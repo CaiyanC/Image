@@ -1,4 +1,4 @@
-import json
+﻿import json
 import re
 
 from fastapi import HTTPException, status
@@ -577,6 +577,7 @@ async def _polish_customer_answer(db: Session, question: str, agent_result: dict
         "不得新增事实、参数、认证、价格、库存或承诺。"
         "如果 uncertainty 不是 confirmed，必须保留“资料未标注/不能确认/需要人工确认”的含义。"
         "输出纯中文客服回答，不要输出 JSON，不要出现意图、置信度、Agent、调试、异常提示等工程词。"
+        "不要逐字分析或引用用户问题中的措辞（如人数、场景词），用户问题只提供上下文。"
     )
     try:
         polished = await dmxapi_service.chat_completion(
@@ -771,3 +772,5 @@ def _safe_json(value: str | None, fallback):
         return json.loads(value)
     except json.JSONDecodeError:
         return fallback
+
+

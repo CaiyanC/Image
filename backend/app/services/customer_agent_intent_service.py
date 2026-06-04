@@ -16,7 +16,7 @@ from . import agent_action_service, customer_agent_service, customer_agent_tool_
 CONTEXT_WORDS = ("他", "它", "这个", "这款", "该产品", "这些", "那些", "刚才那些", "上面这些", "刚才的", "上一轮", "这一批", "这批", "这几个", "那几个")
 QUESTION_WORDS = ("哪些", "有哪些", "多少", "分别", "列出", "查询", "找", "是什么")
 COMPARE_WORDS = ("对比", "比较", "区别", "差异", "分别")
-RECOMMEND_WORDS = ("推荐", "更适合", "最适合", "哪个好", "哪款更好", "优先", "比较轻", "比较小", "最轻", "最小", "带什么", "带哪个")
+RECOMMEND_WORDS = ("推荐", "更适合", "最适合", "最合适", "合适", "哪个好", "哪款更好", "优先", "比较轻", "比较小", "最轻", "最小", "带什么", "带哪个", "选哪个", "买哪个")
 FOLLOWUP_NARROW_WORDS = ("排除", "不要", "去掉", "剔除", "排掉")
 PLACEHOLDER_WORDS = {"tbd", "todo", "test", "null", "none", "n/a", "na", "-", "--", "unknown"}
 
@@ -692,7 +692,7 @@ async def _recommend_result(db: Session, user_id: str, intent: CustomerIntent) -
             ],
         )
 
-    ranked = _rank_rows_for_recommendation(rows, intent.recommendation_query or intent.semantic_query or intent.term)
+    ranked = await _rank_rows_for_recommendation_llm(db, rows, intent.recommendation_query or intent.semantic_query or intent.term)
     best = ranked[0]
     anomalies = _detect_row_anomalies([item["row"] for item in ranked[:3]], intent)
     warnings = [item["message"] for item in anomalies[:2]]
@@ -715,6 +715,44 @@ async def _recommend_result(db: Session, user_id: str, intent: CustomerIntent) -
         suggested_followups=followups,
     )
 
+
+def _compose_recommendation_answer(
+    ranked: list[dict],
+    intent: CustomerIntent,
+    warnings: list[str],
+    anomalies: list[dict[str, Any]],
+    followups: list[str],
+) -> str:
+    """Compose a recommendation answer from ranked products."""
+    if not ranked:
+        return "目前没有找到合适的产品推荐，你可以换个场景或条件试试。"
+    
+    best = ranked[0]
+    best_row = best["row"]
+    sku = best_row.get("sku", "")
+    name = best_row.get("product_name_cn") or best_row.get("product_name_en") or sku
+    reasons = best.get("reasons", [])
+    
+    lines = [f"根据你的需求，我优先推荐 **{name}**（{sku}）。"]
+    
+    if reasons:
+        lines.append("推荐理由：" + "；".join(reasons[:3]) + "。")
+    
+    # Show runner-ups
+    if len(ranked) > 1:
+        lines.append("其他候选：")
+        for item in ranked[1:4]:
+            r = item["row"]
+            s = r.get("sku", "")
+            n = r.get("product_name_cn") or r.get("product_name_en") or s
+            lines.append(f"- {n}（{s}）")
+    
+    if warnings:
+        lines.append("注意：" + warnings[0])
+    if followups:
+        lines.append(followups[0])
+    
+    return "\n".join(lines)
 
 async def _propose_delete_result(db: Session, user_id: str, intent: CustomerIntent) -> dict:
     actions = []
@@ -1327,7 +1365,59 @@ def _suggest_detail_followups(intent: CustomerIntent) -> list[str]:
     ]
 
 
-def _rank_rows_for_recommendation(rows: list[dict], query: str) -> list[dict[str, Any]]:
+async def _rank_rows_for_recommendation_llm(db: Session, rows: list[dict], query: str) -> list[dict[str, Any]]:
+    """Use LLM to rank products for recommendation based on actual reasoning."""
+    if not rows or not query:
+        return [{"row": r, "score": 0, "reasons": ["无足够信息排名"]} for r in rows]
+    
+    import json as _json
+    product_list = []
+    for i, row in enumerate(rows[:10]):
+        info = {
+            "index": i,
+            "sku": row.get("sku", ""),
+            "name": row.get("product_name_cn") or row.get("product_name_en") or "",
+            "category": row.get("category", ""),
+            "capacity": _format_capacity(row.get("capacity")) if row.get("capacity") else "",
+            "material": row.get("body_material", ""),
+            "color": row.get("color", ""),
+            "features": row.get("features", ""),
+        }
+        product_list.append(info)
+    
+    system_prompt = (
+        "你是户外装备推荐专家。根据用户需求，从候选产品中选出最合适的，并给出排名理由。"
+        "输出JSON格式：{\"ranking\": [{\"index\": 0, \"reason\": \"推荐理由\"}, ...]}"
+        "推荐时要综合考虑容量、材质、适用场景、便携性等因素。按推荐优先顺序排列。"
+    )
+    
+    try:
+        result = await dmxapi_service.chat_completion(
+            db,
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": f"用户需求: {query}\n\n候选产品:\n{_json.dumps(product_list, ensure_ascii=False, indent=2)}"},
+            ],
+            temperature=0.1,
+            max_tokens=600,
+        )
+        ranking_data = _parse_llm_json(result or "")
+        if ranking_data and ranking_data.get("ranking"):
+            ranking_map = {item["index"]: item.get("reason", "") for item in ranking_data["ranking"]}
+            ranked = []
+            for i, row in enumerate(rows):
+                reason = ranking_map.get(i, "")
+                scored = 10 - list(ranking_map.keys()).index(i) if i in ranking_map else 0
+                ranked.append({"row": row, "score": scored, "reasons": [reason] if reason else []})
+            ranked.sort(key=lambda x: x["score"], reverse=True)
+            return ranked if ranked else _fallback_rank(rows, query)
+    except Exception:
+        pass
+    return _fallback_rank(rows, query)
+
+
+def _fallback_rank(rows: list[dict], query: str) -> list[dict[str, Any]]:
+    """Fallback keyword-based ranking when LLM ranking fails."""
     keywords = [item for item in re.split(r"[\s,，。/]+", query) if item]
     ranked = []
     for row in rows:
@@ -1341,7 +1431,7 @@ def _rank_rows_for_recommendation(rows: list[dict], query: str) -> list[dict[str
             token = keyword.lower()
             if token and token in haystack:
                 score += 2
-                reasons.append(f"命中“{keyword}”相关信息")
+                reasons.append(f'命中"{keyword}"相关信息')
         if row.get("features"):
             score += 1
             reasons.append("有可用的卖点/场景信息")
@@ -1351,8 +1441,6 @@ def _rank_rows_for_recommendation(rows: list[dict], query: str) -> list[dict[str
         ranked.append({"row": row, "score": score, "reasons": list(dict.fromkeys(reasons))})
     ranked.sort(key=lambda item: (item["score"], bool(item["row"].get("features")), bool(item["row"].get("capacity"))), reverse=True)
     return ranked
-
-
 def _confidence_for_rows(rows: list[dict], intent: CustomerIntent, warnings: list[str]) -> str:
     if not rows:
         return "medium" if intent.source_context == "previous_results" else "low"
@@ -1754,3 +1842,5 @@ def _first_nonempty(values: list[Any]) -> str:
         if text:
             return text
     return ""
+
+
