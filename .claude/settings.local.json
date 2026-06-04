@@ -1,0 +1,27 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python -c ' *)",
+      "Bash(pip install *)",
+      "Bash(python *)",
+      "Bash(sc query *)",
+      "Bash(pg_isready)",
+      "Bash(pip list *)",
+      "Bash(npx vite *)",
+      "Bash(curl -s http://localhost:5173)",
+      "Bash(npx tsc *)",
+      "Bash(curl -s http://localhost:8000/api/health)",
+      "Bash(npm run *)",
+      "Bash(pkill -f \"uvicorn app.main:app\")",
+      "Bash(pkill -f \"vite\")",
+      "Bash(taskkill /F /IM \"python.exe\" /FI \"WINDOWTITLE eq *uvicorn*\")",
+      "Bash(taskkill /F /IM \"node.exe\" /FI \"WINDOWTITLE eq *vite*\")",
+      "Bash(cmd //c \"taskkill /F /PID 17992\")",
+      "Bash(cmd //c \"netstat -ano | findstr :5174\")",
+      "Bash(cmd *)",
+      "Bash(curl -s -o /dev/null -w \"Frontend: %{http_code}\" http://localhost:5174)",
+      "Bash(curl -s -X POST http://localhost:8000/api/auth/login -H 'Content-Type: application/json' -d '{\"username\":\"admin\",\"password\":\"admin123\"}')",
+      "Bash(curl -s -H \"Authorization: Bearer $\\(curl -s -X POST http://localhost:8000/api/auth/login -H 'Content-Type: application/json' -d '{\"username\":\"admin\",\"password\":\"admin123\"}')"
+    ]
+  }
+}

@@ -1,0 +1,50 @@
+# Environment variables (contains secrets, passwords) — NEVER COMMIT
+.env
+backend/.env
+
+# SQLite database (contains real API Keys) — NEVER COMMIT
+*.db
+*.sqlite
+*.sqlite3
+
+# Generated/uploaded image files
+uploads/
+backend/uploads/
+
+# Python virtual environment
+venv/
+backend/venv/
+env/
+.venv/
+
+# Python bytecode cache
+__pycache__/
+*.py[cod]
+*.pyo
+*.egg-info/
+dist/
+build/
+
+# IDE config
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Node dependencies (frontend)
+frontend/node_modules/
+frontend/tsconfig.tsbuildinfo
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Temporary git helper scripts
+_git_*.bat
+
+# Trae IDE local config (only exclude IDE internals, keep documents)
+.trae/rules/
+.trae/settings/
+.trae/cache/
+.trae/tasks/
+.trae/agent/

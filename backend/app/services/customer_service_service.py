@@ -1,0 +1,773 @@
+import json
+import re
+
+from fastapi import HTTPException, status
+from sqlalchemy.orm import Session
+
+from ..models.knowledge_base import CustomerServiceConversation, CustomerServiceMessage
+from ..models.product import Product
+from ..models.product_qa import ProductQa, ProductQaNegative
+from . import customer_agent_intent_service, customer_agent_runtime_service, customer_agent_service, dmxapi_service, knowledge_service, product_service
+
+
+SKU_RE = re.compile(r"\b[A-Za-z]{1,6}[-_][A-Za-z0-9][A-Za-z0-9_-]{1,40}\b")
+
+
+def list_conversations(db: Session, user_id: str, skip: int = 0, limit: int = 30) -> dict:
+    user_id = str(user_id)
+    query = db.query(CustomerServiceConversation).filter(
+        CustomerServiceConversation.user_id == user_id
+    ).order_by(CustomerServiceConversation.updated_at.desc())
+    total = query.count()
+    items = query.offset(skip).limit(limit).all()
+    return {
+        "items": [
+            {
+                "id": item.id,
+                "title": item.title,
+                "sku": item.sku,
+                "created_at": str(item.created_at),
+                "updated_at": str(item.updated_at),
+            }
+            for item in items
+        ],
+        "total": total,
+    }
+
+
+def get_conversation(db: Session, conversation_id: str, user_id: str) -> dict:
+    user_id = str(user_id)
+    conversation = db.query(CustomerServiceConversation).filter(
+        CustomerServiceConversation.id == conversation_id,
+        CustomerServiceConversation.user_id == user_id,
+    ).first()
+    if not conversation:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="客服会话不存在")
+
+    messages = db.query(CustomerServiceMessage).filter(
+        CustomerServiceMessage.conversation_id == conversation_id
+    ).order_by(CustomerServiceMessage.created_at.asc()).all()
+    payload = []
+    for item in messages:
+        meta = _message_meta(item.sources_json)
+        payload.append(
+            {
+                "id": item.id,
+                "role": item.role,
+                "content": item.content,
+                "sku": item.sku,
+                "sources": _safe_json(item.sources_json, []),
+                "steps": _steps_from_sources(item.sources_json),
+                "intent": meta.get("intent"),
+                "answer_type": meta.get("answer_type"),
+                "confidence": meta.get("confidence"),
+                "uncertainty": meta.get("uncertainty"),
+                "needs_clarification": meta.get("needs_clarification", False),
+                "anomalies": meta.get("anomalies", []),
+                "suggested_followups": meta.get("suggested_followups", meta.get("followups", [])),
+                "followups": meta.get("followups", meta.get("suggested_followups", [])),
+                "warnings": meta.get("warnings", []),
+                "evidence": meta.get("evidence", []),
+                "debug": meta.get("debug", {}),
+                "feedback": meta.get("feedback"),
+                "created_at": str(item.created_at),
+            }
+        )
+    return {
+        "id": conversation.id,
+        "title": conversation.title,
+        "sku": conversation.sku,
+        "created_at": str(conversation.created_at),
+        "updated_at": str(conversation.updated_at),
+        "messages": payload,
+    }
+
+
+def delete_conversation(db: Session, conversation_id: str, user_id: str) -> dict:
+    user_id = str(user_id)
+    conversation = db.query(CustomerServiceConversation).filter(
+        CustomerServiceConversation.id == conversation_id,
+        CustomerServiceConversation.user_id == user_id,
+    ).first()
+    if not conversation:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="客服会话不存在")
+    db.delete(conversation)
+    db.commit()
+    return {"deleted": True, "id": conversation_id}
+
+
+def save_message_feedback(
+    db: Session,
+    *,
+    user_id: str,
+    message_id: str,
+    rating: str,
+    reason: str | None = None,
+    comment: str | None = None,
+) -> dict:
+    allowed = {"helpful", "incorrect", "missing_data"}
+    if rating not in allowed:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="反馈类型不支持")
+    message = (
+        db.query(CustomerServiceMessage)
+        .join(CustomerServiceConversation, CustomerServiceConversation.id == CustomerServiceMessage.conversation_id)
+        .filter(
+            CustomerServiceMessage.id == message_id,
+            CustomerServiceMessage.role == "assistant",
+            CustomerServiceConversation.user_id == str(user_id),
+        )
+        .first()
+    )
+    if not message:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="客服消息不存在")
+
+    sources = _safe_json(message.sources_json, [])
+    meta = None
+    for source in sources:
+        if isinstance(source, dict) and source.get("type") == "agent_meta":
+            meta = source
+            break
+    if meta is None:
+        meta = {"type": "agent_meta", "label": "客服回复元数据"}
+        sources.append(meta)
+    feedback = {
+        "rating": rating,
+        "reason": reason or "",
+        "comment": comment or "",
+    }
+    meta["feedback"] = feedback
+    message.sources_json = json.dumps(sources, ensure_ascii=False)
+    db.commit()
+    return {"message_id": message.id, "feedback": feedback}
+
+
+async def ask_customer_service(
+    db: Session,
+    *,
+    user_id: str,
+    question: str,
+    sku: str | None = None,
+    conversation_id: str | None = None,
+) -> dict:
+    user_id = str(user_id)
+    question = question.strip()
+    if not question:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="问题不能为空")
+
+    previous_result_skus = _latest_result_skus(db, conversation_id, user_id)
+    conversation_history = _build_conversation_history(db, conversation_id, user_id)
+    # Intent parser first (structured, smarter answer composition)
+    agent_result = await customer_agent_intent_service.process_intent_request(
+        db,
+        user_id=user_id,
+        question=question,
+        sku=sku,
+        previous_result_skus=previous_result_skus,
+    )
+    # Fallback to runtime agent if intent parser fails
+    if not agent_result:
+        agent_result = await customer_agent_runtime_service.process_agent_request(
+            db,
+            user_id=user_id,
+            question=question,
+            sku=sku,
+            previous_result_skus=previous_result_skus,
+            conversation_history=conversation_history,
+        )
+    if not agent_result:
+        agent_result = customer_agent_service.try_numeric_english_name_query(db, question)
+    if not agent_result:
+        agent_result = customer_agent_service.process_agent_request(
+            db,
+            user_id=user_id,
+            question=question,
+            sku=sku,
+        )
+    if agent_result:
+        agent_result = _normalize_agent_result(agent_result)
+        agent_result["answer"] = await _polish_customer_answer(db, question, agent_result)
+        conversation = _get_or_create_conversation(db, user_id, question, agent_result.get("sku") or sku, conversation_id)
+        db.add(CustomerServiceMessage(
+            conversation_id=conversation.id,
+            role="user",
+            content=question,
+            sku=agent_result.get("sku") or sku,
+        ))
+        assistant_message = CustomerServiceMessage(
+            conversation_id=conversation.id,
+            role="assistant",
+            content=agent_result["answer"],
+            sku=agent_result.get("sku") or sku,
+            sources_json=json.dumps(_sources_with_result_context(agent_result), ensure_ascii=False),
+        )
+        db.add(assistant_message)
+        conversation.sku = agent_result.get("sku") or sku
+        conversation.title = _make_title(question, conversation.sku)
+        db.commit()
+        return {
+            "conversation_id": conversation.id,
+            "message_id": assistant_message.id,
+            "intent": agent_result.get("intent"),
+            "answer_type": agent_result.get("answer_type"),
+            "confidence": agent_result.get("confidence"),
+            "uncertainty": agent_result.get("uncertainty"),
+            "needs_clarification": agent_result.get("needs_clarification", False),
+            "anomalies": agent_result.get("anomalies") or [],
+            "suggested_followups": agent_result.get("suggested_followups") or [],
+            "followups": agent_result.get("followups") or agent_result.get("suggested_followups") or [],
+            "warnings": agent_result.get("warnings") or [],
+            "evidence": agent_result.get("evidence") or [],
+            "debug": agent_result.get("debug") or {},
+            "sku": agent_result.get("sku"),
+            "answer": agent_result["answer"],
+            "sources": agent_result.get("sources") or [],
+            "actions": agent_result.get("actions") or [],
+            "results": agent_result.get("results") or [],
+            "steps": agent_result.get("steps") or [],
+        }
+
+    resolved_sku = _resolve_sku(db, question, sku)
+    if not resolved_sku:
+        return _save_and_return_guidance(db, user_id, question, conversation_id)
+
+    product = db.query(Product).filter(Product.sku == resolved_sku).first()
+    if not product:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="产品不存在")
+
+    conversation = _get_or_create_conversation(db, user_id, question, resolved_sku, conversation_id)
+    db.add(CustomerServiceMessage(
+        conversation_id=conversation.id,
+        role="user",
+        content=question,
+        sku=resolved_sku,
+    ))
+
+    context, sources = build_product_context(db, resolved_sku, question)
+    messages = [
+        {
+            "role": "system",
+            "content": (
+                "你是内部产品客服助手。只能依据提供的产品上下文回答。"
+                "如果上下文没有答案，必须明确说需要人工确认。"
+                "不要编造参数、认证、价格、库存或售后政策。"
+                "回答请先给结论，再给依据，保持中文、简洁、客服口吻。"
+            ),
+        },
+        {
+            "role": "user",
+            "content": f"产品上下文：\n{context}\n\n客服问题：{question}",
+        },
+    ]
+
+    try:
+        answer = await dmxapi_service.chat_completion(db, messages)
+    except Exception as exc:
+        answer = f"聊天模型暂时不可用：{exc}"
+
+    sources_with_meta = list(sources)
+    sources_with_meta.append({
+        "type": "agent_meta",
+        "label": "客服回复元数据",
+        "intent": "knowledge_base_answer",
+        "answer_type": "knowledge_answer",
+        "confidence": "medium",
+        "uncertainty": _uncertainty_from_answer(answer, [], [], False),
+        "needs_clarification": False,
+        "anomalies": [],
+        "suggested_followups": [],
+        "followups": [],
+        "warnings": [],
+        "evidence": [],
+        "debug": {"intent": "knowledge_base_answer", "steps": [], "warnings": [], "anomalies": [], "raw_results": []},
+        "feedback": None,
+    })
+    assistant_message = CustomerServiceMessage(
+        conversation_id=conversation.id,
+        role="assistant",
+        content=answer,
+        sku=resolved_sku,
+        sources_json=json.dumps(sources_with_meta, ensure_ascii=False),
+    )
+    db.add(assistant_message)
+    conversation.sku = resolved_sku
+    conversation.title = _make_title(question, resolved_sku)
+    db.commit()
+
+    return {
+        "conversation_id": conversation.id,
+        "message_id": assistant_message.id,
+        "intent": "knowledge_base_answer",
+        "answer_type": "knowledge_answer",
+        "confidence": "medium",
+        "uncertainty": _uncertainty_from_answer(answer, [], [], False),
+        "needs_clarification": False,
+        "anomalies": [],
+        "suggested_followups": [],
+        "followups": [],
+        "warnings": [],
+        "evidence": [],
+        "debug": {"intent": "knowledge_base_answer", "steps": [], "warnings": [], "anomalies": [], "raw_results": []},
+        "sku": resolved_sku,
+        "answer": answer,
+        "sources": sources,
+        "actions": [],
+        "results": [],
+        "steps": [],
+    }
+
+
+def build_product_context(db: Session, sku: str, question: str) -> tuple[str, list[dict]]:
+    detail = product_service.get_product_detail(db, sku)
+    sources: list[dict] = []
+    lines = [
+        f"SKU: {detail.get('sku')}",
+        f"中文名: {detail.get('product_name_cn') or ''}",
+        f"英文名: {detail.get('product_name_en') or ''}",
+        f"品牌: {detail.get('brand') or ''}",
+        f"系列: {detail.get('series') or ''}",
+        f"类目: {detail.get('category') or ''} / {detail.get('sub_category') or ''}",
+        f"等级: {detail.get('product_level') or ''}",
+        f"生命周期: {detail.get('lifecycle_status') or ''}",
+        f"负责人: {detail.get('person_in_charge') or ''}",
+        f"品质情况: {detail.get('quality_note') or ''}",
+    ]
+    sources.append({"type": "product", "label": "产品基础信息", "sku": sku})
+
+    specs = detail.get("specs") or {}
+    if specs:
+        lines.append("规格信息:")
+        for key, label in [
+            ("capacity", "容量"),
+            ("gross_weight_g", "毛重g"),
+            ("body_material", "材质"),
+            ("color", "颜色"),
+            ("surface_finish", "表面工艺"),
+            ("heat_source", "适用热源"),
+            ("power", "功率"),
+            ("technical_advantages", "技术优势"),
+            ("usage_instruction", "使用说明"),
+        ]:
+            value = specs.get(key)
+            if value not in (None, "", []):
+                lines.append(f"- {label}: {_stringify(value)}")
+        sources.append({"type": "product_specs", "label": "产品规格", "sku": sku})
+
+    business = detail.get("business") or {}
+    if business:
+        lines.append("业务信息:")
+        for key, label in [
+            ("top_selling_points", "核心卖点"),
+            ("target_audience", "目标人群"),
+            ("positioning", "定位"),
+            ("price_positioning", "价格定位"),
+            ("emotional_value", "情绪价值"),
+            ("usage_scenarios", "使用场景"),
+            ("competitor_benchmark", "竞品信息"),
+        ]:
+            value = business.get(key)
+            if value not in (None, "", []):
+                lines.append(f"- {label}: {_stringify(value)}")
+        sources.append({"type": "product_business", "label": "产品业务信息", "sku": sku})
+
+    qa_items = db.query(ProductQa).filter(ProductQa.product_id == detail["id"]).order_by(ProductQa.priority.asc().nullslast()).all()
+    if qa_items:
+        lines.append("产品 QA:")
+        for item in qa_items[:20]:
+            lines.append(f"- Q: {item.question}\n  A: {item.answer}")
+        sources.append({"type": "product_qa", "label": "产品 QA", "sku": sku, "count": len(qa_items)})
+
+    negative = db.query(ProductQaNegative).filter(ProductQaNegative.product_id == detail["id"]).first()
+    if negative:
+        lines.append("差评/负面问题应答:")
+        if negative.high_freq_negative_words:
+            lines.append(f"- 高频负面词: {negative.high_freq_negative_words}")
+        if negative.response_tone:
+            lines.append(f"- 应答口径: {negative.response_tone}")
+        sources.append({"type": "product_qa_negative", "label": "差评应答", "sku": sku})
+
+    knowledge = knowledge_service.keyword_retrieve(db, question, sku=sku, limit=5)
+    if knowledge:
+        lines.append("知识库补充:")
+        for item in knowledge:
+            lines.append(f"- {item['content']}")
+        sources.append({"type": "knowledge_base", "label": "向量/知识库补充", "sku": sku, "count": len(knowledge)})
+
+    return "\n".join(lines), sources
+
+
+def review_samples(db: Session, user_id: str, limit: int = 100) -> dict:
+    user_id = str(user_id)
+    messages = (
+        db.query(CustomerServiceMessage, CustomerServiceConversation)
+        .join(CustomerServiceConversation, CustomerServiceConversation.id == CustomerServiceMessage.conversation_id)
+        .filter(
+            CustomerServiceConversation.user_id == user_id,
+            CustomerServiceMessage.role == "assistant",
+        )
+        .order_by(CustomerServiceMessage.created_at.desc())
+        .limit(limit)
+        .all()
+    )
+    items = []
+    frequent_questions: dict[str, int] = {}
+    clarification_samples = 0
+    anomaly_samples = 0
+    for assistant_message, conversation in messages:
+        meta = _message_meta(assistant_message.sources_json)
+        user_message = (
+            db.query(CustomerServiceMessage)
+            .filter(
+                CustomerServiceMessage.conversation_id == conversation.id,
+                CustomerServiceMessage.role == "user",
+                CustomerServiceMessage.created_at <= assistant_message.created_at,
+            )
+            .order_by(CustomerServiceMessage.created_at.desc())
+            .first()
+        )
+        question = (user_message.content if user_message else "").strip()
+        if question:
+            frequent_questions[question] = frequent_questions.get(question, 0) + 1
+        if meta.get("needs_clarification"):
+            clarification_samples += 1
+        if meta.get("anomalies"):
+            anomaly_samples += 1
+        items.append({
+            "conversation_id": conversation.id,
+            "message_id": assistant_message.id,
+            "question": question,
+            "answer": assistant_message.content,
+            "intent": meta.get("intent"),
+            "confidence": meta.get("confidence"),
+            "needs_clarification": meta.get("needs_clarification", False),
+            "anomalies": meta.get("anomalies", []),
+            "warnings": meta.get("warnings", []),
+            "suggested_followups": meta.get("suggested_followups", []),
+            "created_at": str(assistant_message.created_at),
+        })
+
+    top_questions = sorted(frequent_questions.items(), key=lambda item: item[1], reverse=True)[:20]
+    return {
+        "items": items,
+        "summary": {
+            "total_samples": len(items),
+            "clarification_samples": clarification_samples,
+            "anomaly_samples": anomaly_samples,
+            "top_questions": [{"question": question, "count": count} for question, count in top_questions],
+        },
+    }
+
+
+def _resolve_sku(db: Session, question: str, sku: str | None) -> str | None:
+    if sku:
+        return sku.strip()
+    candidates = SKU_RE.findall(question)
+    for candidate in candidates:
+        product = db.query(Product).filter(Product.sku.ilike(candidate)).first()
+        if product:
+            return product.sku
+    return None
+
+
+def _get_or_create_conversation(
+    db: Session,
+    user_id: str,
+    question: str,
+    sku: str | None,
+    conversation_id: str | None,
+) -> CustomerServiceConversation:
+    user_id = str(user_id)
+    if conversation_id:
+        conversation = db.query(CustomerServiceConversation).filter(
+            CustomerServiceConversation.id == conversation_id,
+            CustomerServiceConversation.user_id == user_id,
+        ).first()
+        if not conversation:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="客服会话不存在")
+        return conversation
+
+    conversation = CustomerServiceConversation(
+        user_id=user_id,
+        title=_make_title(question, sku),
+        sku=sku,
+    )
+    db.add(conversation)
+    db.flush()
+    return conversation
+
+
+def _sources_with_result_context(agent_result: dict) -> list[dict]:
+    sources = list(agent_result.get("sources") or [])
+    sources.append({
+        "type": "agent_meta",
+        "label": "客服回复元数据",
+        "intent": agent_result.get("intent"),
+        "answer_type": agent_result.get("answer_type"),
+        "confidence": agent_result.get("confidence"),
+        "uncertainty": agent_result.get("uncertainty"),
+        "needs_clarification": agent_result.get("needs_clarification", False),
+        "anomalies": agent_result.get("anomalies") or [],
+        "suggested_followups": agent_result.get("suggested_followups") or agent_result.get("followups") or [],
+        "followups": agent_result.get("followups") or agent_result.get("suggested_followups") or [],
+        "warnings": agent_result.get("warnings") or [],
+        "evidence": agent_result.get("evidence") or [],
+        "debug": agent_result.get("debug") or {},
+        "feedback": agent_result.get("feedback") or None,
+    })
+    if agent_result.get("steps"):
+        sources.append({"type": "agent_steps", "label": "Agent执行过程", "steps": agent_result.get("steps")})
+    result_skus = []
+    for item in agent_result.get("results") or []:
+        sku = item.get("sku") if isinstance(item, dict) else None
+        if sku and sku not in result_skus and "," not in str(sku):
+            result_skus.append(sku)
+    if result_skus:
+        sources.append({"type": "agent_context", "label": "上下文结果", "result_skus": result_skus, "count": len(result_skus)})
+    return sources
+
+
+def _steps_from_sources(sources_json: str | None) -> list[dict]:
+    for source in _safe_json(sources_json, []):
+        if isinstance(source, dict) and source.get("type") == "agent_steps":
+            return source.get("steps") or []
+    return []
+
+
+def _message_meta(sources_json: str | None) -> dict:
+    for source in _safe_json(sources_json, []):
+        if isinstance(source, dict) and source.get("type") == "agent_meta":
+            return source
+    return {}
+
+
+def _normalize_agent_result(agent_result: dict) -> dict:
+    result = dict(agent_result)
+    results = result.get("results") or []
+    warnings = result.get("warnings") or []
+    result.setdefault("answer_type", _answer_type_from_intent(result.get("intent")))
+    result.setdefault("uncertainty", _uncertainty_from_answer(result.get("answer") or "", results, warnings, result.get("needs_clarification", False)))
+    result.setdefault("evidence", _evidence_from_results(results))
+    result.setdefault("followups", result.get("suggested_followups") or [])
+    result.setdefault("suggested_followups", result.get("followups") or [])
+    result.setdefault("debug", {
+        "intent": result.get("intent"),
+        "steps": result.get("steps") or [],
+        "warnings": warnings,
+        "anomalies": result.get("anomalies") or [],
+        "raw_results": results,
+    })
+    return result
+
+
+async def _polish_customer_answer(db: Session, question: str, agent_result: dict) -> str:
+    answer = str(agent_result.get("answer") or "").strip()
+    if not answer or agent_result.get("answer_type") == "action_proposal":
+        return answer
+    evidence = agent_result.get("evidence") or []
+    if not evidence and agent_result.get("uncertainty") == "confirmed":
+        return answer
+    payload = {
+        "question": question,
+        "draft_answer": answer,
+        "uncertainty": agent_result.get("uncertainty"),
+        "evidence": evidence[:8],
+        "followups": (agent_result.get("followups") or agent_result.get("suggested_followups") or [])[:3],
+    }
+    system = (
+        "你是产品客服话术润色器。只能依据输入的 draft_answer、evidence、uncertainty 和 followups 改写，"
+        "不得新增事实、参数、认证、价格、库存或承诺。"
+        "如果 uncertainty 不是 confirmed，必须保留“资料未标注/不能确认/需要人工确认”的含义。"
+        "输出纯中文客服回答，不要输出 JSON，不要出现意图、置信度、Agent、调试、异常提示等工程词。"
+    )
+    try:
+        polished = await dmxapi_service.chat_completion(
+            db,
+            messages=[
+                {"role": "system", "content": system},
+                {"role": "user", "content": json.dumps(payload, ensure_ascii=False, default=str)},
+            ],
+            temperature=0.2,
+            max_tokens=800,
+        )
+    except Exception:
+        return answer
+    polished = str(polished or "").strip()
+    if not polished:
+        return answer
+    forbidden = ("意图", "置信度", "Agent", "执行过程", "异常提示")
+    if any(item in polished for item in forbidden):
+        return answer
+    if agent_result.get("uncertainty") != "confirmed" and not any(item in polished for item in ("未标注", "不能确认", "人工确认", "资料不足", "暂不能确认")):
+        return answer
+    return polished
+
+
+def _answer_type_from_intent(intent: str | None) -> str:
+    return {
+        "query_products": "product_query",
+        "product_detail": "product_detail",
+        "compare_products": "comparison",
+        "recommend_products": "recommendation",
+        "propose_delete": "action_proposal",
+        "propose_update": "action_proposal",
+        "clarify": "clarification",
+    }.get(str(intent or ""), "unknown")
+
+
+def _uncertainty_from_answer(answer: str, results: list, warnings: list, needs_clarification: bool) -> str:
+    if needs_clarification:
+        return "ambiguous_product"
+    if any(item in answer for item in ("没有标注", "不能直接确认", "暂时不能确认", "资料未标注")):
+        return "not_recorded"
+    if not results and any(item in answer for item in ("没有找到", "暂时无法", "不能可靠")):
+        return "insufficient_data"
+    if warnings:
+        return "insufficient_data"
+    return "confirmed"
+
+
+def _evidence_from_results(results: list) -> list[dict]:
+    evidence = []
+    for item in results[:8]:
+        if not isinstance(item, dict):
+            continue
+        field_values = item.get("field_values") if isinstance(item.get("field_values"), dict) else {}
+        if field_values:
+            for label, value in field_values.items():
+                evidence.append({
+                    "sku": item.get("sku"),
+                    "product_name": item.get("product_name_cn") or item.get("product_name_en"),
+                    "field_label": label,
+                    "value": value,
+                    "source_layer": _layer_for_field_label(str(label)),
+                    "matched_by": item.get("matched_by") or "产品资料",
+                })
+            continue
+        for label, key in (("容量", "capacity"), ("材质", "body_material"), ("颜色", "color"), ("负责人", "person_in_charge"), ("类目", "category"), ("卖点", "features")):
+            value = item.get(key)
+            if value not in (None, ""):
+                evidence.append({
+                    "sku": item.get("sku"),
+                    "product_name": item.get("product_name_cn") or item.get("product_name_en"),
+                    "field_label": label,
+                    "value": _stringify(value),
+                    "source_layer": _layer_for_field_label(label),
+                    "matched_by": item.get("matched_by") or "产品资料",
+                })
+    return evidence
+
+
+def _layer_for_field_label(label: str) -> str:
+    if any(item in label for item in ("容量", "重量", "材质", "颜色", "热源", "功率", "表面")):
+        return "L2"
+    if any(item in label for item in ("卖点", "场景", "定位", "人群", "竞品")):
+        return "L3"
+    if any(item in label for item in ("标题", "描述", "关键词", "listing", "Listing")):
+        return "L4"
+    return "L1"
+
+
+
+def _build_conversation_history(db: Session, conversation_id: str | None, user_id: str) -> list[dict]:
+    """Build conversation context from DB history (last 10 turns)."""
+    if not conversation_id:
+        return []
+    messages = db.query(CustomerServiceMessage).filter(
+        CustomerServiceMessage.conversation_id == conversation_id
+    ).order_by(CustomerServiceMessage.created_at.desc()).limit(20).all()
+    history = []
+    for msg in reversed(messages):
+        role = "assistant" if msg.role == "assistant" else "user"
+        history.append({"role": role, "content": msg.content})
+    return history
+
+def _latest_result_skus(db: Session, conversation_id: str | None, user_id: str) -> list[str]:
+    if not conversation_id:
+        return []
+    conversation = db.query(CustomerServiceConversation).filter(
+        CustomerServiceConversation.id == conversation_id,
+        CustomerServiceConversation.user_id == str(user_id),
+    ).first()
+    if not conversation:
+        return []
+    messages = db.query(CustomerServiceMessage).filter(
+        CustomerServiceMessage.conversation_id == conversation_id,
+        CustomerServiceMessage.role == "assistant",
+    ).order_by(CustomerServiceMessage.created_at.desc()).limit(5).all()
+    for message in messages:
+        for source in _safe_json(message.sources_json, []):
+            skus = source.get("result_skus") if isinstance(source, dict) else None
+            if skus:
+                return [str(sku) for sku in skus]
+    return []
+
+
+def _save_and_return_guidance(db: Session, user_id: str, question: str, conversation_id: str | None) -> dict:
+    conversation = _get_or_create_conversation(db, user_id, question, None, conversation_id)
+    answer = "先说结论：我还不能可靠回答这个问题，因为当前没有识别到明确的产品范围。\n下一步建议：请先输入 SKU，或者先让我查一批产品，再继续追问。"
+    meta_sources = [{
+        "type": "agent_meta",
+        "label": "客服回复元数据",
+        "intent": "clarify",
+        "answer_type": "clarification",
+        "confidence": "low",
+        "uncertainty": "ambiguous_product",
+        "needs_clarification": True,
+        "anomalies": [],
+        "suggested_followups": ["你可以直接给我 SKU，或者让我先列出某个类目的产品。"],
+        "followups": ["你可以直接给我 SKU，或者让我先列出某个类目的产品。"],
+        "warnings": [],
+        "evidence": [],
+        "debug": {"intent": "clarify", "steps": [], "warnings": [], "anomalies": [], "raw_results": []},
+        "feedback": None,
+    }]
+    db.add(CustomerServiceMessage(conversation_id=conversation.id, role="user", content=question))
+    assistant_message = CustomerServiceMessage(
+        conversation_id=conversation.id,
+        role="assistant",
+        content=answer,
+        sources_json=json.dumps(meta_sources, ensure_ascii=False),
+    )
+    db.add(assistant_message)
+    db.commit()
+    return {
+        "conversation_id": conversation.id,
+        "message_id": assistant_message.id,
+        "intent": "clarify",
+        "answer_type": "clarification",
+        "confidence": "low",
+        "uncertainty": "ambiguous_product",
+        "needs_clarification": True,
+        "anomalies": [],
+        "suggested_followups": ["你可以直接给我 SKU，或者让我先列出某个类目的产品。"],
+        "followups": ["你可以直接给我 SKU，或者让我先列出某个类目的产品。"],
+        "warnings": [],
+        "evidence": [],
+        "debug": {"intent": "clarify", "steps": [], "warnings": [], "anomalies": [], "raw_results": []},
+        "sku": None,
+        "answer": answer,
+        "sources": [],
+        "actions": [],
+        "results": [],
+        "steps": [],
+    }
+
+
+def _make_title(question: str, sku: str | None) -> str:
+    prefix = f"{sku} " if sku else ""
+    clean = re.sub(r"\s+", " ", question).strip()
+    return (prefix + clean)[:80] or "客服会话"
+
+
+def _stringify(value) -> str:
+    if isinstance(value, (dict, list)):
+        return json.dumps(value, ensure_ascii=False)
+    return str(value)
+
+
+def _safe_json(value: str | None, fallback):
+    if not value:
+        return fallback
+    try:
+        return json.loads(value)
+    except json.JSONDecodeError:
+        return fallback
