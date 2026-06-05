@@ -749,7 +749,7 @@ def _should_use_previous_result_skus(question: str) -> bool:
     text = str(question or "")
     explicit_refs = (
         "这些", "这几个", "这几款", "刚才", "上面", "上一轮", "前面",
-        "它们", "他们", "哪个", "哪款", "哪种", "这款", "这个", "那个", "其中",
+        "他", "他的", "它", "它的", "该产品", "它们", "他们", "哪个", "哪款", "哪种", "这款", "这个", "那个", "其中",
     )
     if any(item in text for item in explicit_refs):
         return True

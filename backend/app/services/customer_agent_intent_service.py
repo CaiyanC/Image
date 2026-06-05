@@ -940,10 +940,18 @@ def _parse_term(text: str, filters: dict[str, Any], semantic_query: str) -> str:
 
 def _parse_update_intent(text: str, target_skus: list[str]) -> CustomerIntent | None:
     match = re.search(r"把\s+(.+?)\s*的\s*(.+?)\s*(?:都)?改成\s*(.+)$", text)
+    if match:
+        sku_text, field_label, new_value = match.groups()
+        skus = _extract_skus(sku_text) or target_skus
+        if not skus:
+            return CustomerIntent(intent="clarify", clarification_question="请告诉我要修改哪些 SKU。")
+        return CustomerIntent(intent="propose_update", target_skus=skus, requested_fields=[field_label.strip()], exact_value=new_value.strip())
+
+    match = re.search(r"(?:修改|更改|更新|改)\s*(?:他|他的|它|它的|这个|这款|该产品)?\s*的?\s*(.+?)\s*(?:为|成|改成)\s*(.+)$", text)
     if not match:
         return None
-    sku_text, field_label, new_value = match.groups()
-    skus = _extract_skus(sku_text) or target_skus
+    field_label, new_value = match.groups()
+    skus = target_skus
     if not skus:
         return CustomerIntent(intent="clarify", clarification_question="请告诉我要修改哪些 SKU。")
     return CustomerIntent(intent="propose_update", target_skus=skus, requested_fields=[field_label.strip()], exact_value=new_value.strip())

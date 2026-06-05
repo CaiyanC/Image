@@ -571,6 +571,26 @@ class CustomerAgentRuntimeServiceTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result["steps"][0]["type"], "clarify")
 
 
+    async def test_write_request_without_action_falls_back_to_intent_parser(self):
+        calls = []
+
+        async def fake_chat_completion(db, messages, model=None, temperature=0.2, max_tokens=1200):
+            calls.append(messages)
+            if len(calls) == 1:
+                return '{"tool_calls":[{"name":"search_products","arguments":{"term":"","filters":{"负责人":"Yao"}}}]}'
+            return '{"answer":"当前没有找到负责人为 Yao 的产品。"}'
+
+        dmxapi_service.chat_completion = fake_chat_completion
+
+        result = await customer_agent_runtime_service.process_agent_request(
+            self.db,
+            user_id="user-1",
+            question="修改他的负责人为kang",
+            previous_result_skus=["CS-G25"],
+        )
+
+        self.assertIsNone(result)
+
     async def test_product_lookup_direct_answer_is_regrounded_on_current_question(self):
         async def fake_chat_completion(db, messages, model=None, temperature=0.2, max_tokens=1200):
             return '{"answer":"根据您适合泡咖啡的小锅需求，推荐 CW-C93。"}'
@@ -822,6 +842,47 @@ class CustomerServiceServiceTest(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(captured["previous_result_skus"], [])
         self.assertEqual(captured["conversation_history"], [])
+
+    async def test_pronoun_update_uses_previous_result_sku(self):
+        product = Product(
+            id="product-cs-g25",
+            sku="CS-G25",
+            barcode="barcode-cs-g25",
+            product_name_cn="小青炉",
+            product_name_en="Mini Stove",
+            brand="alocs爱路客",
+            category="炉具",
+            person_in_charge="Max",
+        )
+        self.db.add(product)
+        conversation = CustomerServiceConversation(id="conv-pronoun", user_id="user-1", title="小青炉")
+        self.db.add(conversation)
+        self.db.add(CustomerServiceMessage(
+            conversation_id="conv-pronoun",
+            role="assistant",
+            content="已查到小青炉。",
+            sources_json=json.dumps([
+                {"type": "agent_context", "result_skus": ["CS-G25"]}
+            ], ensure_ascii=False),
+        ))
+        self.db.commit()
+
+        async def fake_runtime(db, **kwargs):
+            return None
+
+        customer_agent_runtime_service.process_agent_request = fake_runtime
+
+        result = await customer_service_service.ask_customer_service(
+            self.db,
+            user_id="user-1",
+            question="修改他的负责人为kang",
+            conversation_id="conv-pronoun",
+        )
+
+        self.assertEqual(result["intent"], "propose_update")
+        self.assertEqual(result["actions"][0]["sku"], "CS-G25")
+        self.assertEqual(result["actions"][0]["field_path"], "product.person_in_charge")
+        self.assertEqual(result["actions"][0]["proposed_value"], "kang")
 
     def test_recommendation_answer_filters_oversized_pans_for_coffee(self):
         tool_results = [{

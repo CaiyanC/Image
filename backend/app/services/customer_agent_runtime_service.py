@@ -80,6 +80,12 @@ async def process_agent_request(
         messages.append({"role": "assistant", "content": content})
         messages.append({"role": "user", "content": json.dumps({"tool_results": round_results, "instruction": "你可以继续调用工具，或输出 {\"answer\":\"...\"} 结束。"}, ensure_ascii=False, default=str)})
 
+    if tool_results and _requires_write_tool(question) and not _collect_actions(tool_results):
+        agent_trace_service.trace(
+            "WRITE_REQUEST_WITHOUT_ACTION_REJECTED",
+            {"question": question, "tool_results": tool_results},
+        )
+        return None
     if not tool_results and final_answer and _requires_write_tool(question):
         agent_trace_service.trace(
             "DIRECT_PRODUCT_WRITE_ANSWER_REJECTED",
@@ -674,9 +680,7 @@ def _requires_lookup_tool(question: str) -> bool:
 
 def _requires_write_tool(question: str) -> bool:
     text = str(question or "")
-    if not any(term in text for term in PRODUCT_WRITE_TERMS):
-        return False
-    return bool(re.search(r"\b[A-Za-z]{1,6}[-_][A-Za-z0-9][A-Za-z0-9_-]{1,40}\b", text))
+    return any(term in text for term in PRODUCT_WRITE_TERMS)
 
 
 def _answer_focus_conflicts(answer: str, question: str) -> bool:
