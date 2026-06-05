@@ -8,6 +8,8 @@ interface ChatMessage {
   message_id?: string | null
   role: 'user' | 'assistant'
   content: string
+  created_at?: string | null
+  streaming?: boolean
   status?: string
   intent?: string | null
   answer_type?: string | null
@@ -58,7 +60,7 @@ export default function CustomerService() {
   }, [messages, loading])
 
   const latestSources = useMemo(() => {
-    const msg = [...messages].reverse().find((item) => item.role === 'assistant' && item.sources?.length)
+    const msg = [...messages].reverse().find((item) => item.role === 'assistant' && !item.streaming && item.sources?.length)
     return (msg?.sources || []).filter((source) => !['agent_steps', 'agent_meta'].includes(String(source.type || '')))
   }, [messages])
 
@@ -85,7 +87,11 @@ export default function CustomerService() {
     const assistantId = `assistant-${Date.now()}`
     let streamError = ''
     setQuestion('')
-    setMessages((prev) => [...prev, { role: 'user', content: userText }, { id: assistantId, role: 'assistant', content: '' }])
+    setMessages((prev) => [
+      ...prev,
+      { role: 'user', content: userText },
+      { id: assistantId, role: 'assistant', content: '', streaming: true },
+    ])
 
     try {
       await api.customerService.askStream(
@@ -178,12 +184,15 @@ export default function CustomerService() {
         },
       )
       if (streamError) throw new Error(streamError)
+      setMessages((prev) => prev.map((message) => (
+        message.id === assistantId ? { ...message, streaming: false, status: '' } : message
+      )))
       loadSideData()
     } catch (err) {
       const message = err instanceof Error ? err.message : '智能客服请求失败'
       setError(message)
       setMessages((prev) => prev.map((item) => (
-        item.id === assistantId ? { ...item, content: message } : item
+        item.id === assistantId ? { ...item, content: message, streaming: false, status: '' } : item
       )))
     } finally {
       setLoading(false)
@@ -198,7 +207,7 @@ export default function CustomerService() {
         messages?: ChatMessage[]
       }
       setConversationId(data.id)
-      setMessages(data.messages || [])
+      setMessages(orderMessages(data.messages || []))
     } catch (err) {
       setError(err instanceof Error ? err.message : '加载会话失败')
     }
@@ -331,7 +340,7 @@ export default function CustomerService() {
                     {message.content || message.status || ''}
                   </div>
 
-                  {message.role === 'assistant' && message.needs_clarification && (
+                  {message.role === 'assistant' && !message.streaming && message.needs_clarification && (
                     <div className="flex flex-wrap gap-2 text-[11px]">
                       <span className="rounded-full bg-amber-50 px-2 py-1 text-amber-700 border border-amber-100">
                         需要澄清
@@ -339,22 +348,22 @@ export default function CustomerService() {
                     </div>
                   )}
 
-                  {message.role === 'assistant' && message.uncertainty && message.uncertainty !== 'confirmed' && (
+                  {message.role === 'assistant' && !message.streaming && message.uncertainty && message.uncertainty !== 'confirmed' && (
                     <UncertaintyNotice uncertainty={message.uncertainty} />
                   )}
 
-                  {message.role === 'assistant' && Boolean(message.evidence?.length) && (
+                  {message.role === 'assistant' && !message.streaming && Boolean(message.evidence?.length) && (
                     <EvidenceList evidence={message.evidence || []} />
                   )}
 
-                  {message.role === 'assistant' && Boolean(message.suggested_followups?.length) && (
+                  {message.role === 'assistant' && !message.streaming && Boolean(message.suggested_followups?.length) && (
                     <HintList title="下一步建议" tone="info" items={dedupe(message.suggested_followups || []).slice(0, 3)} />
                   )}
 
-                  {message.role === 'assistant' && Boolean(message.results?.length) && (
+                  {message.role === 'assistant' && !message.streaming && Boolean(message.results?.length) && (
                     <ResultList results={message.results || []} evidence={message.evidence || []} />
                   )}
-                  {message.role === 'assistant' && Boolean(message.actions?.length) && (
+                  {message.role === 'assistant' && !message.streaming && Boolean(message.actions?.length) && (
                     <ActionList
                       actions={message.actions || []}
                       loadingId={actionLoadingId}
@@ -362,14 +371,14 @@ export default function CustomerService() {
                       onCancel={(id) => updateAction(id, 'cancel')}
                     />
                   )}
-                  {message.role === 'assistant' && message.content && (
+                  {message.role === 'assistant' && !message.streaming && message.content && (
                     <FeedbackBar
                       feedback={message.feedback}
                       loading={feedbackLoadingId === (message.message_id || message.id)}
                       onFeedback={(rating) => sendFeedback(message, rating)}
                     />
                   )}
-                  {message.role === 'assistant' && debugMode && isManagement && (
+                  {message.role === 'assistant' && !message.streaming && debugMode && isManagement && (
                     <DebugPanel message={message} />
                   )}
                 </div>
@@ -513,6 +522,22 @@ function EvidenceList({ evidence }: { evidence: Array<Record<string, unknown>> }
       </div>
     </div>
   )
+}
+
+function orderMessages(items: ChatMessage[]): ChatMessage[] {
+  return [...items].sort((left, right) => {
+    const leftTime = timestampOf(left.created_at)
+    const rightTime = timestampOf(right.created_at)
+    if (leftTime !== rightTime) return leftTime - rightTime
+    if (left.role !== right.role) return left.role === 'user' ? -1 : 1
+    return 0
+  })
+}
+
+function timestampOf(value?: string | null): number {
+  if (!value) return 0
+  const parsed = Date.parse(value)
+  return Number.isFinite(parsed) ? parsed : 0
 }
 
 function FeedbackBar({
