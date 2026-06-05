@@ -144,7 +144,7 @@ async def ask_stream(
 ):
     async def event_stream():
         try:
-            yield _sse("status", {"message": "intent_parsing", "label": "正在识别问题意图"})
+            yield _sse("status", {"message": "agent_planning", "label": "正在理解问题并选择工具"})
             result = await customer_service_service.ask_customer_service(
                 db,
                 user_id=current_user.id,
@@ -152,7 +152,7 @@ async def ask_stream(
                 sku=body.sku,
                 conversation_id=body.conversation_id,
             )
-            yield _sse("status", {"message": "summarizing", "label": "正在整理客服回复"})
+            yield _sse("status", {"message": "agent_reasoning", "label": "正在基于资料推理回复"})
             operation_log_service.log_operation(
                 db,
                 operator_id=current_user.id,

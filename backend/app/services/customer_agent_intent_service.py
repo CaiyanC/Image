@@ -1142,6 +1142,34 @@ def _compose_detail_answer(
     return "\n".join(lines)
 
 
+def _compose_unknown_attribute_answer(
+    details: list[dict[str, Any]],
+    requested_fields: list[str],
+    followups: list[str],
+) -> str:
+    if not details:
+        return "先说结论：我还不能直接确认，因为没有找到对应产品资料。"
+
+    field_text = "、".join(requested_fields or ["这个属性"])
+    lines = [f"先说结论：产品资料里没有标注{field_text}，所以不能直接确认。"]
+    lines.append("我能看到的相关依据如下：")
+
+    for detail in details[:3]:
+        sku = detail.get("sku") or ""
+        name = detail.get("product_name_cn") or detail.get("product_name_en") or ""
+        evidence = _unknown_attribute_evidence(detail)
+        if not evidence:
+            continue
+        title = f"{sku} {name}".strip()
+        lines.append(f"- {title}：" + "；".join(evidence[:6]))
+
+    if len(lines) == 2:
+        lines.append("- 当前资料缺少可用于判断的材质、表面处理、使用场景或使用说明。")
+    if followups:
+        lines.append(f"下一步建议：{followups[0]}")
+    return "\n".join(lines)
+
+
 def _search_product_qa(db: Session, sku: str, question: str, limit: int = 3) -> list[dict]:
     """Search product QA table for matching Q&A pairs."""
     from ..models.product import Product

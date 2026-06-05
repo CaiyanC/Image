@@ -136,7 +136,7 @@ def save_message_feedback(
         "comment": comment or "",
     }
     meta["feedback"] = feedback
-    message.sources_json = json.dumps(sources, ensure_ascii=False)
+    message.sources_json = json.dumps(sources, ensure_ascii=False, default=str)
     db.commit()
     return {"message_id": message.id, "feedback": feedback}
 
@@ -156,23 +156,22 @@ async def ask_customer_service(
 
     previous_result_skus = _latest_result_skus(db, conversation_id, user_id)
     conversation_history = _build_conversation_history(db, conversation_id, user_id)
-    # Intent parser first (structured, smarter answer composition)
-    agent_result = await customer_agent_intent_service.process_intent_request(
+    agent_result = await customer_agent_runtime_service.process_agent_request(
         db,
         user_id=user_id,
         question=question,
         sku=sku,
         previous_result_skus=previous_result_skus,
+        conversation_history=conversation_history,
+        feedback_lessons=_build_feedback_lessons(db, user_id),
     )
-    # Fallback to runtime agent if intent parser fails
     if not agent_result:
-        agent_result = await customer_agent_runtime_service.process_agent_request(
+        agent_result = await customer_agent_intent_service.process_intent_request(
             db,
             user_id=user_id,
             question=question,
             sku=sku,
             previous_result_skus=previous_result_skus,
-            conversation_history=conversation_history,
         )
     if not agent_result:
         agent_result = customer_agent_service.try_numeric_english_name_query(db, question)
@@ -185,7 +184,8 @@ async def ask_customer_service(
         )
     if agent_result:
         agent_result = _normalize_agent_result(agent_result)
-        agent_result["answer"] = await _polish_customer_answer(db, question, agent_result)
+        if not agent_result.get("skip_polish"):
+            agent_result["answer"] = await _polish_customer_answer(db, question, agent_result)
         conversation = _get_or_create_conversation(db, user_id, question, agent_result.get("sku") or sku, conversation_id)
         db.add(CustomerServiceMessage(
             conversation_id=conversation.id,
@@ -198,7 +198,7 @@ async def ask_customer_service(
             role="assistant",
             content=agent_result["answer"],
             sku=agent_result.get("sku") or sku,
-            sources_json=json.dumps(_sources_with_result_context(agent_result), ensure_ascii=False),
+            sources_json=json.dumps(_sources_with_result_context(agent_result), ensure_ascii=False, default=str),
         )
         db.add(assistant_message)
         conversation.sku = agent_result.get("sku") or sku
@@ -286,7 +286,7 @@ async def ask_customer_service(
         role="assistant",
         content=answer,
         sku=resolved_sku,
-        sources_json=json.dumps(sources_with_meta, ensure_ascii=False),
+        sources_json=json.dumps(sources_with_meta, ensure_ascii=False, default=str),
     )
     db.add(assistant_message)
     conversation.sku = resolved_sku
@@ -681,6 +681,47 @@ def _build_conversation_history(db: Session, conversation_id: str | None, user_i
         history.append({"role": role, "content": msg.content})
     return history
 
+
+def _build_feedback_lessons(db: Session, user_id: str, limit: int = 8) -> list[dict]:
+    messages = (
+        db.query(CustomerServiceMessage)
+        .join(CustomerServiceConversation, CustomerServiceConversation.id == CustomerServiceMessage.conversation_id)
+        .filter(
+            CustomerServiceConversation.user_id == str(user_id),
+            CustomerServiceMessage.role == "assistant",
+        )
+        .order_by(CustomerServiceMessage.created_at.desc())
+        .limit(50)
+        .all()
+    )
+    lessons = []
+    for message in messages:
+        meta = _message_meta(message.sources_json)
+        feedback = meta.get("feedback") if isinstance(meta, dict) else None
+        if not isinstance(feedback, dict) or feedback.get("rating") == "helpful":
+            continue
+        user_message = (
+            db.query(CustomerServiceMessage)
+            .filter(
+                CustomerServiceMessage.conversation_id == message.conversation_id,
+                CustomerServiceMessage.role == "user",
+                CustomerServiceMessage.created_at <= message.created_at,
+            )
+            .order_by(CustomerServiceMessage.created_at.desc())
+            .first()
+        )
+        lessons.append({
+            "question": user_message.content if user_message else "",
+            "bad_answer": message.content[:500],
+            "rating": feedback.get("rating"),
+            "reason": feedback.get("reason") or "",
+            "comment": feedback.get("comment") or "",
+        })
+        if len(lessons) >= limit:
+            break
+    return lessons
+
+
 def _latest_result_skus(db: Session, conversation_id: str | None, user_id: str) -> list[str]:
     if not conversation_id:
         return []
@@ -726,7 +767,7 @@ def _save_and_return_guidance(db: Session, user_id: str, question: str, conversa
         conversation_id=conversation.id,
         role="assistant",
         content=answer,
-        sources_json=json.dumps(meta_sources, ensure_ascii=False),
+        sources_json=json.dumps(meta_sources, ensure_ascii=False, default=str),
     )
     db.add(assistant_message)
     db.commit()

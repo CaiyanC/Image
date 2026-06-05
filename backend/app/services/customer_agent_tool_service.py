@@ -34,8 +34,8 @@ TOOL_SPECS = [
     },
     {
         "name": "get_product_detail",
-        "description": "读取单个 SKU 的完整产品资料。",
-        "arguments": {"sku": "产品 SKU"},
+        "description": "读取一个或多个 SKU 的完整产品资料。适合单品追问、上一轮结果继续对比、推荐前补全资料。",
+        "arguments": {"sku": "单个产品 SKU", "skus": "可选，多个 SKU 数组"},
     },
     {
         "name": "propose_update_product_field",
@@ -147,13 +147,12 @@ def _hybrid_search_products(db: Session, arguments: dict[str, Any], semantic_row
         sku = item.get("sku")
         if not sku:
             continue
-        if filters and sku not in merged and sql_rows:
-            continue
         if sku in merged:
             merged[sku]["hybrid_score"] = merged[sku].get("hybrid_score", 0) + 500 - index
             merged[sku]["semantic_match"] = item.get("content")
             continue
-        rows = customer_agent_service.search_products(db, "", limit=1, filters={"sku": sku})
+        sku_filters = {"sku": sku, **filters}
+        rows = customer_agent_service.search_products(db, "", limit=1, filters=sku_filters)
         if rows:
             enriched = _enrich_fields(db, rows[0], fields)
             enriched["hybrid_score"] = 500 - index
@@ -176,10 +175,21 @@ def _hybrid_search_products(db: Session, arguments: dict[str, Any], semantic_row
 
 
 def _get_product_detail(db: Session, arguments: dict[str, Any]) -> dict:
-    sku = str(arguments.get("sku") or "").strip().upper()
-    if not sku:
-        return {"ok": False, "error": "缺少 SKU"}
-    return {"ok": True, "tool": "get_product_detail", "sku": sku, "detail": product_service.get_product_detail(db, sku)}
+    skus = _extract_argument_skus(arguments)
+    if not skus:
+        return {"ok": False, "tool": "get_product_detail", "error": "缺少 SKU"}
+    details = []
+    errors = []
+    for sku in skus[:20]:
+        try:
+            details.append(product_service.get_product_detail(db, sku))
+        except Exception as exc:
+            errors.append({"sku": sku, "error": str(exc)})
+    if not details:
+        return {"ok": False, "tool": "get_product_detail", "error": "没有读取到产品详情", "errors": errors}
+    if len(details) == 1:
+        return {"ok": True, "tool": "get_product_detail", "sku": details[0].get("sku"), "detail": details[0], "errors": errors}
+    return {"ok": True, "tool": "get_product_detail", "skus": [item.get("sku") for item in details], "count": len(details), "details": details, "errors": errors}
 
 
 def _propose_update_product_field(db: Session, user_id: str, arguments: dict[str, Any]) -> dict:

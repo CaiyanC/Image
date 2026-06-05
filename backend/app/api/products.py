@@ -16,7 +16,7 @@ from ..schemas.product import (
     QaBatchImportRequest,
     ProductPromptsCreate,
 )
-from ..services import operation_log_service, product_service
+from ..services import operation_log_service, product_service, product_vector_index_service
 
 router = APIRouter(prefix="/api/products", tags=["products"])
 
@@ -140,6 +140,7 @@ def create_product(
         response_data={"sku": product.sku, "product_id": product.id},
         request=request,
     )
+    product_service.sync_product_to_vector_db(db, product.sku)
     return product_service.get_product_detail(db, product.sku)
 
 
@@ -165,6 +166,7 @@ def update_product(
         response_data={"sku": product.sku, "product_id": product.id},
         request=request,
     )
+    product_service.sync_product_to_vector_db(db, product.sku)
     return product_service.get_product_detail(db, product.sku)
 
 
@@ -192,6 +194,7 @@ def update_product_full(
         response_data={"sku": product.sku, "product_id": product.id},
         request=request,
     )
+    product_service.sync_product_to_vector_db(db, product.sku)
     return product_service.get_product_detail(db, product.sku)
 
 
@@ -365,6 +368,7 @@ def add_qa(
         request_data=body.model_dump(),
         request=request,
     )
+    product_service.sync_product_to_vector_db(db, sku)
     return product_service.model_to_dict(qa)
 
 
@@ -389,6 +393,7 @@ def update_qa(
         request_data=body,
         request=request,
     )
+    product_service.sync_product_to_vector_db(db, sku)
     return product_service.model_to_dict(qa)
 
 
@@ -411,6 +416,7 @@ def delete_qa(
         target_name=sku,
         request=request,
     )
+    product_service.sync_product_to_vector_db(db, sku)
     return {"ok": True}
 
 
@@ -443,6 +449,7 @@ def upsert_qa_negative(
         request_data=body.model_dump(),
         request=request,
     )
+    product_service.sync_product_to_vector_db(db, sku)
     return product_service.model_to_dict(qa_negative)
 
 

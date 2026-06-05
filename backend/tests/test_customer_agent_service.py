@@ -1,6 +1,8 @@
 import contextlib
 import io
+import json
 import unittest
+import uuid
 
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
@@ -10,9 +12,10 @@ from app.models import (
     AgentAction, Certification, Keyword, ListingChannel, OperationLog, Product,
     ProductBusiness, ProductCertification, ProductContent, ProductKeyword,
     ProductListingChannel, ProductMedia, ProductPrompts, ProductQa, ProductQaNegative,
-    ProductSalesRegion, ProductSpecs, SalesRegion,
+    ProductSalesRegion, ProductSpecs, SalesRegion, CustomerServiceConversation,
+    CustomerServiceMessage, KnowledgeChunk, KnowledgeDocument,
 )
-from app.services import customer_agent_intent_service, customer_agent_runtime_service, customer_agent_service, customer_agent_tool_service, dmxapi_service
+from app.services import customer_agent_intent_service, customer_agent_runtime_service, customer_agent_service, customer_agent_tool_service, customer_service_service, dmxapi_service, knowledge_service
 
 
 class CustomerAgentServiceTest(unittest.TestCase):
@@ -37,6 +40,8 @@ class CustomerAgentServiceTest(unittest.TestCase):
             ProductKeyword.__table__,
             AgentAction.__table__,
             OperationLog.__table__,
+            KnowledgeDocument.__table__,
+            KnowledgeChunk.__table__,
         ])
         self.Session = sessionmaker(bind=engine)
         self.db = self.Session()
@@ -318,6 +323,41 @@ class CustomerAgentServiceTest(unittest.TestCase):
         self.assertTrue(result["ok"])
         self.assertEqual([item["sku"] for item in result["results"]], ["CW-C93", "TW-141"])
 
+    def test_get_product_detail_accepts_multiple_skus(self):
+        result = customer_agent_tool_service.execute_tool(
+            self.db,
+            user_id="user-1",
+            name="get_product_detail",
+            arguments={"skus": ["CW-C93", "TW-141"]},
+        )
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["count"], 2)
+        self.assertEqual([item["sku"] for item in result["details"]], ["CW-C93", "TW-141"])
+
+    def test_keyword_retrieve_tokenizes_fuzzy_scene_query(self):
+        doc = KnowledgeDocument(
+            id="doc-1",
+            source_type="manual",
+            title="送礼场景",
+            content="年轻人送礼更看重颜值、便携和使用场景。",
+        )
+        chunk = KnowledgeChunk(
+            id="chunk-1",
+            document_id="doc-1",
+            source_type="manual",
+            content="年轻人送礼更看重颜值、便携和使用场景。",
+            embedding_status="pending",
+        )
+        self.db.add(doc)
+        self.db.add(chunk)
+        self.db.commit()
+
+        rows = knowledge_service.keyword_retrieve(self.db, "三个年轻人哪种适合送礼", limit=3)
+
+        self.assertEqual(len(rows), 1)
+        self.assertIn("送礼", rows[0]["content"])
+
 
 class CustomerAgentRuntimeServiceTest(unittest.IsolatedAsyncioTestCase):
     def setUp(self):
@@ -389,11 +429,35 @@ class CustomerAgentRuntimeServiceTest(unittest.IsolatedAsyncioTestCase):
         output = stream.getvalue()
         self.assertIsNotNone(result)
         self.assertEqual(result["answer"], "CW-C93 的容量是 1000ml。")
+        self.assertEqual(result["intent"], "query_products")
+        self.assertEqual(result["answer_type"], "product_query")
+        self.assertEqual(result["debug"]["agent_mode"], "llm_tool_calling")
+        self.assertTrue(result["skip_polish"])
         self.assertEqual(result["results"][0]["sku"], "CW-C93")
         self.assertEqual(result["results"][0]["field_values"]["容量"], "1000ml")
         self.assertIn("CUSTOMER_AGENT_TOOL_CALL", output)
         self.assertIn("CUSTOMER_AGENT_TOOL_RESULT", output)
         self.assertIn("CUSTOMER_AGENT_FINAL_RESPONSE", output)
+
+    async def test_runtime_strips_markdown_from_customer_answer(self):
+        calls = []
+
+        async def fake_chat_completion(db, messages, model=None, temperature=0.2, max_tokens=1200):
+            calls.append(messages)
+            if len(calls) == 1:
+                return '{"tool_calls":[{"name":"search_products","arguments":{"term":"锅","fields":["容量"]}}]}'
+            return '{"answer":"**首选：CW-C93**\\n### 依据\\n容量是 `1000ml`。"}'
+
+        dmxapi_service.chat_completion = fake_chat_completion
+        result = await customer_agent_runtime_service.process_agent_request(
+            self.db,
+            user_id="user-1",
+            question="三个年轻人适合哪个锅",
+        )
+
+        self.assertNotIn("**", result["answer"])
+        self.assertNotIn("###", result["answer"])
+        self.assertNotIn("`", result["answer"])
 
     async def test_model_can_search_then_create_batch_actions_in_multiple_rounds(self):
         calls = []
@@ -416,6 +480,7 @@ class CustomerAgentRuntimeServiceTest(unittest.IsolatedAsyncioTestCase):
         self.assertIsNotNone(result)
         self.assertEqual(len(result["actions"]), 1)
         self.assertEqual(result["actions"][0]["sku"], "CW-C93")
+        self.assertEqual(result["intent"], "propose_update")
         self.assertEqual(result["actions"][0]["field_label"], "生命周期")
 
     async def test_model_can_use_previous_result_skus_for_these(self):
@@ -439,6 +504,34 @@ class CustomerAgentRuntimeServiceTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(result["actions"]), 1)
         self.assertEqual(result["actions"][0]["sku"], "CW-C93")
 
+    async def test_model_receives_conversation_history_for_followup(self):
+        calls = []
+        history = [
+            {"role": "user", "content": "查一下锅具"},
+            {"role": "assistant", "content": "找到 CW-C93。"},
+        ]
+
+        async def fake_chat_completion(db, messages, model=None, temperature=0.2, max_tokens=1200):
+            calls.append(messages)
+            if len(calls) == 1:
+                payload = json.loads(messages[-1]["content"])
+                self.assertEqual(payload["conversation_history"], history)
+                return '{"tool_calls":[{"name":"get_product_detail","arguments":{"sku":"CW-C93"}}]}'
+            return '{"answer":"结合上一轮结果，CW-C93 更适合继续查看容量和材质。"}'
+
+        dmxapi_service.chat_completion = fake_chat_completion
+        result = await customer_agent_runtime_service.process_agent_request(
+            self.db,
+            user_id="user-1",
+            question="哪种适合送礼",
+            previous_result_skus=["CW-C93"],
+            conversation_history=history,
+        )
+
+        self.assertIsNotNone(result)
+        self.assertEqual(result["debug"]["history_turns"], 2)
+        self.assertEqual(result["results"][0]["sku"], "CW-C93")
+
     async def test_context_reference_without_previous_results_clarifies(self):
         result = await customer_agent_runtime_service.process_agent_request(
             self.db,
@@ -451,6 +544,137 @@ class CustomerAgentRuntimeServiceTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result["actions"], [])
         self.assertIn("没有可引用的上一轮产品结果", result["answer"])
         self.assertEqual(result["steps"][0]["type"], "clarify")
+
+
+class CustomerServiceServiceTest(unittest.IsolatedAsyncioTestCase):
+    def setUp(self):
+        engine = create_engine("sqlite:///:memory:")
+        Base.metadata.create_all(engine, tables=[
+            Product.__table__,
+            ProductSpecs.__table__,
+            ProductBusiness.__table__,
+            ProductContent.__table__,
+            ProductMedia.__table__,
+            ProductPrompts.__table__,
+            ProductQa.__table__,
+            ProductQaNegative.__table__,
+            ListingChannel.__table__,
+            ProductListingChannel.__table__,
+            SalesRegion.__table__,
+            ProductSalesRegion.__table__,
+            Certification.__table__,
+            ProductCertification.__table__,
+            Keyword.__table__,
+            ProductKeyword.__table__,
+            AgentAction.__table__,
+            OperationLog.__table__,
+            CustomerServiceConversation.__table__,
+            CustomerServiceMessage.__table__,
+        ])
+        self.Session = sessionmaker(bind=engine)
+        self.db = self.Session()
+        self.original_runtime = customer_agent_runtime_service.process_agent_request
+        self.original_intent = customer_agent_intent_service.process_intent_request
+        self.original_polish = customer_service_service._polish_customer_answer
+
+    def tearDown(self):
+        customer_agent_runtime_service.process_agent_request = self.original_runtime
+        customer_agent_intent_service.process_intent_request = self.original_intent
+        customer_service_service._polish_customer_answer = self.original_polish
+        self.db.close()
+
+    async def test_ask_customer_service_uses_llm_runtime_before_intent_parser(self):
+        calls = []
+
+        async def fake_runtime(db, **kwargs):
+            calls.append(("runtime", kwargs["question"]))
+            return {
+                "answer": "Agent 已经自主查询并回答。",
+                "intent": "query_products",
+                "answer_type": "product_query",
+                "confidence": "high",
+                "uncertainty": "confirmed",
+                "sources": [],
+                "actions": [],
+                "results": [{"id": uuid.uuid4(), "sku": "CW-C93"}],
+                "steps": [],
+                "warnings": [],
+                "evidence": [],
+                "debug": {"agent_mode": "llm_tool_calling"},
+                "skip_polish": True,
+            }
+
+        async def fake_intent(*args, **kwargs):
+            calls.append(("intent", kwargs["question"]))
+            return None
+
+        async def fake_polish(*args, **kwargs):
+            calls.append(("polish", "unexpected"))
+            return "不应该润色"
+
+        customer_agent_runtime_service.process_agent_request = fake_runtime
+        customer_agent_intent_service.process_intent_request = fake_intent
+        customer_service_service._polish_customer_answer = fake_polish
+
+        result = await customer_service_service.ask_customer_service(
+            self.db,
+            user_id="user-1",
+            question="三个年轻人适合哪个锅",
+        )
+
+        self.assertEqual(result["answer"], "Agent 已经自主查询并回答。")
+        self.assertEqual([item[0] for item in calls], ["runtime"])
+        self.assertEqual(result["debug"]["agent_mode"], "llm_tool_calling")
+
+    async def test_ask_customer_service_passes_negative_feedback_lessons(self):
+        conversation = CustomerServiceConversation(id="conv-1", user_id="user-1", title="旧会话")
+        self.db.add(conversation)
+        self.db.add(CustomerServiceMessage(
+            id="user-msg-1",
+            conversation_id="conv-1",
+            role="user",
+            content="哪种适合送礼",
+        ))
+        self.db.add(CustomerServiceMessage(
+            id="assistant-msg-1",
+            conversation_id="conv-1",
+            role="assistant",
+            content="随便选一个就行。",
+            sources_json=json.dumps([{
+                "type": "agent_meta",
+                "feedback": {"rating": "incorrect", "reason": "too_casual", "comment": "没有依据"},
+            }], ensure_ascii=False),
+        ))
+        self.db.commit()
+
+        async def fake_runtime(db, **kwargs):
+            self.assertEqual(kwargs["feedback_lessons"][0]["question"], "哪种适合送礼")
+            self.assertEqual(kwargs["feedback_lessons"][0]["rating"], "incorrect")
+            return {
+                "answer": "这次会基于资料给推荐理由。",
+                "intent": "recommend_products",
+                "answer_type": "recommendation",
+                "confidence": "high",
+                "uncertainty": "confirmed",
+                "sources": [],
+                "actions": [],
+                "results": [{"sku": "CW-C93"}],
+                "steps": [],
+                "warnings": [],
+                "evidence": [],
+                "debug": {"agent_mode": "llm_tool_calling"},
+                "skip_polish": True,
+            }
+
+        customer_agent_runtime_service.process_agent_request = fake_runtime
+
+        result = await customer_service_service.ask_customer_service(
+            self.db,
+            user_id="user-1",
+            question="给三个年轻人送礼选哪个",
+        )
+
+        self.assertEqual(result["intent"], "recommend_products")
 
 
 if __name__ == "__main__":

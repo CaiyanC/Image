@@ -1,4 +1,5 @@
 import json
+import re
 from typing import Any
 
 from sqlalchemy import text
@@ -75,20 +76,35 @@ def create_document(
 
 
 def keyword_retrieve(db: Session, query: str, sku: str | None = None, limit: int = 5) -> list[dict]:
-    if not query.strip():
+    query_text = query.strip()
+    if not query_text:
         return []
-    db_query = db.query(KnowledgeChunk).filter(KnowledgeChunk.content.ilike(f"%{query.strip()}%"))
+    tokens = _query_tokens(query_text)
+    db_query = db.query(KnowledgeChunk)
     if sku:
         db_query = db_query.filter((KnowledgeChunk.sku == sku) | (KnowledgeChunk.sku.is_(None)))
-    chunks = db_query.order_by(KnowledgeChunk.updated_at.desc()).limit(limit).all()
+    if tokens:
+        conditions = [KnowledgeChunk.content.ilike(f"%{token}%") for token in tokens[:8]]
+        db_query = db_query.filter(text(" OR ".join([f"content LIKE :token_{index}" for index, _ in enumerate(conditions)]))).params(
+            **{f"token_{index}": f"%{token}%" for index, token in enumerate(tokens[:8])}
+        )
+    else:
+        db_query = db_query.filter(KnowledgeChunk.content.ilike(f"%{query_text}%"))
+    chunks = db_query.order_by(KnowledgeChunk.updated_at.desc()).limit(max(limit * 4, limit)).all()
+    ranked = sorted(
+        chunks,
+        key=lambda item: (_keyword_score(query_text, tokens, item.content), item.updated_at),
+        reverse=True,
+    )[:limit]
     return [
         {
             "source_type": item.source_type,
             "sku": item.sku,
             "content": item.content,
             "metadata": _safe_json(item.metadata_json),
+            "score": _keyword_score(query_text, tokens, item.content),
         }
-        for item in chunks
+        for item in ranked
     ]
 
 
@@ -130,6 +146,44 @@ async def semantic_retrieve(db: Session, query: str, sku: str | None = None, lim
 def _safe_json(value: str | None) -> dict:
     if not value:
         return {}
+
+
+def _query_tokens(query: str) -> list[str]:
+    raw = [item.strip() for item in re.split(r"[\s,，。！？?、/；;：:（）()]+", query) if item.strip()]
+    tokens = []
+    stopwords = {"哪些", "哪个", "哪种", "适合", "推荐", "产品", "商品", "这个", "这些", "一下", "给我", "比较"}
+    domain_words = (
+        "年轻人", "送礼", "露营", "泡咖啡", "咖啡", "便携", "轻量", "轻便", "多人", "三人",
+        "一个人", "情侣", "家庭", "锅具", "炉具", "容量", "材质", "颜值", "场景",
+    )
+    for word in domain_words:
+        if word in query:
+            tokens.append(word)
+    for item in raw:
+        if item in stopwords:
+            continue
+        if len(item) >= 2:
+            tokens.append(item)
+    if len(tokens) <= 1:
+        for size in (4, 3, 2):
+            for index in range(0, max(len(query) - size + 1, 0)):
+                token = query[index:index + size].strip()
+                if token and token not in stopwords and re.search(r"[\u4e00-\u9fffA-Za-z0-9]", token):
+                    tokens.append(token)
+    return list(dict.fromkeys(tokens))[:12]
+
+
+def _keyword_score(query: str, tokens: list[str], content: str) -> float:
+    text = content or ""
+    if not text:
+        return 0
+    score = 0.0
+    if query and query in text:
+        score += 10
+    for token in tokens:
+        if token in text:
+            score += min(len(token), 6)
+    return score
     try:
         return json.loads(value)
     except json.JSONDecodeError:
