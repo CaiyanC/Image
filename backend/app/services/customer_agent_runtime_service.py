@@ -118,10 +118,16 @@ def _build_result(
 ) -> dict:
     actions = _collect_actions(tool_results)
     results = _collect_results(tool_results)
-    clean_answer = _clean_customer_answer(answer or _fallback_answer(tool_results))
     warnings = _warnings_from_tool_results(tool_results, direct_answer=direct_answer)
+    provisional_answer = _clean_customer_answer(answer or "")
+    provisional_needs_clarification = _needs_clarification(provisional_answer, results, warnings)
+    intent = _infer_intent(question, tool_results, actions, results, provisional_needs_clarification)
+    if intent == "recommend_products":
+        results = _rank_recommendation_results(question, results)
+        if not provisional_answer or _should_replace_recommendation_answer(provisional_answer, question, results):
+            provisional_answer = _compose_recommendation_answer(question, results)
+    clean_answer = _clean_customer_answer(provisional_answer or _fallback_answer(tool_results))
     needs_clarification = _needs_clarification(clean_answer, results, warnings)
-    intent = _infer_intent(question, tool_results, actions, results, needs_clarification)
     suggested_followups = _suggested_followups(question, results, needs_clarification)
     final_steps = [
         {
@@ -482,6 +488,129 @@ def _fallback_answer(tool_results: list[dict]) -> str:
         suffix = "，" + "，".join(f"{key}：{value}" for key, value in field_values.items()) if field_values else ""
         lines.append(f"{index}. {item.get('sku')}，{item.get('product_name_cn') or ''}{suffix}")
     return "\n".join(lines)
+
+
+def _rank_recommendation_results(question: str, results: list[dict]) -> list[dict]:
+    unique: dict[str, dict] = {}
+    for item in results:
+        if not isinstance(item, dict):
+            continue
+        sku = item.get("sku")
+        if not sku or sku in unique:
+            continue
+        unique[sku] = item
+    ranked = sorted(unique.values(), key=lambda row: _recommendation_score(question, row), reverse=True)
+    return [row for row in ranked if _recommendation_score(question, row) > -20][:5]
+
+
+def _recommendation_score(question: str, row: dict) -> float:
+    text = _row_text(row)
+    name = str(row.get("product_name_cn") or "")
+    capacity_ml = _capacity_ml(row.get("capacity"))
+    score = 0.0
+    if "露营" in question and "露营" in text:
+        score += 30
+    if any(word in question for word in ("年轻人", "三人", "三个人", "三个")):
+        if capacity_ml:
+            if 1800 <= capacity_ml <= 4200:
+                score += 35
+            elif capacity_ml < 1500:
+                score -= 25
+            elif capacity_ml > 5000:
+                score -= 15
+        if any(word in text for word in ("家庭", "多人", "聚餐", "营地大餐", "精致露营")):
+            score += 12
+        if any(word in text for word in ("单人", "极限轻量", "速穿")):
+            score -= 16
+    if any(word in question for word in ("咖啡", "泡咖啡", "小锅")):
+        if any(word in text for word in ("咖啡", "煮水", "速沸", "烧水", "单锅")):
+            score += 35
+        if capacity_ml:
+            if 400 <= capacity_ml <= 1500:
+                score += 35
+            elif capacity_ml > 2000:
+                score -= 35
+        if any(word in name for word in ("炒锅", "煎锅", "煎盘")):
+            score -= 50
+        if "炉" in name and "锅" not in name:
+            score -= 20
+    if any(word in question for word in ("送礼", "礼物")):
+        if any(word in text for word in ("颜值", "精致", "情绪价值", "优雅", "礼")):
+            score += 25
+        if any(word in text for word in ("套锅", "套装", "家庭", "精致露营")):
+            score += 15
+    if row.get("features"):
+        score += 4
+    return score
+
+
+def _should_replace_recommendation_answer(answer: str, question: str, results: list[dict]) -> bool:
+    if not results:
+        return False
+    listed_count = len(re.findall(r"(^|\n)\s*\d+[\.、]", answer))
+    if listed_count > 5:
+        return True
+    if any(word in question for word in ("咖啡", "泡咖啡", "小锅")) and any(word in answer for word in ("炒锅", "煎锅", "煎盘")):
+        return True
+    return "找到" in answer and "条产品资料" in answer
+
+
+def _compose_recommendation_answer(question: str, results: list[dict]) -> str:
+    if not results:
+        return "没有找到足够匹配的产品资料。你可以补充人数、场景或容量要求，我再帮你缩小范围。"
+    best = results[0]
+    lines = [f"首选 {best.get('sku')}，{best.get('product_name_cn') or best.get('product_name_en') or ''}。"]
+    reason = _recommendation_reason(question, best)
+    if reason:
+        lines.append(f"理由：{reason}")
+    if len(results) > 1:
+        lines.append("备选：")
+        for item in results[1:3]:
+            item_reason = _recommendation_reason(question, item)
+            lines.append(f"{item.get('sku')}，{item.get('product_name_cn') or item.get('product_name_en') or ''}：{item_reason}")
+    if any(word in question for word in ("咖啡", "泡咖啡", "小锅")):
+        lines.append("我已把炒锅、煎锅这类容量偏大或器型不适合泡咖啡的产品降权，不作为优先推荐。")
+    return "\n".join(line for line in lines if line.strip())
+
+
+def _recommendation_reason(question: str, row: dict) -> str:
+    parts = []
+    capacity = row.get("capacity")
+    if capacity:
+        parts.append(f"容量 {capacity}")
+    if row.get("body_material"):
+        parts.append(f"材质 {row.get('body_material')}")
+    if row.get("features"):
+        parts.append(f"卖点 {row.get('features')}")
+    scenes = row.get("usage_scenarios") or row.get("usage_scene") or ""
+    if scenes:
+        parts.append(f"场景 {scenes}")
+    if any(word in question for word in ("咖啡", "泡咖啡", "小锅")) and _capacity_ml(capacity) and _capacity_ml(capacity) > 2000:
+        parts.append("但容量偏大，不适合单人小锅泡咖啡")
+    return "；".join(str(part) for part in parts[:4] if part)
+
+
+def _row_text(row: dict) -> str:
+    values = []
+    for key in ("product_name_cn", "product_name_en", "category", "sub_category", "capacity", "body_material", "features", "target_audience", "usage_scenarios", "emotional_value", "semantic_match"):
+        value = row.get(key)
+        if value:
+            values.append(str(value))
+    field_values = row.get("field_values")
+    if isinstance(field_values, dict):
+        values.extend(str(value) for value in field_values.values())
+    return " ".join(values)
+
+
+def _capacity_ml(value: Any) -> float | None:
+    text = str(value or "")
+    numbers = [float(item) for item in re.findall(r"(\d+(?:\.\d+)?)\s*(?:ML|ml|毫升)", text)]
+    if numbers:
+        return max(numbers)
+    liters = [float(item) * 1000 for item in re.findall(r"(\d+(?:\.\d+)?)\s*(?:L|l|升)", text)]
+    if liters:
+        return max(liters)
+    return None
 
 
 def _resolve_context_arguments(arguments: dict[str, Any], previous_result_skus: list[str], tool_results: list[dict]) -> dict[str, Any]:

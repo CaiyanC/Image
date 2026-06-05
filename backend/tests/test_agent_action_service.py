@@ -1,3 +1,4 @@
+import json
 import unittest
 
 from sqlalchemy import create_engine
@@ -139,6 +140,33 @@ class AgentActionServiceTest(unittest.TestCase):
         refreshed = self.db.query(AgentAction).filter(AgentAction.id == action.id).first()
         self.assertEqual(refreshed.status, "cancelled")
         self.assertEqual(result["status"], "cancelled")
+
+    def test_capacity_update_preserves_existing_label_value_shape(self):
+        specs = self.db.query(ProductSpecs).filter(ProductSpecs.product_id == "product-1").first()
+        specs.capacity = '[{"label": "锅", "value": "3700ML"}]'
+        self.db.commit()
+
+        action = agent_action_service.create_update_field_action(
+            self.db,
+            created_by="user-1",
+            sku="CS-G25",
+            field_path="specs.capacity",
+            new_value="2000ml",
+        )
+
+        self.assertEqual(action.original_value, '[{"label": "锅", "value": "3700ML"}]')
+        self.assertEqual(action.proposed_value, [{"label": "锅", "value": "2000ml"}])
+
+    def test_delete_product_action_serializes_uuid_like_values(self):
+        action = agent_action_service.create_delete_product_action(
+            self.db,
+            created_by="user-1",
+            sku="CS-G25",
+        )
+
+        payload = json.loads(action.original_value_json)
+        self.assertEqual(payload["id"], "product-1")
+        self.assertEqual(action.action_type, "delete_product")
 
 
 if __name__ == "__main__":

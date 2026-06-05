@@ -154,13 +154,14 @@ async def ask_customer_service(
     if not question:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="问题不能为空")
 
-    previous_result_skus = _latest_result_skus(db, conversation_id, user_id)
+    previous_result_skus = _previous_skus_for_agent(question, _latest_result_skus(db, conversation_id, user_id))
     conversation_history = _build_conversation_history(db, conversation_id, user_id)
+    agent_sku = _sku_for_agent(question, sku)
     agent_result = await customer_agent_runtime_service.process_agent_request(
         db,
         user_id=user_id,
         question=question,
-        sku=sku,
+        sku=agent_sku,
         previous_result_skus=previous_result_skus,
         conversation_history=conversation_history,
         feedback_lessons=_build_feedback_lessons(db, user_id),
@@ -170,7 +171,7 @@ async def ask_customer_service(
             db,
             user_id=user_id,
             question=question,
-            sku=sku,
+            sku=agent_sku,
             previous_result_skus=previous_result_skus,
         )
     if not agent_result:
@@ -180,28 +181,28 @@ async def ask_customer_service(
             db,
             user_id=user_id,
             question=question,
-            sku=sku,
+            sku=agent_sku,
         )
     if agent_result:
         agent_result = _normalize_agent_result(agent_result)
         if not agent_result.get("skip_polish"):
             agent_result["answer"] = await _polish_customer_answer(db, question, agent_result)
-        conversation = _get_or_create_conversation(db, user_id, question, agent_result.get("sku") or sku, conversation_id)
+        conversation = _get_or_create_conversation(db, user_id, question, agent_result.get("sku") or agent_sku, conversation_id)
         db.add(CustomerServiceMessage(
             conversation_id=conversation.id,
             role="user",
             content=question,
-            sku=agent_result.get("sku") or sku,
+            sku=agent_result.get("sku") or agent_sku,
         ))
         assistant_message = CustomerServiceMessage(
             conversation_id=conversation.id,
             role="assistant",
             content=agent_result["answer"],
-            sku=agent_result.get("sku") or sku,
+            sku=agent_result.get("sku") or agent_sku,
             sources_json=json.dumps(_sources_with_result_context(agent_result), ensure_ascii=False, default=str),
         )
         db.add(assistant_message)
-        conversation.sku = agent_result.get("sku") or sku
+        conversation.sku = agent_result.get("sku") or agent_sku
         conversation.title = _make_title(question, conversation.sku)
         db.commit()
         return {
@@ -798,6 +799,33 @@ def _make_title(question: str, sku: str | None) -> str:
     prefix = f"{sku} " if sku else ""
     clean = re.sub(r"\s+", " ", question).strip()
     return (prefix + clean)[:80] or "客服会话"
+
+
+def _sku_for_agent(question: str, sku: str | None) -> str | None:
+    if not sku:
+        return None
+    clean = question.strip()
+    sku_text = str(sku).strip()
+    if sku_text and sku_text.lower() in clean.lower():
+        return sku
+    if any(word in clean for word in ("这个", "该产品", "当前", "这款", "它", "这个SKU", "这个产品")):
+        return sku
+    if _is_broad_recommendation(clean):
+        return None
+    return sku
+
+
+def _previous_skus_for_agent(question: str, previous_result_skus: list[str]) -> list[str]:
+    if _is_broad_recommendation(question):
+        return []
+    return previous_result_skus
+
+
+def _is_broad_recommendation(question: str) -> bool:
+    has_recommend_signal = any(word in question for word in ("推荐", "适合", "哪个好", "哪款", "送礼", "年轻人", "露营", "泡咖啡", "小锅"))
+    has_context_signal = any(word in question for word in ("这些", "刚才", "上面", "这个", "该产品", "当前", "这款", "它"))
+    has_explicit_sku = bool(re.search(r"\b[A-Z]{1,5}-[A-Z0-9-]{1,20}\b", question, flags=re.I))
+    return has_recommend_signal and not has_context_signal and not has_explicit_sku
 
 
 def _stringify(value) -> str:

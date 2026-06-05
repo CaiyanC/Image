@@ -676,6 +676,98 @@ class CustomerServiceServiceTest(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(result["intent"], "recommend_products")
 
+    def test_broad_recommendation_does_not_lock_selected_sku(self):
+        self.assertIsNone(customer_service_service._sku_for_agent("三个年轻人露营适合带什么产品", "CW-C83"))
+        self.assertEqual(customer_service_service._sku_for_agent("这个适合露营吗", "CW-C83"), "CW-C83")
+        self.assertEqual(customer_service_service._sku_for_agent("CW-C83 适合露营吗", "CW-C83"), "CW-C83")
+
+    def test_recommendation_answer_filters_oversized_pans_for_coffee(self):
+        tool_results = [{
+            "ok": True,
+            "tool": "search_products",
+            "query": "适合泡咖啡的小锅",
+            "count": 3,
+            "results": [
+                {
+                    "sku": "CW-C83-1",
+                    "product_name_cn": "炊墨炒锅",
+                    "category": "锅具",
+                    "capacity": "锅 3700ML",
+                    "features": "一锅N用",
+                    "usage_scenarios": "家庭精致露营",
+                },
+                {
+                    "sku": "CW-C83-2",
+                    "product_name_cn": "炊墨煎锅",
+                    "category": "锅具",
+                    "capacity": "煎盘 2300ML",
+                    "features": "健康不沾",
+                    "usage_scenarios": "家庭精致露营",
+                },
+                {
+                    "sku": "CW-C93",
+                    "product_name_cn": "行山单锅",
+                    "category": "锅具",
+                    "capacity": "锅 1000ML",
+                    "features": "聚能结构 95秒速沸",
+                    "usage_scenarios": "单人野宿，露营泡咖啡",
+                },
+            ],
+        }]
+
+        result = customer_agent_runtime_service._build_result(
+            "适合泡咖啡的小锅有吗？",
+            None,
+            tool_results,
+            "为您找到了以下适合泡咖啡的小锅推荐：\n1. 炊墨炒锅\n2. 炊墨煎锅\n3. 行山单锅",
+            [],
+        )
+
+        self.assertEqual(result["intent"], "recommend_products")
+        self.assertEqual(result["results"][0]["sku"], "CW-C93")
+        self.assertIn("CW-C93", result["answer"])
+        self.assertIn("不作为优先推荐", result["answer"])
+
+    def test_recommendation_answer_prefers_three_person_camping_capacity(self):
+        tool_results = [{
+            "ok": True,
+            "tool": "search_products",
+            "query": "三个年轻人露营",
+            "count": 2,
+            "results": [
+                {
+                    "sku": "CW-C93",
+                    "product_name_cn": "行山单锅",
+                    "category": "锅具",
+                    "capacity": "锅 1000ML",
+                    "features": "极限轻量",
+                    "target_audience": "单人背包客",
+                    "usage_scenarios": "单人野宿",
+                },
+                {
+                    "sku": "CW-C83",
+                    "product_name_cn": "炊墨套锅",
+                    "category": "锅具",
+                    "capacity": "锅 3700ML，煎盘 2300ML",
+                    "features": "轻量便携 健康不沾 一锅N用",
+                    "target_audience": "家庭户外野餐群体",
+                    "usage_scenarios": "家庭精致露营，户外营地大餐",
+                },
+            ],
+        }]
+
+        result = customer_agent_runtime_service._build_result(
+            "三个年轻人露营，适合带什么产品",
+            None,
+            tool_results,
+            None,
+            [],
+        )
+
+        self.assertEqual(result["results"][0]["sku"], "CW-C83")
+        self.assertIn("CW-C83", result["answer"])
+        self.assertNotIn("找到 2 条产品资料", result["answer"])
+
 
 if __name__ == "__main__":
     unittest.main()

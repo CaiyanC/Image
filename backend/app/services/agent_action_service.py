@@ -1,4 +1,5 @@
 import json
+import re
 from dataclasses import dataclass
 from typing import Any
 
@@ -119,6 +120,7 @@ def create_update_field_action(
 ) -> AgentAction:
     spec = _require_field_spec(field_path)
     current_value = _read_current_value(db, sku, spec, target_id)
+    proposed_value = _normalize_proposed_value(spec, current_value, new_value)
     action = AgentAction(
         action_type="update_field",
         sku=sku,
@@ -127,7 +129,7 @@ def create_update_field_action(
         field_path=field_path,
         field_label=spec.label,
         original_value_json=_dumps(current_value),
-        proposed_value_json=_dumps(new_value),
+        proposed_value_json=_dumps(proposed_value),
         status="pending",
         created_by=str(created_by),
     )
@@ -384,7 +386,7 @@ def _log_action(
 
 def _delete_preview(detail: dict) -> dict:
     return {
-        "id": detail.get("id"),
+        "id": str(detail.get("id")) if detail.get("id") is not None else None,
         "sku": detail.get("sku"),
         "product_name_cn": detail.get("product_name_cn"),
         "will_delete": {
@@ -405,11 +407,67 @@ def _delete_preview(detail: dict) -> dict:
 
 
 def _dumps(value: Any) -> str:
-    return json.dumps(value, ensure_ascii=False)
+    return json.dumps(value, ensure_ascii=False, default=str)
 
 
 def _normal_value(value: Any) -> str:
     return json.dumps(value, ensure_ascii=False, sort_keys=True, default=str)
+
+
+def _normalize_proposed_value(spec: FieldSpec, current_value: Any, new_value: Any) -> Any:
+    if spec.section == "specs" and spec.field == "capacity":
+        return _normalize_capacity_update(current_value, new_value)
+    return new_value
+
+
+def _normalize_capacity_update(current_value: Any, new_value: Any) -> Any:
+    parsed = _parse_json_value(current_value)
+    requested_label, requested_value = _split_capacity_request(new_value)
+    if isinstance(parsed, dict):
+        updated = dict(parsed)
+        value_key = "value" if "value" in updated else "label"
+        if requested_label and "label" in updated and str(updated.get("label") or "").strip() != requested_label:
+            value_key = "value"
+        updated[value_key] = requested_value
+        return updated
+    if isinstance(parsed, list) and parsed and all(isinstance(item, dict) for item in parsed):
+        updated_items = [dict(item) for item in parsed]
+        matched_indexes = [
+            index for index, item in enumerate(updated_items)
+            if requested_label and str(item.get("label") or "").strip() == requested_label
+        ]
+        if matched_indexes:
+            for index in matched_indexes:
+                updated_items[index]["value"] = requested_value
+            return updated_items
+        if len(updated_items) == 1:
+            updated_items[0]["value"] = requested_value
+            return updated_items
+        return new_value
+    return new_value
+
+
+def _parse_json_value(value: Any) -> Any:
+    if not isinstance(value, str):
+        return value
+    text = value.strip()
+    if not text or text[0] not in "[{":
+        return value
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError:
+        return value
+
+
+def _split_capacity_request(value: Any) -> tuple[str | None, Any]:
+    if isinstance(value, dict):
+        label = str(value.get("label") or "").strip() or None
+        return label, value.get("value") or value.get("label") or ""
+    text = str(value or "").strip()
+    match = re.match(r"^([\u4e00-\u9fffA-Za-z]+)\s*[:：]\s*(.+)$", text)
+    if match:
+        return match.group(1).strip(), match.group(2).strip()
+    return None, value
 
 
 class _StaleAction(Exception):
