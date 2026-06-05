@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { useNavigate, useSearchParams } from 'react-router-dom'
+import { useNavigate } from 'react-router-dom'
 import { AgentAction, AgentStep, ProductSearchResult, api } from '../services/api'
 import { useAuthStore } from '../store/authStore'
 
@@ -29,8 +29,6 @@ interface ChatMessage {
 
 export default function CustomerService() {
   const { isManagement } = useAuthStore()
-  const [params, setParams] = useSearchParams()
-  const [sku, setSku] = useState(params.get('sku') || '')
   const [question, setQuestion] = useState('')
   const [conversationId, setConversationId] = useState<string | null>(null)
   const [messages, setMessages] = useState<ChatMessage[]>([])
@@ -58,13 +56,6 @@ export default function CustomerService() {
       bottomRef.current?.scrollIntoView({ behavior: 'auto', block: 'end' })
     }
   }, [messages, loading])
-
-  useEffect(() => {
-    const next = new URLSearchParams(params)
-    if (sku) next.set('sku', sku)
-    else next.delete('sku')
-    setParams(next, { replace: true })
-  }, [sku])
 
   const latestSources = useMemo(() => {
     const msg = [...messages].reverse().find((item) => item.role === 'assistant' && item.sources?.length)
@@ -100,7 +91,6 @@ export default function CustomerService() {
       await api.customerService.askStream(
         {
           question: userText,
-          sku: sku.trim() || null,
           conversation_id: conversationId,
         },
         (event) => {
@@ -115,7 +105,6 @@ export default function CustomerService() {
 
           if (event.type === 'meta') {
             setConversationId(event.conversation_id)
-            if (event.sku) setSku(event.sku)
             setMessages((prev) => prev.map((message) => (
               message.id === assistantId
                 ? {
@@ -206,11 +195,9 @@ export default function CustomerService() {
     try {
       const data = await api.customerService.conversation(id) as {
         id: string
-        sku?: string | null
         messages?: ChatMessage[]
       }
       setConversationId(data.id)
-      setSku(data.sku || '')
       setMessages(data.messages || [])
     } catch (err) {
       setError(err instanceof Error ? err.message : '加载会话失败')
@@ -315,15 +302,9 @@ export default function CustomerService() {
         <main className="col-span-12 lg:col-span-6 glass rounded-2xl overflow-hidden flex flex-col">
           <div className="p-4 border-b border-black/5">
             <div className="flex items-end gap-3">
-              <label className="block flex-1">
-                <span className="block text-[11px] font-medium text-apple-gray-dark mb-1">当前 SKU</span>
-                <input
-                  value={sku}
-                  onChange={(e) => setSku(e.target.value)}
-                  placeholder="例如 CS-G25；为空时会尝试从问题中识别"
-                  className="glass-input w-full px-3 py-2 text-sm font-mono"
-                />
-              </label>
+              <div className="flex-1 rounded-xl bg-blue-50/70 px-3 py-2 text-xs text-blue-700 border border-blue-100">
+                智能客服会根据你的问题、历史对话和工具查询结果判断产品范围；不会被页面当前 SKU 锁定。
+              </div>
               {isManagement && (
                 <button
                   type="button"

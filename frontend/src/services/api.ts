@@ -597,10 +597,10 @@ export const api = {
   },
 
   customerService: {
-    ask: (data: { question: string; sku?: string | null; conversation_id?: string | null }) =>
+    ask: (data: { question: string; conversation_id?: string | null }) =>
       request<CustomerServiceAskResult>('/customer-service/ask', { method: 'POST', body: JSON.stringify(data) }, 150000),
     askStream: (
-      data: { question: string; sku?: string | null; conversation_id?: string | null },
+      data: { question: string; conversation_id?: string | null },
       onEvent: (event: CustomerServiceStreamEvent) => void,
     ) => streamRequest('/customer-service/ask-stream', { method: 'POST', body: JSON.stringify(data) }, onEvent, 150000),
     feedback: (messageId: string, data: { rating: 'helpful' | 'incorrect' | 'missing_data'; reason?: string; comment?: string }) =>
