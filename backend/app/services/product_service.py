@@ -125,6 +125,74 @@ def _to_json_str(value):
     return json.dumps(value, ensure_ascii=False)
 
 
+_SIZE_UNIT_ALIASES = {
+    "mm": "mm",
+    "毫米": "mm",
+    "cm": "cm",
+    "厘米": "cm",
+    "m": "m",
+    "米": "m",
+    "in": "in",
+    "inch": "in",
+    "英寸": "in",
+}
+
+_SIZE_UNIT_PATTERN = re.compile(
+    r"(?P<number>\d+(?:\.\d+)?)\s*(?P<unit>毫米|厘米|英寸|inch|mm|cm|in|m|米)",
+    re.IGNORECASE,
+)
+
+
+def _normalize_size_unit(unit: str) -> str:
+    return _SIZE_UNIT_ALIASES.get(unit.strip().lower(), unit.strip())
+
+
+def _strip_size_unit(value: str, unit: str) -> str:
+    variants = [alias for alias, normalized in _SIZE_UNIT_ALIASES.items() if normalized == unit]
+    variants.sort(key=len, reverse=True)
+    unit_pattern = "|".join(re.escape(variant) for variant in variants)
+    return re.sub(
+        rf"(?P<number>\d+(?:\.\d+)?)\s*(?:{unit_pattern})",
+        r"\g<number>",
+        value,
+        flags=re.IGNORECASE,
+    ).strip()
+
+
+def _normalize_size_info(value):
+    parsed = _serialize_json(value)
+    if not isinstance(parsed, list):
+        return value
+
+    normalized_items = []
+    for item in parsed:
+        if not isinstance(item, dict):
+            normalized_items.append(item)
+            continue
+
+        normalized_item = dict(item)
+        raw_value = str(normalized_item.get("value") or "").strip()
+        existing_unit = str(normalized_item.get("unit") or "").strip()
+        if not raw_value or existing_unit:
+            normalized_items.append(normalized_item)
+            continue
+
+        units = {
+            _normalize_size_unit(match.group("unit"))
+            for match in _SIZE_UNIT_PATTERN.finditer(raw_value)
+        }
+        if len(units) == 1:
+            unit = next(iter(units))
+            normalized_item["unit"] = unit
+            normalized_item["value"] = _strip_size_unit(raw_value, unit)
+        else:
+            normalized_item.setdefault("unit", "")
+
+        normalized_items.append(normalized_item)
+
+    return normalized_items
+
+
 def model_to_dict(obj) -> dict | None:
     if obj is None:
         return None
@@ -193,7 +261,7 @@ def _build_detail(product: Product, db: Session) -> dict:
         "updated_at": str(product.updated_at) if product.updated_at else None,
         "specs": {
             "id": specs.id,
-            "size_info": _serialize_json(specs.size_info),
+            "size_info": _normalize_size_info(specs.size_info),
             "capacity": _serialize_json(specs.capacity),
             "gross_weight_g": specs.gross_weight_g,
             "body_material": specs.body_material,
@@ -578,7 +646,7 @@ def create_product(db: Session, data: dict, creator_id: str = None) -> Product:
     specs_data = data.get("specs_data") or data.get("specs") or {}
     db.add(ProductSpecs(
         product_id=product_id,
-        size_info=_to_json_str(specs_data.get("size_info")),
+        size_info=_to_json_str(_normalize_size_info(specs_data.get("size_info"))),
         capacity=_to_json_str(specs_data.get("capacity")),
         gross_weight_g=specs_data.get("gross_weight_g"),
         body_material=specs_data.get("body_material"),
@@ -734,7 +802,7 @@ def update_product_specs(db: Session, sku: str, data: dict) -> dict:
 
     fields = {}
     if "size_info" in data:
-        fields["size_info"] = _to_json_str(data["size_info"])
+        fields["size_info"] = _to_json_str(_normalize_size_info(data["size_info"]))
     for k in ["capacity", "gross_weight_g", "body_material", "color",
                "surface_finish", "heat_source", "power", "usage_instruction"]:
         if k in data and data[k] is not None:
