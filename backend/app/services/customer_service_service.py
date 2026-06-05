@@ -155,14 +155,16 @@ async def ask_customer_service(
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="问题不能为空")
 
     previous_result_skus = _latest_result_skus(db, conversation_id, user_id)
+    contextual_previous_result_skus = previous_result_skus if _should_use_previous_result_skus(question) else []
     conversation_history = _build_conversation_history(db, conversation_id, user_id)
+    contextual_conversation_history = conversation_history if _should_use_conversation_history(question) else []
     agent_result = await customer_agent_runtime_service.process_agent_request(
         db,
         user_id=user_id,
         question=question,
         sku=None,
-        previous_result_skus=previous_result_skus,
-        conversation_history=conversation_history,
+        previous_result_skus=contextual_previous_result_skus,
+        conversation_history=contextual_conversation_history,
         feedback_lessons=_build_feedback_lessons(db, user_id),
     )
     if not agent_result:
@@ -171,7 +173,7 @@ async def ask_customer_service(
             user_id=user_id,
             question=question,
             sku=None,
-            previous_result_skus=previous_result_skus,
+            previous_result_skus=contextual_previous_result_skus,
         )
     if not agent_result:
         agent_result = customer_agent_service.try_numeric_english_name_query(db, question)
@@ -741,6 +743,29 @@ def _latest_result_skus(db: Session, conversation_id: str | None, user_id: str) 
             if skus:
                 return [str(sku) for sku in skus]
     return []
+
+
+def _should_use_previous_result_skus(question: str) -> bool:
+    text = str(question or "")
+    explicit_refs = (
+        "这些", "这几个", "这几款", "刚才", "上面", "上一轮", "前面",
+        "它们", "他们", "哪个", "哪款", "哪种", "这款", "这个", "那个", "其中",
+    )
+    if any(item in text for item in explicit_refs):
+        return True
+    if len(text) <= 12 and any(item in text for item in ("容量", "材质", "卖点", "价格", "适合", "好不好")):
+        return True
+    return False
+
+
+def _should_use_conversation_history(question: str) -> bool:
+    text = str(question or "")
+    if _should_use_previous_result_skus(text):
+        return True
+    followup_starts = ("那", "如果", "那如果", "还有", "另外", "继续", "改成", "换成")
+    if text.startswith(followup_starts) and len(text) <= 30:
+        return True
+    return False
 
 
 def _save_and_return_guidance(db: Session, user_id: str, question: str, conversation_id: str | None) -> dict:

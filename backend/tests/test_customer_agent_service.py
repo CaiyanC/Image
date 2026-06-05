@@ -359,6 +359,29 @@ class CustomerAgentServiceTest(unittest.TestCase):
         self.assertIn("送礼", rows[0]["content"])
 
 
+    def test_semantic_tool_enriches_product_fields(self):
+        original_keyword_retrieve = knowledge_service.keyword_retrieve
+
+        def fake_keyword_retrieve(db, query, sku=None, limit=8):
+            return [{"sku": "CW-C93", "content": "适合露营泡咖啡"}]
+
+        knowledge_service.keyword_retrieve = fake_keyword_retrieve
+        try:
+            result = customer_agent_tool_service.execute_tool(
+                self.db,
+                user_id="user-1",
+                name="semantic_search_knowledge",
+                arguments={"query": "适合泡咖啡的小锅"},
+            )
+        finally:
+            knowledge_service.keyword_retrieve = original_keyword_retrieve
+
+        row = result["results"][0]
+        self.assertEqual(row["sku"], "CW-C93")
+        self.assertTrue(row["product_name_cn"])
+        self.assertIn("capacity", row)
+
+
 class CustomerAgentRuntimeServiceTest(unittest.IsolatedAsyncioTestCase):
     def setUp(self):
         engine = create_engine("sqlite:///:memory:")
@@ -754,6 +777,51 @@ class CustomerServiceServiceTest(unittest.IsolatedAsyncioTestCase):
 
         self.assertIsNone(captured["sku"])
         self.assertEqual(result["sku"], "CS-G25")
+
+    async def test_standalone_followup_does_not_pass_previous_result_skus(self):
+        conversation = CustomerServiceConversation(id="conv-context", user_id="user-1", title="旧会话")
+        self.db.add(conversation)
+        self.db.add(CustomerServiceMessage(
+            conversation_id="conv-context",
+            role="assistant",
+            content="首选 CW-C93。",
+            sources_json=json.dumps([
+                {"type": "agent_context", "result_skus": ["CW-C93", "CW-C83-1"]}
+            ], ensure_ascii=False),
+        ))
+        self.db.commit()
+        captured = {}
+
+        async def fake_runtime(db, **kwargs):
+            captured.update(kwargs)
+            return {
+                "answer": "已按四个人做饭重新检索。",
+                "intent": "recommend_products",
+                "answer_type": "recommendation",
+                "confidence": "high",
+                "uncertainty": "confirmed",
+                "sources": [],
+                "actions": [],
+                "results": [{"sku": "CW-C83"}],
+                "steps": [],
+                "warnings": [],
+                "evidence": [],
+                "debug": {"agent_mode": "llm_tool_calling"},
+                "skip_polish": True,
+                "sku": None,
+            }
+
+        customer_agent_runtime_service.process_agent_request = fake_runtime
+
+        await customer_service_service.ask_customer_service(
+            self.db,
+            user_id="user-1",
+            question="适合四个人做饭的锅有哪些？",
+            conversation_id="conv-context",
+        )
+
+        self.assertEqual(captured["previous_result_skus"], [])
+        self.assertEqual(captured["conversation_history"], [])
 
     def test_recommendation_answer_filters_oversized_pans_for_coffee(self):
         tool_results = [{

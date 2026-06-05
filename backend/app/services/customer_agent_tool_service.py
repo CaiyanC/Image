@@ -113,6 +113,7 @@ def _semantic_search_knowledge(db: Session, arguments: dict[str, Any]) -> dict:
     sku = str(arguments.get("sku") or "").strip().upper() or None
     limit = int(arguments.get("limit") or 8)
     rows = knowledge_service.keyword_retrieve(db, query, sku=sku, limit=limit)
+    rows = _enrich_semantic_rows(db, rows)
     return {"ok": True, "tool": "semantic_search_knowledge", "query": query, "sku": sku, "mode": "keyword", "count": len(rows), "results": rows}
 
 
@@ -121,6 +122,7 @@ async def _semantic_search_knowledge_async(db: Session, arguments: dict[str, Any
     sku = str(arguments.get("sku") or "").strip().upper() or None
     limit = int(arguments.get("limit") or 8)
     rows = await knowledge_service.semantic_retrieve(db, query, sku=sku, limit=limit)
+    rows = _enrich_semantic_rows(db, rows)
     return {"ok": True, "tool": "semantic_search_knowledge", "query": query, "sku": sku, "mode": "semantic", "count": len(rows), "results": rows}
 
 
@@ -274,3 +276,45 @@ def _enrich_fields(db: Session, row: dict, fields: list[str]) -> dict:
         field_values[label] = customer_agent_service._stringify(value) if value not in (None, "") else "暂无"
     enriched["field_values"] = field_values
     return enriched
+
+
+def _enrich_semantic_rows(db: Session, rows: list[dict]) -> list[dict]:
+    enriched_rows = []
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        sku = str(row.get("sku") or "").strip().upper()
+        if not sku:
+            enriched_rows.append(row)
+            continue
+        try:
+            detail = product_service.get_product_detail(db, sku)
+        except Exception:
+            enriched_rows.append(row)
+            continue
+        specs = detail.get("specs") or {}
+        business = detail.get("business") or {}
+        enriched = {
+            **row,
+            "sku": sku,
+            "product_name_cn": detail.get("product_name_cn"),
+            "product_name_en": detail.get("product_name_en"),
+            "category": detail.get("category"),
+            "sub_category": detail.get("sub_category"),
+            "capacity": _safe_stringify(specs.get("capacity")),
+            "body_material": _safe_stringify(specs.get("body_material")),
+            "features": _safe_stringify(business.get("top_selling_points")),
+            "usage_scenarios": _safe_stringify(business.get("usage_scenarios")),
+            "target_audience": _safe_stringify(business.get("target_audience")),
+            "emotional_value": _safe_stringify(business.get("emotional_value")),
+            "matched_by": row.get("matched_by") or "语义知识库",
+            "semantic_match": row.get("content"),
+        }
+        enriched_rows.append(enriched)
+    return enriched_rows
+
+
+def _safe_stringify(value: Any) -> str:
+    if value in (None, "", []):
+        return ""
+    return customer_agent_service._stringify(value)
