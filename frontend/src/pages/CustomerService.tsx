@@ -29,8 +29,18 @@ interface ChatMessage {
   steps?: AgentStep[]
 }
 
+interface CustomerServiceDraft {
+  version: number
+  conversationId: string | null
+  question: string
+  messages: ChatMessage[]
+  savedAt: string
+}
+
+const CUSTOMER_SERVICE_DRAFT_VERSION = 1
+
 export default function CustomerService() {
-  const { isManagement } = useAuthStore()
+  const { isManagement, user } = useAuthStore()
   const [question, setQuestion] = useState('')
   const [conversationId, setConversationId] = useState<string | null>(null)
   const [messages, setMessages] = useState<ChatMessage[]>([])
@@ -44,10 +54,38 @@ export default function CustomerService() {
   const [error, setError] = useState('')
   const bottomRef = useRef<HTMLDivElement | null>(null)
   const chatContainerRef = useRef<HTMLDivElement | null>(null)
+  const draftHydratedRef = useRef(false)
+  const skipNextDraftPersistRef = useRef(false)
+  const draftCacheKey = useMemo(() => customerServiceDraftKey(user?.id || user?.username), [user?.id, user?.username])
 
   useEffect(() => {
     loadSideData()
   }, [])
+
+  useEffect(() => {
+    skipNextDraftPersistRef.current = true
+    draftHydratedRef.current = false
+    const draft = loadCustomerServiceDraft(draftCacheKey)
+    setConversationId(draft?.conversationId || null)
+    setQuestion(draft?.question || '')
+    setMessages(draft?.messages || [])
+    draftHydratedRef.current = true
+  }, [draftCacheKey])
+
+  useEffect(() => {
+    if (!draftHydratedRef.current) return
+    if (skipNextDraftPersistRef.current) {
+      skipNextDraftPersistRef.current = false
+      return
+    }
+    saveCustomerServiceDraft(draftCacheKey, {
+      version: CUSTOMER_SERVICE_DRAFT_VERSION,
+      conversationId,
+      question,
+      messages: compactDraftMessages(messages),
+      savedAt: new Date().toISOString(),
+    })
+  }, [conversationId, draftCacheKey, messages, question])
 
   useEffect(() => {
     // Use scrollTop for instant scroll during streaming; smooth on completion
@@ -231,6 +269,7 @@ export default function CustomerService() {
     setMessages([])
     setQuestion('')
     setError('')
+    clearCustomerServiceDraft(draftCacheKey)
   }
 
   async function updateAction(actionId: string, mode: 'confirm' | 'cancel') {
@@ -538,6 +577,59 @@ function timestampOf(value?: string | null): number {
   if (!value) return 0
   const parsed = Date.parse(value)
   return Number.isFinite(parsed) ? parsed : 0
+}
+
+function customerServiceDraftKey(userKey?: string | null): string {
+  return `customer-service:draft:${userKey || 'anonymous'}`
+}
+
+function loadCustomerServiceDraft(key: string): CustomerServiceDraft | null {
+  try {
+    const raw = localStorage.getItem(key)
+    if (!raw) return null
+    const draft = JSON.parse(raw) as CustomerServiceDraft
+    if (draft.version !== CUSTOMER_SERVICE_DRAFT_VERSION || !Array.isArray(draft.messages)) {
+      localStorage.removeItem(key)
+      return null
+    }
+    return draft
+  } catch {
+    localStorage.removeItem(key)
+    return null
+  }
+}
+
+function saveCustomerServiceDraft(key: string, draft: CustomerServiceDraft) {
+  const hasContent = Boolean(draft.conversationId || draft.question.trim() || draft.messages.length)
+  if (!hasContent) {
+    localStorage.removeItem(key)
+    return
+  }
+
+  try {
+    localStorage.setItem(key, JSON.stringify(draft))
+  } catch {
+    try {
+      localStorage.setItem(key, JSON.stringify({
+        ...draft,
+        messages: compactDraftMessages(draft.messages, 20),
+      }))
+    } catch {
+      // Browser storage may be full or disabled; losing the draft should not break chat.
+    }
+  }
+}
+
+function clearCustomerServiceDraft(key: string) {
+  localStorage.removeItem(key)
+}
+
+function compactDraftMessages(messages: ChatMessage[], maxMessages = 80): ChatMessage[] {
+  return messages.slice(-maxMessages).map((message) => ({
+    ...message,
+    streaming: false,
+    status: message.streaming ? '' : message.status,
+  }))
 }
 
 function FeedbackBar({
