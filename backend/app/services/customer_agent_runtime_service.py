@@ -10,6 +10,13 @@ from . import agent_trace_service, customer_agent_tool_service, dmxapi_service
 MAX_TOOL_ROUNDS = 4
 CONTEXT_REFERENCES = ("这些", "刚才那些", "上面这些", "刚才的", "上一轮")
 WRITE_TOOL_PREFIXES = ("propose_",)
+PRODUCT_LOOKUP_TERMS = (
+    "适合", "推荐", "哪些", "有没有", "有吗", "容量", "材质", "卖点", "场景",
+    "做饭", "烹饪", "煮饭", "炒菜", "露营", "徒步", "锅", "炉", "咖啡", "泡咖啡",
+)
+PRODUCT_WRITE_TERMS = ("修改", "改成", "改为", "删除", "删掉", "清空", "取消")
+COFFEE_TERMS = ("咖啡", "泡咖啡")
+COOKING_TERMS = ("做饭", "烹饪", "煮饭", "炒菜", "煮东西")
 
 
 async def process_agent_request(
@@ -73,6 +80,37 @@ async def process_agent_request(
         messages.append({"role": "assistant", "content": content})
         messages.append({"role": "user", "content": json.dumps({"tool_results": round_results, "instruction": "你可以继续调用工具，或输出 {\"answer\":\"...\"} 结束。"}, ensure_ascii=False, default=str)})
 
+    if not tool_results and final_answer and _requires_write_tool(question):
+        agent_trace_service.trace(
+            "DIRECT_PRODUCT_WRITE_ANSWER_REJECTED",
+            {"question": question, "answer": final_answer},
+        )
+        return None
+    if not tool_results and final_answer and _requires_lookup_tool(question):
+        arguments = {
+            "semantic_query": question,
+            "fields": [
+                "specs.capacity",
+                "specs.body_material",
+                "business.top_selling_points",
+                "business.usage_scenarios",
+                "business.target_audience",
+            ],
+            "limit": 20,
+        }
+        agent_trace_service.trace(
+            "DIRECT_PRODUCT_ANSWER_GUARDRAIL",
+            {"question": question, "answer": final_answer, "fallback_tool": "hybrid_search_products"},
+        )
+        fallback_result = await customer_agent_tool_service.execute_tool_async(
+            db,
+            user_id=user_id,
+            name="hybrid_search_products",
+            arguments=arguments,
+        )
+        tool_results.append(fallback_result)
+        steps.append(_step_from_tool_result("hybrid_search_products", arguments, fallback_result))
+        final_answer = None
     if not tool_results and final_answer:
         return _build_result(
             question,
@@ -545,6 +583,8 @@ def _recommendation_score(question: str, row: dict) -> float:
 def _should_replace_recommendation_answer(answer: str, question: str, results: list[dict]) -> bool:
     if not results:
         return False
+    if _answer_focus_conflicts(answer, question):
+        return True
     listed_count = len(re.findall(r"(^|\n)\s*\d+[\.、]", answer))
     if listed_count > 5:
         return True
@@ -621,6 +661,30 @@ def _resolve_context_arguments(arguments: dict[str, Any], previous_result_skus: 
     if resolved.get("skus") in ("$last_search_skus", "last_search_skus"):
         resolved["skus"] = _latest_search_skus(tool_results)
     return resolved
+
+
+def _requires_lookup_tool(question: str) -> bool:
+    text = str(question or "")
+    if _requires_write_tool(text):
+        return False
+    return any(term in text for term in PRODUCT_LOOKUP_TERMS)
+
+
+def _requires_write_tool(question: str) -> bool:
+    text = str(question or "")
+    if not any(term in text for term in PRODUCT_WRITE_TERMS):
+        return False
+    return bool(re.search(r"\b[A-Za-z]{1,6}[-_][A-Za-z0-9][A-Za-z0-9_-]{1,40}\b", text))
+
+
+def _answer_focus_conflicts(answer: str, question: str) -> bool:
+    answer_text = str(answer or "")
+    question_text = str(question or "")
+    asks_cooking = any(term in question_text for term in COOKING_TERMS)
+    asks_coffee = any(term in question_text for term in COFFEE_TERMS)
+    if asks_cooking and not asks_coffee and any(term in answer_text for term in COFFEE_TERMS):
+        return True
+    return False
 
 
 def _latest_search_skus(tool_results: list[dict]) -> list[str]:

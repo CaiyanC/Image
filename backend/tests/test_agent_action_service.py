@@ -141,6 +141,24 @@ class AgentActionServiceTest(unittest.TestCase):
         self.assertEqual(refreshed.status, "cancelled")
         self.assertEqual(result["status"], "cancelled")
 
+    def test_cancel_action_marks_failed_action_cancelled(self):
+        action = agent_action_service.create_update_field_action(
+            self.db,
+            created_by="user-1",
+            sku="CS-G25",
+            field_path="specs.body_material",
+            new_value="updated-material",
+        )
+        action.status = "failed"
+        action.error_message = "Bad Request"
+        self.db.commit()
+
+        result = agent_action_service.cancel_action(self.db, action.id, cancelled_by="user-2")
+
+        refreshed = self.db.query(AgentAction).filter(AgentAction.id == action.id).first()
+        self.assertEqual(refreshed.status, "cancelled")
+        self.assertEqual(result["status"], "cancelled")
+
     def test_capacity_update_preserves_existing_label_value_shape(self):
         specs = self.db.query(ProductSpecs).filter(ProductSpecs.product_id == "product-1").first()
         specs.capacity = '[{"label": "锅", "value": "3700ML"}]'

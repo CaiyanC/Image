@@ -244,7 +244,13 @@ def confirm_action(
 
 
 def cancel_action(db: Session, action_id: str, *, cancelled_by: str) -> dict:
-    action = _get_pending_action(db, action_id)
+    action = db.query(AgentAction).filter(AgentAction.id == action_id).first()
+    if not action:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Agent action not found")
+    if action.status == "confirmed":
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Confirmed action cannot be cancelled")
+    if action.status == "cancelled":
+        return serialize_action(action)
     action.status = "cancelled"
     action.confirmed_by = str(cancelled_by)
     db.commit()
