@@ -190,7 +190,7 @@ def _build_tool_selection_messages(
                 "如果用户要查询多个产品、条形码、类目或功能，优先调用 search_products。"
                 "如果同时有精确条件和模糊语义需求，优先调用 hybrid_search_products。"
                 "search_products 支持 term 全字段搜索，也支持 filters 精确筛选，例如 {\"负责人\":\"Yao\",\"类目\":\"锅具\"}。"
-                "如果用户给了 SKU 并问单品字段，调用 get_product_detail。"
+                "如果用户在问题文本或历史对话里明确给了 SKU，并问单品字段，调用 get_product_detail。"
                 "如果用户说“这些/刚才那些/上面这些”，使用 previous_result_skus。"
                 "如果用户在历史对话里已经给过范围，本轮追问如“哪种适合送礼/三个年轻人用哪个好”，要结合 conversation_history 和 previous_result_skus 决定工具。"
                 "凡是涉及产品事实、推荐、对比、筛选、修改或删除，必须先调用工具；只有闲聊、解释能力边界或澄清问题可以直接 answer。"
@@ -208,7 +208,6 @@ def _build_tool_selection_messages(
             "content": json.dumps(
                 {
                     "question": question,
-                    "selected_sku": sku,
                     "previous_result_skus": previous_result_skus,
                     "conversation_history": conversation_history[-6:] if len(conversation_history) > 6 else conversation_history,
                     "recent_feedback_lessons": feedback_lessons[:8],
@@ -240,7 +239,6 @@ async def _finalize_answer(db: Session, question: str, sku: str | None, tool_res
             "content": json.dumps(
                 {
                     "question": question,
-                    "selected_sku": sku,
                     "conversation_history": conversation_history[-8:] if len(conversation_history) > 8 else conversation_history,
                     "tool_results": tool_results,
                 },

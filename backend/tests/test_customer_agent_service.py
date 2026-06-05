@@ -602,6 +602,7 @@ class CustomerServiceServiceTest(unittest.IsolatedAsyncioTestCase):
                 "evidence": [],
                 "debug": {"agent_mode": "llm_tool_calling"},
                 "skip_polish": True,
+                "sku": "CS-G25",
             }
 
         async def fake_intent(*args, **kwargs):
@@ -664,6 +665,7 @@ class CustomerServiceServiceTest(unittest.IsolatedAsyncioTestCase):
                 "evidence": [],
                 "debug": {"agent_mode": "llm_tool_calling"},
                 "skip_polish": True,
+                "sku": "CS-G25",
             }
 
         customer_agent_runtime_service.process_agent_request = fake_runtime
@@ -676,10 +678,39 @@ class CustomerServiceServiceTest(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(result["intent"], "recommend_products")
 
-    def test_broad_recommendation_does_not_lock_selected_sku(self):
-        self.assertIsNone(customer_service_service._sku_for_agent("三个年轻人露营适合带什么产品", "CW-C83"))
-        self.assertEqual(customer_service_service._sku_for_agent("这个适合露营吗", "CW-C83"), "CW-C83")
-        self.assertEqual(customer_service_service._sku_for_agent("CW-C83 适合露营吗", "CW-C83"), "CW-C83")
+    async def test_ask_customer_service_never_locks_frontend_selected_sku(self):
+        captured = {}
+
+        async def fake_runtime(db, **kwargs):
+            captured.update(kwargs)
+            return {
+                "answer": "我会根据问题和上下文判断，不使用前端选中的 SKU。",
+                "intent": "query_products",
+                "answer_type": "product_query",
+                "confidence": "high",
+                "uncertainty": "confirmed",
+                "sources": [],
+                "actions": [],
+                "results": [{"sku": "CS-G25"}],
+                "steps": [],
+                "warnings": [],
+                "evidence": [],
+                "debug": {"agent_mode": "llm_tool_calling"},
+                "skip_polish": True,
+                "sku": "CS-G25",
+            }
+
+        customer_agent_runtime_service.process_agent_request = fake_runtime
+
+        result = await customer_service_service.ask_customer_service(
+            self.db,
+            user_id="user-1",
+            question="这个适合露营吗",
+            sku="CW-C83",
+        )
+
+        self.assertIsNone(captured["sku"])
+        self.assertEqual(result["sku"], "CS-G25")
 
     def test_recommendation_answer_filters_oversized_pans_for_coffee(self):
         tool_results = [{
