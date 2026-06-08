@@ -34,6 +34,16 @@ def sync_all_to_vector(
     return {"indexed": result, "embedding": embed_result}
 
 
+@router.post("/sync-pending-to-vector")
+def sync_pending_to_vector(
+    limit: int = Query(50, ge=1, le=500),
+    current_user = Depends(require_permission("ai.call")),
+    db: Session = Depends(get_db),
+):
+    """Retry vector sync only for products marked as not synced."""
+    return product_service.sync_pending_products_to_vector_db(db, limit=limit)
+
+
 @router.post("/{sku}/sync-to-vector")
 def sync_one_to_vector(
     sku: str,

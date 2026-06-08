@@ -43,6 +43,9 @@ def sync_product_to_vector_db(db: Session, sku: str) -> dict:
 
         # Rebuild chunks from current product data
         result = product_vector_index_service.index_product(db, sku)
+        product = get_product_by_sku(db, sku)
+        if product:
+            product.sync_flag = True
         db.commit()
 
         # Try embedding (non-blocking; fails gracefully if API key expired)
@@ -62,6 +65,32 @@ def sync_product_to_vector_db(db: Session, sku: str) -> dict:
         return {"sku": sku, "documents": result["documents"], "chunks": result["chunks"]}
     except Exception as e:
         return {"sku": sku, "error": str(e)}
+
+
+def sync_pending_products_to_vector_db(db: Session, limit: int = 50) -> dict:
+    """Retry vector sync for products marked as not synced."""
+    products = (
+        db.query(Product)
+        .filter(Product.sync_flag.is_(False))
+        .order_by(asc(Product.updated_at), asc(Product.sku))
+        .limit(max(1, min(limit, 500)))
+        .all()
+    )
+    results = []
+    synced = 0
+    failed = 0
+    for product in products:
+        result = sync_product_to_vector_db(db, product.sku)
+        results.append(result)
+        if isinstance(result, dict) and result.get("error"):
+            failed += 1
+            current = get_product_by_sku(db, product.sku)
+            if current:
+                current.sync_flag = False
+                db.commit()
+        else:
+            synced += 1
+    return {"total": len(products), "synced": synced, "failed": failed, "results": results}
 
 
 def delete_product_from_vector_db(db: Session, sku: str) -> dict:
