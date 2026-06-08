@@ -280,24 +280,29 @@ def serialize_action(action: AgentAction) -> dict:
 def _execute_action(db: Session, action: AgentAction) -> dict:
     if action.action_type == "delete_info" and action.target_type == "product_qa":
         product_service.delete_qa_item(db, action.target_id)
-        _mark_product_needs_vector_sync(db, action.sku)
-        return {"sku": action.sku, "deleted": action.target_type, "target_id": action.target_id}
+        return {
+            "sku": action.sku,
+            "deleted": action.target_type,
+            "target_id": action.target_id,
+            "vector_sync": _sync_product_to_vector_db(db, action.sku),
+        }
     if action.action_type in {"update_field", "delete_info"} and action.field_path:
         spec = _require_field_spec(action.field_path)
         current_value = _read_current_value(db, action.sku, spec, action.target_id)
         if _normal_value(current_value) != _normal_value(action.original_value):
             raise _StaleAction(current_value)
         _write_field(db, action.sku, spec, action.proposed_value, action.target_id)
-        _mark_product_needs_vector_sync(db, action.sku)
         return {
             "sku": action.sku,
             "field_path": action.field_path,
             "old_value": action.original_value,
             "new_value": action.proposed_value,
+            "vector_sync": _sync_product_to_vector_db(db, action.sku),
         }
     if action.action_type == "delete_product":
+        vector_delete = _delete_product_from_vector_db(db, action.sku)
         product_service.delete_product(db, action.sku)
-        return {"sku": action.sku, "deleted": "product"}
+        return {"sku": action.sku, "deleted": "product", "vector_sync": vector_delete}
     raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Unsupported action")
 
 
@@ -363,6 +368,24 @@ def _mark_product_needs_vector_sync(db: Session, sku: str) -> None:
     if product:
         product.sync_flag = False
         db.commit()
+
+
+def _sync_product_to_vector_db(db: Session, sku: str) -> dict:
+    try:
+        result = product_service.sync_product_to_vector_db(db, sku)
+    except Exception as exc:
+        _mark_product_needs_vector_sync(db, sku)
+        return {"sku": sku, "error": str(exc)}
+    if isinstance(result, dict) and result.get("error"):
+        _mark_product_needs_vector_sync(db, sku)
+    return result if isinstance(result, dict) else {"sku": sku, "result": result}
+
+
+def _delete_product_from_vector_db(db: Session, sku: str) -> dict:
+    try:
+        return product_service.delete_product_from_vector_db(db, sku)
+    except Exception as exc:
+        return {"sku": sku, "error": str(exc)}
 
 
 def _log_action(

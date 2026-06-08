@@ -631,6 +631,52 @@ class CustomerAgentRuntimeServiceTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result["results"][0]["sku"], "CW-C83")
         self.assertNotIn("泡咖啡", result["answer"])
 
+    async def test_tool_grounded_answer_replaces_stale_previous_need(self):
+        calls = []
+
+        async def fake_chat_completion(db, messages, model=None, temperature=0.2, max_tokens=1200):
+            calls.append(messages)
+            if len(calls) == 1:
+                return '{"tool_calls":[{"name":"hybrid_search_products","arguments":{"semantic_query":"适合四个人做饭的锅有哪些","limit":5}}]}'
+            return '{"answer":"根据您适合泡咖啡的小锅需求，推荐 CW-C93。"}'
+
+        async def fake_execute_tool_async(db, *, user_id, name, arguments):
+            self.assertEqual(name, "hybrid_search_products")
+            return {
+                "ok": True,
+                "tool": name,
+                "query": arguments["semantic_query"],
+                "count": 1,
+                "results": [{
+                    "sku": "CW-C83",
+                    "product_name_cn": "炊墨套锅",
+                    "category": "锅具",
+                    "capacity": "锅 3700ML，煎盘 2300ML",
+                    "features": "一锅多用，适合营地做饭",
+                    "usage_scenarios": "家庭露营，户外营地大餐",
+                    "target_audience": "家庭户外野餐群体，多人露营",
+                }],
+            }
+
+        dmxapi_service.chat_completion = fake_chat_completion
+        customer_agent_tool_service.execute_tool_async = fake_execute_tool_async
+
+        result = await customer_agent_runtime_service.process_agent_request(
+            self.db,
+            user_id="user-1",
+            question="适合四个人做饭的锅有哪些",
+            conversation_history=[
+                {"role": "user", "content": "适合泡咖啡的小锅有吗？"},
+                {"role": "assistant", "content": "首选 CW-C93。"},
+            ],
+        )
+
+        self.assertIsNotNone(result)
+        self.assertEqual(result["results"][0]["sku"], "CW-C83")
+        self.assertIn("CW-C83", result["answer"])
+        self.assertNotIn("CW-C93", result["answer"])
+        self.assertNotIn("泡咖啡", result["answer"])
+
 
 class CustomerServiceServiceTest(unittest.IsolatedAsyncioTestCase):
     def setUp(self):

@@ -102,6 +102,66 @@ class AgentActionServiceTest(unittest.TestCase):
         self.assertEqual(refreshed.status, "confirmed")
         self.assertEqual(result["status"], "confirmed")
 
+    def test_confirm_update_action_syncs_vector_knowledge(self):
+        calls = []
+        original_sync = agent_action_service.product_service.sync_product_to_vector_db
+
+        def fake_sync(db, sku):
+            calls.append(sku)
+            return {"sku": sku, "documents": 1, "chunks": 3}
+
+        agent_action_service.product_service.sync_product_to_vector_db = fake_sync
+        try:
+            action = agent_action_service.create_update_field_action(
+                self.db,
+                created_by="user-1",
+                sku="CS-G25",
+                field_path="specs.body_material",
+                new_value="304不锈钢",
+            )
+
+            result = agent_action_service.confirm_action(
+                self.db,
+                action_id=action.id,
+                confirmed_by="user-2",
+                permissions={"product.edit"},
+            )
+        finally:
+            agent_action_service.product_service.sync_product_to_vector_db = original_sync
+
+        self.assertEqual(calls, ["CS-G25"])
+        self.assertEqual(result["result"]["vector_sync"]["chunks"], 3)
+
+    def test_confirm_update_action_keeps_change_when_vector_sync_fails(self):
+        original_sync = agent_action_service.product_service.sync_product_to_vector_db
+
+        def fake_sync(db, sku):
+            raise RuntimeError("vector service unavailable")
+
+        agent_action_service.product_service.sync_product_to_vector_db = fake_sync
+        try:
+            action = agent_action_service.create_update_field_action(
+                self.db,
+                created_by="user-1",
+                sku="CS-G25",
+                field_path="specs.body_material",
+                new_value="304不锈钢",
+            )
+
+            result = agent_action_service.confirm_action(
+                self.db,
+                action_id=action.id,
+                confirmed_by="user-2",
+                permissions={"product.edit"},
+            )
+        finally:
+            agent_action_service.product_service.sync_product_to_vector_db = original_sync
+
+        specs = self.db.query(ProductSpecs).filter(ProductSpecs.product_id == "product-1").first()
+        self.assertEqual(specs.body_material, "304不锈钢")
+        self.assertEqual(result["status"], "confirmed")
+        self.assertIn("vector service unavailable", result["result"]["vector_sync"]["error"])
+
     def test_confirm_update_action_detects_stale_original_value(self):
         action = agent_action_service.create_update_field_action(
             self.db,

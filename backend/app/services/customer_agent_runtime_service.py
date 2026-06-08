@@ -170,6 +170,9 @@ def _build_result(
         results = _rank_recommendation_results(question, results)
         if not provisional_answer or _should_replace_recommendation_answer(provisional_answer, question, results):
             provisional_answer = _compose_recommendation_answer(question, results)
+    elif results and _answer_conflicts_with_current_results(provisional_answer, question, results):
+        warnings.append("LLM 原始回答与本轮问题或工具结果不一致，已改用工具结果兜底回答。")
+        provisional_answer = _fallback_answer(tool_results)
     clean_answer = _clean_customer_answer(provisional_answer or _fallback_answer(tool_results))
     needs_clarification = _needs_clarification(clean_answer, results, warnings)
     suggested_followups = _suggested_followups(question, results, needs_clarification)
@@ -591,6 +594,8 @@ def _recommendation_score(question: str, row: dict) -> float:
 def _should_replace_recommendation_answer(answer: str, question: str, results: list[dict]) -> bool:
     if not results:
         return False
+    if _answer_conflicts_with_current_results(answer, question, results):
+        return True
     if _answer_focus_conflicts(answer, question):
         return True
     listed_count = len(re.findall(r"(^|\n)\s*\d+[\.、]", answer))
@@ -691,6 +696,32 @@ def _answer_focus_conflicts(answer: str, question: str) -> bool:
     if asks_cooking and not asks_coffee and any(term in answer_text for term in COFFEE_TERMS):
         return True
     return False
+
+
+def _answer_conflicts_with_current_results(answer: str, question: str, results: list[dict]) -> bool:
+    if not answer or not results:
+        return False
+    if _answer_focus_conflicts(answer, question):
+        return True
+
+    result_skus = {str(item.get("sku") or "").upper() for item in results if item.get("sku")}
+    if not result_skus:
+        return False
+
+    mentioned_skus = _extract_skus(answer)
+    if not mentioned_skus:
+        return False
+
+    if mentioned_skus.isdisjoint(result_skus):
+        return True
+    return bool(mentioned_skus - result_skus) and any(word in answer for word in ("首选", "推荐", "适合", "建议"))
+
+
+def _extract_skus(text: str) -> set[str]:
+    return {
+        match.upper()
+        for match in re.findall(r"\b[A-Z]{1,6}(?:-[A-Z0-9]{1,8}){1,4}\b", str(text or ""), flags=re.IGNORECASE)
+    }
 
 
 def _latest_search_skus(tool_results: list[dict]) -> list[str]:
