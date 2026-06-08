@@ -61,15 +61,18 @@ def vector_status(
 ):
     """Get vector database status."""
     from ..models.knowledge_base import KnowledgeChunk
+    from ..models.product import Product
     from sqlalchemy import distinct
     total = db.query(KnowledgeChunk).count()
     synced = db.query(KnowledgeChunk).filter(KnowledgeChunk.embedding_status == "synced").count()
     failed = db.query(KnowledgeChunk).filter(KnowledgeChunk.embedding_status == "failed").count()
+    pending_products = db.query(Product).filter(Product.sync_flag.is_(False)).count()
     skus = [row[0] for row in db.query(distinct(KnowledgeChunk.sku)).all()]
     return {
         "total_chunks": total,
         "synced": synced,
         "failed": failed,
+        "pending_products": pending_products,
         "products": len(skus),
         "skus": skus,
     }
