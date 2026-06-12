@@ -56,6 +56,17 @@ class CustomerDialogueStateTest(unittest.TestCase):
         self.assertIn("适合三个人露营的锅有哪些？", merged)
         self.assertIn("预算不高", merged)
 
+    def test_alternative_recommendation_followup_uses_previous_need(self):
+        history = [
+            {"role": "user", "content": "适合泡咖啡的小锅有吗？"},
+            {"role": "assistant", "content": "首选 CW-C93。"},
+        ]
+
+        merged = customer_dialogue_state.recommendation_question_with_context("还有别的吗？", history)
+
+        self.assertIn("适合泡咖啡的小锅有吗？", merged)
+        self.assertIn("还有别的吗", merged)
+
     def test_complete_low_budget_need_is_not_budget_followup(self):
         history = [
             {"role": "user", "content": "适合泡咖啡的小锅有哪些？"},

@@ -18,10 +18,10 @@ def budget_score(query: str, row: dict[str, Any]) -> int:
     )
     lower = price_text.lower()
     if any(word in lower for word in HIGH_PRICE_TERMS):
-        return -45
+        return -100
     if any(word in lower for word in VALUE_PRICE_TERMS):
-        return 25
-    return -5
+        return 45
+    return -15
 
 
 def recommendation_score(query: str, row: dict[str, Any]) -> float:
@@ -29,6 +29,8 @@ def recommendation_score(query: str, row: dict[str, Any]) -> float:
     name = str(row.get("product_name_cn") or "")
     capacity_ml = _capacity_ml(row.get("capacity"))
     score = 0.0
+    if is_obvious_product_type_mismatch(query, row):
+        score -= 140
     if "露营" in query and "露营" in text:
         score += 30
     if any(word in query for word in ("年轻人", "三人", "三个人", "三个", "四人", "四个人", "四个")):
@@ -64,6 +66,18 @@ def recommendation_score(query: str, row: dict[str, Any]) -> float:
         score += 4
     score += budget_score(query, row)
     return score
+
+
+def is_obvious_product_type_mismatch(query: str, row: dict[str, Any]) -> bool:
+    if not any(term in str(query or "") for term in ("小锅", "单锅", "套锅", "煎锅", "炒锅", "锅具", "锅")):
+        return False
+    name_category = " ".join(
+        str(row.get(key) or "")
+        for key in ("product_name_cn", "product_name_en", "category", "sub_category")
+    )
+    if "锅" in name_category:
+        return False
+    return any(term in name_category for term in ("炉", "炉具", "酒精炉", "气炉", "卡式炉"))
 
 
 def fallback_rank(rows: list[dict[str, Any]], query: str) -> list[dict[str, Any]]:

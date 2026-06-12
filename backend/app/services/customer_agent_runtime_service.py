@@ -225,7 +225,9 @@ def _build_result(
         recommendation_question = _recommendation_question_with_context(question, conversation_history or [])
         results = _filter_excluded_recommendations(recommendation_question, results, conversation_history or [])
         results = _rank_recommendation_results(recommendation_question, results)
-        if not provisional_answer or _should_replace_recommendation_answer(provisional_answer, recommendation_question, results):
+        if not results:
+            provisional_answer = _compose_recommendation_answer(recommendation_question, results)
+        elif not provisional_answer or _should_replace_recommendation_answer(provisional_answer, recommendation_question, results):
             provisional_answer = _compose_recommendation_answer(recommendation_question, results)
     elif _has_field_values(results):
         field_answer = _compose_field_values_answer(results)
@@ -722,6 +724,13 @@ def _rank_recommendation_results(question: str, results: list[dict]) -> list[dic
             continue
         unique[sku] = item
     ranked = sorted(unique.values(), key=lambda row: _recommendation_score(question, row), reverse=True)
+    compatible = [
+        row
+        for row in ranked
+        if not customer_recommendation_ranker.is_obvious_product_type_mismatch(question, row)
+    ]
+    if compatible or len(compatible) != len(ranked):
+        return compatible[:5]
     return ranked[:5]
 
 
@@ -797,6 +806,8 @@ def _should_replace_recommendation_answer(answer: str, question: str, results: l
 
 def _compose_recommendation_answer(question: str, results: list[dict]) -> str:
     if not results:
+        if any(term in question for term in ("还有别的", "还有其他", "换一个", "换一款", "换个", "换别的", "再推荐", "其他推荐")):
+            return "除了上一轮已经推荐的产品，暂时没有找到其它足够匹配的同类产品。你可以放宽品类、容量或使用场景，我再帮你重新筛选。"
         return "没有找到足够匹配的产品资料。你可以补充人数、场景或容量要求，我再帮你缩小范围。"
     best = results[0]
     lines = [f"首选 {best.get('sku')}，{best.get('product_name_cn') or best.get('product_name_en') or ''}。"]

@@ -129,6 +129,8 @@ async def semantic_retrieve(db: Session, query: str, sku: str | None = None, lim
             "ORDER BY embedding <=> CAST(:embedding AS vector) "
             "LIMIT :limit"
         ), params).mappings().all()
+        if not rows:
+            return keyword_retrieve(db, query, sku=sku, limit=limit)
         return [
             {
                 "source_type": row["source_type"],

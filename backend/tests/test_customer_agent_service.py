@@ -811,6 +811,59 @@ class CustomerAgentRuntimeServiceTest(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("首选 CW-C93", result["answer"])
         self.assertIn("agent_quality", result)
 
+    def test_pot_followup_does_not_return_stove_as_alternative(self):
+        result = customer_agent_runtime_service._build_result(
+            "适合泡咖啡的小锅有吗？；追加条件：还有别的吗？",
+            None,
+            [{
+                "ok": True,
+                "tool": "hybrid_search_products",
+                "query": "适合泡咖啡的小锅",
+                "count": 1,
+                "results": [
+                    {
+                        "sku": "CS-B14",
+                        "product_name_cn": "旋焰酒精炉",
+                        "category": "炉具",
+                        "capacity": "炉体 200ML",
+                        "features": "适合冲泡咖啡",
+                    },
+                ],
+            }],
+            None,
+            [],
+        )
+
+        self.assertEqual(result["results"], [])
+        self.assertIn("上一轮", result["answer"])
+        self.assertIn("没有找到", result["answer"])
+
+    def test_filtered_empty_recommendation_replaces_llm_answer(self):
+        result = customer_agent_runtime_service._build_result(
+            "适合泡咖啡的小锅有吗？；追加条件：还有别的吗？",
+            None,
+            [{
+                "ok": True,
+                "tool": "semantic_search_knowledge",
+                "query": "适合泡咖啡的小锅",
+                "count": 1,
+                "results": [
+                    {
+                        "sku": "CS-B14",
+                        "product_name_cn": "旋焰酒精炉",
+                        "category": "炉具",
+                        "features": "适合冲泡咖啡",
+                    },
+                ],
+            }],
+            "可以看看 CS-B14 旋焰酒精炉，它也适合冲泡咖啡。",
+            [],
+        )
+
+        self.assertEqual(result["results"], [])
+        self.assertNotIn("CS-B14", result["answer"])
+        self.assertIn("上一轮", result["answer"])
+
     def test_build_result_includes_agent_quality_metadata(self):
         result = customer_agent_runtime_service._build_result(
             "CW-C93 的容量是多少？",

@@ -152,7 +152,8 @@ def is_low_budget_query(question: str) -> bool:
 
 def recommendation_question_with_context(question: str, conversation_history: list[dict] | None = None) -> str:
     text = _normalize(question)
-    if not is_budget_followup(text):
+    should_merge = is_budget_followup(text) or _is_alternative_recommendation_followup(text)
+    if not should_merge:
         return text
     history = conversation_history or []
     previous_user_turns = [
@@ -166,6 +167,11 @@ def recommendation_question_with_context(question: str, conversation_history: li
         if any(word in previous for word in RECOMMENDATION_TERMS + SCENE_TERMS):
             return f"{previous}；追加条件：{text}"
     return text
+
+
+def _is_alternative_recommendation_followup(text: str) -> bool:
+    normalized = _normalize(text)
+    return any(term in normalized for term in ("还有别的", "还有其他", "换一个", "换一款", "换个", "换别的", "再推荐", "其他推荐"))
 
 
 def _normalize(text: str) -> str:

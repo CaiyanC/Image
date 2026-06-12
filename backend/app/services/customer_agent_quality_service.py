@@ -48,7 +48,7 @@ def evaluate_agent_response(
     risks: list[str] = []
     dimensions = {
         "intent_resolution": _score_intent_resolution(question, intent, results, actions, needs_clarification, answer),
-        "groundedness": _score_groundedness(answer, intent, results, sources, actions, direct_answer, risks),
+        "groundedness": _score_groundedness(question, answer, intent, results, sources, actions, direct_answer, risks),
         "tool_use": _score_tool_use(question, intent, sources, actions, warnings, direct_answer, tool_results, risks),
         "task_adherence": _score_task_adherence(question, answer, intent, actions, risks),
         "context_handling": _score_context_handling(question, answer, results, actions, needs_clarification, risks),
@@ -96,6 +96,7 @@ def _score_intent_resolution(
 
 
 def _score_groundedness(
+    question: str,
     answer: str,
     intent: str,
     results: list[dict[str, Any]],
@@ -120,6 +121,10 @@ def _score_groundedness(
     if extra:
         risks.append(f"answer_mentions_unreturned_sku:{','.join(sorted(extra))}")
         return 0.35
+    if intent == "recommend_products" and _is_low_budget_query(question) and _is_high_price_row(results[0]):
+        if any(term in answer for term in ("首选", "推荐", "适合")) and "不符合低预算" not in answer:
+            risks.append("low_budget_high_end_first_choice")
+            return 0.45
     if direct_answer:
         risks.append("direct_answer_for_product_fact")
         return 0.65
@@ -223,6 +228,18 @@ def _extract_skus(text: str) -> set[str]:
     return {match.upper() for match in SKU_RE.findall(str(text or ""))}
 
 
+def _is_low_budget_query(question: str) -> bool:
+    return any(term in str(question or "") for term in ("预算不高", "预算低", "便宜", "实惠", "性价比", "入门", "低预算", "省钱", "不要太贵"))
+
+
+def _is_high_price_row(row: dict[str, Any]) -> bool:
+    text = " ".join(
+        str(row.get(key) or "")
+        for key in ("price_positioning", "positioning", "product_level", "features", "semantic_match")
+    ).lower()
+    return any(term in text for term in ("高端", "高价", "高预算", "旗舰", "专业级", "premium"))
+
+
 def _quality_level(score: float, risks: list[str]) -> str:
     if _has_blocking_risk(risks) or score < 0.6:
         return "low"
@@ -234,7 +251,12 @@ def _quality_level(score: float, risks: list[str]) -> str:
 def _has_blocking_risk(risks: list[str]) -> bool:
     return any(
         risk.startswith("answer_mentions_unreturned_sku:")
-        or risk in {"unsafe_direct_write_claim", "write_request_without_confirmable_action", "generic_recommendation_answer"}
+        or risk in {
+            "unsafe_direct_write_claim",
+            "write_request_without_confirmable_action",
+            "generic_recommendation_answer",
+            "low_budget_high_end_first_choice",
+        }
         for risk in risks
     )
 
@@ -254,6 +276,7 @@ def _recommendations(risks: list[str]) -> list[str]:
         "debug_trace_leaked": "不要把 Agent 调试过程暴露给用户。",
         "answer_too_long": "回答应先给结论，长内容拆成后续追问。",
         "generic_recommendation_answer": "推荐问题必须给首选和理由，不能只列数据库记录。",
+        "low_budget_high_end_first_choice": "低预算问题不能把高端/高价定位产品作为首选；应优先选亲民/常规/性价比候选，或说明没有低预算匹配。",
     }
     recommendations = []
     for risk in risks:

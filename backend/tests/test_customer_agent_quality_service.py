@@ -63,6 +63,21 @@ class CustomerAgentQualityServiceTest(unittest.TestCase):
         self.assertIn("generic_recommendation_answer", quality["risks"])
         self.assertFalse(quality["passed"])
 
+    def test_low_budget_high_end_first_choice_is_blocked(self):
+        quality = customer_agent_quality_service.evaluate_agent_response(
+            "预算不高，推荐一下",
+            answer="首选 CW-C83，价格定位高端。",
+            intent="recommend_products",
+            results=[{"sku": "CW-C83", "price_positioning": "高端价格带"}],
+            sources=[{"type": "product_search"}],
+            actions=[],
+            warnings=[],
+        )
+
+        self.assertEqual(quality["level"], "low")
+        self.assertFalse(quality["passed"])
+        self.assertIn("low_budget_high_end_first_choice", quality["risks"])
+
 
 if __name__ == "__main__":
     unittest.main()

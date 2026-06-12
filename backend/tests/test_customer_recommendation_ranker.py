@@ -70,6 +70,42 @@ class CustomerRecommendationRankerTest(unittest.TestCase):
             customer_recommendation_ranker.recommendation_score("适合四个人做饭的锅", rows[0]),
         )
 
+    def test_low_budget_penalty_overrides_scene_fit_for_high_end(self):
+        rows = [
+            {
+                "sku": "HIGH-FIT",
+                "product_name_cn": "高端家庭套锅",
+                "capacity": "3700ML",
+                "features": "多人露营做饭",
+                "target_audience": "家庭多人",
+                "price_positioning": "高端价格带",
+            },
+            {
+                "sku": "VALUE-OK",
+                "product_name_cn": "常规单锅",
+                "capacity": "1400ML",
+                "features": "实惠耐用",
+                "target_audience": "双人",
+                "price_positioning": "常规价格带，性价比款",
+            },
+        ]
+
+        ranked = customer_recommendation_ranker.fallback_rank(rows, "适合四个人做饭的锅；追加条件：预算不高")
+
+        self.assertEqual(ranked[0]["row"]["sku"], "VALUE-OK")
+        self.assertLess(customer_recommendation_ranker.budget_score("预算不高", rows[0]), -50)
+
+    def test_pot_query_penalizes_stove_candidate(self):
+        pot = {"sku": "POT-1", "product_name_cn": "行山单锅", "category": "锅具", "features": "适合泡咖啡"}
+        stove = {"sku": "STOVE-1", "product_name_cn": "旋焰酒精炉", "category": "炉具", "features": "适合冲泡咖啡"}
+
+        self.assertTrue(customer_recommendation_ranker.is_obvious_product_type_mismatch("适合泡咖啡的小锅", stove))
+        self.assertFalse(customer_recommendation_ranker.is_obvious_product_type_mismatch("适合泡咖啡的小锅", pot))
+        self.assertGreater(
+            customer_recommendation_ranker.recommendation_score("适合泡咖啡的小锅", pot),
+            customer_recommendation_ranker.recommendation_score("适合泡咖啡的小锅", stove),
+        )
+
 
 if __name__ == "__main__":
     unittest.main()
