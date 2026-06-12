@@ -1,5 +1,7 @@
 import json
 import logging
+import os
+import sys
 from typing import Any
 
 from sqlalchemy.orm import Session
@@ -8,7 +10,10 @@ from ..models.agent_trace import AgentTrace
 
 
 logger = logging.getLogger("uvicorn")
-MAX_TRACE_CHARS = 8000
+MAX_TRACE_CHARS = int(os.getenv("CUSTOMER_AGENT_TRACE_MAX_CHARS", "2000"))
+TRACE_STDOUT = os.getenv("CUSTOMER_AGENT_TRACE_STDOUT", "").lower() in {"1", "true", "yes", "on"}
+TRACE_FULL_PAYLOAD = os.getenv("CUSTOMER_AGENT_TRACE_FULL_PAYLOAD", "").lower() in {"1", "true", "yes", "on"}
+MAX_SUMMARY_TEXT_CHARS = 240
 
 
 def create_trace(
@@ -86,17 +91,25 @@ def serialize_trace(trace_record: AgentTrace | None) -> dict | None:
 
 
 def trace(label: str, payload: Any) -> None:
-    text = _safe_json(payload)
+    line = _format_trace_line(label, payload)
+    if TRACE_STDOUT:
+        _safe_print(line)
+    logger.info(line)
+
+
+def _format_trace_line(label: str, payload: Any) -> str:
+    safe_payload = _mask(payload)
+    if not TRACE_FULL_PAYLOAD:
+        safe_payload = _summarize_payload(safe_payload)
+    text = _safe_json(safe_payload)
     if len(text) > MAX_TRACE_CHARS:
         text = text[:MAX_TRACE_CHARS] + "...<truncated>"
-    line = f"[CUSTOMER_AGENT_{label}] {text}"
-    print(line, flush=True)
-    logger.info(line)
+    return f"[CUSTOMER_AGENT_{label}] {text}"
 
 
 def _safe_json(payload: Any) -> str:
     try:
-        return json.dumps(_mask(payload), ensure_ascii=False, default=str, indent=2)
+        return json.dumps(payload, ensure_ascii=False, default=str, indent=2)
     except TypeError:
         return str(payload)
 
@@ -118,3 +131,33 @@ def _mask(value: Any) -> Any:
     if isinstance(value, list):
         return [_mask(item) for item in value]
     return value
+
+
+def _summarize_payload(value: Any) -> Any:
+    if isinstance(value, dict):
+        return {key: _summarize_payload(item) for key, item in value.items()}
+    if isinstance(value, list):
+        summary: dict[str, Any] = {"type": "list", "count": len(value)}
+        if value:
+            summary["sample"] = [_summarize_payload(item) for item in value[:3]]
+        return summary
+    if isinstance(value, tuple):
+        return _summarize_payload(list(value))
+    if isinstance(value, bytes):
+        return f"<bytes:{len(value)}>"
+    if isinstance(value, str) and len(value) > MAX_SUMMARY_TEXT_CHARS:
+        return f"{value[:MAX_SUMMARY_TEXT_CHARS]}...<chars:{len(value)}>"
+    return value
+
+
+def _safe_print(line: str) -> None:
+    try:
+        print(line, flush=True)
+    except UnicodeEncodeError:
+        stream = getattr(sys.stdout, "buffer", None)
+        if stream is not None:
+            stream.write((line + "\n").encode("utf-8", errors="replace"))
+            stream.flush()
+        else:
+            sys.stdout.write(line + "\n")
+            sys.stdout.flush()

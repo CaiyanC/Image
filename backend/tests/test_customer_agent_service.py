@@ -15,7 +15,7 @@ from app.models import (
     ProductSalesRegion, ProductSpecs, SalesRegion, CustomerServiceConversation,
     CustomerServiceMessage, KnowledgeChunk, KnowledgeDocument,
 )
-from app.services import customer_agent_intent_service, customer_agent_runtime_service, customer_agent_service, customer_agent_tool_service, customer_service_service, dmxapi_service, knowledge_service
+from app.services import agent_trace_service, customer_agent_intent_service, customer_agent_runtime_service, customer_agent_service, customer_agent_tool_service, customer_service_service, dmxapi_service, knowledge_service
 
 
 class CustomerAgentServiceTest(unittest.TestCase):
@@ -471,12 +471,18 @@ class CustomerAgentRuntimeServiceTest(unittest.IsolatedAsyncioTestCase):
 
         dmxapi_service.chat_completion = fake_chat_completion
         stream = io.StringIO()
-        with contextlib.redirect_stdout(stream):
-            result = await customer_agent_runtime_service.process_agent_request(
-                self.db,
-                user_id="user-1",
+        original_trace_stdout = agent_trace_service.TRACE_STDOUT
+        try:
+            agent_trace_service.TRACE_STDOUT = True
+            with contextlib.redirect_stdout(stream):
+                result = await customer_agent_runtime_service.process_agent_request(
+                    self.db,
+                    user_id="user-1",
                 question="所有锅的容量给我",
             )
+
+        finally:
+            agent_trace_service.TRACE_STDOUT = original_trace_stdout
 
         output = stream.getvalue()
         self.assertIsNotNone(result)
