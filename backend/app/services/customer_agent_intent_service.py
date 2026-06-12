@@ -304,9 +304,9 @@ def _sanitize_intent(intent: CustomerIntent) -> CustomerIntent | None:
         intent.intent = "query_products"
     # If query_products with only requested_fields (no filters, no term, no target_skus) -> clarify
     if intent.intent == "query_products" and intent.requested_fields and not intent.filters and not intent.term and not intent.target_skus and not intent.semantic_query:
-        if not any(w in intent.clarification_question for w in ("?", "?", "??", "??")):
+        if not any(w in intent.clarification_question for w in ("SKU", "产品", "范围", "哪款")):
             intent.intent = "clarify"
-            intent.clarification_question = "?????????????????????SKU????"
+            intent.clarification_question = "请告诉我要查询哪款产品，可以给 SKU、产品名，或先查询一批产品后再继续追问。"
     return intent
 def parse_intent(question: str, *, sku: str | None = None, previous_result_skus: list[str] | None = None) -> CustomerIntent | None:
     text = re.sub(r"\s+", " ", (question or "").strip())
@@ -473,7 +473,7 @@ async def _query_products_result(db: Session, user_id: str, intent: CustomerInte
     qa_results: list[dict] = []
     kb_results: list[dict] = []
     # Use the full original question for QA/knowledge search, not just extracted term
-    # This ensures questions like "?????????" match QA entries about fuel/alcohol
+    # This ensures questions like "用什么燃料" match QA entries about fuel/alcohol.
     if not search_question_text:
         search_question_text = intent.term or intent.semantic_query or ""
     for row in rows[:5]:
@@ -1152,21 +1152,21 @@ def _compose_detail_answer(
     qa_results = qa_results or []
     kb_results = kb_results or []
     if not field_paths:
-        return "?????????????????????????????"
+        return "我还没有识别到你想查询的具体字段，请告诉我要看容量、材质、卖点、负责人等哪类信息。"
     if not rows:
-        return "??????????????? SKU?????????"
+        return "没有找到对应产品。请确认 SKU 或产品名是否正确。"
 
     labels = [_field_label(path) for path in field_paths]
     row = rows[0]
     title = row.get("product_name_cn") or row.get("product_name_en") or ""
     sku_val = row["sku"]
-    detail = "?".join(f"{key}?{value}" for key, value in row.get("field_values", {}).items())
+    detail = "；".join(f"{key}：{value}" for key, value in row.get("field_values", {}).items())
 
-    lines = [f"{title}?{sku_val}??{', '.join(labels)}?{detail}?"]
+    lines = [f"{title}（{sku_val}）的{', '.join(labels)}：{detail}。"]
 
     if qa_results:
         lines.append("")
-        lines.append("??QA?????????")
+        lines.append("相关 QA 资料：")
         for qa in qa_results[:2]:
             lines.append(f"Q: {qa['question']}")
             lines.append(f"A: {qa['answer']}")
@@ -1176,10 +1176,10 @@ def _compose_detail_answer(
         for kb in kb_results[:2]:
             content_text = kb.get("content", "")[:200]
             if content_text:
-                lines.append(f"???{content_text}")
+                lines.append(f"知识库：{content_text}")
 
     if warnings:
-        lines.append(f"????{warnings[0]}?")
+        lines.append(f"提示：{warnings[0]}")
     if followups:
         lines.append(followups[0])
     return "\n".join(lines)
@@ -1222,7 +1222,7 @@ def _search_product_qa(db: Session, sku: str, question: str, limit: int = 3) -> 
     if not product:
         return []
     # Search by keyword matching in question/answer fields
-    terms = [w.strip() for w in re.split(r"[?,????!\s]+", question) if len(w.strip()) >= 2]
+    terms = [w.strip() for w in re.split(r"[?,，。？！!\s]+", question) if len(w.strip()) >= 2]
     if not terms:
         return []
     from sqlalchemy import or_
@@ -1269,28 +1269,28 @@ async def _llm_compose_answer(
 ) -> str:
     """Use LLM to compose a natural customer service reply from structured data."""
     if not rows:
-        return f"?????????????????????"
+        return "没有找到匹配的产品资料，请换一个 SKU、产品名或筛选条件再试。"
 
     # Build context for LLM
     product_info = []
     for row in rows[:5]:
         info = {
             "SKU": row.get("sku", ""),
-            "??": row.get("product_name_cn") or row.get("product_name_en") or "",
-            "??": row.get("brand", ""),
-            "??": row.get("category", ""),
-            "???": row.get("person_in_charge", ""),
-            "????": row.get("lifecycle_status", ""),
+            "名称": row.get("product_name_cn") or row.get("product_name_en") or "",
+            "品牌": row.get("brand", ""),
+            "类目": row.get("category", ""),
+            "负责人": row.get("person_in_charge", ""),
+            "生命周期": row.get("lifecycle_status", ""),
         }
         # Add field values if present
         for key, value in (row.get("field_values") or {}).items():
-            if value and value not in ("??", ""):
+            if value and value not in ("无", ""):
                 info[key] = value
         # Add key spec fields
         for field in ["capacity", "body_material", "color", "heat_source", "power", "quality_note"]:
             val = row.get(field)
             if val:
-                label = {"capacity": "??", "body_material": "??", "color": "??", "heat_source": "??", "power": "??", "quality_note": "??"}.get(field, field)
+                label = {"capacity": "容量", "body_material": "材质", "color": "颜色", "heat_source": "热源", "power": "功率", "quality_note": "品质备注"}.get(field, field)
                 info[label] = str(val)
         product_info.append(info)
 
@@ -1314,35 +1314,35 @@ async def _llm_compose_answer(
     followups_text = "\n".join(followups[:3]) if followups else ""
 
     import json as _json
-    system_prompt = """???????????????????????????????????
+    system_prompt = """你是产品知识库智能客服。请基于给定产品资料、QA 和知识库片段回答用户。
 
-?????
-1. ?????????????????????"????"?????????
-2. ??QA???????????????QA?????????
-3. ??????KB??????????????????
-4. ?????????????????????????????
-5. ????????????????????????????????
-6. ???????1-2?????????????????????
-7. ?????????????????????
-8. ????????????????????????????????
-9. ?????????????"""
+要求：
+1. 先给结论，再给依据。
+2. 如果 QA 能直接回答，优先使用 QA。
+3. 如果知识库有补充信息，可以合并说明。
+4. 不要编造工具结果之外的参数、价格、库存或承诺。
+5. 如果数据缺失，要明确说“资料里暂未提供”。
+6. 回答控制在 1-2 段，必要时给下一步建议。
+7. 如果有异常或警告，要友善提醒。
+8. 推荐类问题要解释取舍理由。
+9. 不要使用 Markdown 表格。"""
 
-    user_prompt = f"""?????{question}
+    user_prompt = f"""用户问题：{question}
 
-??????????
+产品资料：
 {_json.dumps(product_info, ensure_ascii=False, indent=2)}
 
-QA??????
-{qa_text or "???QA"}
+QA 资料：
+{qa_text or "暂无 QA"}
 
-????????
-{kb_text or "????????"}
+知识库资料：
+{kb_text or "暂无知识库资料"}
 
-???????
-{warnings_text or "???"}
+异常/警告：
+{warnings_text or "无"}
 
-?????????????????????
-{followups_text or "?"}"""
+建议追问：
+{followups_text or "无"}"""
 
     try:
         answer = await dmxapi_service.chat_completion(
