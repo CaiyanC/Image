@@ -2,7 +2,7 @@ import asyncio
 import json
 import logging
 
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, Depends, Query, Request
 from pydantic import BaseModel, Field
 from starlette.responses import StreamingResponse
 from sqlalchemy.orm import Session
@@ -30,8 +30,8 @@ class CustomerServiceFeedbackRequest(BaseModel):
 
 @router.get("/conversations")
 def list_conversations(
-    skip: int = 0,
-    limit: int = 30,
+    skip: int = Query(0, ge=0),
+    limit: int = Query(30, ge=1, le=100),
     current_user: User = Depends(require_permission("ai.customer_service")),
     db: Session = Depends(get_db),
 ):
@@ -75,7 +75,7 @@ def save_feedback(
 
 @router.get("/review-samples")
 def review_samples(
-    limit: int = 100,
+    limit: int = Query(100, ge=1, le=500),
     current_user: User = Depends(require_permission("ai.customer_service")),
     db: Session = Depends(get_db),
 ):

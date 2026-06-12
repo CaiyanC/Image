@@ -68,6 +68,23 @@ class ApiInputSafetyTest(unittest.TestCase):
         self.assertNotIn("Traceback", message)
         self.assertNotIn("Exception", message)
 
+    def test_customer_service_pagination_has_server_side_bounds(self):
+        routes = {route.path: route for route in customer_service_api.router.routes}
+        conversation_params = {
+            param.name: str(param.field_info.metadata)
+            for param in routes["/api/customer-service/conversations"].dependant.query_params
+        }
+        review_params = {
+            param.name: str(param.field_info.metadata)
+            for param in routes["/api/customer-service/review-samples"].dependant.query_params
+        }
+
+        self.assertIn("Ge(ge=0)", conversation_params["skip"])
+        self.assertIn("Ge(ge=1)", conversation_params["limit"])
+        self.assertIn("Le(le=100)", conversation_params["limit"])
+        self.assertIn("Ge(ge=1)", review_params["limit"])
+        self.assertIn("Le(le=500)", review_params["limit"])
+
     def test_reference_upload_rejects_unsupported_extension(self):
         upload = FakeUpload(b"hello", filename="ref.txt", content_type="text/plain")
         with self.assertRaises(HTTPException) as ctx:
