@@ -625,20 +625,13 @@ def get_product_detail(db: Session, sku: str) -> dict:
     return _build_detail(product, db)
 
 
-def create_product(db: Session, data: dict, creator_id: str = None) -> Product:
-    sku = data.get("sku", "").strip()
-    if not sku:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="SKU is required")
-    if get_product_by_sku(db, sku):
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="SKU already exists")
-
-    # Validate required fields per design doc
+def _validate_product_data(data: dict):
+    """Validate required fields across L1, L2."""
+    # L1 required fields
     required_fields = {
         "barcode": "条形码",
         "product_name_cn": "中文产品名",
-        "product_name_en": "英文产品名",
         "brand": "品牌",
-        "person_in_charge": "负责人",
     }
     for field, label in required_fields.items():
         val = data.get(field)
@@ -648,6 +641,55 @@ def create_product(db: Session, data: dict, creator_id: str = None) -> Product:
                 detail=f"{label}（{field}）为必填项"
             )
 
+    # L2 required fields (except certification)
+    specs_data = data.get("specs_data") or data.get("specs") or {}
+    specs_required = {
+        "capacity": "容量",
+        "power": "功率",
+        "technical_advantages": "技术优势",
+        "usage_instruction": "使用说明",
+    }
+    for field, label in specs_required.items():
+        val = specs_data.get(field)
+        is_empty = False
+        if val is None:
+            is_empty = True
+        elif isinstance(val, str):
+            is_empty = not val.strip()
+        elif isinstance(val, list):
+            is_empty = not any(
+                (isinstance(item, str) and item.strip()) or
+                (isinstance(item, dict) and (item.get("label", "").strip() or item.get("value", "").strip()))
+                for item in val
+            )
+        if is_empty:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"{label}（{field}）为必填项"
+            )
+    # L4 required fields
+    content_data = data.get("content_data") or data.get("content") or {}
+    content_required = {
+        "title_cn": "标题中文",
+        "long_description_cn": "中文长描述",
+    }
+    for field, label in content_required.items():
+        val = content_data.get(field)
+        if not val or (isinstance(val, str) and not val.strip()):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"{label}（{field}）为必填项"
+            )
+
+def create_product(db: Session, data: dict, creator_id: str = None) -> Product:
+    sku = data.get("sku", "").strip()
+    if not sku:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="SKU is required")
+    if get_product_by_sku(db, sku):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="SKU already exists")
+
+    _validate_product_data(data)
+
     product_id = str(uuid.uuid4())
 
     product = Product(
@@ -655,7 +697,7 @@ def create_product(db: Session, data: dict, creator_id: str = None) -> Product:
         sku=sku,
         barcode=data["barcode"],
         product_name_cn=data["product_name_cn"],
-        product_name_en=data["product_name_en"],
+        product_name_en=data.get("product_name_en"),
         brand=data["brand"],
         series=data.get("series"),
         category=data.get("category"),
@@ -663,7 +705,7 @@ def create_product(db: Session, data: dict, creator_id: str = None) -> Product:
         product_level=data.get("product_level"),
         launch_date=_parse_date(data.get("launch_date")),
         lifecycle_status=data.get("lifecycle_status"),
-        person_in_charge=data["person_in_charge"],
+        person_in_charge=data.get("person_in_charge"),
         active_flag=data.get("active_flag", True),
         sync_flag=data.get("sync_flag", False),
         quality_note=data.get("quality_note"),
@@ -797,6 +839,8 @@ def delete_product(db: Session, sku: str):
     product = get_product_by_sku(db, sku)
     if not product:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Product not found")
+
+    delete_product_from_vector_db(db, sku)
 
     pid = product.id
     for model in [

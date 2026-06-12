@@ -767,6 +767,9 @@ def seed_data(conn):
 
     # 默认权限
     perms = [
+        ("history.view", "查看历史记录", "page"),
+        ("profile.view", "查看个人资料", "page"),
+        ("category.read", "查看产品品类", "api"),
         ("product.read", "查看产品", "page"),
         ("product.create", "创建产品", "button"),
         ("product.edit", "编辑产品", "button"),
@@ -777,6 +780,8 @@ def seed_data(conn):
         ("media.download", "下载素材", "button"),
         ("tag.edit", "编辑标签", "button"),
         ("ai.call", "AI 调用", "api"),
+        ("ai.generate", "AI 生图", "api"),
+        ("ai.customer_service", "智能客服", "api"),
         ("ai.authorize", "AI 调用授权", "button"),
         ("competitor.view", "查看竞品图", "page"),
         ("new_product.view", "查看新品图", "page"),
@@ -791,6 +796,7 @@ def seed_data(conn):
     # 默认路由
     route_list = [
         ("/", "工作区", None, "page"),
+        ("/customer-service", "智能客服", None, "page"),
         ("/history", "历史记录", None, "page"),
         ("/products", "产品管理", None, "page"),
         ("/products/create", "新增产品", None, "page"),

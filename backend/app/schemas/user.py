@@ -1,6 +1,6 @@
 from datetime import datetime
 from typing import Optional, List, Annotated
-from pydantic import BaseModel, EmailStr, BeforeValidator
+from pydantic import BaseModel, BeforeValidator
 from .common import UuidStr
 
 
@@ -10,7 +10,7 @@ def empty_to_none(v: Optional[str]) -> Optional[str]:
     return v
 
 
-OptionalEmail = Annotated[Optional[EmailStr], BeforeValidator(empty_to_none)]
+OptionalEmail = Annotated[Optional[str], BeforeValidator(empty_to_none)]
 
 
 class UserGroupInfo(BaseModel):

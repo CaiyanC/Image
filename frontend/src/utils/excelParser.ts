@@ -227,6 +227,50 @@ const HEADER_MAP: Record<string, string> = {
   '搜索关键词库': 'search_keywords',
 }
 
+const NORMALIZED_HEADER_MAP = Object.fromEntries(
+  Object.entries(HEADER_MAP).map(([header, field]) => [normalizeHeader(header), field]),
+)
+
+function normalizeHeader(value: unknown): string {
+  return String(value || '').replace(/\s+/g, '').replace(/^#+/, '').trim()
+}
+
+function resolveHeaderField(header: unknown): string {
+  const raw = String(header || '').trim()
+  return HEADER_MAP[raw] || NORMALIZED_HEADER_MAP[normalizeHeader(raw)] || ''
+}
+
+function buildColumnMap(headerRow: unknown[]): Record<string, number> {
+  const colMap: Record<string, number> = {}
+  for (let i = 0; i < headerRow.length; i++) {
+    const raw = String(headerRow[i] || '').trim()
+    const field = resolveHeaderField(raw)
+    if (!field) continue
+
+    colMap[raw] = i
+    colMap[normalizeHeader(raw)] = i
+    colMap[field] = i
+    for (const [canonicalHeader, canonicalField] of Object.entries(HEADER_MAP)) {
+      if (canonicalField === field) {
+        colMap[canonicalHeader] = i
+        colMap[normalizeHeader(canonicalHeader)] = i
+      }
+    }
+  }
+  return colMap
+}
+
+function findL1L4HeaderRow(rows: unknown[][]): number {
+  const maxRows = Math.min(rows.length, 20)
+  for (let i = 0; i < maxRows; i++) {
+    const colMap = buildColumnMap(rows[i] || [])
+    const hasSku = colMap['SKU'] !== undefined || colMap['sku'] !== undefined
+    const hasName = colMap['商品中文名称'] !== undefined || colMap['product_name_cn'] !== undefined
+    if (hasSku && hasName) return i
+  }
+  return -1
+}
+
 // ── Main parser: 产品库元数据.xlsx ───────────────────────────────
 
 export function parseL1L4Excel(file: File): Promise<ImportProductData[]> {
@@ -240,34 +284,27 @@ export function parseL1L4Excel(file: File): Promise<ImportProductData[]> {
         const sheet = wb.Sheets[sheetName]
         const rows = XLSX.utils.sheet_to_json<unknown[]>(sheet, { header: 1 })
 
-        // Need at least 6 rows: rows 1-3 (meta), row 4 (headers), row 5 (example), row 6+ (data)
-        if (rows.length < 6) {
+        if (rows.length < 2) {
           resolve([])
           return
         }
 
-        // Build column index map from row 4 (0-indexed: row 3)
-        const headerRow = rows[3] as string[]
-        const colMap: Record<string, number> = {}
-        for (let i = 0; i < headerRow.length; i++) {
-          const h = String(headerRow[i] || '').trim()
-          if (h && HEADER_MAP[h]) {
-            colMap[h] = i
-          }
-        }
+        const headerRowIndex = findL1L4HeaderRow(rows)
+        const headerRow = rows[headerRowIndex] as string[]
+        const colMap = buildColumnMap(headerRow || [])
 
         // Must have at least SKU column
-        if (colMap['SKU'] === undefined) {
+        if (headerRowIndex < 0 || colMap['SKU'] === undefined) {
           reject(new Error('未找到 SKU 列，请确认表格格式为产品库元数据标准模板'))
           return
         }
 
         const results: ImportProductData[] = []
 
-        // Data starts from row 6 (0-indexed: row 5)
-        for (let i = 5; i < rows.length; i++) {
+        for (let i = headerRowIndex + 1; i < rows.length; i++) {
           const row = rows[i] as unknown[]
           if (!row || row.length === 0) continue
+          if (String(row[0] || '').trim() === '示例') continue
 
           const sku = getCell(row, colMap, 'SKU')
           if (!sku) continue

@@ -20,7 +20,7 @@ export default function DraftBox() {
   async function loadDrafts() {
     setLoading(true)
     try {
-      const result = await api.drafts.list(0, 100)
+      const result = await api.drafts.list(0, 1000)
       setDrafts(result.items)
     } catch (err) {
       console.error('Failed to load drafts:', err)

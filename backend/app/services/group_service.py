@@ -3,6 +3,7 @@ from sqlalchemy.orm import Session
 from ..models.group import Group
 from ..models.user_group import UserGroup
 from ..models.user import User
+from ..models.permissions import GroupPermission, Permission
 
 PRESET_GROUPS = {
     "管理层", "产品团队", "设计团队", "AI工程师", "AI内容岗",
@@ -46,6 +47,63 @@ def get_group_by_name(db: Session, name: str):
 def get_groups(db: Session):
     groups = db.query(Group).order_by(Group.group_name).all()
     return [_group_to_dict(g) for g in groups]
+
+
+def get_permissions(db: Session):
+    permissions = db.query(Permission).order_by(Permission.permission_type, Permission.permission_key).all()
+    return [
+        {
+            "id": permission.id,
+            "permission_key": permission.permission_key,
+            "permission_name": permission.permission_name,
+            "permission_type": permission.permission_type,
+            "description": permission.description,
+        }
+        for permission in permissions
+    ]
+
+
+def get_group_permissions(db: Session, group_id: str):
+    group = get_group_by_id(db, group_id)
+    if not group:
+        raise HTTPException(status_code=404, detail="Group not found")
+
+    rows = (
+        db.query(Permission)
+        .join(GroupPermission, GroupPermission.permission_id == Permission.id)
+        .filter(GroupPermission.group_id == group_id)
+        .order_by(Permission.permission_type, Permission.permission_key)
+        .all()
+    )
+    return [
+        {
+            "id": permission.id,
+            "permission_key": permission.permission_key,
+            "permission_name": permission.permission_name,
+            "permission_type": permission.permission_type,
+            "description": permission.description,
+        }
+        for permission in rows
+    ]
+
+
+def update_group_permissions(db: Session, group_id: str, permission_keys: list[str]):
+    group = get_group_by_id(db, group_id)
+    if not group:
+        raise HTTPException(status_code=404, detail="Group not found")
+
+    unique_keys = sorted(set(permission_keys))
+    permissions = db.query(Permission).filter(Permission.permission_key.in_(unique_keys)).all() if unique_keys else []
+    found_keys = {permission.permission_key for permission in permissions}
+    missing_keys = sorted(set(unique_keys) - found_keys)
+    if missing_keys:
+        raise HTTPException(status_code=400, detail=f"Unknown permissions: {', '.join(missing_keys)}")
+
+    db.query(GroupPermission).filter(GroupPermission.group_id == group_id).delete()
+    for permission in permissions:
+        db.add(GroupPermission(group_id=group_id, permission_id=permission.id))
+    db.commit()
+    return get_group_permissions(db, group_id)
 
 
 def create_group(db: Session, name: str, description: str = None):

@@ -2,7 +2,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 from pydantic import BaseModel
 from ..core.database import get_db
-from ..core.security import require_permission
+from ..core.security import require_any_permission, require_permission
 from ..models.product_category import ProductCategory
 from ..schemas.common import UuidStr
 
@@ -23,7 +23,10 @@ class CategoryResponse(BaseModel):
 
 
 @router.get("", response_model=list[CategoryResponse])
-def list_categories(db: Session = Depends(get_db)):
+def list_categories(
+    db: Session = Depends(get_db),
+    current_user=Depends(require_any_permission("category.read", "product.read", "product.create", "product.edit")),
+):
     return db.query(ProductCategory).order_by(ProductCategory.id).all()
 
 

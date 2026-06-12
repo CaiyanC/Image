@@ -26,34 +26,31 @@ function ProtectedRoute({ children }: { children: React.ReactNode }) {
 function SuperAdminRoute({ children }: { children: React.ReactNode }) {
   const { token, isManagement } = useAuthStore()
   if (!token) return <Navigate to="/login" replace />
-  if (!isManagement) return <Navigate to="/history" replace />
+  if (!isManagement) return <Navigate to="/no-access" replace />
   return <>{children}</>
 }
 
-function hasTeamAccess(user: ReturnType<typeof useAuthStore.getState>['user'], isManagement: boolean) {
+function hasPermission(
+  user: ReturnType<typeof useAuthStore.getState>['user'],
+  isManagement: boolean,
+  permissionKey: string,
+) {
   if (isManagement) return true
-  if (user?.permissions?.includes('product.read')) return true
-  return !!user?.groups?.some(
-    (g) => g.group_name === '产品团队' || g.group_name === '设计团队'
-  )
+  return !!user?.permissions?.includes(permissionKey)
 }
 
-function hasWorkspaceAccess(user: ReturnType<typeof useAuthStore.getState>['user'], isManagement: boolean) {
-  if (isManagement) return true
-  return !!user?.permissions?.includes('ai.call')
-}
-
-function TeamRoute({ children }: { children: React.ReactNode }) {
+function PermissionRoute({
+  permissionKey,
+  fallback = '/no-access',
+  children,
+}: {
+  permissionKey: string
+  fallback?: string
+  children: React.ReactNode
+}) {
   const { token, isManagement, user } = useAuthStore()
   if (!token) return <Navigate to="/login" replace />
-  if (!hasTeamAccess(user, isManagement)) return <Navigate to="/history" replace />
-  return <>{children}</>
-}
-
-function WorkspaceRoute({ children }: { children: React.ReactNode }) {
-  const { token, isManagement, user } = useAuthStore()
-  if (!token) return <Navigate to="/login" replace />
-  if (!hasWorkspaceAccess(user, isManagement)) return <Navigate to="/history" replace />
+  if (!hasPermission(user, isManagement, permissionKey)) return <Navigate to={fallback} replace />
   return <>{children}</>
 }
 
@@ -66,29 +63,39 @@ export default function App() {
         <Route
           path="/"
           element={
-            <WorkspaceRoute>
+            <PermissionRoute permissionKey="ai.generate">
               <Layout>
                 <Workspace />
               </Layout>
-            </WorkspaceRoute>
+            </PermissionRoute>
           }
         />
         <Route
           path="/history"
           element={
-            <ProtectedRoute>
+            <PermissionRoute permissionKey="history.view">
               <Layout>
                 <History />
               </Layout>
-            </ProtectedRoute>
+            </PermissionRoute>
           }
         />
         <Route
           path="/profile"
           element={
-            <ProtectedRoute>
+            <PermissionRoute permissionKey="profile.view">
               <Layout>
                 <Profile />
+              </Layout>
+            </PermissionRoute>
+          }
+        />
+        <Route
+          path="/no-access"
+          element={
+            <ProtectedRoute>
+              <Layout>
+                <NoAccess />
               </Layout>
             </ProtectedRoute>
           }
@@ -96,61 +103,61 @@ export default function App() {
         <Route
           path="/products"
           element={
-            <TeamRoute>
+            <PermissionRoute permissionKey="product.read">
               <Layout>
                 <ProductManagement />
               </Layout>
-            </TeamRoute>
+            </PermissionRoute>
           }
         />
         <Route
           path="/customer-service"
           element={
-            <WorkspaceRoute>
+            <PermissionRoute permissionKey="ai.customer_service">
               <Layout>
                 <CustomerService />
               </Layout>
-            </WorkspaceRoute>
+            </PermissionRoute>
           }
         />
         <Route
           path="/products/create"
           element={
-            <TeamRoute>
+            <PermissionRoute permissionKey="product.create" fallback="/products">
               <Layout>
                 <ProductCreate />
               </Layout>
-            </TeamRoute>
+            </PermissionRoute>
           }
         />
         <Route
           path="/products/create/:draftId"
           element={
-            <TeamRoute>
+            <PermissionRoute permissionKey="product.create" fallback="/products">
               <Layout>
                 <ProductCreate />
               </Layout>
-            </TeamRoute>
+            </PermissionRoute>
           }
         />
         <Route
           path="/products/edit/:sku"
           element={
-            <TeamRoute>
+            <PermissionRoute permissionKey="product.edit" fallback="/products">
               <Layout>
                 <ProductCreate />
               </Layout>
-            </TeamRoute>
+            </PermissionRoute>
           }
         />
         <Route
           path="/products/drafts"
           element={
-            <TeamRoute>
+            <PermissionRoute permissionKey="product.read">
               <Layout>
                 <DraftBox />
               </Layout>
-            </TeamRoute>
+            </PermissionRoute>
           }
         />
         <Route
@@ -204,6 +211,19 @@ function RouteFallback() {
     <div className="min-h-screen bg-[#f6f3ee] text-[#2f241d] flex items-center justify-center">
       <div className="px-6 py-4 rounded-2xl border border-[#d9c9b8] bg-white/80 text-sm tracking-[0.02em]">
         页面加载中...
+      </div>
+    </div>
+  )
+}
+
+function NoAccess() {
+  return (
+    <div className="min-h-[calc(100vh-56px)] flex items-center justify-center px-4">
+      <div className="glass p-8 max-w-md w-full text-center">
+        <h1 className="text-xl font-semibold text-apple-text">没有访问权限</h1>
+        <p className="text-sm text-apple-gray-medium mt-2">
+          当前账号没有访问该页面的权限，请联系超级管理员调整所在团队权限。
+        </p>
       </div>
     </div>
   )

@@ -1,7 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from sqlalchemy.orm import Session
 from ..core.database import get_db
-from ..core.security import verify_password, create_access_token, get_current_user
+from ..core.security import verify_password, create_access_token, get_current_user, require_permission
 from ..core.security import get_user_groups, get_user_permissions
 from ..models.user import User
 from ..schemas.user import (
@@ -55,7 +55,7 @@ def login(
 
 @router.get("/me", response_model=UserResponse)
 def get_me(
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_permission("profile.view")),
     db: Session = Depends(get_db),
 ):
     groups = get_user_groups(db, current_user.id)
@@ -68,7 +68,7 @@ def get_me(
 @router.put("/me", response_model=UserResponse)
 def update_me(
     profile_data: UserProfileUpdate,
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_permission("profile.view")),
     db: Session = Depends(get_db),
 ):
     user = user_service.update_own_profile(db, current_user.id, profile_data)

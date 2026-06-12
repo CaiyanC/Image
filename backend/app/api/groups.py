@@ -29,12 +29,24 @@ class UpdateRoleRequest(BaseModel):
     group_role: str
 
 
+class UpdateGroupPermissionsRequest(BaseModel):
+    permission_keys: list[str]
+
+
 @router.get("")
 def list_groups(
     _: User = Depends(get_current_super_admin),
     db: Session = Depends(get_db),
 ):
     return group_service.get_groups(db)
+
+
+@router.get("/permissions")
+def list_permissions(
+    _: User = Depends(get_current_super_admin),
+    db: Session = Depends(get_db),
+):
+    return group_service.get_permissions(db)
 
 
 @router.post("")
@@ -115,6 +127,40 @@ def list_group_members(
     db: Session = Depends(get_db),
 ):
     return group_service.get_group_members(db, group_id)
+
+
+@router.get("/{group_id}/permissions")
+def list_group_permissions(
+    group_id: str,
+    _: User = Depends(get_current_super_admin),
+    db: Session = Depends(get_db),
+):
+    return group_service.get_group_permissions(db, group_id)
+
+
+@router.put("/{group_id}/permissions")
+def update_group_permissions(
+    group_id: str,
+    req: UpdateGroupPermissionsRequest,
+    request: Request,
+    current_user: User = Depends(get_current_super_admin),
+    db: Session = Depends(get_db),
+):
+    permissions = group_service.update_group_permissions(db, group_id, req.permission_keys)
+    group = group_service.get_group_by_id(db, group_id)
+    operation_log_service.log_operation(
+        db,
+        operator_id=current_user.id,
+        action_type="update",
+        action_name="更新团队权限",
+        target_type="group_permissions",
+        target_id=group_id,
+        target_name=group.group_name if group else group_id,
+        request_data=req.model_dump(),
+        response_data={"permissions": permissions},
+        request=request,
+    )
+    return permissions
 
 
 @router.post("/{group_id}/users")

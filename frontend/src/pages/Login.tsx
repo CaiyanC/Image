@@ -11,19 +11,28 @@ export default function Login() {
   const { setAuth } = useAuthStore()
   const navigate = useNavigate()
 
-  async function handleSubmit(e: React.FormEvent) {
-    e.preventDefault()
+  async function handleSubmit(event: React.FormEvent) {
+    event.preventDefault()
     setError('')
     setLoading(true)
 
     try {
       const data = await api.auth.login(username, password)
       setAuth(data.access_token, data.user)
-      const canUseWorkspace = data.user.permissions?.includes('ai.call') || data.user.groups?.some(
-        (g: { group_name: string }) =>
-          g.group_name === '管理层' || g.group_name === '产品团队' || g.group_name === '设计团队'
-      )
-      navigate(canUseWorkspace ? '/' : '/history')
+      const permissions = data.user.permissions || []
+      if (permissions.includes('ai.generate')) {
+        navigate('/')
+      } else if (permissions.includes('ai.customer_service')) {
+        navigate('/customer-service')
+      } else if (permissions.includes('history.view')) {
+        navigate('/history')
+      } else if (permissions.includes('product.read')) {
+        navigate('/products')
+      } else if (permissions.includes('profile.view')) {
+        navigate('/profile')
+      } else {
+        navigate('/no-access')
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : '账号或密码错误')
     } finally {
@@ -41,7 +50,7 @@ export default function Login() {
       <div className="w-full max-w-md animate-slide-up">
         <div className="text-center mb-8">
           <h1 className="text-3xl font-bold text-apple-text tracking-tight">AI 创作平台</h1>
-          <p className="text-apple-gray-medium mt-2">登录以开始创作</p>
+          <p className="text-apple-gray-medium mt-2">登录以开始工作</p>
         </div>
 
         <form onSubmit={handleSubmit} className="glass p-8 space-y-5">
@@ -56,7 +65,7 @@ export default function Login() {
             <input
               type="text"
               value={username}
-              onChange={(e) => setUsername(e.target.value)}
+              onChange={(event) => setUsername(event.target.value)}
               className="glass-input w-full px-4 py-3 text-sm text-apple-text placeholder:text-apple-gray-medium"
               placeholder="请输入用户名"
               required
@@ -68,27 +77,23 @@ export default function Login() {
             <input
               type="password"
               value={password}
-              onChange={(e) => setPassword(e.target.value)}
+              onChange={(event) => setPassword(event.target.value)}
               className="glass-input w-full px-4 py-3 text-sm text-apple-text placeholder:text-apple-gray-medium"
               placeholder="请输入密码"
               required
             />
           </div>
 
-          <button
-            type="submit"
-            disabled={loading}
-            className="btn-primary w-full"
-          >
+          <button type="submit" disabled={loading} className="btn-primary w-full">
             {loading ? '登录中...' : '登录'}
           </button>
 
-          <p className="text-center text-sm text-apple-gray-medium">
+          <div className="text-center text-sm text-apple-gray-medium">
             还没有账号？{' '}
-            <Link to="/register" className="text-apple-blue hover:underline font-medium">
+            <Link to="/register" className="text-apple-blue hover:underline">
               注册
             </Link>
-          </p>
+          </div>
         </form>
       </div>
     </div>

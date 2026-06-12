@@ -167,9 +167,12 @@ def publish_draft(db: Session, draft_id: str, user_id: str = None) -> dict:
     existing_product = get_product_by_sku(db, sku)
 
     if existing_product:
+        # Validate L2 required fields (except certification)
+        from .product_service import _to_json_str, _validate_product_data
+        _validate_product_data(draft_data)
+
         # Update existing product with draft data
         from ..models.product_content import ProductContent
-        from .product_service import _to_json_str
 
         pid = existing_product.id
         product_fields = {

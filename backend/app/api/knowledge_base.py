@@ -3,7 +3,7 @@ from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from ..core.database import get_db
-from ..core.security import require_permission
+from ..core.security import require_any_permission, require_permission
 from ..models.user import User
 from ..services import knowledge_service
 
@@ -21,7 +21,7 @@ class KnowledgeDocumentCreate(BaseModel):
 
 @router.get("/status")
 def status(
-    current_user: User = Depends(require_permission("ai.call")),
+    current_user: User = Depends(require_any_permission("ai.customer_service", "ai.call")),
     db: Session = Depends(get_db),
 ):
     return knowledge_service.vector_status(db)

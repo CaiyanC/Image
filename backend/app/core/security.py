@@ -128,6 +128,22 @@ def require_permission(permission_key: str):
     return checker
 
 
+def require_any_permission(*permission_keys: str):
+    def checker(
+        current_user: User = Depends(get_current_user),
+        db: Session = Depends(get_db),
+    ) -> User:
+        for permission_key in permission_keys:
+            if has_permission(db, current_user.id, permission_key):
+                return current_user
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=f"Permission required: {' or '.join(permission_keys)}",
+        )
+
+    return checker
+
+
 def get_current_super_admin(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),

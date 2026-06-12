@@ -3,7 +3,7 @@ from sqlalchemy.orm import Session
 from typing import List
 from datetime import date
 from ..core.database import get_db
-from ..core.security import get_current_user, get_current_admin_user, get_user_groups
+from ..core.security import get_current_admin_user, get_user_groups, require_permission
 from ..models.user import User
 from ..schemas.generation import GenerationResponse, GenerationStats
 from ..services import generation_service
@@ -25,7 +25,7 @@ def get_history(
     search: str = Query(None),
     date_from: date = Query(None),
     date_to: date = Query(None),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_permission("history.view")),
     db: Session = Depends(get_db),
 ):
     return generation_service.get_user_generations(
@@ -48,7 +48,7 @@ def get_admin_history(
 
 @router.get("/stats", response_model=GenerationStats)
 def get_stats(
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_permission("history.view")),
     db: Session = Depends(get_db),
 ):
     if _is_management(current_user, db):
@@ -59,7 +59,7 @@ def get_stats(
 @router.get("/{generation_id}", response_model=GenerationResponse)
 def get_generation(
     generation_id: str,
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_permission("history.view")),
     db: Session = Depends(get_db),
 ):
     if _is_management(current_user, db):
@@ -70,7 +70,7 @@ def get_generation(
 @router.delete("/{generation_id}")
 def delete_generation(
     generation_id: str,
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_permission("history.view")),
     db: Session = Depends(get_db),
 ):
     generation_service.delete_generation(db, generation_id, current_user.id)

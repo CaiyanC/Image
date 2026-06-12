@@ -372,6 +372,7 @@ export default function ProductCreate() {
   }
 
   function addCapacityLine() {
+    clearFieldError('capacity')
     const lines = specs.capacity || []
     setSpecs({
       ...specs,
@@ -380,6 +381,7 @@ export default function ProductCreate() {
   }
 
   function updateCapacityLine(index: number, field: 'label' | 'value', value: string) {
+    clearFieldError('capacity')
     const lines = specs.capacity || []
     setSpecs({
       ...specs,
@@ -398,11 +400,13 @@ export default function ProductCreate() {
   }
 
   function addSpecTechAdvantage() {
+    clearFieldError('technical_advantages')
     const advs = specs.technical_advantages || []
     setSpecs({ ...specs, technical_advantages: [...advs, ''] })
   }
 
   function updateSpecTechAdvantage(index: number, value: string) {
+    clearFieldError('technical_advantages')
     const advs = specs.technical_advantages || []
     setSpecs({ ...specs, technical_advantages: advs.map((a, i) => i === index ? value : a) })
   }
@@ -833,28 +837,28 @@ export default function ProductCreate() {
 
   // field-id → label mapping for scroll targeting
   const FIELD_IDS: Record<string, string> = {
-    barcode: '条形码', nameZh: '商品中文名称', nameEn: '商品英文名称',
-    brand: '品牌', personInCharge: '负责人',
+    barcode: '条形码', nameZh: '商品中文名称',
+    brand: '品牌',
     body_material: '主体材质', color: '主色系', surface_finish: '表面处理',
-    heat_source: '适用热源', title_en: '标题英文', title_cn: '标题中文',
-    long_description_en: '英文长描述', long_description_cn: '中文长描述',
+    heat_source: '适用热源', capacity: '容量', power: '功率',
+    technical_advantages: '技术优势', usage_instruction: '使用说明',
+    title_cn: '标题中文', long_description_cn: '中文长描述',
   }
-
   function validateRequired(): string[] {
     const missing: string[] = []
     if (!sku.trim()) missing.push('sku')
     if (!barcode.trim()) missing.push('barcode')
     if (!nameZh.trim()) missing.push('nameZh')
-    if (!nameEn.trim()) missing.push('nameEn')
     if (!brand.trim()) missing.push('brand')
-    if (!personInCharge.trim()) missing.push('personInCharge')
     if (!specs.body_material?.trim()) missing.push('body_material')
     if (!specs.color?.trim()) missing.push('color')
     if (!specs.surface_finish?.trim()) missing.push('surface_finish')
     if (!specs.heat_source?.trim()) missing.push('heat_source')
-    if (!content.title_en?.trim()) missing.push('title_en')
+    if (!specs.capacity || (Array.isArray(specs.capacity) && specs.capacity.every((c: any) => !c.label?.trim() && !c.value?.trim()))) missing.push('capacity')
+    if (!specs.power?.trim()) missing.push('power')
+    if (!specs.technical_advantages || (Array.isArray(specs.technical_advantages) && specs.technical_advantages.every((t: any) => !t?.trim()))) missing.push('technical_advantages')
+    if (!specs.usage_instruction?.trim()) missing.push('usage_instruction')
     if (!content.title_cn?.trim()) missing.push('title_cn')
-    if (!content.long_description_en?.trim()) missing.push('long_description_en')
     if (!content.long_description_cn?.trim()) missing.push('long_description_cn')
     return missing
   }
@@ -1125,7 +1129,7 @@ export default function ProductCreate() {
             </div>
           </div>
 
-          <div className="mb-6">
+          <div id="field-capacity" className="mb-6">
             <div className="flex items-center justify-between mb-3">
               <span className="text-sm font-medium text-apple-text">容量信息</span>
               <button onClick={addCapacityLine} className="text-sm text-blue-600 hover:text-blue-700">
@@ -1198,13 +1202,13 @@ export default function ProductCreate() {
           <div className="mb-6">
             <div>
               <label className="block text-sm text-apple-text mb-1">功率（炉具类）</label>
-              <input type="text" value={specs.power || ''} onChange={(e) => setSpecs({ ...specs, power: e.target.value })}
+              <input id="field-power" type="text" value={specs.power || ''} onChange={(e) => { setSpecs({ ...specs, power: e.target.value }); clearFieldError('power') }}
                 className="w-full px-3 py-2 bg-white/50 border border-gray-200 rounded-lg text-sm focus:outline-none focus:border-blue-400"
                 placeholder="800W-2000W" />
             </div>
           </div>
 
-          <div className="mb-6">
+          <div id="field-technical_advantages" className="mb-6">
             <div className="flex items-center justify-between mb-3">
               <span className="text-sm font-medium text-apple-text">技术优势</span>
               <button onClick={addSpecTechAdvantage} className="text-sm text-blue-600 hover:text-blue-700">+ 添加</button>
@@ -1224,7 +1228,7 @@ export default function ProductCreate() {
 
           <div className="mb-6 mt-6">
             <label className="block text-sm text-apple-text mb-1">使用说明</label>
-            <textarea value={specs.usage_instruction || ''} onChange={(e) => setSpecs({ ...specs, usage_instruction: e.target.value })}
+            <textarea id="field-usage_instruction" value={specs.usage_instruction || ''} onChange={(e) => { setSpecs({ ...specs, usage_instruction: e.target.value }); clearFieldError('usage_instruction') }}
               className="w-full px-3 py-2 bg-white/50 border border-gray-200 rounded-lg text-sm focus:outline-none focus:border-blue-400"
               rows={3} placeholder="首次使用前请清洗..." />
           </div>

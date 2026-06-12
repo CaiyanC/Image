@@ -12,6 +12,11 @@ const ERROR_MESSAGES: Record<string, string> = {
   'Permission required: product.read': '没有产品查看权限',
   'Permission required: product.create': '没有产品创建权限',
   'Permission required: product.delete': '没有产品删除权限',
+  'Permission required: ai.generate': '没有 AI 生图权限',
+  'Permission required: ai.customer_service': '没有智能客服权限',
+  'Permission required: history.view': '没有历史记录查看权限',
+  'Permission required: profile.view': '没有个人资料查看权限',
+  'Permission required: category.read': '没有品类查看权限',
   'Product not found': '产品不存在',
   'User not found': '用户不存在或已被删除，请刷新用户列表',
   'Group not found': '团队不存在或已被删除，请刷新页面',
@@ -487,6 +492,13 @@ export const api = {
       request(`/admin/groups/${id}`, { method: 'PUT', body: JSON.stringify(data) }),
     delete: (id: string) => request(`/admin/groups/${id}`, { method: 'DELETE' }),
     members: (groupId: string) => request<any[]>(`/admin/groups/${groupId}/users`),
+    permissions: () => request<any[]>('/admin/groups/permissions'),
+    groupPermissions: (groupId: string) => request<any[]>(`/admin/groups/${groupId}/permissions`),
+    updatePermissions: (groupId: string, permissionKeys: string[]) =>
+      request(`/admin/groups/${groupId}/permissions`, {
+        method: 'PUT',
+        body: JSON.stringify({ permission_keys: permissionKeys }),
+      }),
     addUser: (groupId: string, data: { user_id: string; group_role: string }) =>
       request(`/admin/groups/${groupId}/users`, { method: 'POST', body: JSON.stringify(data) }),
     removeUser: (groupId: string, userId: string) =>

@@ -1,9 +1,10 @@
-import { useAuthStore } from '../../store/authStore'
-import { Link, useNavigate, useLocation } from 'react-router-dom'
 import { useEffect, useRef, useState } from 'react'
+import { Link, useLocation, useNavigate } from 'react-router-dom'
+import { useAuthStore } from '../../store/authStore'
 
 export default function Header() {
   const { user, logout } = useAuthStore()
+  const isSuperAdmin = useAuthStore((state) => state.isManagement)
   const navigate = useNavigate()
   const location = useLocation()
   const [menuOpen, setMenuOpen] = useState(false)
@@ -11,8 +12,8 @@ export default function Header() {
   const menuRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
-    function handleClick(e: MouseEvent) {
-      if (menuRef.current && !menuRef.current.contains(e.target as Node)) {
+    function handleClick(event: MouseEvent) {
+      if (menuRef.current && !menuRef.current.contains(event.target as Node)) {
         setMenuOpen(false)
         setAdminOpen(false)
       }
@@ -21,27 +22,26 @@ export default function Header() {
     return () => document.removeEventListener('mousedown', handleClick)
   }, [])
 
+  function has(permissionKey: string) {
+    return isSuperAdmin || user?.permissions?.includes(permissionKey)
+  }
+
   function handleLogout() {
     logout()
     navigate('/login')
   }
 
-  const isSuperAdmin = useAuthStore((s) => s.isManagement)
-  const hasProductAccess = isSuperAdmin || user?.permissions?.includes('product.read') || user?.groups?.some(
-    (g) => g.group_name === '产品团队' || g.group_name === '设计团队'
-  )
-  const hasWorkspaceAccess = isSuperAdmin || user?.permissions?.includes('ai.call')
-
   const navItems = [
-    ...(hasWorkspaceAccess ? [{ path: '/customer-service', label: '智能客服' }] : []),
-    ...(hasWorkspaceAccess ? [{ path: '/', label: '创作' }] : []),
-    { path: '/history', label: '历史' },
-    ...(hasProductAccess ? [{ path: '/products', label: '产品' }] : []),
+    ...(has('ai.customer_service') ? [{ path: '/customer-service', label: '智能客服' }] : []),
+    ...(has('ai.generate') ? [{ path: '/', label: '创作' }] : []),
+    ...(has('history.view') ? [{ path: '/history', label: '历史' }] : []),
+    ...(has('product.read') ? [{ path: '/products', label: '产品' }] : []),
   ]
+  const homePath = navItems[0]?.path || '/no-access'
 
   const superAdminItems = [
     { path: '/admin/users', label: '用户' },
-    { path: '/admin/groups', label: '团队' },
+    { path: '/admin/groups', label: '团队权限' },
     { path: '/admin/settings', label: '设置' },
     { path: '/admin/logs', label: '日志' },
   ]
@@ -52,7 +52,7 @@ export default function Header() {
     <header className="fixed top-0 left-0 right-0 z-50 h-14">
       <div className="glass-dark mx-4 mt-3 px-6 h-12 flex items-center justify-between rounded-glass">
         <div className="flex items-center gap-8">
-          <Link to="/" className="text-lg font-semibold text-apple-text tracking-tight">
+          <Link to={homePath} className="text-lg font-semibold text-apple-text tracking-tight">
             AI 创作平台
           </Link>
           <nav className="flex items-center gap-1">
@@ -129,13 +129,15 @@ export default function Header() {
                   <p className="text-sm font-medium text-apple-text">{user?.username}</p>
                   <p className="text-xs text-apple-gray-medium mt-0.5">{user?.email}</p>
                 </div>
-                <Link
-                  to="/profile"
-                  onClick={() => setMenuOpen(false)}
-                  className="block px-4 py-2.5 text-sm text-apple-gray-dark hover:text-apple-text hover:bg-black/[0.02] transition-colors duration-150"
-                >
-                  个人资料
-                </Link>
+                {has('profile.view') && (
+                  <Link
+                    to="/profile"
+                    onClick={() => setMenuOpen(false)}
+                    className="block px-4 py-2.5 text-sm text-apple-gray-dark hover:text-apple-text hover:bg-black/[0.02] transition-colors duration-150"
+                  >
+                    个人资料
+                  </Link>
+                )}
                 <button
                   onClick={handleLogout}
                   className="w-full text-left px-4 py-2.5 text-sm text-red-500 hover:bg-red-50/50 transition-colors duration-150"
