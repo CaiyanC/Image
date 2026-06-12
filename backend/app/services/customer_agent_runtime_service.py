@@ -31,6 +31,14 @@ async def process_agent_request(
     conversation_history: list[dict] | None = None,
     feedback_lessons: list[dict] | None = None,
 ) -> dict | None:
+    dialogue_state = customer_dialogue_state.build_dialogue_state(question, conversation_history or [])
+    if (
+        dialogue_state.needs_clarification
+        and not previous_result_skus
+        and not sku
+        and not _requires_write_tool(question)
+    ):
+        return _build_clarification_result(question, sku, dialogue_state)
     if _needs_previous_context(question) and not previous_result_skus:
         return {
             "answer": "你说的“这些”我还没有可引用的上一轮产品结果。请先告诉我要处理的 SKU，或先查询一批产品，比如“负责人为 Yao 的锅有哪些”。",
@@ -835,6 +843,29 @@ def _price_text(row: dict) -> str:
         str(row.get(key) or "")
         for key in ("price_positioning", "positioning", "product_level", "features", "semantic_match")
     )
+
+
+def _build_clarification_result(question: str, sku: str | None, dialogue_state: customer_dialogue_state.DialogueState) -> dict:
+    answer = "我还需要一个更明确的产品范围。你可以告诉我要查的 SKU、产品名、类目，或者具体使用场景，比如“适合三个人露营的锅”。"
+    return {
+        "answer": answer,
+        "sku": sku,
+        "sources": [{"type": "agent_clarification", "label": "需要明确产品范围"}],
+        "actions": [],
+        "results": [],
+        "steps": [
+            {
+                "type": "clarify",
+                "label": "需要明确产品范围",
+                "detail": f"clarification_reason={dialogue_state.clarification_reason}; missing_slots={dialogue_state.missing_slots}",
+            }
+        ],
+        "warnings": [],
+        "debug": {
+            "agent_mode": "dialogue_state_clarification",
+            "dialogue_state": dialogue_state.to_dict(),
+        },
+    }
 
 
 def _answer_budget_conflicts(answer: str, question: str, results: list[dict]) -> bool:

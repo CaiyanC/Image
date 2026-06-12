@@ -602,6 +602,21 @@ class CustomerAgentRuntimeServiceTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result["actions"], [])
         self.assertIn("没有可引用的上一轮产品结果", result["answer"])
 
+    async def test_vague_recommendation_clarifies_before_tool_selection(self):
+        result = await customer_agent_runtime_service.process_agent_request(
+            self.db,
+            user_id="user-1",
+            question="推荐一下",
+            previous_result_skus=[],
+            conversation_history=[],
+        )
+
+        self.assertIsNotNone(result)
+        self.assertEqual(result["results"], [])
+        self.assertEqual(result["steps"][0]["type"], "clarify")
+        self.assertEqual(result["debug"]["agent_mode"], "dialogue_state_clarification")
+        self.assertIn("产品范围", result["answer"])
+
     def test_budget_followup_builds_conversation_context(self):
         context = customer_agent_runtime_service._conversation_context_for_question(
             "预算不高",
