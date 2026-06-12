@@ -1,7 +1,7 @@
 {
   "version": 1,
   "name": "智能客服正式上线回归测试集",
-  "updated_at": "2026-06-09",
+  "updated_at": "2026-06-12",
   "pass_threshold": 0.9,
   "cases": [
     {
@@ -14,7 +14,11 @@
         "answer_must_include_any": ["三", "露营", "推荐", "适合"],
         "answer_must_not_include": ["找到 14 条", "只找到以下资料"],
         "min_results": 1,
-        "requires_sources": true
+        "requires_sources": true,
+        "requires_evidence": true,
+        "min_quality_score": 0.82,
+        "max_quality_risks": 0,
+        "quality_must_pass": true
       }
     },
     {
@@ -27,7 +31,11 @@
         "answer_must_include_any": ["CW-C93", "小锅", "咖啡", "速沸", "烧水"],
         "answer_must_not_include": ["首选 CW-C83-1", "首选 炊墨炒锅", "首选 炊墨煎锅"],
         "min_results": 1,
-        "requires_sources": true
+        "requires_sources": true,
+        "requires_evidence": true,
+        "min_quality_score": 0.82,
+        "max_quality_risks": 0,
+        "quality_must_pass": true
       }
     },
     {
@@ -40,7 +48,11 @@
         "answer_must_include_any": ["四", "做饭", "多人", "容量", "锅"],
         "answer_must_not_include": ["根据您适合泡咖啡的小锅需求", "泡咖啡的理想小锅"],
         "min_results": 1,
-        "requires_sources": true
+        "requires_sources": true,
+        "requires_evidence": true,
+        "min_quality_score": 0.82,
+        "max_quality_risks": 0,
+        "quality_must_pass": true
       }
     },
     {
@@ -79,7 +91,10 @@
         "answer_must_include_any": ["预算", "性价比", "价格定位", "常规", "实惠", "不高"],
         "answer_must_not_include": ["行山单锅性价比很高", "行山单锅是低预算首选", "高端低预算"],
         "min_results": 1,
-        "requires_sources": true
+        "requires_sources": true,
+        "requires_evidence": true,
+        "min_quality_score": 0.82,
+        "quality_must_pass": true
       }
     },
     {
@@ -104,7 +119,10 @@
         "intent": "propose_update",
         "answer_must_include_any": ["待确认", "修改", "确认"],
         "expected_action_type": "update_field",
-        "requires_actions": true
+        "requires_actions": true,
+        "min_quality_score": 0.82,
+        "max_quality_risks": 0,
+        "quality_must_pass": true
       }
     },
     {
@@ -140,7 +158,11 @@
         "intent": "product_detail",
         "answer_must_include_any": ["CS-G25", "小青炉", "炉"],
         "min_results": 1,
-        "requires_sources": true
+        "requires_sources": true,
+        "requires_evidence": true,
+        "min_quality_score": 0.82,
+        "max_quality_risks": 0,
+        "quality_must_pass": true
       }
     },
     {
@@ -152,7 +174,11 @@
         "intent": "product_detail",
         "answer_must_include_any": ["CW-C83", "容量", "材质"],
         "min_results": 1,
-        "requires_sources": true
+        "requires_sources": true,
+        "requires_evidence": true,
+        "min_quality_score": 0.82,
+        "max_quality_risks": 0,
+        "quality_must_pass": true
       }
     },
     {
@@ -267,7 +293,10 @@
         "intent": "propose_update",
         "answer_must_include_any": ["待确认", "确认"],
         "answer_must_not_include": ["已经修改完成", "已直接修改"],
-        "requires_actions": true
+        "requires_actions": true,
+        "min_quality_score": 0.82,
+        "max_quality_risks": 0,
+        "quality_must_pass": true
       }
     },
     {

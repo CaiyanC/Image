@@ -169,12 +169,28 @@ def evaluate_case(case: dict[str, Any], response: dict[str, Any]) -> dict[str, A
         check(len(response.get("results") or []) >= int(expect["min_results"]), f"results fewer than {expect['min_results']}")
     if expect.get("requires_sources"):
         check(bool(response.get("sources")), "sources required")
+    if expect.get("requires_evidence"):
+        check(bool(response.get("evidence")), "evidence required")
+    if expect.get("confidence"):
+        check(str(response.get("confidence") or "") == str(expect["confidence"]), f"confidence expected {expect['confidence']}, got {response.get('confidence')}")
+    if expect.get("uncertainty"):
+        check(str(response.get("uncertainty") or "") == str(expect["uncertainty"]), f"uncertainty expected {expect['uncertainty']}, got {response.get('uncertainty')}")
     if expect.get("requires_actions") is not None:
         has_actions = bool(response.get("actions"))
         check(has_actions is bool(expect["requires_actions"]), f"actions required={expect['requires_actions']} got={has_actions}")
     if expect.get("expected_action_type"):
         actions = response.get("actions") or []
         check(any(action.get("action_type") == expect["expected_action_type"] for action in actions), f"missing action_type {expect['expected_action_type']}")
+    if expect.get("min_quality_score") is not None:
+        quality = response.get("agent_quality") or {}
+        check(float(quality.get("score") or 0) >= float(expect["min_quality_score"]), f"quality score below {expect['min_quality_score']}: {quality.get('score')}")
+    if expect.get("max_quality_risks") is not None:
+        quality = response.get("agent_quality") or {}
+        risks = quality.get("risks") or []
+        check(len(risks) <= int(expect["max_quality_risks"]), f"too many quality risks: {risks}")
+    if expect.get("quality_must_pass"):
+        quality = response.get("agent_quality") or {}
+        check(bool(quality.get("passed")), f"quality did not pass: {quality}")
 
     score = passed / checks if checks else 1.0
     return {

@@ -68,6 +68,7 @@ def get_conversation(db: Session, conversation_id: str, user_id: str) -> dict:
                 "followups": meta.get("followups", meta.get("suggested_followups", [])),
                 "warnings": meta.get("warnings", []),
                 "evidence": meta.get("evidence", []),
+                "agent_quality": meta.get("agent_quality", {}),
                 "debug": meta.get("debug", {}),
                 "feedback": meta.get("feedback"),
                 "created_at": str(item.created_at),
@@ -219,6 +220,7 @@ async def ask_customer_service(
             "followups": agent_result.get("followups") or agent_result.get("suggested_followups") or [],
             "warnings": agent_result.get("warnings") or [],
             "evidence": agent_result.get("evidence") or [],
+            "agent_quality": agent_result.get("agent_quality") or {},
             "debug": agent_result.get("debug") or {},
             "sku": agent_result.get("sku"),
             "answer": agent_result["answer"],
@@ -440,6 +442,7 @@ def review_samples(db: Session, user_id: str, limit: int = 100) -> dict:
             "answer": assistant_message.content,
             "intent": meta.get("intent"),
             "confidence": meta.get("confidence"),
+            "agent_quality": meta.get("agent_quality", {}),
             "needs_clarification": meta.get("needs_clarification", False),
             "anomalies": meta.get("anomalies", []),
             "warnings": meta.get("warnings", []),
@@ -512,6 +515,7 @@ def _sources_with_result_context(agent_result: dict) -> list[dict]:
         "followups": agent_result.get("followups") or agent_result.get("suggested_followups") or [],
         "warnings": agent_result.get("warnings") or [],
         "evidence": agent_result.get("evidence") or [],
+        "agent_quality": agent_result.get("agent_quality") or {},
         "debug": agent_result.get("debug") or {},
         "feedback": agent_result.get("feedback") or None,
     })
@@ -550,6 +554,7 @@ def _normalize_agent_result(agent_result: dict) -> dict:
     result.setdefault("evidence", _evidence_from_results(results))
     result.setdefault("followups", result.get("suggested_followups") or [])
     result.setdefault("suggested_followups", result.get("followups") or [])
+    result.setdefault("agent_quality", {})
     result.setdefault("debug", {
         "intent": result.get("intent"),
         "steps": result.get("steps") or [],

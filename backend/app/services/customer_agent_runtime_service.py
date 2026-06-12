@@ -4,7 +4,14 @@ from typing import Any
 
 from sqlalchemy.orm import Session
 
-from . import agent_trace_service, customer_agent_tool_service, customer_dialogue_state, customer_recommendation_ranker, dmxapi_service
+from . import (
+    agent_trace_service,
+    customer_agent_quality_service,
+    customer_agent_tool_service,
+    customer_dialogue_state,
+    customer_recommendation_ranker,
+    dmxapi_service,
+)
 
 
 MAX_TOOL_ROUNDS = 4
@@ -38,14 +45,34 @@ async def process_agent_request(
     ):
         return _build_clarification_result(question, sku, dialogue_state)
     if _needs_previous_context(question) and not previous_result_skus:
-        return {
+        result = {
             "answer": "你说的“这些”我还没有可引用的上一轮产品结果。请先告诉我要处理的 SKU，或先查询一批产品，比如“负责人为 Yao 的锅有哪些”。",
+            "intent": "clarify",
+            "answer_type": "clarification",
+            "confidence": "low",
+            "uncertainty": "ambiguous_product",
+            "needs_clarification": True,
             "sku": sku,
             "sources": [{"type": "agent_clarification", "label": "需要明确产品范围"}],
             "actions": [],
             "results": [],
             "steps": [{"type": "clarify", "label": "需要明确产品范围", "detail": "检测到上下文引用，但没有上一轮产品结果。"}],
+            "warnings": [],
+            "debug": {"agent_mode": "dialogue_state_clarification", "warnings": []},
         }
+        quality = customer_agent_quality_service.evaluate_agent_response(
+            question,
+            answer=result["answer"],
+            intent=result["intent"],
+            results=result["results"],
+            sources=result["sources"],
+            actions=result["actions"],
+            warnings=result["warnings"],
+            needs_clarification=result["needs_clarification"],
+        )
+        result["agent_quality"] = quality
+        result["debug"]["agent_quality"] = quality
+        return result
     context_fields = _context_detail_fields(question, conversation_history or [])
     if previous_result_skus and context_fields and not _requires_write_tool(question):
         arguments = {"skus": previous_result_skus[:5], "fields": context_fields}
@@ -225,7 +252,7 @@ def _build_result(
             "ok": True,
         },
     ]
-    return {
+    result = {
         "answer": clean_answer,
         "intent": intent,
         "answer_type": _answer_type_from_intent(intent),
@@ -253,6 +280,26 @@ def _build_result(
         "warnings": warnings,
         "skip_polish": True,
     }
+    quality = customer_agent_quality_service.evaluate_agent_response(
+        question,
+        answer=result["answer"],
+        intent=result["intent"],
+        results=result["results"],
+        sources=result["sources"],
+        actions=result["actions"],
+        warnings=result["warnings"],
+        needs_clarification=result["needs_clarification"],
+        direct_answer=direct_answer,
+        tool_results=tool_results,
+    )
+    result["agent_quality"] = quality
+    result["debug"]["agent_quality"] = quality
+    if quality["level"] == "low" and result["confidence"] == "high":
+        result["confidence"] = "medium"
+    if quality["risks"]:
+        result["warnings"] = list(dict.fromkeys([*result["warnings"], *quality["risks"]]))
+        result["debug"]["warnings"] = result["warnings"]
+    return result
 
 
 def _build_tool_selection_messages(
@@ -466,7 +513,10 @@ def _infer_intent(question: str, tool_results: list[dict], actions: list[dict], 
         return "propose_update"
     if any(word in question for word in ("对比", "比较", "区别", "差异")):
         return "compare_products"
-    if any(word in question for word in ("推荐", "适合", "哪个好", "哪款", "送礼", "年轻人", "场景")):
+    if any(word in question for word in (
+        "推荐", "适合", "哪个好", "哪款", "送礼", "年轻人", "场景",
+        "还有别的", "还有其他", "换个", "换一个", "换一款", "再推荐",
+    )):
         return "recommend_products"
     if "get_product_detail" in tool_names:
         return "product_detail"
@@ -685,7 +735,10 @@ def _excluded_terms_from_question(question: str) -> list[str]:
 
 
 def _excluded_previous_skus(question: str, conversation_history: list[dict]) -> set[str]:
-    if not any(word in str(question or "") for word in ("换一个", "换一款", "再推荐一个", "另外推荐", "不要刚才", "别要刚才")):
+    if not any(word in str(question or "") for word in (
+        "换一个", "换一款", "换个", "换别的", "另一个", "再推荐一个", "另外推荐",
+        "还有别的", "还有其他", "其他推荐", "不要刚才", "别要刚才",
+    )):
         return set()
     for item in reversed(conversation_history[-6:]):
         if item.get("role") != "assistant":
@@ -800,8 +853,13 @@ def _price_text(row: dict) -> str:
 
 def _build_clarification_result(question: str, sku: str | None, dialogue_state: customer_dialogue_state.DialogueState) -> dict:
     answer = "我还需要一个更明确的产品范围。你可以告诉我要查的 SKU、产品名、类目，或者具体使用场景，比如“适合三个人露营的锅”。"
-    return {
+    result = {
         "answer": answer,
+        "intent": "clarify",
+        "answer_type": "clarification",
+        "confidence": "low",
+        "uncertainty": "ambiguous_product",
+        "needs_clarification": True,
         "sku": sku,
         "sources": [{"type": "agent_clarification", "label": "需要明确产品范围"}],
         "actions": [],
@@ -817,8 +875,22 @@ def _build_clarification_result(question: str, sku: str | None, dialogue_state: 
         "debug": {
             "agent_mode": "dialogue_state_clarification",
             "dialogue_state": dialogue_state.to_dict(),
+            "warnings": [],
         },
     }
+    quality = customer_agent_quality_service.evaluate_agent_response(
+        question,
+        answer=result["answer"],
+        intent=result["intent"],
+        results=result["results"],
+        sources=result["sources"],
+        actions=result["actions"],
+        warnings=result["warnings"],
+        needs_clarification=result["needs_clarification"],
+    )
+    result["agent_quality"] = quality
+    result["debug"]["agent_quality"] = quality
+    return result
 
 
 def _answer_budget_conflicts(answer: str, question: str, results: list[dict]) -> bool:

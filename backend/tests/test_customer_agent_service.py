@@ -772,6 +772,67 @@ class CustomerAgentRuntimeServiceTest(unittest.IsolatedAsyncioTestCase):
         self.assertIn("未记录", result["answer"])
         self.assertNotIn("放入口袋", result["answer"])
 
+    def test_followup_more_options_excludes_previous_recommendation(self):
+        result = customer_agent_runtime_service._build_result(
+            "还有别的吗？",
+            None,
+            [{
+                "ok": True,
+                "tool": "hybrid_search_products",
+                "query": "还有别的吗？",
+                "count": 2,
+                "results": [
+                    {
+                        "sku": "CW-C93",
+                        "product_name_cn": "行山单锅",
+                        "category": "锅具",
+                        "capacity": "锅 1000ML",
+                        "features": "聚能结构，适合泡咖啡",
+                    },
+                    {
+                        "sku": "CW-C83",
+                        "product_name_cn": "炊墨套锅",
+                        "category": "锅具",
+                        "capacity": "锅 3700ML",
+                        "features": "适合多人露营做饭",
+                    },
+                ],
+            }],
+            "首选 CW-C93，行山单锅。",
+            [],
+            conversation_history=[
+                {"role": "assistant", "content": "首选 CW-C93，行山单锅。"},
+            ],
+        )
+
+        self.assertEqual(result["intent"], "recommend_products")
+        self.assertEqual(result["results"][0]["sku"], "CW-C83")
+        self.assertIn("CW-C83", result["answer"])
+        self.assertNotIn("首选 CW-C93", result["answer"])
+        self.assertIn("agent_quality", result)
+
+    def test_build_result_includes_agent_quality_metadata(self):
+        result = customer_agent_runtime_service._build_result(
+            "CW-C93 的容量是多少？",
+            None,
+            [{
+                "ok": True,
+                "tool": "get_product_detail",
+                "sku": "CW-C93",
+                "detail": {
+                    "sku": "CW-C93",
+                    "product_name_cn": "行山单锅",
+                    "field_values": {"容量": "1000ml"},
+                },
+            }],
+            None,
+            [],
+        )
+
+        self.assertEqual(result["agent_quality"]["level"], "high")
+        self.assertTrue(result["agent_quality"]["passed"])
+        self.assertEqual(result["debug"]["agent_quality"], result["agent_quality"])
+
 
     async def test_write_request_without_action_falls_back_to_intent_parser(self):
         calls = []

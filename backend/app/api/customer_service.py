@@ -180,6 +180,7 @@ async def ask_stream(
                 "followups": result.get("followups") or result.get("suggested_followups") or [],
                 "warnings": result.get("warnings") or [],
                 "evidence": result.get("evidence") or [],
+                "agent_quality": result.get("agent_quality") or {},
                 "debug": result.get("debug") or {},
                 "sku": result.get("sku"),
                 "sources": result.get("sources") or [],
