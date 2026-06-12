@@ -157,7 +157,7 @@ async def ask_customer_service(
     previous_result_skus = _latest_result_skus(db, conversation_id, user_id)
     contextual_previous_result_skus = previous_result_skus if _should_use_previous_result_skus(question) else []
     conversation_history = _build_conversation_history(db, conversation_id, user_id)
-    contextual_conversation_history = conversation_history if _should_use_conversation_history(question) else []
+    contextual_conversation_history = conversation_history
     agent_result = await customer_agent_runtime_service.process_agent_request(
         db,
         user_id=user_id,
@@ -838,5 +838,11 @@ def _safe_json(value: str | None, fallback):
         return json.loads(value)
     except json.JSONDecodeError:
         return fallback
+
+
+def _should_use_previous_result_skus(question: str) -> bool:
+    from . import customer_dialogue_state
+
+    return customer_dialogue_state.should_use_previous_result_skus(question)
 
 

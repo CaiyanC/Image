@@ -4,7 +4,7 @@ from typing import Any
 
 from sqlalchemy.orm import Session
 
-from . import agent_trace_service, customer_agent_tool_service, dmxapi_service
+from . import agent_trace_service, customer_agent_tool_service, customer_dialogue_state, dmxapi_service
 
 
 MAX_TOOL_ROUNDS = 4
@@ -17,6 +17,9 @@ PRODUCT_LOOKUP_TERMS = (
 PRODUCT_WRITE_TERMS = ("修改", "改成", "改为", "删除", "删掉", "清空", "取消")
 COFFEE_TERMS = ("咖啡", "泡咖啡")
 COOKING_TERMS = ("做饭", "烹饪", "煮饭", "炒菜", "煮东西")
+LOW_BUDGET_TERMS = ("预算不高", "预算低", "便宜", "实惠", "性价比", "入门", "低预算", "省钱", "不要太贵")
+HIGH_PRICE_TERMS = ("高端", "高价", "高预算", "旗舰", "专业级", "premium", "Premium")
+VALUE_PRICE_TERMS = ("入门", "亲民", "经济", "实惠", "低价", "基础", "性价比", "常规")
 
 
 async def process_agent_request(
@@ -101,6 +104,7 @@ async def process_agent_request(
                 "business.top_selling_points",
                 "business.usage_scenarios",
                 "business.target_audience",
+                "business.price_positioning",
             ],
             "limit": 20,
         }
@@ -166,10 +170,13 @@ def _build_result(
     provisional_answer = _clean_customer_answer(answer or "")
     provisional_needs_clarification = _needs_clarification(provisional_answer, results, warnings)
     intent = _infer_intent(question, tool_results, actions, results, provisional_needs_clarification)
+    if _requires_lookup_tool(question) and not results and not actions:
+        provisional_answer = _fallback_answer(tool_results)
     if intent == "recommend_products":
-        results = _rank_recommendation_results(question, results)
-        if not provisional_answer or _should_replace_recommendation_answer(provisional_answer, question, results):
-            provisional_answer = _compose_recommendation_answer(question, results)
+        recommendation_question = _recommendation_question_with_context(question, conversation_history or [])
+        results = _rank_recommendation_results(recommendation_question, results)
+        if not provisional_answer or _should_replace_recommendation_answer(provisional_answer, recommendation_question, results):
+            provisional_answer = _compose_recommendation_answer(recommendation_question, results)
     elif results and _answer_conflicts_with_current_results(provisional_answer, question, results):
         warnings.append("LLM 原始回答与本轮问题或工具结果不一致，已改用工具结果兜底回答。")
         provisional_answer = _fallback_answer(tool_results)
@@ -228,6 +235,8 @@ def _build_tool_selection_messages(
     conversation_history: list[dict],
     feedback_lessons: list[dict],
 ) -> list[dict]:
+    conversation_context = _conversation_context_for_question(question, conversation_history)
+    dialogue_state = customer_dialogue_state.build_dialogue_state(question, conversation_history).to_dict()
     return [
         {
             "role": "system",
@@ -240,6 +249,7 @@ def _build_tool_selection_messages(
                 "如果用户在问题文本或历史对话里明确给了 SKU，并问单品字段，调用 get_product_detail。"
                 "如果用户说“这些/刚才那些/上面这些”，使用 previous_result_skus。"
                 "如果本轮问题是完整的新需求（例如重新说明人数、场景、用途、产品类型），以当前问题为准重新检索；不要把上一轮 SKU 当默认范围。"
+                "如果本轮是“预算不高/便宜点/性价比”等追问，要继承上一轮用户的场景、人群和用途，但必须重新按价格定位、产品定位和候选资料判断，不能把高端定位产品说成低预算推荐。"
                 "如果用户在历史对话里已经给过范围，本轮追问如“哪种适合送礼/三个年轻人用哪个好”，要结合 conversation_history 和 previous_result_skus 决定工具。"
                 "凡是涉及产品事实、推荐、对比、筛选、修改或删除，必须先调用工具；只有闲聊、解释能力边界或澄清问题可以直接 answer。"
                 "如果问题缺少必要范围，不要猜，输出澄清 answer。"
@@ -257,6 +267,7 @@ def _build_tool_selection_messages(
                 {
                     "question": question,
                     "previous_result_skus": previous_result_skus,
+                    "conversation_context": conversation_context,
                     "conversation_history": conversation_history[-6:] if len(conversation_history) > 6 else conversation_history,
                     "recent_feedback_lessons": feedback_lessons[:8],
                     "available_tools": customer_agent_tool_service.list_tool_specs(),
@@ -267,7 +278,81 @@ def _build_tool_selection_messages(
     ]
 
 
+def _conversation_context_for_question(question: str, conversation_history: list[dict]) -> dict:
+    previous_user_need = _latest_contextual_user_need(question, conversation_history)
+    if not previous_user_need:
+        return {
+            "mode": "current_question",
+            "previous_user_need": "",
+            "instruction": "本轮问题信息较完整，优先按当前问题重新检索和回答；历史只作背景参考。",
+        }
+    if _is_budget_followup(question):
+        mode = "budget_followup"
+        instruction = "本轮是预算/性价比追问，继承上一轮场景、人群和用途，并重新按价格定位筛选。"
+    elif _should_inherit_user_need(question):
+        mode = "context_followup"
+        instruction = "本轮是短追问或补充条件，继承上一轮用户需求；如果当前问题给出新场景，则以当前问题为准。"
+    else:
+        mode = "current_question"
+        previous_user_need = ""
+        instruction = "本轮问题信息较完整，优先按当前问题重新检索和回答；历史只作背景参考。"
+    return {
+        "mode": mode,
+        "previous_user_need": previous_user_need,
+        "combined_user_need": f"{previous_user_need}；补充条件：{question}" if previous_user_need else question,
+        "instruction": instruction,
+    }
+
+
+def _latest_contextual_user_need(question: str, conversation_history: list[dict]) -> str:
+    if not conversation_history or not (_is_budget_followup(question) or _should_inherit_user_need(question)):
+        return ""
+    previous_user_turns = [
+        str(item.get("content") or "").strip()
+        for item in conversation_history
+        if item.get("role") == "user" and str(item.get("content") or "").strip()
+    ]
+    for previous in reversed(previous_user_turns[-6:]):
+        if previous == question:
+            continue
+        if _looks_like_user_need(previous):
+            return previous
+    return ""
+
+
+def _should_inherit_user_need(question: str) -> bool:
+    text = str(question or "").strip()
+    if not text:
+        return False
+    if _looks_like_complete_new_need(text):
+        return False
+    if _is_budget_followup(text) or _needs_previous_context(text):
+        return True
+    followup_starts = ("那", "如果", "那如果", "还有", "另外", "继续", "改成", "换成", "预算", "便宜", "贵")
+    if text.startswith(followup_starts) and len(text) <= 36:
+        return True
+    if len(text) <= 18 and any(word in text for word in ("推荐", "适合", "哪个好", "哪款", "怎么选", "容量", "材质", "价格")):
+        return True
+    return False
+
+
+def _looks_like_complete_new_need(text: str) -> bool:
+    has_audience = any(word in text for word in ("一个人", "两个人", "三个人", "四个人", "五个人", "几个人", "年轻人", "家庭", "朋友"))
+    has_scene = any(word in text for word in ("露营", "做饭", "泡咖啡", "送礼", "徒步", "自驾", "野餐", "房车"))
+    has_product_type = any(word in text for word in ("锅", "炉", "杯", "水壶", "煎锅", "炒锅", "产品", "装备"))
+    has_action = any(word in text for word in ("适合", "推荐", "有哪些", "哪个好", "怎么选"))
+    return has_action and has_product_type and (has_audience or has_scene)
+
+
+def _looks_like_user_need(text: str) -> bool:
+    return any(
+        word in str(text or "")
+        for word in ("推荐", "适合", "露营", "做饭", "泡咖啡", "送礼", "徒步", "年轻人", "几个人", "三个人", "三个", "预算")
+    )
+
+
 async def _finalize_answer(db: Session, question: str, sku: str | None, tool_results: list[dict], conversation_history: list[dict]) -> str | None:
+    conversation_context = _conversation_context_for_question(question, conversation_history)
     messages = [
         {
             "role": "system",
@@ -278,6 +363,7 @@ async def _finalize_answer(db: Session, question: str, sku: str | None, tool_res
                 "如果结果很多，总结关键信息并建议用户进一步筛选。"
                 "如果用户是在追问上一轮内容，要显式继承历史对话里的范围，不要当作孤立问题。"
                 "如果本轮问题已经重新说明了人数、场景或用途，要以本轮 question 和 tool_results 为准，不要复读上一轮需求。"
+                "如果用户提出预算不高、便宜点或性价比，本轮回答必须优先检查工具结果里的价格定位/定位；资料显示高端或高价的产品不能作为低预算首选，除非明确说明它只是性能更强但不符合低预算。"
                 "不得新增工具结果之外的产品事实、参数、价格、库存或承诺。"
                 "answer 字段里不要使用 Markdown 标记，不要出现 **、###、表格语法。"
                 "只输出JSON：{\"answer\":\"...\"}。"
@@ -288,6 +374,7 @@ async def _finalize_answer(db: Session, question: str, sku: str | None, tool_res
             "content": json.dumps(
                 {
                     "question": question,
+                    "conversation_context": conversation_context,
                     "conversation_history": conversation_history[-8:] if len(conversation_history) > 8 else conversation_history,
                     "tool_results": tool_results,
                 },
@@ -588,6 +675,14 @@ def _recommendation_score(question: str, row: dict) -> float:
             score += 15
     if row.get("features"):
         score += 4
+    if _is_low_budget_query(question):
+        price_text = _price_text(row)
+        if any(word.lower() in price_text.lower() for word in HIGH_PRICE_TERMS):
+            score -= 45
+        elif any(word.lower() in price_text.lower() for word in VALUE_PRICE_TERMS):
+            score += 28
+        else:
+            score -= 6
     return score
 
 
@@ -602,6 +697,10 @@ def _should_replace_recommendation_answer(answer: str, question: str, results: l
     if listed_count > 5:
         return True
     if any(word in question for word in ("咖啡", "泡咖啡", "小锅")) and any(word in answer for word in ("炒锅", "煎锅", "煎盘")):
+        return True
+    if _answer_budget_conflicts(answer, question, results):
+        return True
+    if _is_low_budget_query(question) and _answer_misses_ranked_first_choice(answer, results):
         return True
     return "找到" in answer and "条产品资料" in answer
 
@@ -633,6 +732,8 @@ def _recommendation_reason(question: str, row: dict) -> str:
         parts.append(f"材质 {row.get('body_material')}")
     if row.get("features"):
         parts.append(f"卖点 {row.get('features')}")
+    if _is_low_budget_query(question) and row.get("price_positioning"):
+        parts.append(f"价格定位 {row.get('price_positioning')}")
     scenes = row.get("usage_scenarios") or row.get("usage_scene") or ""
     if scenes:
         parts.append(f"场景 {scenes}")
@@ -643,7 +744,7 @@ def _recommendation_reason(question: str, row: dict) -> str:
 
 def _row_text(row: dict) -> str:
     values = []
-    for key in ("product_name_cn", "product_name_en", "category", "sub_category", "capacity", "body_material", "features", "target_audience", "usage_scenarios", "emotional_value", "semantic_match"):
+    for key in ("product_name_cn", "product_name_en", "category", "sub_category", "capacity", "body_material", "features", "target_audience", "positioning", "price_positioning", "usage_scenarios", "emotional_value", "semantic_match"):
         value = row.get(key)
         if value:
             values.append(str(value))
@@ -662,6 +763,61 @@ def _capacity_ml(value: Any) -> float | None:
     if liters:
         return max(liters)
     return None
+
+
+def _recommendation_question_with_context(question: str, conversation_history: list[dict]) -> str:
+    if not _is_budget_followup(question):
+        return question
+    previous_user_turns = [
+        str(item.get("content") or "").strip()
+        for item in conversation_history
+        if item.get("role") == "user" and str(item.get("content") or "").strip()
+    ]
+    for previous in reversed(previous_user_turns[-4:]):
+        if previous == question:
+            continue
+        if any(word in previous for word in ("推荐", "适合", "露营", "做饭", "泡咖啡", "送礼", "徒步", "年轻人", "几个人", "三个人", "三个")):
+            return f"{previous}；追加条件：{question}"
+    return question
+
+
+def _is_budget_followup(question: str) -> bool:
+    return _is_low_budget_query(question) and not any(word in question for word in ("露营", "做饭", "泡咖啡", "送礼", "徒步", "几个人", "三个人", "三个"))
+
+
+def _is_low_budget_query(question: str) -> bool:
+    return any(word in str(question or "") for word in LOW_BUDGET_TERMS)
+
+
+def _price_text(row: dict) -> str:
+    return " ".join(
+        str(row.get(key) or "")
+        for key in ("price_positioning", "positioning", "product_level", "features", "semantic_match")
+    )
+
+
+def _answer_budget_conflicts(answer: str, question: str, results: list[dict]) -> bool:
+    if not _is_low_budget_query(question) or not answer or not results:
+        return False
+    best_sku = str(results[0].get("sku") or "")
+    for row in results[1:]:
+        price_text = _price_text(row)
+        if not any(word.lower() in price_text.lower() for word in HIGH_PRICE_TERMS):
+            continue
+        sku = str(row.get("sku") or "")
+        name = str(row.get("product_name_cn") or row.get("product_name_en") or "")
+        if (sku and sku != best_sku and sku in answer) or (name and name in answer and sku != best_sku):
+            return True
+    return "预算不高" in question and "高端" in answer and any(word in answer for word in ("推荐", "首选", "适合"))
+
+
+def _answer_misses_ranked_first_choice(answer: str, results: list[dict]) -> bool:
+    if not answer or not results:
+        return False
+    best = results[0]
+    best_sku = str(best.get("sku") or "")
+    best_name = str(best.get("product_name_cn") or best.get("product_name_en") or "")
+    return bool(best_sku or best_name) and best_sku not in answer and best_name not in answer
 
 
 def _resolve_context_arguments(arguments: dict[str, Any], previous_result_skus: list[str], tool_results: list[dict]) -> dict[str, Any]:
@@ -732,7 +888,7 @@ def _latest_search_skus(tool_results: list[dict]) -> list[str]:
 
 
 def _needs_previous_context(question: str) -> bool:
-    return any(item in question for item in CONTEXT_REFERENCES)
+    return customer_dialogue_state.needs_previous_context(question)
 
 
 def _step_from_tool_result(name: str, arguments: dict[str, Any], result: dict) -> dict:
@@ -757,3 +913,4 @@ def _step_from_tool_result(name: str, arguments: dict[str, Any], result: dict) -
         "detail": detail,
         "ok": bool(result.get("ok", True)),
     }
+
