@@ -196,6 +196,7 @@ CASES: list[dict[str, Any]] = [
         "expect": {
             "answer_must_include_any": ["入门", "中端", "预算", "CS-B02", "CW-K04PRO"],
             "answer_must_not_include": ["首选 CS-B14"],
+            "result_skus_must_not_include": ["CW-S10-1", "CW-C01-37", "CW-C83", "CW-C83-1", "CW-C83-2"],
             "min_results": 1,
             "min_quality_score": 0.82,
             "quality_must_not_include_risks": ["low_budget_high_end_first_choice"],

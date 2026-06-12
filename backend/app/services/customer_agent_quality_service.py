@@ -125,7 +125,7 @@ def _score_groundedness(
         if any(term in answer for term in ("首选", "推荐", "适合")) and "不符合低预算" not in answer:
             risks.append("low_budget_high_end_first_choice")
             return 0.45
-    if intent == "recommend_products" and _is_pot_query(question) and _is_non_pot_row(results[0]):
+    if intent == "recommend_products" and _has_product_type_mismatch(question, results[0]):
         risks.append("product_type_mismatch_first_choice")
         return 0.4
     if direct_answer:
@@ -243,18 +243,17 @@ def _is_high_price_row(row: dict[str, Any]) -> bool:
     return any(term in text for term in ("高端", "高价", "高预算", "旗舰", "专业级", "premium"))
 
 
-def _is_pot_query(question: str) -> bool:
-    return any(term in str(question or "") for term in ("小锅", "单锅", "套锅", "煎锅", "炒锅", "锅具", "锅"))
-
-
-def _is_non_pot_row(row: dict[str, Any]) -> bool:
+def _has_product_type_mismatch(question: str, row: dict[str, Any]) -> bool:
+    query = str(question or "")
     text = " ".join(
         str(row.get(key) or "")
         for key in ("product_name_cn", "product_name_en", "category", "sub_category")
     )
-    if "锅" in text:
-        return False
-    return any(term in text for term in ("炉", "杯", "壶", "包", "餐具", "勺", "铲"))
+    if any(term in query for term in ("小锅", "单锅", "套锅", "煎锅", "炒锅", "锅具", "锅")):
+        return "锅" not in text and any(term in text for term in ("炉", "杯", "壶", "包", "餐具", "勺", "铲"))
+    if any(term in query for term in ("炉具", "酒精炉", "气炉", "卡式炉")) or ("炉" in query and "炉头" not in query):
+        return "炉" not in text and any(term in text for term in ("锅", "烤盘", "水壶", "杯", "包", "餐具", "勺", "铲"))
+    return False
 
 
 def _quality_level(score: float, risks: list[str]) -> str:

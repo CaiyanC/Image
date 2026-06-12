@@ -69,18 +69,23 @@ def recommendation_score(query: str, row: dict[str, Any]) -> float:
 
 
 def is_obvious_product_type_mismatch(query: str, row: dict[str, Any]) -> bool:
-    if not any(term in str(query or "") for term in ("小锅", "单锅", "套锅", "煎锅", "炒锅", "锅具", "锅")):
-        return False
+    query_text = str(query or "")
     name_category = " ".join(
         str(row.get(key) or "")
         for key in ("product_name_cn", "product_name_en", "category", "sub_category")
     )
-    if "锅" in name_category:
-        return False
-    return any(
-        term in name_category
-        for term in ("炉", "炉具", "酒精炉", "气炉", "卡式炉", "杯", "杯套", "水壶", "壶", "包", "收纳", "餐具", "勺", "铲")
-    )
+    if any(term in query_text for term in ("小锅", "单锅", "套锅", "煎锅", "炒锅", "锅具", "锅")):
+        if "锅" in name_category:
+            return False
+        return any(
+            term in name_category
+            for term in ("炉", "炉具", "酒精炉", "气炉", "卡式炉", "杯", "杯套", "水壶", "壶", "包", "收纳", "餐具", "勺", "铲")
+        )
+    if any(term in query_text for term in ("炉具", "酒精炉", "气炉", "卡式炉")) or ("炉" in query_text and "炉头" not in query_text):
+        if "炉" in name_category:
+            return False
+        return any(term in name_category for term in ("锅", "烤盘", "水壶", "杯", "包", "餐具", "勺", "铲"))
+    return False
 
 
 def fallback_rank(rows: list[dict[str, Any]], query: str) -> list[dict[str, Any]]:

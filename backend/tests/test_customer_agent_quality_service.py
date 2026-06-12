@@ -93,6 +93,21 @@ class CustomerAgentQualityServiceTest(unittest.TestCase):
         self.assertFalse(quality["passed"])
         self.assertIn("product_type_mismatch_first_choice", quality["risks"])
 
+    def test_stove_query_pot_first_choice_is_blocked(self):
+        quality = customer_agent_quality_service.evaluate_agent_response(
+            "预算不高的炉具推荐一下",
+            answer="首选 CW-S10-1 激川单锅。",
+            intent="recommend_products",
+            results=[{"sku": "CW-S10-1", "product_name_cn": "激川单锅", "category": "锅具"}],
+            sources=[{"type": "product_search"}],
+            actions=[],
+            warnings=[],
+        )
+
+        self.assertEqual(quality["level"], "low")
+        self.assertFalse(quality["passed"])
+        self.assertIn("product_type_mismatch_first_choice", quality["risks"])
+
 
 if __name__ == "__main__":
     unittest.main()
