@@ -52,7 +52,7 @@ def evaluate_agent_response(
         "tool_use": _score_tool_use(question, intent, sources, actions, warnings, direct_answer, tool_results, risks),
         "task_adherence": _score_task_adherence(question, answer, intent, actions, risks),
         "context_handling": _score_context_handling(question, answer, results, actions, needs_clarification, risks),
-        "answer_hygiene": _score_answer_hygiene(answer, risks),
+        "answer_hygiene": _score_answer_hygiene(answer, intent, risks),
     }
     weights = {
         "intent_resolution": 0.18,
@@ -189,7 +189,7 @@ def _score_context_handling(
     return 0.35
 
 
-def _score_answer_hygiene(answer: str, risks: list[str]) -> float:
+def _score_answer_hygiene(answer: str, intent: str, risks: list[str]) -> float:
     if not answer.strip():
         risks.append("empty_answer")
         return 0.0
@@ -203,6 +203,10 @@ def _score_answer_hygiene(answer: str, risks: list[str]) -> float:
     if len(answer) > 1800:
         risks.append("answer_too_long")
         score -= 0.15
+    if intent == "recommend_products" and "找到" in answer and "条产品资料" in answer:
+        if not any(term in answer for term in ("首选", "推荐", "理由", "适合")):
+            risks.append("generic_recommendation_answer")
+            score -= 0.35
     return max(0.0, score)
 
 
@@ -230,7 +234,7 @@ def _quality_level(score: float, risks: list[str]) -> str:
 def _has_blocking_risk(risks: list[str]) -> bool:
     return any(
         risk.startswith("answer_mentions_unreturned_sku:")
-        or risk in {"unsafe_direct_write_claim", "write_request_without_confirmable_action"}
+        or risk in {"unsafe_direct_write_claim", "write_request_without_confirmable_action", "generic_recommendation_answer"}
         for risk in risks
     )
 
@@ -249,6 +253,7 @@ def _recommendations(risks: list[str]) -> list[str]:
         "markdown_leaked": "客服回答不要泄漏 Markdown 控制符。",
         "debug_trace_leaked": "不要把 Agent 调试过程暴露给用户。",
         "answer_too_long": "回答应先给结论，长内容拆成后续追问。",
+        "generic_recommendation_answer": "推荐问题必须给首选和理由，不能只列数据库记录。",
     }
     recommendations = []
     for risk in risks:

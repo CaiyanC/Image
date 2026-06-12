@@ -29,14 +29,19 @@ def main() -> int:
     parser.add_argument("--base-url", default=os.getenv("CUSTOMER_SERVICE_API_URL", "http://127.0.0.1:8001"))
     parser.add_argument("--token", default=os.getenv("CUSTOMER_SERVICE_TOKEN", ""))
     parser.add_argument("--dry-run", action="store_true", help="Only validate case schema, do not call API.")
+    parser.add_argument("--category", default="", help="Only run cases in one category, e.g. recommendation.")
     parser.add_argument("--limit", type=int, default=0, help="Run only the first N cases.")
+    parser.add_argument("--report", default="", help="Optional path to write a JSON report.")
     parser.add_argument("--sleep", type=float, default=0.0, help="Seconds to sleep between cases.")
     parser.add_argument("--timeout", type=float, default=60.0, help="HTTP timeout seconds.")
     args = parser.parse_args()
 
     payload = load_cases(Path(args.cases))
-    cases = payload["cases"][: args.limit or None]
-    schema_errors = validate_cases(cases)
+    cases = payload["cases"]
+    if args.category:
+        cases = [case for case in cases if str(case.get("category") or "") == args.category]
+    cases = cases[: args.limit or None]
+    schema_errors = validate_cases(cases, require_launch_coverage=not bool(args.category))
     if schema_errors:
         for error in schema_errors:
             print(f"[SCHEMA FAIL] {error}")
@@ -56,6 +61,7 @@ def main() -> int:
         except Exception as exc:  # noqa: BLE001 - CLI must keep going.
             result = {
                 "id": case["id"],
+                "category": case.get("category"),
                 "title": case["title"],
                 "ok": False,
                 "score": 0,
@@ -75,10 +81,14 @@ def main() -> int:
     passed = sum(1 for result in results if result["ok"])
     score = sum(result["score"] for result in results) / max(len(results), 1)
     threshold = float(payload.get("pass_threshold", 0.9))
+    summary = build_summary(results, threshold)
     print("=" * 72)
     print(f"Cases: {len(results)}, passed: {passed}, pass_rate: {passed / max(len(results), 1):.1%}, avg_score: {score:.2f}")
     print(f"Threshold: {threshold:.2f}")
     print("=" * 72)
+    if args.report:
+        write_report(Path(args.report), payload, results, summary)
+        print(f"Report written: {args.report}")
     return 0 if score >= threshold else 1
 
 
@@ -90,14 +100,15 @@ def load_cases(path: Path) -> dict[str, Any]:
     return data
 
 
-def validate_cases(cases: list[dict[str, Any]]) -> list[str]:
+def validate_cases(cases: list[dict[str, Any]], *, require_launch_coverage: bool = True) -> list[str]:
     errors: list[str] = []
     seen_ids: set[str] = set()
-    required_categories = {"recommendation", "context", "detail", "compare", "write_action", "safety"}
-    categories = {str(case.get("category") or "") for case in cases}
-    missing_categories = required_categories - categories
-    if missing_categories:
-        errors.append(f"missing categories: {sorted(missing_categories)}")
+    if require_launch_coverage:
+        required_categories = {"recommendation", "context", "detail", "compare", "write_action", "safety"}
+        categories = {str(case.get("category") or "") for case in cases}
+        missing_categories = required_categories - categories
+        if missing_categories:
+            errors.append(f"missing categories: {sorted(missing_categories)}")
 
     for case in cases:
         case_id = str(case.get("id") or "")
@@ -122,6 +133,43 @@ def run_case(case: dict[str, Any], base_url: str, token: str, timeout: float) ->
         last_response = ask(base_url, token, str(question), conversation_id, timeout)
         conversation_id = last_response.get("conversation_id") or conversation_id
     return evaluate_case(case, last_response)
+
+
+def build_summary(results: list[dict[str, Any]], threshold: float) -> dict[str, Any]:
+    total = len(results)
+    passed = sum(1 for result in results if result.get("ok"))
+    avg_score = sum(float(result.get("score") or 0) for result in results) / max(total, 1)
+    categories: dict[str, dict[str, Any]] = {}
+    for result in results:
+        category = str(result.get("category") or "uncategorized")
+        bucket = categories.setdefault(category, {"cases": 0, "passed": 0, "avg_score": 0.0})
+        bucket["cases"] += 1
+        bucket["passed"] += 1 if result.get("ok") else 0
+        bucket["avg_score"] += float(result.get("score") or 0)
+    for bucket in categories.values():
+        bucket["avg_score"] = round(bucket["avg_score"] / max(bucket["cases"], 1), 3)
+        bucket["pass_rate"] = round(bucket["passed"] / max(bucket["cases"], 1), 3)
+    return {
+        "cases": total,
+        "passed": passed,
+        "pass_rate": round(passed / max(total, 1), 3),
+        "avg_score": round(avg_score, 3),
+        "threshold": threshold,
+        "ok": avg_score >= threshold,
+        "categories": categories,
+    }
+
+
+def write_report(path: Path, payload: dict[str, Any], results: list[dict[str, Any]], summary: dict[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    report = {
+        "case_file": payload.get("name"),
+        "case_version": payload.get("version"),
+        "generated_at": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
+        "summary": summary,
+        "results": results,
+    }
+    path.write_text(json.dumps(report, ensure_ascii=False, indent=2, default=str), encoding="utf-8")
 
 
 def ask(base_url: str, token: str, question: str, conversation_id: str | None, timeout: float) -> dict[str, Any]:
@@ -195,12 +243,14 @@ def evaluate_case(case: dict[str, Any], response: dict[str, Any]) -> dict[str, A
     score = passed / checks if checks else 1.0
     return {
         "id": case["id"],
+        "category": case.get("category"),
         "title": case["title"],
         "ok": score >= 1.0,
         "score": score,
         "errors": errors,
         "last_answer": answer,
         "conversation_id": response.get("conversation_id"),
+        "agent_quality": response.get("agent_quality") or {},
     }
 
 

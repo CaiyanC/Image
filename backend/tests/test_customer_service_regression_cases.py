@@ -57,6 +57,18 @@ class CustomerServiceRegressionCasesTest(unittest.TestCase):
         self.assertEqual(completed.returncode, 0, completed.stdout + completed.stderr)
         self.assertIn("Dry-run OK", completed.stdout)
 
+    def test_runner_category_dry_run_passes(self):
+        completed = subprocess.run(
+            [sys.executable, str(RUNNER), "--dry-run", "--category", "recommendation"],
+            cwd=ROOT,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+
+        self.assertEqual(completed.returncode, 0, completed.stdout + completed.stderr)
+        self.assertIn("categories=['recommendation']", completed.stdout)
+
 
 if __name__ == "__main__":
     unittest.main()

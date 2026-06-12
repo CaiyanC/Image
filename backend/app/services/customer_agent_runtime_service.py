@@ -294,8 +294,8 @@ def _build_result(
     )
     result["agent_quality"] = quality
     result["debug"]["agent_quality"] = quality
-    if quality["level"] == "low" and result["confidence"] == "high":
-        result["confidence"] = "medium"
+    result["confidence"] = _confidence_adjusted_by_quality(result["confidence"], quality)
+    result["uncertainty"] = _uncertainty_adjusted_by_quality(result["uncertainty"], quality)
     if quality["risks"]:
         result["warnings"] = list(dict.fromkeys([*result["warnings"], *quality["risks"]]))
         result["debug"]["warnings"] = result["warnings"]
@@ -550,6 +550,16 @@ def _confidence(results: list[dict], warnings: list[str], needs_clarification: b
     return "high"
 
 
+def _confidence_adjusted_by_quality(confidence: str, quality: dict) -> str:
+    level = str((quality or {}).get("level") or "")
+    passed = bool((quality or {}).get("passed"))
+    if level == "low":
+        return "low"
+    if not passed and confidence == "high":
+        return "medium"
+    return confidence
+
+
 def _uncertainty(answer: str, results: list[dict], warnings: list[str], needs_clarification: bool) -> str:
     if needs_clarification:
         return "ambiguous_product"
@@ -558,6 +568,19 @@ def _uncertainty(answer: str, results: list[dict], warnings: list[str], needs_cl
     if warnings or (not results and any(item in answer for item in ("没有找到", "无法", "不能可靠"))):
         return "insufficient_data"
     return "confirmed"
+
+
+def _uncertainty_adjusted_by_quality(uncertainty: str, quality: dict) -> str:
+    risks = (quality.get("risks") or []) if isinstance(quality, dict) else []
+    if any(
+        risk.startswith("answer_mentions_unreturned_sku:")
+        or risk in {"missing_product_results", "tool_required_but_not_used", "tool_call_failed"}
+        for risk in risks
+    ):
+        return "insufficient_data"
+    if any(risk in {"context_reference_not_resolved"} for risk in risks):
+        return "ambiguous_product"
+    return uncertainty
 
 
 def _suggested_followups(question: str, results: list[dict], needs_clarification: bool) -> list[str]:

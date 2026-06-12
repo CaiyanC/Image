@@ -833,6 +833,19 @@ class CustomerAgentRuntimeServiceTest(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(result["agent_quality"]["passed"])
         self.assertEqual(result["debug"]["agent_quality"], result["agent_quality"])
 
+    def test_quality_risk_downgrades_confidence_and_uncertainty(self):
+        quality = {
+            "level": "low",
+            "passed": False,
+            "risks": ["answer_mentions_unreturned_sku:CW-C93"],
+        }
+
+        self.assertEqual(customer_agent_runtime_service._confidence_adjusted_by_quality("high", quality), "low")
+        self.assertEqual(
+            customer_agent_runtime_service._uncertainty_adjusted_by_quality("confirmed", quality),
+            "insufficient_data",
+        )
+
 
     async def test_write_request_without_action_falls_back_to_intent_parser(self):
         calls = []

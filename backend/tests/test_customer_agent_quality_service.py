@@ -49,6 +49,20 @@ class CustomerAgentQualityServiceTest(unittest.TestCase):
         self.assertIn("unsafe_direct_write_claim", quality["risks"])
         self.assertIn("write_request_without_confirmable_action", quality["risks"])
 
+    def test_generic_recommendation_answer_is_flagged(self):
+        quality = customer_agent_quality_service.evaluate_agent_response(
+            "推荐一个适合露营的锅",
+            answer="找到 2 条产品资料：CW-C83，CW-C93。",
+            intent="recommend_products",
+            results=[{"sku": "CW-C83"}, {"sku": "CW-C93"}],
+            sources=[{"type": "product_search"}],
+            actions=[],
+            warnings=[],
+        )
+
+        self.assertIn("generic_recommendation_answer", quality["risks"])
+        self.assertFalse(quality["passed"])
+
 
 if __name__ == "__main__":
     unittest.main()
