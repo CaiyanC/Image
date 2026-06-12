@@ -8,7 +8,6 @@ from . import agent_trace_service, customer_agent_tool_service, customer_dialogu
 
 
 MAX_TOOL_ROUNDS = 4
-CONTEXT_REFERENCES = ("这些", "刚才那些", "上面这些", "刚才的", "上一轮")
 WRITE_TOOL_PREFIXES = ("propose_",)
 PRODUCT_LOOKUP_TERMS = (
     "适合", "推荐", "哪些", "有没有", "有吗", "容量", "材质", "卖点", "场景",
@@ -17,7 +16,6 @@ PRODUCT_LOOKUP_TERMS = (
 PRODUCT_WRITE_TERMS = ("修改", "改成", "改为", "删除", "删掉", "清空", "取消")
 COFFEE_TERMS = ("咖啡", "泡咖啡")
 COOKING_TERMS = ("做饭", "烹饪", "煮饭", "炒菜", "煮东西")
-LOW_BUDGET_TERMS = ("预算不高", "预算低", "便宜", "实惠", "性价比", "入门", "低预算", "省钱", "不要太贵")
 HIGH_PRICE_TERMS = ("高端", "高价", "高预算", "旗舰", "专业级", "premium", "Premium")
 VALUE_PRICE_TERMS = ("入门", "亲民", "经济", "实惠", "低价", "基础", "性价比", "常规")
 CONFIRMATION_TERMS = ("是的", "对", "对的", "确认", "嗯", "可以", "没错")
