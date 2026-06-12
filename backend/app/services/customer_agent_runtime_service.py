@@ -291,6 +291,7 @@ def _build_tool_selection_messages(
                     "question": question,
                     "previous_result_skus": previous_result_skus,
                     "conversation_context": conversation_context,
+                    "dialogue_state": dialogue_state,
                     "conversation_history": conversation_history[-6:] if len(conversation_history) > 6 else conversation_history,
                     "recent_feedback_lessons": feedback_lessons[:8],
                     "available_tools": customer_agent_tool_service.list_tool_specs(),
