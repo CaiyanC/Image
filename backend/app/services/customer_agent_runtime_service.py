@@ -4,7 +4,7 @@ from typing import Any
 
 from sqlalchemy.orm import Session
 
-from . import agent_trace_service, customer_agent_tool_service, customer_dialogue_state, dmxapi_service
+from . import agent_trace_service, customer_agent_tool_service, customer_dialogue_state, customer_recommendation_ranker, dmxapi_service
 
 
 MAX_TOOL_ROUNDS = 4
@@ -16,8 +16,6 @@ PRODUCT_LOOKUP_TERMS = (
 PRODUCT_WRITE_TERMS = ("修改", "改成", "改为", "删除", "删掉", "清空", "取消")
 COFFEE_TERMS = ("咖啡", "泡咖啡")
 COOKING_TERMS = ("做饭", "烹饪", "煮饭", "炒菜", "煮东西")
-HIGH_PRICE_TERMS = ("高端", "高价", "高预算", "旗舰", "专业级", "premium", "Premium")
-VALUE_PRICE_TERMS = ("入门", "亲民", "经济", "实惠", "低价", "基础", "性价比", "常规")
 CONFIRMATION_TERMS = ("是的", "对", "对的", "确认", "嗯", "可以", "没错")
 
 
@@ -737,13 +735,7 @@ def _recommendation_score(question: str, row: dict) -> float:
     if row.get("features"):
         score += 4
     if _is_low_budget_query(question):
-        price_text = _price_text(row)
-        if any(word.lower() in price_text.lower() for word in HIGH_PRICE_TERMS):
-            score -= 45
-        elif any(word.lower() in price_text.lower() for word in VALUE_PRICE_TERMS):
-            score += 28
-        else:
-            score -= 6
+        score += customer_recommendation_ranker.budget_score(question, row)
     return score
 
 
@@ -874,7 +866,7 @@ def _answer_budget_conflicts(answer: str, question: str, results: list[dict]) ->
     best_sku = str(results[0].get("sku") or "")
     for row in results[1:]:
         price_text = _price_text(row)
-        if not any(word.lower() in price_text.lower() for word in HIGH_PRICE_TERMS):
+        if not any(word.lower() in price_text.lower() for word in customer_recommendation_ranker.HIGH_PRICE_TERMS):
             continue
         sku = str(row.get("sku") or "")
         name = str(row.get("product_name_cn") or row.get("product_name_en") or "")
