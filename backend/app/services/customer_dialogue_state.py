@@ -24,6 +24,11 @@ PRODUCT_TYPE_TERMS = (
 )
 RECOMMENDATION_TERMS = ("推荐", "适合", "哪款", "哪种", "哪个", "选哪", "选哪个", "有什么")
 EXPLICIT_REF_TERMS = CONTEXT_REFERENCES + ("刚才", "上轮", "上一条")
+FIELD_FOLLOWUP_TERMS = (
+    "容量", "材质", "卖点", "价格", "适合", "好不好", "条形码", "条码", "尺寸", "规格",
+    "上架平台", "平台", "售卖地区", "销售地区", "地区", "关键词", "关键词库", "负责人",
+)
+CONFIRMATION_TERMS = ("是的", "对", "对的", "确认", "嗯", "可以", "没错")
 SKU_RE = re.compile(r"\b[A-Za-z]{1,6}[-_][A-Za-z0-9][A-Za-z0-9_-]{1,40}\b")
 
 
@@ -147,9 +152,14 @@ def _normalize(text: str) -> str:
 
 def _should_use_previous_result_skus(question: str) -> bool:
     text = _normalize(question)
-    if any(item in text for item in CONTEXT_REFERENCES):
+    if text.strip(" ，。！？?") in CONFIRMATION_TERMS:
         return True
-    if len(text) <= 12 and any(item in text for item in ("容量", "材质", "卖点", "价格", "适合", "好不好")):
+    has_reference = any(item in text for item in CONTEXT_REFERENCES)
+    if _looks_like_complete_new_need(text) and not has_reference:
+        return False
+    if has_reference:
+        return True
+    if len(text) <= 16 and any(item in text for item in FIELD_FOLLOWUP_TERMS):
         return True
     return False
 

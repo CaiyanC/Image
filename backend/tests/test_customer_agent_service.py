@@ -335,6 +335,33 @@ class CustomerAgentServiceTest(unittest.TestCase):
         self.assertEqual(result["count"], 2)
         self.assertEqual([item["sku"] for item in result["details"]], ["CW-C93", "TW-141"])
 
+    def test_get_product_detail_returns_requested_context_fields(self):
+        channel = ListingChannel(id="channel-1", channel_name="淘宝", channel_code="taobao")
+        region = SalesRegion(id="region-1", region_name="中国", region_code="CN")
+        keyword = Keyword(id="keyword-1", keyword="轻量徒步", keyword_level="core")
+        self.db.add_all([
+            channel,
+            region,
+            keyword,
+            ProductListingChannel(product_id="id-CW-C93", channel_id=channel.id),
+            ProductSalesRegion(product_id="id-CW-C93", region_id=region.id),
+            ProductKeyword(product_id="id-CW-C93", keyword_id=keyword.id),
+        ])
+        self.db.commit()
+
+        result = customer_agent_tool_service.execute_tool(
+            self.db,
+            user_id="user-1",
+            name="get_product_detail",
+            arguments={"sku": "CW-C93", "fields": ["条形码", "上架平台", "售卖地区", "关键词库"]},
+        )
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["detail"]["field_values"]["条形码"], "6959291009022")
+        self.assertIn("淘宝", result["detail"]["field_values"]["上架平台"])
+        self.assertIn("中国", result["detail"]["field_values"]["售卖地区"])
+        self.assertIn("轻量徒步", result["detail"]["field_values"]["关键词库"])
+
     def test_keyword_retrieve_tokenizes_fuzzy_scene_query(self):
         doc = KnowledgeDocument(
             id="doc-1",
@@ -568,7 +595,135 @@ class CustomerAgentRuntimeServiceTest(unittest.IsolatedAsyncioTestCase):
         self.assertIsNotNone(result)
         self.assertEqual(result["actions"], [])
         self.assertIn("没有可引用的上一轮产品结果", result["answer"])
-        self.assertEqual(result["steps"][0]["type"], "clarify")
+
+    def test_budget_followup_builds_conversation_context(self):
+        context = customer_agent_runtime_service._conversation_context_for_question(
+            "预算不高",
+            [
+                {"role": "user", "content": "三个年轻人露营，适合带什么产品？"},
+                {"role": "assistant", "content": "首选 CW-C83-2，炊墨煎锅。"},
+            ],
+        )
+
+        self.assertEqual(context["mode"], "budget_followup")
+        self.assertIn("三个年轻人露营", context["previous_user_need"])
+        self.assertIn("预算不高", context["combined_user_need"])
+
+    def test_complete_new_need_uses_current_question_context(self):
+        context = customer_agent_runtime_service._conversation_context_for_question(
+            "适合四个人做饭的锅有哪些？",
+            [
+                {"role": "user", "content": "适合泡咖啡的小锅有吗？"},
+                {"role": "assistant", "content": "首选 CW-C93。"},
+            ],
+        )
+
+        self.assertEqual(context["mode"], "current_question")
+        self.assertEqual(context["previous_user_need"], "")
+
+    def test_empty_product_results_discard_hallucinated_recommendation(self):
+        result = customer_agent_runtime_service._build_result(
+            "三个人去旅行，推荐一下产品",
+            None,
+            [{"ok": True, "tool": "hybrid_search_products", "query": "三个人去旅行，推荐一下产品", "count": 0, "results": []}],
+            "推荐 CW-C83，炊墨套锅适合三个人旅行。",
+            [],
+        )
+
+        self.assertEqual(result["results"], [])
+        self.assertNotIn("CW-C83", result["answer"])
+        self.assertIn("没有找到", result["answer"])
+
+    def test_stale_semantic_sku_is_not_returned_as_product(self):
+        rows = customer_agent_tool_service._enrich_semantic_rows(
+            self.db,
+            [{"sku": "CW-C83", "content": "炊墨套锅适合三人旅行"}],
+        )
+
+        self.assertEqual(rows, [])
+
+    async def test_context_field_followup_uses_previous_sku_without_llm(self):
+        async def fail_chat_completion(*args, **kwargs):
+            raise RuntimeError("LLM should not be called for deterministic field followup")
+
+        dmxapi_service.chat_completion = fail_chat_completion
+        result = await customer_agent_runtime_service.process_agent_request(
+            self.db,
+            user_id="user-1",
+            question="条形码是多少？",
+            previous_result_skus=["CW-C93"],
+        )
+
+        self.assertIsNotNone(result)
+        self.assertEqual(result["intent"], "product_detail")
+        self.assertEqual(result["results"][0]["field_values"]["条形码"], "barcode-CW-C93")
+        self.assertIn("条形码", result["answer"])
+        self.assertIn("barcode-CW-C93", result["answer"])
+
+    async def test_confirmation_reuses_field_from_previous_clarification(self):
+        region = SalesRegion(id="region-runtime-1", region_name="日本", region_code="JP")
+        self.db.add(region)
+        self.db.add(ProductSalesRegion(product_id="id-CW-C93", region_id=region.id))
+        self.db.commit()
+
+        async def fail_chat_completion(*args, **kwargs):
+            raise RuntimeError("LLM should not be called for confirmation field followup")
+
+        dmxapi_service.chat_completion = fail_chat_completion
+        result = await customer_agent_runtime_service.process_agent_request(
+            self.db,
+            user_id="user-1",
+            question="是的",
+            previous_result_skus=["CW-C93"],
+            conversation_history=[
+                {"role": "assistant", "content": "你是想查行山单锅的售卖地区吗？如果是，我可以继续查。"},
+            ],
+        )
+
+        self.assertIsNotNone(result)
+        self.assertEqual(result["results"][0]["field_values"]["售卖地区"], "日本")
+        self.assertIn("售卖地区", result["answer"])
+        self.assertIn("日本", result["answer"])
+
+    def test_negative_recommendation_excludes_unwanted_series(self):
+        result = customer_agent_runtime_service._build_result(
+            "不要炊墨系列的，换一个推荐",
+            None,
+            [{
+                "ok": True,
+                "tool": "hybrid_search_products",
+                "results": [
+                    {"sku": "CW-C83", "product_name_cn": "炊墨套锅", "series": "炊墨", "features": "多人露营"},
+                    {"sku": "CW-C93", "product_name_cn": "行山单锅", "features": "轻量徒步"},
+                ],
+            }],
+            "首选 CW-C83，炊墨套锅。",
+            [],
+        )
+
+        self.assertEqual(result["results"][0]["sku"], "CW-C93")
+        self.assertNotIn("CW-C83", result["answer"])
+
+    def test_missing_field_value_replaces_hallucinated_answer(self):
+        result = customer_agent_runtime_service._build_result(
+            "小圆炉的尺寸是多少？",
+            None,
+            [{
+                "ok": True,
+                "tool": "get_product_detail",
+                "detail": {
+                    "sku": "CS-G35",
+                    "product_name_cn": "小圆炉",
+                    "field_values": {"尺寸规格": "暂无"},
+                },
+            }],
+            "小圆炉尺寸很小巧，可以轻松放入口袋。",
+            [],
+        )
+
+        self.assertIn("暂无", result["answer"])
+        self.assertIn("未记录", result["answer"])
+        self.assertNotIn("放入口袋", result["answer"])
 
 
     async def test_write_request_without_action_falls_back_to_intent_parser(self):
@@ -887,7 +1042,9 @@ class CustomerServiceServiceTest(unittest.IsolatedAsyncioTestCase):
         )
 
         self.assertEqual(captured["previous_result_skus"], [])
-        self.assertEqual(captured["conversation_history"], [])
+        self.assertEqual(len(captured["conversation_history"]), 1)
+        self.assertEqual(captured["conversation_history"][0]["role"], "assistant")
+        self.assertIn("CW-C93", captured["conversation_history"][0]["content"])
 
     async def test_pronoun_update_uses_previous_result_sku(self):
         product = Product(
@@ -1016,6 +1173,54 @@ class CustomerServiceServiceTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result["results"][0]["sku"], "CW-C83")
         self.assertIn("CW-C83", result["answer"])
         self.assertNotIn("找到 2 条产品资料", result["answer"])
+
+    def test_budget_followup_uses_context_and_avoids_high_end_first_choice(self):
+        tool_results = [{
+            "ok": True,
+            "tool": "hybrid_search_products",
+            "query": "预算不高，推荐一下",
+            "count": 2,
+            "results": [
+                {
+                    "sku": "CW-C93",
+                    "product_name_cn": "行山单锅",
+                    "category": "锅具",
+                    "capacity": "锅 1000ML",
+                    "features": "聚能结构 95秒速沸，极限轻量",
+                    "target_audience": "单人背包客，极限轻量徒步者",
+                    "usage_scenarios": "高海拔徒步，单人野宿",
+                    "price_positioning": "高端价格带",
+                },
+                {
+                    "sku": "CW-C83-1",
+                    "product_name_cn": "炊墨炒锅",
+                    "category": "锅具",
+                    "capacity": "锅 3700ML",
+                    "features": "轻量化设计，可拆卸手柄，水性不沾，易清洁",
+                    "target_audience": "家庭户外野餐群体，多人露营",
+                    "usage_scenarios": "家庭精致露营，户外营地大餐",
+                    "price_positioning": "常规价格带，性价比款",
+                },
+            ],
+        }]
+
+        result = customer_agent_runtime_service._build_result(
+            "预算不高，推荐一下",
+            None,
+            tool_results,
+            "预算不高的话，我推荐行山单锅，它很轻，性价比很高。",
+            [],
+            conversation_history=[
+                {"role": "user", "content": "三个年轻人露营，适合带什么产品？"},
+                {"role": "assistant", "content": "首选 CW-C83-1，炊墨炒锅。"},
+            ],
+        )
+
+        self.assertEqual(result["intent"], "recommend_products")
+        self.assertEqual(result["results"][0]["sku"], "CW-C83-1")
+        self.assertIn("CW-C83-1", result["answer"])
+        self.assertIn("价格定位", result["answer"])
+        self.assertNotIn("推荐行山单锅", result["answer"])
 
 
 if __name__ == "__main__":

@@ -35,7 +35,7 @@ TOOL_SPECS = [
     {
         "name": "get_product_detail",
         "description": "读取一个或多个 SKU 的完整产品资料。适合单品追问、上一轮结果继续对比、推荐前补全资料。",
-        "arguments": {"sku": "单个产品 SKU", "skus": "可选，多个 SKU 数组"},
+        "arguments": {"sku": "单个产品 SKU", "skus": "可选，多个 SKU 数组", "fields": "可选，只返回/突出指定字段，例如 条形码、尺寸、上架平台、售卖地区、关键词库"},
     },
     {
         "name": "propose_update_product_field",
@@ -53,6 +53,33 @@ TOOL_SPECS = [
         "arguments": {"sku": "产品 SKU"},
     },
 ]
+
+QUERY_FIELD_ALIASES = {
+    "条形码": "product.barcode",
+    "barcode": "product.barcode",
+    "尺寸": "specs.size_info",
+    "尺寸规格": "specs.size_info",
+    "规格尺寸": "specs.size_info",
+    "上架平台": "channels",
+    "平台": "channels",
+    "哪些平台": "channels",
+    "销售平台": "channels",
+    "售卖平台": "channels",
+    "售卖地区": "regions",
+    "销售地区": "regions",
+    "销售区域": "regions",
+    "地区": "regions",
+    "关键词库": "keywords",
+    "关键词": "keywords",
+}
+
+QUERY_FIELD_LABELS = {
+    "product.barcode": "条形码",
+    "specs.size_info": "尺寸规格",
+    "channels": "上架平台",
+    "regions": "售卖地区",
+    "keywords": "关键词库",
+}
 
 
 def list_tool_specs() -> list[dict]:
@@ -178,13 +205,16 @@ def _hybrid_search_products(db: Session, arguments: dict[str, Any], semantic_row
 
 def _get_product_detail(db: Session, arguments: dict[str, Any]) -> dict:
     skus = _extract_argument_skus(arguments)
+    fields = _normalize_fields(arguments.get("fields") or [])
     if not skus:
         return {"ok": False, "tool": "get_product_detail", "error": "缺少 SKU"}
     details = []
     errors = []
     for sku in skus[:20]:
         try:
-            details.append(product_service.get_product_detail(db, sku))
+            detail = product_service.get_product_detail(db, sku)
+            detail = _attach_field_values(detail, fields)
+            details.append(detail)
         except Exception as exc:
             errors.append({"sku": sku, "error": str(exc)})
     if not details:
@@ -267,15 +297,89 @@ def _enrich_fields(db: Session, row: dict, fields: list[str]) -> dict:
     enriched = dict(row)
     field_values = {}
     for field in fields:
-        field_path = _resolve_field(field)
+        field_path = resolve_query_field_path(field)
         if not field_path:
             continue
-        section, key = field_path.split(".", 1)
-        value = detail.get(key) if section == "product" else (detail.get(section) or {}).get(key)
-        label = agent_action_service.FIELD_SPECS[field_path].label
+        value = _value_from_detail(detail, field_path)
+        label = _label_for_query_field(field_path)
         field_values[label] = customer_agent_service._stringify(value) if value not in (None, "") else "暂无"
     enriched["field_values"] = field_values
     return enriched
+
+
+def query_fields_from_text(text: str) -> list[str]:
+    found = []
+    raw = str(text or "")
+    for label, path in QUERY_FIELD_ALIASES.items():
+        if label and label in raw and path not in found:
+            found.append(path)
+    for label, path in agent_action_service.FIELD_ALIASES.items():
+        if label and label in raw and path not in found:
+            found.append(path)
+    return found
+
+
+def resolve_query_field_path(value: Any) -> str | None:
+    text = str(value or "").strip()
+    if not text:
+        return None
+    if text in QUERY_FIELD_LABELS:
+        return text
+    if text in agent_action_service.FIELD_SPECS:
+        return text
+    if text in QUERY_FIELD_ALIASES:
+        return QUERY_FIELD_ALIASES[text]
+    return agent_action_service.resolve_field_path(text)
+
+
+def _normalize_fields(value: Any) -> list[str]:
+    if isinstance(value, str):
+        raw_fields = [value]
+    elif isinstance(value, list):
+        raw_fields = value
+    else:
+        raw_fields = []
+    fields = []
+    for item in raw_fields:
+        field_path = resolve_query_field_path(item)
+        if field_path and field_path not in fields:
+            fields.append(field_path)
+    return fields
+
+
+def _attach_field_values(detail: dict, fields: list[str]) -> dict:
+    if not fields:
+        return detail
+    enriched = dict(detail)
+    field_values = {}
+    for field_path in fields:
+        value = _value_from_detail(detail, field_path)
+        field_values[_label_for_query_field(field_path)] = customer_agent_service._stringify(value) if value not in (None, "") else "暂无"
+    enriched["field_values"] = field_values
+    return enriched
+
+
+def _label_for_query_field(field_path: str) -> str:
+    if field_path in agent_action_service.FIELD_SPECS:
+        return agent_action_service.FIELD_SPECS[field_path].label
+    return QUERY_FIELD_LABELS.get(field_path, field_path)
+
+
+def _value_from_detail(detail: dict, field_path: str) -> Any:
+    if field_path == "channels":
+        return [item.get("channel_name") or item.get("channel_code") for item in detail.get("channels") or []]
+    if field_path == "regions":
+        return [item.get("region_name") or item.get("region_code") for item in detail.get("regions") or []]
+    if field_path == "keywords":
+        keywords = [item.get("keyword") for item in detail.get("keywords") or [] if item.get("keyword")]
+        content_keywords = (detail.get("content") or {}).get("search_keywords")
+        if content_keywords not in (None, "", []):
+            keywords.append(content_keywords)
+        return keywords
+    if "." not in field_path:
+        return detail.get(field_path)
+    section, key = field_path.split(".", 1)
+    return detail.get(key) if section == "product" else (detail.get(section) or {}).get(key)
 
 
 def _enrich_semantic_rows(db: Session, rows: list[dict]) -> list[dict]:
@@ -290,7 +394,6 @@ def _enrich_semantic_rows(db: Session, rows: list[dict]) -> list[dict]:
         try:
             detail = product_service.get_product_detail(db, sku)
         except Exception:
-            enriched_rows.append(row)
             continue
         specs = detail.get("specs") or {}
         business = detail.get("business") or {}
@@ -306,6 +409,8 @@ def _enrich_semantic_rows(db: Session, rows: list[dict]) -> list[dict]:
             "features": _safe_stringify(business.get("top_selling_points")),
             "usage_scenarios": _safe_stringify(business.get("usage_scenarios")),
             "target_audience": _safe_stringify(business.get("target_audience")),
+            "positioning": _safe_stringify(business.get("positioning")),
+            "price_positioning": _safe_stringify(business.get("price_positioning")),
             "emotional_value": _safe_stringify(business.get("emotional_value")),
             "matched_by": row.get("matched_by") or "语义知识库",
             "semantic_match": row.get("content"),

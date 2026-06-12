@@ -20,6 +20,7 @@ COOKING_TERMS = ("做饭", "烹饪", "煮饭", "炒菜", "煮东西")
 LOW_BUDGET_TERMS = ("预算不高", "预算低", "便宜", "实惠", "性价比", "入门", "低预算", "省钱", "不要太贵")
 HIGH_PRICE_TERMS = ("高端", "高价", "高预算", "旗舰", "专业级", "premium", "Premium")
 VALUE_PRICE_TERMS = ("入门", "亲民", "经济", "实惠", "低价", "基础", "性价比", "常规")
+CONFIRMATION_TERMS = ("是的", "对", "对的", "确认", "嗯", "可以", "没错")
 
 
 async def process_agent_request(
@@ -41,6 +42,23 @@ async def process_agent_request(
             "results": [],
             "steps": [{"type": "clarify", "label": "需要明确产品范围", "detail": "检测到上下文引用，但没有上一轮产品结果。"}],
         }
+    context_fields = _context_detail_fields(question, conversation_history or [])
+    if previous_result_skus and context_fields and not _requires_write_tool(question):
+        arguments = {"skus": previous_result_skus[:5], "fields": context_fields}
+        result = await customer_agent_tool_service.execute_tool_async(
+            db,
+            user_id=user_id,
+            name="get_product_detail",
+            arguments=arguments,
+        )
+        return _build_result(
+            question,
+            sku,
+            [result],
+            None,
+            [_step_from_tool_result("get_product_detail", arguments, result)],
+            conversation_history=conversation_history or [],
+        )
     messages = _build_tool_selection_messages(question, sku, previous_result_skus or [], conversation_history or [], feedback_lessons or [])
     agent_trace_service.trace("TOOL_SELECTION_REQUEST", {"messages": messages, "tools": customer_agent_tool_service.list_tool_specs()})
 
@@ -174,9 +192,14 @@ def _build_result(
         provisional_answer = _fallback_answer(tool_results)
     if intent == "recommend_products":
         recommendation_question = _recommendation_question_with_context(question, conversation_history or [])
+        results = _filter_excluded_recommendations(recommendation_question, results, conversation_history or [])
         results = _rank_recommendation_results(recommendation_question, results)
         if not provisional_answer or _should_replace_recommendation_answer(provisional_answer, recommendation_question, results):
             provisional_answer = _compose_recommendation_answer(recommendation_question, results)
+    elif _has_field_values(results):
+        field_answer = _compose_field_values_answer(results)
+        if field_answer and (not provisional_answer or _field_answer_should_replace(provisional_answer, results)):
+            provisional_answer = field_answer
     elif results and _answer_conflicts_with_current_results(provisional_answer, question, results):
         warnings.append("LLM 原始回答与本轮问题或工具结果不一致，已改用工具结果兜底回答。")
         provisional_answer = _fallback_answer(tool_results)
@@ -349,6 +372,24 @@ def _looks_like_user_need(text: str) -> bool:
         word in str(text or "")
         for word in ("推荐", "适合", "露营", "做饭", "泡咖啡", "送礼", "徒步", "年轻人", "几个人", "三个人", "三个", "预算")
     )
+
+
+def _context_detail_fields(question: str, conversation_history: list[dict]) -> list[str]:
+    fields = customer_agent_tool_service.query_fields_from_text(question)
+    if fields:
+        return fields
+    if not _is_confirmation(question):
+        return []
+    for item in reversed(conversation_history[-4:]):
+        content = str(item.get("content") or "")
+        fields = customer_agent_tool_service.query_fields_from_text(content)
+        if fields:
+            return fields
+    return []
+
+
+def _is_confirmation(question: str) -> bool:
+    return str(question or "").strip(" ，。！？?") in CONFIRMATION_TERMS
 
 
 async def _finalize_answer(db: Session, question: str, sku: str | None, tool_results: list[dict], conversation_history: list[dict]) -> str | None:
@@ -624,6 +665,44 @@ def _fallback_answer(tool_results: list[dict]) -> str:
     return "\n".join(lines)
 
 
+def _has_field_values(results: list[dict]) -> bool:
+    return any(isinstance(item.get("field_values"), dict) and item.get("field_values") for item in results if isinstance(item, dict))
+
+
+def _compose_field_values_answer(results: list[dict]) -> str:
+    rows = []
+    for item in results[:10]:
+        if not isinstance(item, dict):
+            continue
+        field_values = item.get("field_values")
+        if not isinstance(field_values, dict) or not field_values:
+            continue
+        product_name = item.get("product_name_cn") or item.get("product_name_en") or ""
+        fields = "，".join(f"{key}：{value}" for key, value in field_values.items())
+        rows.append(f"{item.get('sku')}，{product_name}，{fields}")
+    if not rows:
+        return ""
+    prefix = "查到以下资料："
+    if any("暂无" in row for row in rows):
+        prefix = "查到以下资料；标为“暂无”的字段表示产品库未记录，不能自行补参数："
+    return "\n".join([prefix, *rows])
+
+
+def _field_answer_should_replace(answer: str, results: list[dict]) -> bool:
+    if not answer:
+        return True
+    text = str(answer)
+    if any("暂无" in str(value) for row in results if isinstance(row, dict) for value in (row.get("field_values") or {}).values()):
+        return not any(word in text for word in ("暂无", "未记录", "未标注", "资料"))
+    labels = [
+        str(label)
+        for row in results
+        if isinstance(row, dict)
+        for label in (row.get("field_values") or {}).keys()
+    ]
+    return bool(labels) and not any(label in text for label in labels)
+
+
 def _rank_recommendation_results(question: str, results: list[dict]) -> list[dict]:
     unique: dict[str, dict] = {}
     for item in results:
@@ -635,6 +714,50 @@ def _rank_recommendation_results(question: str, results: list[dict]) -> list[dic
         unique[sku] = item
     ranked = sorted(unique.values(), key=lambda row: _recommendation_score(question, row), reverse=True)
     return [row for row in ranked if _recommendation_score(question, row) > -20][:5]
+
+
+def _filter_excluded_recommendations(question: str, results: list[dict], conversation_history: list[dict]) -> list[dict]:
+    excluded_terms = _excluded_terms_from_question(question)
+    excluded_skus = _excluded_previous_skus(question, conversation_history)
+    if not excluded_terms and not excluded_skus:
+        return results
+    kept = []
+    for row in results:
+        sku = str(row.get("sku") or "").upper()
+        if sku and sku in excluded_skus:
+            continue
+        row_text = _row_text(row).lower()
+        if any(term.lower() and term.lower() in row_text for term in excluded_terms):
+            continue
+        kept.append(row)
+    return kept or results
+
+
+def _excluded_terms_from_question(question: str) -> list[str]:
+    terms = []
+    text = str(question or "")
+    patterns = [
+        r"(?:不要|别要|不想要|排除|去掉|剔除|不是)\s*([\u4e00-\u9fffA-Za-z0-9_\-]+?)(?:系列|系|品牌|牌子|产品|的|，|,|。|$)",
+        r"换(?:一个|一款|个|款)\s*(?:不要)?\s*([\u4e00-\u9fffA-Za-z0-9_\-]+)?",
+    ]
+    for pattern in patterns:
+        for match in re.finditer(pattern, text):
+            value = (match.group(1) or "").strip()
+            if value and value not in {"一个", "一款", "产品", "推荐"} and value not in terms:
+                terms.append(value)
+    return terms
+
+
+def _excluded_previous_skus(question: str, conversation_history: list[dict]) -> set[str]:
+    if not any(word in str(question or "") for word in ("换一个", "换一款", "再推荐一个", "另外推荐", "不要刚才", "别要刚才")):
+        return set()
+    for item in reversed(conversation_history[-6:]):
+        if item.get("role") != "assistant":
+            continue
+        skus = _extract_skus(str(item.get("content") or ""))
+        if skus:
+            return skus
+    return set()
 
 
 def _recommendation_score(question: str, row: dict) -> float:
@@ -913,4 +1036,3 @@ def _step_from_tool_result(name: str, arguments: dict[str, Any], result: dict) -
         "detail": detail,
         "ok": bool(result.get("ok", True)),
     }
-
