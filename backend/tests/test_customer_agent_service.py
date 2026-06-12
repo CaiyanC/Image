@@ -899,6 +899,16 @@ class CustomerAgentRuntimeServiceTest(unittest.IsolatedAsyncioTestCase):
             "insufficient_data",
         )
 
+    def test_recommendation_phrasing_infers_recommend_intent(self):
+        self.assertEqual(
+            customer_agent_runtime_service._infer_intent("一个人轻量徒步带什么锅？", [], [], [], False),
+            "recommend_products",
+        )
+        self.assertEqual(
+            customer_agent_runtime_service._infer_intent("两个人露营，有没有中端一点的锅？", [], [], [], False),
+            "recommend_products",
+        )
+
 
     async def test_write_request_without_action_falls_back_to_intent_parser(self):
         calls = []

@@ -518,6 +518,7 @@ def _infer_intent(question: str, tool_results: list[dict], actions: list[dict], 
     if any(word in question for word in (
         "推荐", "适合", "哪个好", "哪款", "送礼", "年轻人", "场景",
         "还有别的", "还有其他", "换个", "换一个", "换一款", "再推荐",
+        "带什么", "有没有中端", "中端一点", "预算不高",
     )):
         return "recommend_products"
     if "get_product_detail" in tool_names:
