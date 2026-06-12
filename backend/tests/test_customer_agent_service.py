@@ -1035,6 +1035,45 @@ class CustomerServiceServiceTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual([item[0] for item in calls], ["runtime"])
         self.assertEqual(result["debug"]["agent_mode"], "llm_tool_calling")
 
+    async def test_ask_customer_service_adds_quality_for_legacy_agent_result(self):
+        async def fake_runtime(*args, **kwargs):
+            return None
+
+        async def fake_intent(db, **kwargs):
+            return {
+                "answer": "CW-C93 的容量是 1000ml。",
+                "intent": "product_detail",
+                "answer_type": "product_detail",
+                "confidence": "high",
+                "uncertainty": "confirmed",
+                "sources": [{"type": "product", "sku": "CW-C93"}],
+                "actions": [],
+                "results": [{"sku": "CW-C93", "capacity": "1000ml"}],
+                "steps": [],
+                "warnings": [],
+                "evidence": [{"sku": "CW-C93", "field_label": "容量", "value": "1000ml"}],
+                "debug": {"agent_mode": "intent_parser"},
+                "skip_polish": True,
+                "sku": "CW-C93",
+            }
+
+        customer_agent_runtime_service.process_agent_request = fake_runtime
+        customer_agent_intent_service.process_intent_request = fake_intent
+
+        result = await customer_service_service.ask_customer_service(
+            self.db,
+            user_id="user-1",
+            question="CW-C93 的容量是多少？",
+        )
+
+        self.assertEqual(result["agent_quality"]["level"], "high")
+        self.assertTrue(result["agent_quality"]["passed"])
+        self.assertEqual(result["debug"]["agent_quality"], result["agent_quality"])
+
+        review = customer_service_service.review_samples(self.db, "user-1", limit=10)
+        self.assertIn("quality", review["summary"])
+        self.assertEqual(review["summary"]["quality"]["levels"]["high"], 1)
+
     async def test_ask_customer_service_passes_negative_feedback_lessons(self):
         conversation = CustomerServiceConversation(id="conv-1", user_id="user-1", title="旧会话")
         self.db.add(conversation)

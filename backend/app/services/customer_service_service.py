@@ -7,7 +7,15 @@ from sqlalchemy.orm import Session
 from ..models.knowledge_base import CustomerServiceConversation, CustomerServiceMessage
 from ..models.product import Product
 from ..models.product_qa import ProductQa, ProductQaNegative
-from . import customer_agent_intent_service, customer_agent_runtime_service, customer_agent_service, dmxapi_service, knowledge_service, product_service
+from . import (
+    customer_agent_intent_service,
+    customer_agent_quality_service,
+    customer_agent_runtime_service,
+    customer_agent_service,
+    dmxapi_service,
+    knowledge_service,
+    product_service,
+)
 
 
 SKU_RE = re.compile(r"\b[A-Za-z]{1,6}[-_][A-Za-z0-9][A-Za-z0-9_-]{1,40}\b")
@@ -189,6 +197,7 @@ async def ask_customer_service(
         agent_result = _normalize_agent_result(agent_result)
         if not agent_result.get("skip_polish"):
             agent_result["answer"] = await _polish_customer_answer(db, question, agent_result)
+        agent_result = _attach_agent_quality(agent_result, question)
         conversation = _get_or_create_conversation(db, user_id, question, agent_result.get("sku"), conversation_id)
         db.add(CustomerServiceMessage(
             conversation_id=conversation.id,
@@ -451,12 +460,14 @@ def review_samples(db: Session, user_id: str, limit: int = 100) -> dict:
         })
 
     top_questions = sorted(frequent_questions.items(), key=lambda item: item[1], reverse=True)[:20]
+    quality_summary = _review_quality_summary(items)
     return {
         "items": items,
         "summary": {
             "total_samples": len(items),
             "clarification_samples": clarification_samples,
             "anomaly_samples": anomaly_samples,
+            "quality": quality_summary,
             "top_questions": [{"question": question, "count": count} for question, count in top_questions],
         },
     }
@@ -563,6 +574,57 @@ def _normalize_agent_result(agent_result: dict) -> dict:
         "raw_results": results,
     })
     return result
+
+
+def _attach_agent_quality(agent_result: dict, question: str) -> dict:
+    result = dict(agent_result)
+    if result.get("agent_quality"):
+        return result
+    quality = customer_agent_quality_service.evaluate_agent_response(
+        question,
+        answer=result.get("answer") or "",
+        intent=result.get("intent") or "",
+        results=result.get("results") or [],
+        sources=result.get("sources") or [],
+        actions=result.get("actions") or [],
+        warnings=result.get("warnings") or [],
+        needs_clarification=bool(result.get("needs_clarification")),
+        direct_answer=not bool(result.get("sources") or result.get("actions") or result.get("results")),
+        tool_results=(result.get("debug") or {}).get("tool_results") or [],
+    )
+    result["agent_quality"] = quality
+    debug = dict(result.get("debug") or {})
+    debug["agent_quality"] = quality
+    result["debug"] = debug
+    if quality.get("level") == "low":
+        result["confidence"] = "low"
+    elif not quality.get("passed") and result.get("confidence") == "high":
+        result["confidence"] = "medium"
+    if quality.get("risks"):
+        result["warnings"] = list(dict.fromkeys([*(result.get("warnings") or []), *quality["risks"]]))
+        result["debug"]["warnings"] = result["warnings"]
+    return result
+
+
+def _review_quality_summary(items: list[dict]) -> dict:
+    scores = []
+    levels: dict[str, int] = {}
+    risks: dict[str, int] = {}
+    for item in items:
+        quality = item.get("agent_quality") or {}
+        if quality.get("score") is not None:
+            scores.append(float(quality.get("score") or 0))
+        level = str(quality.get("level") or "unknown")
+        levels[level] = levels.get(level, 0) + 1
+        for risk in quality.get("risks") or []:
+            key = str(risk).split(":", 1)[0]
+            risks[key] = risks.get(key, 0) + 1
+    top_risks = sorted(risks.items(), key=lambda item: item[1], reverse=True)[:8]
+    return {
+        "avg_score": round(sum(scores) / max(len(scores), 1), 3) if scores else None,
+        "levels": levels,
+        "top_risks": [{"risk": risk, "count": count} for risk, count in top_risks],
+    }
 
 
 async def _polish_customer_answer(db: Session, question: str, agent_result: dict) -> str:
@@ -776,6 +838,16 @@ def _should_use_conversation_history(question: str) -> bool:
 def _save_and_return_guidance(db: Session, user_id: str, question: str, conversation_id: str | None) -> dict:
     conversation = _get_or_create_conversation(db, user_id, question, None, conversation_id)
     answer = "先说结论：我还不能可靠回答这个问题，因为当前没有识别到明确的产品范围。\n下一步建议：请先输入 SKU，或者先让我查一批产品，再继续追问。"
+    agent_quality = customer_agent_quality_service.evaluate_agent_response(
+        question,
+        answer=answer,
+        intent="clarify",
+        results=[],
+        sources=[{"type": "agent_clarification", "label": "需要明确产品范围"}],
+        actions=[],
+        warnings=[],
+        needs_clarification=True,
+    )
     meta_sources = [{
         "type": "agent_meta",
         "label": "客服回复元数据",
@@ -789,6 +861,7 @@ def _save_and_return_guidance(db: Session, user_id: str, question: str, conversa
         "followups": ["你可以直接给我 SKU，或者让我先列出某个类目的产品。"],
         "warnings": [],
         "evidence": [],
+        "agent_quality": agent_quality,
         "debug": {"intent": "clarify", "steps": [], "warnings": [], "anomalies": [], "raw_results": []},
         "feedback": None,
     }]
@@ -814,7 +887,8 @@ def _save_and_return_guidance(db: Session, user_id: str, question: str, conversa
         "followups": ["你可以直接给我 SKU，或者让我先列出某个类目的产品。"],
         "warnings": [],
         "evidence": [],
-        "debug": {"intent": "clarify", "steps": [], "warnings": [], "anomalies": [], "raw_results": []},
+        "agent_quality": agent_quality,
+        "debug": {"intent": "clarify", "steps": [], "warnings": [], "anomalies": [], "raw_results": [], "agent_quality": agent_quality},
         "sku": None,
         "answer": answer,
         "sources": [],
