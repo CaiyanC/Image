@@ -16,11 +16,14 @@ class CustomerDialogueStateTest(unittest.TestCase):
         self.assertIn("三个年轻人露营", state.previous_user_need)
         self.assertIn("预算=low", state.summary)
         self.assertTrue(state.should_inherit_user_need)
+        self.assertEqual(state.confidence, "high")
+        self.assertFalse(state.needs_clarification)
 
         context = customer_dialogue_state.build_conversation_context("预算不高", history)
         self.assertEqual(context["mode"], "budget_followup")
         self.assertIn("预算/性价比追问", context["instruction"])
         self.assertIn("三个年轻人露营", context["previous_user_need"])
+        self.assertEqual(context["confidence"], "high")
 
     def test_complete_new_need_does_not_inherit_previous_need(self):
         history = [
@@ -34,6 +37,7 @@ class CustomerDialogueStateTest(unittest.TestCase):
         self.assertEqual(state.previous_user_need, "")
         self.assertFalse(state.should_inherit_user_need)
         self.assertEqual(state.summary, "人数=四人；场景=做饭；品类=锅")
+        self.assertEqual(state.confidence, "high")
 
     def test_previous_result_reference_detection(self):
         self.assertTrue(customer_dialogue_state.should_use_previous_result_skus("这款容量多少？"))
@@ -71,6 +75,17 @@ class CustomerDialogueStateTest(unittest.TestCase):
         self.assertEqual(state.mode, "current_question")
         self.assertEqual(state.previous_user_need, "")
         self.assertFalse(state.should_inherit_user_need)
+        self.assertEqual(state.confidence, "low")
+        self.assertTrue(state.needs_clarification)
+        self.assertEqual(state.clarification_reason, "missing_product_scope")
+        self.assertIn("product_scope", state.missing_slots)
+
+    def test_vague_recommendation_marks_missing_product_scope(self):
+        state = customer_dialogue_state.build_dialogue_state("推荐一下", [])
+
+        self.assertEqual(state.confidence, "low")
+        self.assertTrue(state.needs_clarification)
+        self.assertEqual(state.missing_slots, ["product_scope"])
 
 
 if __name__ == "__main__":

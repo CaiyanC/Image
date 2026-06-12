@@ -53,6 +53,10 @@ class DialogueState:
     is_budget_followup: bool
     is_context_followup: bool
     is_complete_new_need: bool
+    confidence: str
+    needs_clarification: bool
+    clarification_reason: str
+    missing_slots: list[str]
     slots: dict[str, Any]
 
     def to_dict(self) -> dict[str, Any]:
@@ -72,6 +76,14 @@ def build_dialogue_state(question: str, conversation_history: list[dict] | None 
     mode = _decide_mode(text, slots, previous_user_need, is_budget_followup, is_context_followup, is_complete_new_need, has_explicit_sku)
     combined_user_need = _combine_user_need(previous_user_need, text, mode)
     summary = _build_summary(slots, combined_user_need)
+    confidence, needs_clarification, clarification_reason, missing_slots = _assess_clarity(
+        text,
+        mode,
+        slots,
+        previous_user_need,
+        has_explicit_sku,
+        requires_previous_result_skus,
+    )
     return DialogueState(
         mode=mode,
         question=text,
@@ -90,6 +102,10 @@ def build_dialogue_state(question: str, conversation_history: list[dict] | None 
         is_budget_followup=is_budget_followup,
         is_context_followup=is_context_followup,
         is_complete_new_need=is_complete_new_need,
+        confidence=confidence,
+        needs_clarification=needs_clarification,
+        clarification_reason=clarification_reason,
+        missing_slots=missing_slots,
         slots=slots,
     )
 
@@ -110,6 +126,10 @@ def build_conversation_context(question: str, conversation_history: list[dict] |
         "summary": state.summary,
         "slots": state.slots,
         "requires_previous_result_skus": state.requires_previous_result_skus,
+        "confidence": state.confidence,
+        "needs_clarification": state.needs_clarification,
+        "clarification_reason": state.clarification_reason,
+        "missing_slots": state.missing_slots,
     }
 
 
@@ -343,3 +363,33 @@ def _build_summary(slots: dict[str, str], combined_user_need: str) -> str:
     if not parts:
         return combined_user_need
     return "；".join(parts)
+
+
+def _assess_clarity(
+    question: str,
+    mode: str,
+    slots: dict[str, str],
+    previous_user_need: str,
+    has_explicit_sku: bool,
+    requires_previous_result_skus: bool,
+) -> tuple[str, bool, str, list[str]]:
+    text = _normalize(question)
+    if not text:
+        return "low", True, "empty_question", ["question"]
+    if mode in {"product_detail", "budget_followup", "context_followup"}:
+        return "high", False, "", []
+    if requires_previous_result_skus and not previous_user_need and not has_explicit_sku:
+        return "medium", False, "requires_previous_result_skus", []
+    has_product_or_context = bool(
+        has_explicit_sku
+        or slots.get("product_scope")
+        or slots.get("scene")
+        or slots.get("audience")
+        or slots.get("quantity")
+        or slots.get("comparison_target")
+    )
+    if has_product_or_context:
+        return "high", False, "", []
+    if any(word in text for word in RECOMMENDATION_TERMS + FIELD_FOLLOWUP_TERMS + LOW_BUDGET_TERMS):
+        return "low", True, "missing_product_scope", ["product_scope"]
+    return "medium", False, "", []
