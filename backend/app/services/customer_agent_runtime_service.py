@@ -649,7 +649,7 @@ def _rank_recommendation_results(question: str, results: list[dict]) -> list[dic
             continue
         unique[sku] = item
     ranked = sorted(unique.values(), key=lambda row: _recommendation_score(question, row), reverse=True)
-    return [row for row in ranked if _recommendation_score(question, row) > -20][:5]
+    return ranked[:5]
 
 
 def _filter_excluded_recommendations(question: str, results: list[dict], conversation_history: list[dict]) -> list[dict]:
@@ -697,46 +697,7 @@ def _excluded_previous_skus(question: str, conversation_history: list[dict]) -> 
 
 
 def _recommendation_score(question: str, row: dict) -> float:
-    text = _row_text(row)
-    name = str(row.get("product_name_cn") or "")
-    capacity_ml = _capacity_ml(row.get("capacity"))
-    score = 0.0
-    if "露营" in question and "露营" in text:
-        score += 30
-    if any(word in question for word in ("年轻人", "三人", "三个人", "三个")):
-        if capacity_ml:
-            if 1800 <= capacity_ml <= 4200:
-                score += 35
-            elif capacity_ml < 1500:
-                score -= 25
-            elif capacity_ml > 5000:
-                score -= 15
-        if any(word in text for word in ("家庭", "多人", "聚餐", "营地大餐", "精致露营")):
-            score += 12
-        if any(word in text for word in ("单人", "极限轻量", "速穿")):
-            score -= 16
-    if any(word in question for word in ("咖啡", "泡咖啡", "小锅")):
-        if any(word in text for word in ("咖啡", "煮水", "速沸", "烧水", "单锅")):
-            score += 35
-        if capacity_ml:
-            if 400 <= capacity_ml <= 1500:
-                score += 35
-            elif capacity_ml > 2000:
-                score -= 35
-        if any(word in name for word in ("炒锅", "煎锅", "煎盘")):
-            score -= 50
-        if "炉" in name and "锅" not in name:
-            score -= 20
-    if any(word in question for word in ("送礼", "礼物")):
-        if any(word in text for word in ("颜值", "精致", "情绪价值", "优雅", "礼")):
-            score += 25
-        if any(word in text for word in ("套锅", "套装", "家庭", "精致露营")):
-            score += 15
-    if row.get("features"):
-        score += 4
-    if _is_low_budget_query(question):
-        score += customer_recommendation_ranker.budget_score(question, row)
-    return score
+    return customer_recommendation_ranker.recommendation_score(question, row)
 
 
 def _should_replace_recommendation_answer(answer: str, question: str, results: list[dict]) -> bool:
