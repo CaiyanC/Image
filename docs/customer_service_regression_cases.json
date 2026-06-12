@@ -1,7 +1,7 @@
 {
   "version": 1,
   "name": "智能客服正式上线回归测试集",
-  "updated_at": "2026-06-08",
+  "updated_at": "2026-06-09",
   "pass_threshold": 0.9,
   "cases": [
     {
@@ -65,6 +65,19 @@
         "intent": "recommend_products",
         "answer_must_include_any": ["送礼", "礼物", "精致", "情绪价值", "适合"],
         "answer_must_not_include": ["无法判断"],
+        "min_results": 1,
+        "requires_sources": true
+      }
+    },
+    {
+      "id": "REC-006",
+      "category": "recommendation",
+      "title": "低预算追问不能推荐高端产品",
+      "turns": ["三个年轻人露营，适合带什么产品？", "预算不高，推荐一下"],
+      "expect": {
+        "intent": "recommend_products",
+        "answer_must_include_any": ["预算", "性价比", "价格定位", "常规", "实惠", "不高"],
+        "answer_must_not_include": ["行山单锅性价比很高", "行山单锅是低预算首选", "高端低预算"],
         "min_results": 1,
         "requires_sources": true
       }

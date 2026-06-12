@@ -552,6 +552,11 @@ def _result_row(product, specs, business, content, matched_by: str) -> dict:
             getattr(business, "top_selling_points", None),
             getattr(business, "usage_scenarios", None),
         ]),
+        "target_audience": business.target_audience if business else None,
+        "positioning": business.positioning if business else None,
+        "price_positioning": business.price_positioning if business else None,
+        "usage_scenarios": _stringify(business.usage_scenarios) if business else None,
+        "emotional_value": business.emotional_value if business else None,
     }
 
 

@@ -857,6 +857,18 @@ def _parse_english_name_filter(text: str) -> CustomerIntent | None:
     return None
 
 
+def _ensure_negative_filter(negative_filters: dict[str, Any], field_path: str, value: str) -> None:
+    """Append a value to a negative filter field, storing multiple values as a list."""
+    existing = negative_filters.get(field_path)
+    if existing:
+        if isinstance(existing, list):
+            existing.append(value)
+        else:
+            negative_filters[field_path] = [existing, value]
+    else:
+        negative_filters[field_path] = value
+
+
 def _parse_structured_filters(text: str) -> tuple[dict[str, Any], dict[str, Any]]:
     filters: dict[str, Any] = {}
     negative_filters: dict[str, Any] = {}
@@ -885,9 +897,22 @@ def _parse_structured_filters(text: str) -> tuple[dict[str, Any], dict[str, Any]
                 filters["product.category"] = cat
                 break
 
-    lifecycle = re.search(r"(?:生命周期|状态)\s*(?:是|为|=)?\s*([\u4e00-\u9fa5A-Za-z0-9_\-]+)", text)
+        lifecycle = re.search(r"(?:生命周期|状态)\s*(?:是|为|=)?\s*([一-龥A-Za-z0-9_\-]+)", text)
     if lifecycle:
         filters["product.lifecycle_status"] = lifecycle.group(1)
+
+    # Series/brand/name exclusion: "不要XXX系列/品牌的", "排除XXX", "去掉XXX"
+    for negative_word in FOLLOWUP_NARROW_WORDS:
+        series_not = re.search(
+            negative_word + r"\s*([一-龥A-Za-z0-9_\-]+)\s*(?:系列|品牌|牌子|的|产品)?",
+            text
+        )
+        if series_not and series_not.group(1):
+            neg_value = series_not.group(1)
+            # Filter by both series and product name since user may not distinguish
+            _ensure_negative_filter(negative_filters, "product.series", neg_value)
+            _ensure_negative_filter(negative_filters, "product.product_name_cn", neg_value)
+            break
 
     return filters, negative_filters
 
@@ -910,7 +935,11 @@ def _parse_semantic_query(text: str) -> str:
 
 def _parse_recommendation_query(text: str, semantic_query: str) -> str:
     if any(word in text for word in RECOMMEND_WORDS):
-        cleaned = re.sub(r"(推荐|更适合|最适合|哪个好|哪款更好|优先|这些里|这批里)", "", text)
+        cleaned = re.sub(
+            r"(推荐|更适合|最适合|哪个好|哪款更好|优先|这些里|这批里|换一个|不要|排除|去掉|剔除|排掉)",
+            "",
+            text
+        )
         return cleaned.strip(" ，。？") or semantic_query
     return semantic_query
 
@@ -1027,15 +1056,21 @@ def _detail_to_result_row(detail: dict[str, Any], *, matched_by: str) -> dict[st
 
 
 def _filter_rows(rows: list[dict], *, filters: dict[str, Any], negative_filters: dict[str, Any], term: str) -> list[dict]:
-    def match_field(row: dict[str, Any], field_path: str, value: str) -> bool:
+    def _matches_any(text: str, value: Any) -> bool:
+        text_lower = text.lower()
+        if isinstance(value, list):
+            return any(v.lower() in text_lower for v in value)
+        return str(value).lower() in text_lower
+
+    def match_field(row: dict[str, Any], field_path: str, value: Any) -> bool:
         text = str(_row_value(row, field_path) or "").lower()
-        return value.lower() in text
+        return _matches_any(text, value)
 
     filtered = rows
     for field_path, value in (filters or {}).items():
-        filtered = [row for row in filtered if match_field(row, field_path, str(value))]
+        filtered = [row for row in filtered if match_field(row, field_path, value)]
     for field_path, value in (negative_filters or {}).items():
-        filtered = [row for row in filtered if not match_field(row, field_path, str(value))]
+        filtered = [row for row in filtered if not match_field(row, field_path, value)]
     if term:
         term_lower = term.lower()
         filtered = [
@@ -1418,13 +1453,19 @@ async def _rank_rows_for_recommendation_llm(db: Session, rows: list[dict], query
             "material": row.get("body_material", ""),
             "color": row.get("color", ""),
             "features": row.get("features", ""),
+            "target_audience": row.get("target_audience", ""),
+            "usage_scenarios": row.get("usage_scenarios", ""),
+            "positioning": row.get("positioning", ""),
+            "price_positioning": row.get("price_positioning", ""),
         }
         product_list.append(info)
     
     system_prompt = (
         "你是户外装备推荐专家。根据用户需求，从候选产品中选出最合适的，并给出排名理由。"
         "输出JSON格式：{\"ranking\": [{\"index\": 0, \"reason\": \"推荐理由\"}, ...]}"
-        "推荐时要综合考虑容量、材质、适用场景、便携性等因素。按推荐优先顺序排列。"
+        "推荐时要综合考虑容量、材质、适用场景、目标人群、价格定位、产品定位、便携性等因素。"
+        "如果用户说预算不高、便宜点、性价比，要优先选择价格定位更亲民/入门/常规的候选；高端或高价定位不能作为低预算首选。"
+        "按推荐优先顺序排列。"
     )
     
     try:
@@ -1444,6 +1485,7 @@ async def _rank_rows_for_recommendation_llm(db: Session, rows: list[dict], query
             for i, row in enumerate(rows):
                 reason = ranking_map.get(i, "")
                 scored = 10 - list(ranking_map.keys()).index(i) if i in ranking_map else 0
+                scored += _budget_score(query, row)
                 ranked.append({"row": row, "score": scored, "reasons": [reason] if reason else []})
             ranked.sort(key=lambda x: x["score"], reverse=True)
             return ranked if ranked else _fallback_rank(rows, query)
@@ -1474,9 +1516,30 @@ def _fallback_rank(rows: list[dict], query: str) -> list[dict[str, Any]]:
         if row.get("capacity"):
             score += 1
             reasons.append("有容量信息可供判断")
+        budget_score = _budget_score(query, row)
+        score += budget_score
+        if budget_score > 0:
+            reasons.append("价格定位更符合低预算/性价比需求")
+        elif budget_score < -10:
+            reasons.append("价格定位偏高，不适合低预算首选")
         ranked.append({"row": row, "score": score, "reasons": list(dict.fromkeys(reasons))})
     ranked.sort(key=lambda item: (item["score"], bool(item["row"].get("features")), bool(item["row"].get("capacity"))), reverse=True)
     return ranked
+
+
+def _budget_score(query: str, row: dict) -> int:
+    if not any(word in str(query or "") for word in ("预算不高", "预算低", "便宜", "实惠", "性价比", "入门", "低预算", "省钱", "不要太贵")):
+        return 0
+    price_text = " ".join(
+        str(row.get(key) or "")
+        for key in ("price_positioning", "positioning", "product_level", "features", "semantic_match")
+    )
+    lower = price_text.lower()
+    if any(word.lower() in lower for word in ("高端", "高价", "高预算", "旗舰", "专业级", "premium")):
+        return -45
+    if any(word.lower() in lower for word in ("入门", "亲民", "经济", "实惠", "低价", "基础", "性价比", "常规")):
+        return 25
+    return -5
 def _confidence_for_rows(rows: list[dict], intent: CustomerIntent, warnings: list[str]) -> str:
     if not rows:
         return "medium" if intent.source_context == "previous_results" else "low"
