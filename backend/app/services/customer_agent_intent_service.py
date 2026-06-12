@@ -10,7 +10,7 @@ from ..models.product_business import ProductBusiness
 from ..models.product_content import ProductContent
 from ..models.product_qa import ProductQa
 from ..models.product_specs import ProductSpecs
-from . import agent_action_service, customer_agent_service, customer_agent_tool_service, dmxapi_service, knowledge_service, product_service
+from . import agent_action_service, customer_agent_service, customer_agent_tool_service, customer_recommendation_ranker, dmxapi_service, knowledge_service, product_service
 
 
 CONTEXT_WORDS = ("他", "它", "这个", "这款", "该产品", "这些", "那些", "刚才那些", "上面这些", "刚才的", "上一轮", "这一批", "这批", "这几个", "那几个")
@@ -1480,14 +1480,7 @@ async def _rank_rows_for_recommendation_llm(db: Session, rows: list[dict], query
         )
         ranking_data = _parse_llm_json(result or "")
         if ranking_data and ranking_data.get("ranking"):
-            ranking_map = {item["index"]: item.get("reason", "") for item in ranking_data["ranking"]}
-            ranked = []
-            for i, row in enumerate(rows):
-                reason = ranking_map.get(i, "")
-                scored = 10 - list(ranking_map.keys()).index(i) if i in ranking_map else 0
-                scored += _budget_score(query, row)
-                ranked.append({"row": row, "score": scored, "reasons": [reason] if reason else []})
-            ranked.sort(key=lambda x: x["score"], reverse=True)
+            ranked = customer_recommendation_ranker.rank_from_llm_order(rows, ranking_data["ranking"], query)
             return ranked if ranked else _fallback_rank(rows, query)
     except Exception:
         pass
@@ -1495,51 +1488,11 @@ async def _rank_rows_for_recommendation_llm(db: Session, rows: list[dict], query
 
 
 def _fallback_rank(rows: list[dict], query: str) -> list[dict[str, Any]]:
-    """Fallback keyword-based ranking when LLM ranking fails."""
-    keywords = [item for item in re.split(r"[\s,，。/]+", query) if item]
-    ranked = []
-    for row in rows:
-        haystack = " ".join(
-            str(row.get(key) or "")
-            for key in ("product_name_cn", "product_name_en", "category", "capacity", "body_material", "color", "features")
-        ).lower()
-        score = 0
-        reasons = []
-        for keyword in keywords:
-            token = keyword.lower()
-            if token and token in haystack:
-                score += 2
-                reasons.append(f'命中"{keyword}"相关信息')
-        if row.get("features"):
-            score += 1
-            reasons.append("有可用的卖点/场景信息")
-        if row.get("capacity"):
-            score += 1
-            reasons.append("有容量信息可供判断")
-        budget_score = _budget_score(query, row)
-        score += budget_score
-        if budget_score > 0:
-            reasons.append("价格定位更符合低预算/性价比需求")
-        elif budget_score < -10:
-            reasons.append("价格定位偏高，不适合低预算首选")
-        ranked.append({"row": row, "score": score, "reasons": list(dict.fromkeys(reasons))})
-    ranked.sort(key=lambda item: (item["score"], bool(item["row"].get("features")), bool(item["row"].get("capacity"))), reverse=True)
-    return ranked
+    return customer_recommendation_ranker.fallback_rank(rows, query)
 
 
 def _budget_score(query: str, row: dict) -> int:
-    if not any(word in str(query or "") for word in ("预算不高", "预算低", "便宜", "实惠", "性价比", "入门", "低预算", "省钱", "不要太贵")):
-        return 0
-    price_text = " ".join(
-        str(row.get(key) or "")
-        for key in ("price_positioning", "positioning", "product_level", "features", "semantic_match")
-    )
-    lower = price_text.lower()
-    if any(word.lower() in lower for word in ("高端", "高价", "高预算", "旗舰", "专业级", "premium")):
-        return -45
-    if any(word.lower() in lower for word in ("入门", "亲民", "经济", "实惠", "低价", "基础", "性价比", "常规")):
-        return 25
-    return -5
+    return customer_recommendation_ranker.budget_score(query, row)
 def _confidence_for_rows(rows: list[dict], intent: CustomerIntent, warnings: list[str]) -> str:
     if not rows:
         return "medium" if intent.source_context == "previous_results" else "low"
