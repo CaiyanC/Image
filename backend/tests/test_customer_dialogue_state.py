@@ -39,6 +39,7 @@ class CustomerDialogueStateTest(unittest.TestCase):
         self.assertTrue(customer_dialogue_state.should_use_previous_result_skus("这款容量多少？"))
         self.assertTrue(customer_dialogue_state.needs_previous_context("这些有什么区别？"))
         self.assertFalse(customer_dialogue_state.should_use_previous_result_skus("锅具有哪些产品？"))
+        self.assertFalse(customer_dialogue_state.needs_previous_context("还有其他锅推荐吗？"))
 
     def test_recommendation_question_with_context_uses_previous_need(self):
         history = [
@@ -50,6 +51,26 @@ class CustomerDialogueStateTest(unittest.TestCase):
 
         self.assertIn("适合三个人露营的锅有哪些？", merged)
         self.assertIn("预算不高", merged)
+
+    def test_complete_low_budget_need_is_not_budget_followup(self):
+        history = [
+            {"role": "user", "content": "适合泡咖啡的小锅有哪些？"},
+            {"role": "assistant", "content": "推荐 CW-C93。"},
+        ]
+
+        state = customer_dialogue_state.build_dialogue_state("适合四人预算不高的锅有哪些？", history)
+
+        self.assertEqual(state.mode, "current_question")
+        self.assertEqual(state.previous_user_need, "")
+        self.assertEqual(state.budget, "low")
+        self.assertEqual(state.quantity, "四人")
+
+    def test_short_budget_query_without_history_does_not_claim_inheritance(self):
+        state = customer_dialogue_state.build_dialogue_state("预算不高", [])
+
+        self.assertEqual(state.mode, "current_question")
+        self.assertEqual(state.previous_user_need, "")
+        self.assertFalse(state.should_inherit_user_need)
 
 
 if __name__ == "__main__":

@@ -6,6 +6,8 @@ from typing import Any
 
 
 CONTEXT_REFERENCES = ("这些", "刚才那些", "上面这些", "刚才的", "上一轮", "前面", "这几个", "这几款", "这款", "这个", "那个", "他", "他的", "她", "她的", "它", "它的", "他们", "它们", "其中")
+PRONOUN_CONTEXT_REFERENCES = ("他", "他的", "她", "她的", "它", "它的", "他们", "她们", "它们")
+NON_CONTEXT_REFERENCE_TERMS = ("其他", "其它", "其他的", "其它的")
 LOW_BUDGET_TERMS = ("预算不高", "预算低", "便宜", "实惠", "性价比", "入门", "低预算", "省钱", "不要太贵")
 HIGH_PRICE_TERMS = ("高端", "高价", "高预算", "旗舰", "专业级", "premium", "Premium")
 VALUE_PRICE_TERMS = ("入门", "亲民", "经济", "实惠", "低价", "基础", "性价比", "常规")
@@ -84,7 +86,7 @@ def build_dialogue_state(question: str, conversation_history: list[dict] | None 
         comparison_target=slots["comparison_target"],
         has_explicit_sku=has_explicit_sku,
         requires_previous_result_skus=requires_previous_result_skus,
-        should_inherit_user_need=is_budget_followup or is_context_followup,
+        should_inherit_user_need=bool(previous_user_need) and (is_budget_followup or is_context_followup),
         is_budget_followup=is_budget_followup,
         is_context_followup=is_context_followup,
         is_complete_new_need=is_complete_new_need,
@@ -116,7 +118,7 @@ def should_use_previous_result_skus(question: str) -> bool:
 
 
 def needs_previous_context(question: str) -> bool:
-    return any(item in _normalize(question) for item in EXPLICIT_REF_TERMS)
+    return _has_context_reference(_normalize(question), include_broad_terms=True)
 
 
 def is_budget_followup(question: str) -> bool:
@@ -154,7 +156,7 @@ def _should_use_previous_result_skus(question: str) -> bool:
     text = _normalize(question)
     if text.strip(" ，。！？?") in CONFIRMATION_TERMS:
         return True
-    has_reference = any(item in text for item in CONTEXT_REFERENCES)
+    has_reference = _has_context_reference(text)
     if _looks_like_complete_new_need(text) and not has_reference:
         return False
     if has_reference:
@@ -179,7 +181,11 @@ def _should_inherit_user_need(question: str) -> bool:
 
 def _is_budget_followup(question: str) -> bool:
     text = _normalize(question)
-    return _is_low_budget_query(text) and not any(word in text for word in ("露营", "做饭", "泡咖啡", "送礼", "徒步", "几人", "三人", "两人"))
+    if not _is_low_budget_query(text) or _looks_like_complete_new_need(text):
+        return False
+    if _extract_product_scope(text) and (_extract_quantity(text) or _extract_scene(text) or _extract_audience(text)):
+        return False
+    return not any(word in text for word in SCENE_TERMS + AUDIENCE_TERMS)
 
 
 def _is_low_budget_query(question: str) -> bool:
@@ -230,6 +236,15 @@ def _extract_slots(text: str) -> dict[str, str]:
         "product_scope": product_scope,
         "comparison_target": comparison_target,
     }
+
+
+def _has_context_reference(text: str, *, include_broad_terms: bool = False) -> bool:
+    cleaned = _normalize(text)
+    for term in NON_CONTEXT_REFERENCE_TERMS:
+        cleaned = cleaned.replace(term, "")
+    references = EXPLICIT_REF_TERMS if include_broad_terms else CONTEXT_REFERENCES
+    phrase_references = tuple(ref for ref in references if ref not in PRONOUN_CONTEXT_REFERENCES)
+    return any(ref in cleaned for ref in phrase_references) or any(ref in cleaned for ref in PRONOUN_CONTEXT_REFERENCES)
 
 
 def _extract_quantity(text: str) -> str:
@@ -290,12 +305,12 @@ def _decide_mode(
 ) -> str:
     if has_explicit_sku and any(word in question for word in ("容量", "材质", "参数", "详情", "是什么", "多少")):
         return "product_detail"
-    if is_budget_followup:
+    if is_complete_new_need:
+        return "current_question"
+    if is_budget_followup and previous_user_need:
         return "budget_followup"
     if is_context_followup and previous_user_need:
         return "context_followup"
-    if is_complete_new_need:
-        return "current_question"
     if slots["comparison_target"]:
         return "comparison_followup"
     if previous_user_need and _should_inherit_user_need(question):
