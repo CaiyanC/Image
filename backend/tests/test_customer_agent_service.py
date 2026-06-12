@@ -614,6 +614,8 @@ class CustomerAgentRuntimeServiceTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(context["mode"], "budget_followup")
         self.assertIn("三个年轻人露营", context["previous_user_need"])
         self.assertIn("预算不高", context["combined_user_need"])
+        self.assertEqual(context["slots"]["budget"], "low")
+        self.assertIn("预算=low", context["summary"])
 
     def test_complete_new_need_uses_current_question_context(self):
         context = customer_agent_runtime_service._conversation_context_for_question(
@@ -626,6 +628,22 @@ class CustomerAgentRuntimeServiceTest(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(context["mode"], "current_question")
         self.assertEqual(context["previous_user_need"], "")
+        self.assertEqual(context["slots"]["quantity"], "四人")
+        self.assertEqual(context["slots"]["scene"], "做饭")
+
+    def test_tool_selection_payload_includes_dialogue_state(self):
+        messages = customer_agent_runtime_service._build_tool_selection_messages(
+            "预算不高",
+            None,
+            ["CW-C93"],
+            [{"role": "user", "content": "三个年轻人露营，适合什么锅？"}],
+            [],
+        )
+
+        payload = json.loads(messages[1]["content"])
+        self.assertEqual(payload["dialogue_state"]["mode"], "budget_followup")
+        self.assertEqual(payload["dialogue_state"]["budget"], "low")
+        self.assertEqual(payload["conversation_context"]["slots"]["budget"], "low")
 
     def test_empty_product_results_discard_hallucinated_recommendation(self):
         result = customer_agent_runtime_service._build_result(

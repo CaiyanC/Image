@@ -303,76 +303,7 @@ def _build_tool_selection_messages(
 
 
 def _conversation_context_for_question(question: str, conversation_history: list[dict]) -> dict:
-    previous_user_need = _latest_contextual_user_need(question, conversation_history)
-    if not previous_user_need:
-        return {
-            "mode": "current_question",
-            "previous_user_need": "",
-            "instruction": "本轮问题信息较完整，优先按当前问题重新检索和回答；历史只作背景参考。",
-        }
-    if _is_budget_followup(question):
-        mode = "budget_followup"
-        instruction = "本轮是预算/性价比追问，继承上一轮场景、人群和用途，并重新按价格定位筛选。"
-    elif _should_inherit_user_need(question):
-        mode = "context_followup"
-        instruction = "本轮是短追问或补充条件，继承上一轮用户需求；如果当前问题给出新场景，则以当前问题为准。"
-    else:
-        mode = "current_question"
-        previous_user_need = ""
-        instruction = "本轮问题信息较完整，优先按当前问题重新检索和回答；历史只作背景参考。"
-    return {
-        "mode": mode,
-        "previous_user_need": previous_user_need,
-        "combined_user_need": f"{previous_user_need}；补充条件：{question}" if previous_user_need else question,
-        "instruction": instruction,
-    }
-
-
-def _latest_contextual_user_need(question: str, conversation_history: list[dict]) -> str:
-    if not conversation_history or not (_is_budget_followup(question) or _should_inherit_user_need(question)):
-        return ""
-    previous_user_turns = [
-        str(item.get("content") or "").strip()
-        for item in conversation_history
-        if item.get("role") == "user" and str(item.get("content") or "").strip()
-    ]
-    for previous in reversed(previous_user_turns[-6:]):
-        if previous == question:
-            continue
-        if _looks_like_user_need(previous):
-            return previous
-    return ""
-
-
-def _should_inherit_user_need(question: str) -> bool:
-    text = str(question or "").strip()
-    if not text:
-        return False
-    if _looks_like_complete_new_need(text):
-        return False
-    if _is_budget_followup(text) or _needs_previous_context(text):
-        return True
-    followup_starts = ("那", "如果", "那如果", "还有", "另外", "继续", "改成", "换成", "预算", "便宜", "贵")
-    if text.startswith(followup_starts) and len(text) <= 36:
-        return True
-    if len(text) <= 18 and any(word in text for word in ("推荐", "适合", "哪个好", "哪款", "怎么选", "容量", "材质", "价格")):
-        return True
-    return False
-
-
-def _looks_like_complete_new_need(text: str) -> bool:
-    has_audience = any(word in text for word in ("一个人", "两个人", "三个人", "四个人", "五个人", "几个人", "年轻人", "家庭", "朋友"))
-    has_scene = any(word in text for word in ("露营", "做饭", "泡咖啡", "送礼", "徒步", "自驾", "野餐", "房车"))
-    has_product_type = any(word in text for word in ("锅", "炉", "杯", "水壶", "煎锅", "炒锅", "产品", "装备"))
-    has_action = any(word in text for word in ("适合", "推荐", "有哪些", "哪个好", "怎么选"))
-    return has_action and has_product_type and (has_audience or has_scene)
-
-
-def _looks_like_user_need(text: str) -> bool:
-    return any(
-        word in str(text or "")
-        for word in ("推荐", "适合", "露营", "做饭", "泡咖啡", "送礼", "徒步", "年轻人", "几个人", "三个人", "三个", "预算")
-    )
+    return customer_dialogue_state.build_conversation_context(question, conversation_history)
 
 
 def _context_detail_fields(question: str, conversation_history: list[dict]) -> list[str]:
@@ -890,27 +821,15 @@ def _capacity_ml(value: Any) -> float | None:
 
 
 def _recommendation_question_with_context(question: str, conversation_history: list[dict]) -> str:
-    if not _is_budget_followup(question):
-        return question
-    previous_user_turns = [
-        str(item.get("content") or "").strip()
-        for item in conversation_history
-        if item.get("role") == "user" and str(item.get("content") or "").strip()
-    ]
-    for previous in reversed(previous_user_turns[-4:]):
-        if previous == question:
-            continue
-        if any(word in previous for word in ("推荐", "适合", "露营", "做饭", "泡咖啡", "送礼", "徒步", "年轻人", "几个人", "三个人", "三个")):
-            return f"{previous}；追加条件：{question}"
-    return question
+    return customer_dialogue_state.recommendation_question_with_context(question, conversation_history)
 
 
 def _is_budget_followup(question: str) -> bool:
-    return _is_low_budget_query(question) and not any(word in question for word in ("露营", "做饭", "泡咖啡", "送礼", "徒步", "几个人", "三个人", "三个"))
+    return customer_dialogue_state.is_budget_followup(question)
 
 
 def _is_low_budget_query(question: str) -> bool:
-    return any(word in str(question or "") for word in LOW_BUDGET_TERMS)
+    return customer_dialogue_state.is_low_budget_query(question)
 
 
 def _price_text(row: dict) -> str:
