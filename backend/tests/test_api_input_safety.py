@@ -9,6 +9,7 @@ from pydantic import ValidationError
 
 from app.api import customer_service as customer_service_api
 from app.api import generation as generation_api
+from app.api import products as products_api
 from app.schemas.generation import ImagePayload
 from app.services import agent_trace_service
 
@@ -23,6 +24,13 @@ class FakeUpload:
         if size is None or size < 0:
             return self.content
         return self.content[:size]
+
+
+class FakeProductUpload:
+    def __init__(self, content: bytes, filename: str, content_type: str):
+        self.filename = filename
+        self.content_type = content_type
+        self.file = io.BytesIO(content)
 
 
 class ApiInputSafetyTest(unittest.TestCase):
@@ -82,6 +90,20 @@ class ApiInputSafetyTest(unittest.TestCase):
 
         with self.assertRaises(HTTPException):
             generation_api._decode_reference_payload(ImagePayload(data="not-base64", mimeType="image/png"))
+
+    def test_product_image_upload_rejects_type_and_size_abuse(self):
+        bad_type = FakeProductUpload(b"hello", "shell.exe", "application/octet-stream")
+        with self.assertRaises(HTTPException):
+            products_api._validate_media_upload(
+                bad_type,
+                allowed_suffixes=products_api.ALLOWED_PRODUCT_IMAGE_SUFFIXES,
+                allowed_mime_types=products_api.ALLOWED_PRODUCT_IMAGE_MIME_TYPES,
+            )
+
+        oversized = FakeProductUpload(b"x" * (products_api.MAX_PRODUCT_IMAGE_BYTES + 1), "ref.png", "image/png")
+        with self.assertRaises(HTTPException) as ctx:
+            products_api._read_limited_upload(oversized, products_api.MAX_PRODUCT_IMAGE_BYTES, "图片不能超过 10MB")
+        self.assertEqual(ctx.exception.status_code, 400)
 
 
 if __name__ == "__main__":

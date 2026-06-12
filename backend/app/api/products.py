@@ -2,7 +2,7 @@ import uuid
 import os
 from typing import List
 
-from fastapi import APIRouter, Depends, Query, Request, UploadFile, File
+from fastapi import APIRouter, Depends, Query, Request, UploadFile, File, HTTPException
 from sqlalchemy.orm import Session
 
 from ..core.config import settings
@@ -19,6 +19,12 @@ from ..schemas.product import (
 from ..services import operation_log_service, product_service, product_vector_index_service
 
 router = APIRouter(prefix="/api/products", tags=["products"])
+MAX_PRODUCT_IMAGE_BYTES = 10 * 1024 * 1024
+MAX_PRODUCT_VIDEO_BYTES = 100 * 1024 * 1024
+ALLOWED_PRODUCT_IMAGE_SUFFIXES = {".jpg", ".jpeg", ".png", ".webp", ".gif"}
+ALLOWED_PRODUCT_IMAGE_MIME_TYPES = {"image/jpeg", "image/png", "image/webp", "image/gif"}
+ALLOWED_PRODUCT_VIDEO_SUFFIXES = {".mp4", ".mov", ".webm"}
+ALLOWED_PRODUCT_VIDEO_MIME_TYPES = {"video/mp4", "video/quicktime", "video/webm"}
 
 # ?? Vector sync endpoints ??
 
@@ -654,11 +660,16 @@ def upload_product_images(
     os.makedirs(settings.IMAGE_UPLOAD_DIR, exist_ok=True)
     urls: List[str] = []
     for file in files:
-        ext = os.path.splitext(file.filename or "image.png")[1] or ".png"
+        ext = _validate_media_upload(
+            file,
+            allowed_suffixes=ALLOWED_PRODUCT_IMAGE_SUFFIXES,
+            allowed_mime_types=ALLOWED_PRODUCT_IMAGE_MIME_TYPES,
+        )
+        content = _read_limited_upload(file, MAX_PRODUCT_IMAGE_BYTES, "图片不能超过 10MB")
         name = f"{uuid.uuid4().hex}{ext}"
         path = os.path.join(settings.IMAGE_UPLOAD_DIR, name)
         with open(path, "wb") as f:
-            f.write(file.file.read())
+            f.write(content)
         urls.append(f"/uploads/images/{name}")
     operation_log_service.log_operation(
         db,
@@ -684,11 +695,16 @@ def upload_product_videos(
     os.makedirs(settings.VIDEO_UPLOAD_DIR, exist_ok=True)
     urls: List[str] = []
     for file in files:
-        ext = os.path.splitext(file.filename or "video.mp4")[1] or ".mp4"
+        ext = _validate_media_upload(
+            file,
+            allowed_suffixes=ALLOWED_PRODUCT_VIDEO_SUFFIXES,
+            allowed_mime_types=ALLOWED_PRODUCT_VIDEO_MIME_TYPES,
+        )
+        content = _read_limited_upload(file, MAX_PRODUCT_VIDEO_BYTES, "视频不能超过 100MB")
         name = f"{uuid.uuid4().hex}{ext}"
         path = os.path.join(settings.VIDEO_UPLOAD_DIR, name)
         with open(path, "wb") as f:
-            f.write(file.file.read())
+            f.write(content)
         urls.append(f"/uploads/videos/{name}")
     operation_log_service.log_operation(
         db,
@@ -702,3 +718,25 @@ def upload_product_videos(
         request=request,
     )
     return {"urls": urls}
+
+
+def _validate_media_upload(
+    file: UploadFile,
+    *,
+    allowed_suffixes: set[str],
+    allowed_mime_types: set[str],
+) -> str:
+    ext = os.path.splitext(file.filename or "")[1].lower()
+    content_type = (file.content_type or "").split(";", 1)[0].strip().lower()
+    if ext not in allowed_suffixes:
+        raise HTTPException(status_code=400, detail="不支持的文件类型")
+    if content_type and content_type not in allowed_mime_types:
+        raise HTTPException(status_code=400, detail="不支持的文件类型")
+    return ext
+
+
+def _read_limited_upload(file: UploadFile, max_bytes: int, message: str) -> bytes:
+    content = file.file.read(max_bytes + 1)
+    if len(content) > max_bytes:
+        raise HTTPException(status_code=400, detail=message)
+    return content
