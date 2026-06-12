@@ -180,20 +180,20 @@ Current context:{sku_info}{prev_info}
 Intents: query_products|product_detail|compare_products|recommend_products|propose_delete|propose_update|clarify
 
 CRITICAL RULES:
-- When user asks "X???/??/?????" or "X???/??/??/??????" where X is a product name: use intent=query_products with term=X and requested_fields (the system will auto-format as a detail answer for few results).
-- When user just mentions a product name without asking for specific fields (e.g., "????"): use intent=query_products with term=product_name.
+- When user asks "X的容量/材质/卖点是什么" or "X有哪些参数/资料/字段信息" where X is a product name: use intent=query_products with term=X and requested_fields (the system will auto-format as a detail answer for few results).
+- When user just mentions a product name without asking for specific fields (for example "行山单锅"): use intent=query_products with term=product_name.
 - Only use product_detail when you have an exact SKU code (e.g., CW-C93) AND the question is about reading its fields.
-- "??/??/???" + has prev SKUs -> target_skus=prev SKUs, source_context=previous_results
-- "??/??" + no prev -> intent=clarify
+- "这些/这款/刚才那些" + has prev SKUs -> target_skus=prev SKUs, source_context=previous_results
+- "这些/这款" + no prev -> intent=clarify
 
 Available filters (field path):
-?负责人/person_in_charge -> product.person_in_charge
+负责人/person_in_charge -> product.person_in_charge
 类目/品类/分类/category -> product.category
-?品牌/brand -> product.brand
+品牌/brand -> product.brand
 系列/series -> product.series
-?生命周期/状态/lifecycle_status -> product.lifecycle_status
+生命周期/状态/lifecycle_status -> product.lifecycle_status
 品质/品质情况/坏损/quality_note -> product.quality_note
-???/????/product_name_en -> product.product_name_en
+英文名/英文名称/product_name_en -> product.product_name_en
 容量/capacity -> specs.capacity
 材质/材料/body_material -> specs.body_material
 颜色/色系/color -> specs.color
@@ -202,15 +202,15 @@ Available filters (field path):
 功率/power -> specs.power
 卖点/top_selling_points -> business.top_selling_points
 场景/usage_scenarios -> business.usage_scenarios
-?产品名/名称/product_name_cn -> product.product_name_cn
+产品名/名称/product_name_cn -> product.product_name_cn
 
 Special filters (special_filter):
-- ??????? -> english_name_numeric
-- ??????? -> english_name_contains_digit
-- ????????X -> english_name_exact, exact_value=X
+- 英文名全是数字 -> english_name_numeric
+- 英文名包含数字 -> english_name_contains_digit
+- 英文名是X -> english_name_exact, exact_value=X
 
-semantic_query: fuzzy scene needs like "????""???"
-requested_fields: requested field Chinese names, e.g. ["??","??"]
+semantic_query: fuzzy scene needs like "适合露营" or "泡咖啡"
+requested_fields: requested field Chinese names, e.g. ["容量","材质"]
 term: keyword search term
 
 Output ONLY this JSON:

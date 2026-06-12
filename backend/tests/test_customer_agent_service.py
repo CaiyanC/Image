@@ -645,6 +645,14 @@ class CustomerAgentRuntimeServiceTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(payload["dialogue_state"]["budget"], "low")
         self.assertEqual(payload["conversation_context"]["slots"]["budget"], "low")
 
+    def test_fallback_intent_prompt_keeps_readable_chinese_rules(self):
+        prompt = customer_agent_intent_service._build_intent_llm_prompt(None, ["CW-C93"])
+
+        self.assertIn("这些/这款/刚才那些", prompt)
+        self.assertIn("负责人/person_in_charge", prompt)
+        self.assertIn("容量/capacity", prompt)
+        self.assertNotIn("???", prompt)
+
     def test_empty_product_results_discard_hallucinated_recommendation(self):
         result = customer_agent_runtime_service._build_result(
             "三个人去旅行，推荐一下产品",
