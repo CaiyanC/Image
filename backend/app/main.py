@@ -1,12 +1,36 @@
+import logging
 import os
-from fastapi import FastAPI
+from logging.handlers import TimedRotatingFileHandler
+
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 from .core.config import settings
 from .core.database import init_db, SessionLocal
 from .core.security import get_password_hash
 from .models.user import User
 from .api import auth, users, generation, history, admin, products, groups, categories, drafts, customer_service, knowledge_base
+
+def _configure_error_logging() -> None:
+    logs_dir = os.path.abspath(os.path.join(os.path.dirname(os.path.dirname(__file__)), "..", "logs"))
+    os.makedirs(logs_dir, exist_ok=True)
+    handler = TimedRotatingFileHandler(
+        os.path.join(logs_dir, "error.log"),
+        when="midnight",
+        interval=1,
+        backupCount=30,
+        encoding="utf-8",
+    )
+    handler.setLevel(logging.ERROR)
+    handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(name)s %(message)s"))
+    for logger_name in ("uvicorn.error", "uvicorn", "app"):
+        logger = logging.getLogger(logger_name)
+        logger.addHandler(handler)
+        logger.setLevel(logging.INFO)
+
+
+_configure_error_logging()
 
 app = FastAPI(title=settings.APP_NAME, version="1.0.0")
 
@@ -34,6 +58,15 @@ app.include_router(groups.router)
 app.include_router(categories.router)
 app.include_router(customer_service.router)
 app.include_router(knowledge_base.router)
+
+
+@app.exception_handler(Exception)
+async def global_exception_handler(request: Request, exc: Exception):
+    logging.getLogger("app").exception("Unhandled request error: %s %s", request.method, request.url.path)
+    return JSONResponse(
+        status_code=500,
+        content={"detail": "系统暂时繁忙，请稍后再试。如持续出现，请联系管理员。"},
+    )
 
 
 def seed_default_categories():

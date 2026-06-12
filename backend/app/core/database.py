@@ -9,6 +9,7 @@ engine = create_engine(
     echo=settings.DEBUG,
     pool_size=10,
     max_overflow=20,
+    pool_timeout=30,
 )
 
 logger = logging.getLogger("uvicorn")
@@ -120,6 +121,9 @@ def _seed_default_permissions(db):
     from ..models.routes import Route, PermissionRoute
 
     permission_defs = [
+        ("history.view", "查看历史记录", "page"),
+        ("profile.view", "查看个人资料", "page"),
+        ("category.read", "查看产品品类", "api"),
         ("product.read", "查看产品", "page"),
         ("product.create", "创建产品", "button"),
         ("product.edit", "编辑产品", "button"),
@@ -130,6 +134,8 @@ def _seed_default_permissions(db):
         ("media.download", "下载素材", "button"),
         ("tag.edit", "编辑标签", "button"),
         ("ai.call", "AI 调用", "api"),
+        ("ai.generate", "AI 生图", "api"),
+        ("ai.customer_service", "智能客服", "api"),
         ("ai.authorize", "AI 调用授权", "button"),
         ("competitor.view", "查看竞品图", "page"),
         ("new_product.view", "查看新品图", "page"),
@@ -155,6 +161,7 @@ def _seed_default_permissions(db):
         db.commit()
 
     route_defs = [
+        ("/customer-service", "智能客服", "page"),
         ("/", "工作区", "page"),
         ("/history", "历史记录", "page"),
         ("/profile", "个人资料", "page"),
@@ -188,21 +195,25 @@ def _seed_default_permissions(db):
         "管理层": [key for key, _, _ in permission_defs],
         "产品团队": [
             "product.read", "product.create", "product.edit", "product.review",
-            "media.download", "tag.edit", "ai.call", "competitor.view", "new_product.view",
+            "media.download", "tag.edit", "ai.call", "ai.generate", "ai.customer_service", "competitor.view", "new_product.view",
         ],
         "设计团队": [
             "product.read", "product.edit", "media.upload", "media.review",
-            "media.download", "ai.call", "new_product.view",
+            "media.download", "ai.call", "ai.generate", "ai.customer_service", "new_product.view",
         ],
-        "AI工程师": ["ai.call", "ai.authorize", "media.download", "new_product.view"],
-        "AI内容岗": ["product.read", "media.download", "ai.call", "competitor.view", "new_product.view"],
-        "电商运营": ["product.read", "product.edit", "media.download", "ai.call", "new_product.view"],
-        "海外营销": ["product.read", "media.download", "ai.call", "competitor.view", "new_product.view"],
-        "客服团队": ["product.read", "ai.call"],
+        "AI工程师": ["ai.call", "ai.generate", "ai.customer_service", "ai.authorize", "media.download", "new_product.view"],
+        "AI内容岗": ["product.read", "media.download", "ai.call", "ai.generate", "ai.customer_service", "competitor.view", "new_product.view"],
+        "电商运营": ["product.read", "product.edit", "media.download", "ai.call", "ai.generate", "ai.customer_service", "new_product.view"],
+        "海外营销": ["product.read", "media.download", "ai.call", "ai.generate", "ai.customer_service", "competitor.view", "new_product.view"],
+        "客服团队": ["product.read", "ai.call", "ai.customer_service"],
         "经销商": ["product.read", "media.download"],
         "外部达人": ["product.read", "media.download"],
         "广告代理商": ["product.read", "media.download"],
     }
+    for permission_keys in group_permission_map.values():
+        permission_keys.extend(["history.view", "profile.view"])
+        if "product.read" in permission_keys:
+            permission_keys.append("category.read")
     groups = {g.group_name: g for g in db.query(Group).all()}
     permissions = {p.permission_key: p for p in db.query(Permission).all()}
     existing_pairs = {
@@ -227,7 +238,10 @@ def _seed_default_permissions(db):
         db.commit()
 
     permission_route_map = {
-        "ai.call": ["/"],
+        "ai.generate": ["/"],
+        "ai.customer_service": ["/customer-service"],
+        "history.view": ["/history"],
+        "profile.view": ["/profile"],
         "product.read": ["/products", "/products/drafts"],
         "product.create": ["/products/create"],
         "product.edit": ["/products/create", "/products/drafts"],

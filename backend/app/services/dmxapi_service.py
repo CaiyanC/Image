@@ -21,6 +21,21 @@ DEFAULT_MODELS = [
     {"id": "gemini-3.1-flash-image-preview", "name": "Nano Banana 2", "type": "image", "description": "Gemini 文生图/图生图（计划接入）", "api_key": "", "api_base_url": DEFAULT_BASE_URL, "api_format": "gemini"},
 ]
 
+_AI_SEMAPHORE = asyncio.Semaphore(max(1, settings.AI_MAX_CONCURRENT_REQUESTS))
+
+
+async def _run_ai_request(factory, *, timeout: float | None = None):
+    if _AI_SEMAPHORE.locked():
+        raise RuntimeError("当前请求较多，请稍后再试")
+    async with _AI_SEMAPHORE:
+        try:
+            return await asyncio.wait_for(
+                factory(),
+                timeout=timeout or float(settings.AI_REQUEST_TIMEOUT_SECONDS),
+            )
+        except asyncio.TimeoutError as exc:
+            raise TimeoutError("AI 响应超时，请稍后重试") from exc
+
 
 def _make_url(base: str, path: str) -> str:
     parsed = urlparse(base)
@@ -532,15 +547,19 @@ async def chat_completion(
     }
     url = cfg.get("chat_url") or _make_url(cfg.get("api_base_url") or DEFAULT_BASE_URL, "v1/chat/completions")
     agent_trace_service.trace("AI_REQUEST", {"url": url, "body": body})
-    async with httpx.AsyncClient(timeout=120.0) as client:
-        response = await client.post(url, headers=headers, json=body)
-        if response.status_code >= 400:
-            raise httpx.HTTPStatusError(
-                f"聊天模型请求失败: {response.status_code} - {response.text[:500]}",
-                request=response.request,
-                response=response,
-            )
-        data = response.json()
+
+    async def _request():
+        async with httpx.AsyncClient(timeout=float(settings.AI_REQUEST_TIMEOUT_SECONDS)) as client:
+            return await client.post(url, headers=headers, json=body)
+
+    response = await _run_ai_request(_request)
+    if response.status_code >= 400:
+        raise httpx.HTTPStatusError(
+            f"聊天模型请求失败: {response.status_code} - {response.text[:500]}",
+            request=response.request,
+            response=response,
+        )
+    data = response.json()
     agent_trace_service.trace("AI_RESPONSE", data)
     try:
         return data["choices"][0]["message"]["content"] or ""
@@ -569,15 +588,19 @@ async def create_embedding(
         "Content-Type": "application/json",
     }
     url = cfg.get("embedding_url") or _make_url(cfg.get("api_base_url") or DEFAULT_BASE_URL, "v1/embeddings")
-    async with httpx.AsyncClient(timeout=120.0) as client:
-        response = await client.post(url, headers=headers, json=body)
-        if response.status_code >= 400:
-            raise httpx.HTTPStatusError(
-                f"Embedding 模型请求失败: {response.status_code} - {response.text[:500]}",
-                request=response.request,
-                response=response,
-            )
-        data = response.json()
+
+    async def _request():
+        async with httpx.AsyncClient(timeout=float(settings.AI_REQUEST_TIMEOUT_SECONDS)) as client:
+            return await client.post(url, headers=headers, json=body)
+
+    response = await _run_ai_request(_request)
+    if response.status_code >= 400:
+        raise httpx.HTTPStatusError(
+            f"Embedding 模型请求失败: {response.status_code} - {response.text[:500]}",
+            request=response.request,
+            response=response,
+        )
+    data = response.json()
     try:
         return data["data"][0]["embedding"], cfg["id"]
     except (KeyError, IndexError, TypeError) as exc:
