@@ -8,6 +8,7 @@ from ..models.knowledge_base import CustomerServiceConversation, CustomerService
 from ..models.product import Product
 from ..models.product_qa import ProductQa, ProductQaNegative
 from . import (
+    customer_enterprise_guardrail_service,
     customer_agent_intent_service,
     customer_agent_quality_service,
     customer_agent_runtime_service,
@@ -162,6 +163,51 @@ async def ask_customer_service(
     question = question.strip()
     if not question:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="问题不能为空")
+
+    agent_result = customer_enterprise_guardrail_service.evaluate_question(question)
+    if agent_result:
+        agent_result = _normalize_agent_result(agent_result)
+        agent_result = _attach_agent_quality(agent_result, question)
+        conversation = _get_or_create_conversation(db, user_id, question, agent_result.get("sku"), conversation_id)
+        db.add(CustomerServiceMessage(
+            conversation_id=conversation.id,
+            role="user",
+            content=question,
+            sku=agent_result.get("sku"),
+        ))
+        assistant_message = CustomerServiceMessage(
+            conversation_id=conversation.id,
+            role="assistant",
+            content=agent_result["answer"],
+            sku=agent_result.get("sku"),
+            sources_json=json.dumps(_sources_with_result_context(agent_result), ensure_ascii=False, default=str),
+        )
+        db.add(assistant_message)
+        conversation.sku = agent_result.get("sku")
+        conversation.title = _make_title(question, conversation.sku)
+        db.commit()
+        return {
+            "conversation_id": conversation.id,
+            "message_id": assistant_message.id,
+            "intent": agent_result.get("intent"),
+            "answer_type": agent_result.get("answer_type"),
+            "confidence": agent_result.get("confidence"),
+            "uncertainty": agent_result.get("uncertainty"),
+            "needs_clarification": agent_result.get("needs_clarification", False),
+            "anomalies": agent_result.get("anomalies") or [],
+            "suggested_followups": agent_result.get("suggested_followups") or [],
+            "followups": agent_result.get("followups") or agent_result.get("suggested_followups") or [],
+            "warnings": agent_result.get("warnings") or [],
+            "evidence": agent_result.get("evidence") or [],
+            "agent_quality": agent_result.get("agent_quality") or {},
+            "debug": agent_result.get("debug") or {},
+            "sku": agent_result.get("sku"),
+            "answer": agent_result["answer"],
+            "sources": agent_result.get("sources") or [],
+            "actions": agent_result.get("actions") or [],
+            "results": agent_result.get("results") or [],
+            "steps": agent_result.get("steps") or [],
+        }
 
     previous_result_skus = _latest_result_skus(db, conversation_id, user_id)
     contextual_previous_result_skus = previous_result_skus if _should_use_previous_result_skus(question) else []
