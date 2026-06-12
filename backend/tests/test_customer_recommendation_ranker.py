@@ -98,8 +98,12 @@ class CustomerRecommendationRankerTest(unittest.TestCase):
     def test_pot_query_penalizes_stove_candidate(self):
         pot = {"sku": "POT-1", "product_name_cn": "行山单锅", "category": "锅具", "features": "适合泡咖啡"}
         stove = {"sku": "STOVE-1", "product_name_cn": "旋焰酒精炉", "category": "炉具", "features": "适合冲泡咖啡"}
+        cup = {"sku": "CUP-1", "product_name_cn": "悦享杯套装", "category": "杯具", "features": "适合泡咖啡"}
+        bag = {"sku": "BAG-1", "product_name_cn": "悦行包", "category": "收纳包", "features": "适合露营"}
 
         self.assertTrue(customer_recommendation_ranker.is_obvious_product_type_mismatch("适合泡咖啡的小锅", stove))
+        self.assertTrue(customer_recommendation_ranker.is_obvious_product_type_mismatch("适合泡咖啡的小锅", cup))
+        self.assertTrue(customer_recommendation_ranker.is_obvious_product_type_mismatch("适合泡咖啡的小锅", bag))
         self.assertFalse(customer_recommendation_ranker.is_obvious_product_type_mismatch("适合泡咖啡的小锅", pot))
         self.assertGreater(
             customer_recommendation_ranker.recommendation_score("适合泡咖啡的小锅", pot),

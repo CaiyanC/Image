@@ -8,6 +8,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 CASE_FILE = ROOT / "docs" / "customer_service_regression_cases.json"
 RUNNER = ROOT / "scripts" / "customer_service_regression_runner.py"
+LOCAL_RUNNER = ROOT / "scripts" / "customer_service_local_eval.py"
 
 
 class CustomerServiceRegressionCasesTest(unittest.TestCase):
@@ -68,6 +69,18 @@ class CustomerServiceRegressionCasesTest(unittest.TestCase):
 
         self.assertEqual(completed.returncode, 0, completed.stdout + completed.stderr)
         self.assertIn("categories=['recommendation']", completed.stdout)
+
+    def test_local_eval_dry_run_passes(self):
+        completed = subprocess.run(
+            [sys.executable, str(LOCAL_RUNNER), "--dry-run"],
+            cwd=ROOT,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+
+        self.assertEqual(completed.returncode, 0, completed.stdout + completed.stderr)
+        self.assertIn("Dry-run OK", completed.stdout)
 
 
 if __name__ == "__main__":

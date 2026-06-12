@@ -77,7 +77,10 @@ def is_obvious_product_type_mismatch(query: str, row: dict[str, Any]) -> bool:
     )
     if "锅" in name_category:
         return False
-    return any(term in name_category for term in ("炉", "炉具", "酒精炉", "气炉", "卡式炉"))
+    return any(
+        term in name_category
+        for term in ("炉", "炉具", "酒精炉", "气炉", "卡式炉", "杯", "杯套", "水壶", "壶", "包", "收纳", "餐具", "勺", "铲")
+    )
 
 
 def fallback_rank(rows: list[dict[str, Any]], query: str) -> list[dict[str, Any]]:

@@ -78,6 +78,21 @@ class CustomerAgentQualityServiceTest(unittest.TestCase):
         self.assertFalse(quality["passed"])
         self.assertIn("low_budget_high_end_first_choice", quality["risks"])
 
+    def test_pot_query_non_pot_first_choice_is_blocked(self):
+        quality = customer_agent_quality_service.evaluate_agent_response(
+            "适合泡咖啡的小锅有吗？",
+            answer="首选 CB-003 悦行包。",
+            intent="recommend_products",
+            results=[{"sku": "CB-003", "product_name_cn": "悦行包", "category": "收纳包"}],
+            sources=[{"type": "product_search"}],
+            actions=[],
+            warnings=[],
+        )
+
+        self.assertEqual(quality["level"], "low")
+        self.assertFalse(quality["passed"])
+        self.assertIn("product_type_mismatch_first_choice", quality["risks"])
+
 
 if __name__ == "__main__":
     unittest.main()
