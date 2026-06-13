@@ -59,6 +59,11 @@ UNSUPPORTED_FACT_TERMS = (
     "售后政策",
 )
 
+TRAVEL_SAFETY_TERMS = ("飞机", "航班", "安检", "托运", "随身", "高铁", "火车", "地铁")
+FLAMMABLE_PRODUCT_TERMS = ("酒精炉", "酒精", "燃料", "炉具", "气罐", "燃气", "CS-B14", "CS-B02")
+REALTIME_WEATHER_TERMS = ("天气", "下雨", "降雨", "气温", "风力", "台风", "今天", "明天", "现在")
+INTERNAL_BUSINESS_TERMS = ("成本价", "成本", "进价", "利润", "毛利", "底价", "采购价")
+
 
 def evaluate_question(question: str) -> dict[str, Any] | None:
     """Return a deterministic enterprise guardrail response when needed."""
@@ -66,6 +71,59 @@ def evaluate_question(question: str) -> dict[str, Any] | None:
     lowered = text.lower()
     if not text:
         return None
+
+    if _contains_any(text, lowered, INTERNAL_BUSINESS_TERMS):
+        return _build_guardrail_result(
+            question=text,
+            category="internal_business_data",
+            intent="safety_refusal",
+            answer_type="safety",
+            confidence="high",
+            uncertainty="permission_or_data_required",
+            answer=(
+                "成本价、进价、利润、底价属于内部经营数据，我不能直接对外披露或猜测。"
+                "如果系统里没有明确授权字段，也不能把它当作普通客服资料返回。"
+                "你可以提供具体 SKU 和已授权字段，我可以帮你整理成内部查询或审批口径。"
+            ),
+            followups=["请提供具体 SKU，或确认你要查询的是公开售价、价格定位还是内部授权成本字段。"],
+            warnings=["internal_business_data_blocked"],
+        )
+
+    if _contains_any(text, lowered, TRAVEL_SAFETY_TERMS) and _contains_any(text, lowered, FLAMMABLE_PRODUCT_TERMS):
+        sku = _first_sku(text)
+        prefix = f"{sku} " if sku else ""
+        return _build_guardrail_result(
+            question=text,
+            category="travel_safety",
+            intent="safety_refusal",
+            answer_type="safety",
+            confidence="high",
+            uncertainty="external_policy_required",
+            answer=(
+                f"{prefix}这类炉具/燃料相关问题需要以航司、机场安检和当地法规为准，我无法替代航司或安检规定。"
+                "稳妥口径是：不要携带酒精、燃料、气罐等易燃物；炉具本体也应在出行前彻底清空、清洁并向承运方确认。"
+                "客服回复时不要承诺“可以带上飞机”，只能建议用户出发前咨询航司/机场安检。"
+            ),
+            followups=["如果你要对客户回复，我可以帮你整理一版更稳妥的客服话术。"],
+            warnings=["external_travel_safety_policy_required"],
+        )
+
+    if _contains_any(text, lowered, REALTIME_WEATHER_TERMS) and "露营" in text:
+        return _build_guardrail_result(
+            question=text,
+            category="realtime_weather",
+            intent="out_of_scope",
+            answer_type="unsupported_realtime",
+            confidence="high",
+            uncertainty="external_realtime_data_required",
+            answer=(
+                "我当前没有实时天气数据，不能判断今天或明天某个城市是否适合露营。"
+                "建议以天气 App、气象台预警和营地公告为准。"
+                "如果你已经确认天气，我可以继续按人数、场景和预算推荐露营装备。"
+            ),
+            followups=["你可以告诉我人数、目的地场景和预算，我帮你准备装备清单。"],
+            warnings=["realtime_weather_unavailable"],
+        )
 
     if _contains_any(text, lowered, HANDOFF_TERMS):
         return _build_guardrail_result(

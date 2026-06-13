@@ -613,6 +613,33 @@ def _clean_collection_subject(value: str) -> str:
 
 
 def _expand_search_terms(term: str) -> list[str]:
+    text = str(term or "").strip()
+    terms = [text]
+    compact = re.sub(r"\s+", "", text)
+    if compact and compact != text:
+        terms.append(compact)
+    for match in re.finditer(r"([\u4e00-\u9fa5A-Za-z0-9]{0,8}(?:烤盘|套锅|炒锅|煎锅|单锅|水壶|杯套装|杯|勺|炉|包))", text):
+        candidate = re.sub(r"^(?:客户问|客户|问|推荐|适合|有没有|有|给我|我想要|不要)", "", match.group(1)).strip()
+        if len(candidate) >= 2:
+            terms.append(candidate)
+    for token in re.split(r"[\s,，。？?；;、/和与]+", text):
+        token = token.strip()
+        if len(token) >= 2 and token not in {"客户", "客户问", "哪个", "哪个更好", "怎么回复", "该选哪个"}:
+            terms.append(token)
+    if re.search(r"\bpro\b", text, flags=re.I):
+        terms.extend(["Pro", "pro"])
+        without_joiner = re.sub(r"\s*(?:和|与|,|，|/)\s*pro\b", "Pro", text, flags=re.I)
+        if without_joiner != text:
+            terms.append(without_joiner.strip())
+            terms.append(re.sub(r"\s+", "", without_joiner))
+    if text and not text.endswith("具"):
+        terms.append(f"{text}具")
+    if text == "锅":
+        terms.extend(["锅具", "套锅", "单锅"])
+    if text in {"水", "壶", "水具", "水壶"}:
+        terms.extend(["水具", "水壶", "杯", "饮水", "补水"])
+    return list(dict.fromkeys([item for item in terms if item]))
+
     terms = [term]
     if term and not term.endswith("具"):
         terms.append(f"{term}具")
@@ -650,6 +677,7 @@ def _matched_by(term: str, product, specs, business, content) -> str:
 
 def _is_exact_product_match(term: str, product) -> bool:
     normalized = str(term or "").strip().lower()
+    compact = re.sub(r"\s+", "", normalized)
     if not normalized:
         return False
     candidates = [
@@ -658,7 +686,18 @@ def _is_exact_product_match(term: str, product) -> bool:
         product.product_name_cn,
         product.product_name_en,
     ]
-    return any(normalized == str(item or "").strip().lower() for item in candidates)
+    for item in candidates:
+        value = str(item or "").strip().lower()
+        if not value:
+            continue
+        if normalized == value or value in normalized:
+            return True
+        compact_value = re.sub(r"\s+", "", value)
+        if compact_value and compact_value in compact:
+            return True
+        if "pro" in compact_value and "pro" in compact and compact_value.replace("pro", "") in compact:
+            return True
+    return False
 
 
 def _first_nonempty(values: list[Any]) -> str:

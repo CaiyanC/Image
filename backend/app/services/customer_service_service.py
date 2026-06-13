@@ -239,15 +239,27 @@ async def ask_customer_service(
     contextual_previous_result_skus = previous_result_skus if _should_use_previous_result_skus(question) else []
     conversation_history = _build_conversation_history(db, conversation_id, user_id)
     contextual_conversation_history = conversation_history
-    agent_result = await customer_agent_runtime_service.process_agent_request(
-        db,
-        user_id=user_id,
-        question=question,
-        sku=None,
-        previous_result_skus=contextual_previous_result_skus,
-        conversation_history=contextual_conversation_history,
-        feedback_lessons=_build_feedback_lessons(db, user_id),
-    )
+    agent_result = await _try_named_product_shortcut(db, user_id=user_id, question=question)
+    if not agent_result:
+        agent_result = await customer_agent_runtime_service.process_agent_request(
+            db,
+            user_id=user_id,
+            question=question,
+            sku=None,
+            previous_result_skus=contextual_previous_result_skus,
+            conversation_history=contextual_conversation_history,
+            feedback_lessons=_build_feedback_lessons(db, user_id),
+        )
+    if _should_retry_with_deterministic_agent(agent_result):
+        retry_result = await customer_agent_intent_service.process_intent_request(
+            db,
+            user_id=user_id,
+            question=question,
+            sku=None,
+            previous_result_skus=contextual_previous_result_skus,
+        )
+        if retry_result and retry_result.get("results"):
+            agent_result = retry_result
     if not agent_result:
         agent_result = await customer_agent_intent_service.process_intent_request(
             db,
@@ -650,6 +662,128 @@ def _normalize_agent_result(agent_result: dict) -> dict:
         "raw_results": results,
     })
     return result
+
+
+def _should_retry_with_deterministic_agent(agent_result: dict | None) -> bool:
+    if not agent_result:
+        return False
+    warnings = set(agent_result.get("warnings") or [])
+    if "missing_product_results" in warnings:
+        return True
+    if agent_result.get("needs_clarification") and not agent_result.get("results"):
+        return True
+    return str(agent_result.get("confidence") or "").lower() == "low" and not agent_result.get("results")
+
+
+async def _try_named_product_shortcut(db: Session, *, user_id: str, question: str) -> dict | None:
+    products = _products_named_in_question(db, question)
+    if not products:
+        return None
+    if _is_variant_compare_question(question) and len(products) >= 2:
+        sku_text = " 和 ".join(product.sku for product in products[:3])
+        return await customer_agent_intent_service.process_intent_request(
+            db,
+            user_id=user_id,
+            question=f"{sku_text} 有什么区别？客户该选哪个？",
+            sku=None,
+            previous_result_skus=[],
+        )
+    if len(products) == 1 and any(word in question for word in ("适合", "能不能", "可以", "能用", "带")):
+        detail = product_service.get_product_detail(db, products[0].sku)
+        return _named_product_context_result(question, detail)
+    return None
+
+
+def _products_named_in_question(db: Session, question: str) -> list[Product]:
+    text = str(question or "")
+    lower = text.lower()
+    products = db.query(Product).all()
+    matched: list[Product] = []
+    for product in products:
+        names = [product.product_name_cn, product.product_name_en]
+        for raw_name in names:
+            name = str(raw_name or "").strip()
+            if len(name) < 2:
+                continue
+            name_lower = name.lower()
+            base_name = re.sub(r"\s*pro$", "", name_lower, flags=re.I)
+            if name_lower in lower or (name_lower.endswith("pro") and "pro" in lower and base_name in lower):
+                matched.append(product)
+                break
+    matched.sort(key=lambda item: (("pro" not in (item.product_name_cn or "").lower()), -(len(item.product_name_cn or ""))))
+    return matched
+
+
+def _is_variant_compare_question(question: str) -> bool:
+    text = str(question or "")
+    return "pro" in text.lower() and any(word in text for word in ("选", "对比", "比较", "区别", "哪个", "怎么回复"))
+
+
+def _named_product_context_result(question: str, detail: dict) -> dict:
+    specs = detail.get("specs") or {}
+    business = detail.get("business") or {}
+    name = detail.get("product_name_cn") or detail.get("product_name_en") or detail.get("sku")
+    sku = detail.get("sku")
+    scenarios = _display_value(business.get("usage_scenarios"))
+    features = _display_value(business.get("top_selling_points"))
+    capacity = _display_value(specs.get("capacity"))
+    material = _display_value(specs.get("body_material"))
+    answer_parts = [
+        f"{name}（{sku}）可以结合这个场景判断。",
+        f"类目：{detail.get('category') or '未标注'}。",
+    ]
+    if scenarios:
+        answer_parts.append(f"适用场景：{scenarios}。")
+    if features:
+        answer_parts.append(f"主要卖点：{features}。")
+    if capacity:
+        answer_parts.append(f"容量/规格：{capacity}。")
+    if material:
+        answer_parts.append(f"材质：{material}。")
+    if "水壶" in question or "餐具" in question or "带" in question:
+        answer_parts.append("如果要携带餐具、水壶等物品，建议按实际尺寸和数量确认；小件随身/收纳适合，大件或整套锅具不建议强行装。")
+    return {
+        "answer": "".join(answer_parts),
+        "intent": "product_detail",
+        "answer_type": "product_detail",
+        "confidence": "high",
+        "uncertainty": "confirmed",
+        "needs_clarification": False,
+        "sources": [{"type": "product", "label": "命名产品资料", "sku": sku}],
+        "actions": [],
+        "results": [{
+            "sku": sku,
+            "product_name_cn": detail.get("product_name_cn"),
+            "category": detail.get("category"),
+            "capacity": capacity,
+            "body_material": material,
+            "features": features,
+            "usage_scenarios": scenarios,
+        }],
+        "steps": [{"type": "named_product_shortcut", "label": "命名产品优先", "detail": f"命中 {sku}", "ok": True}],
+        "warnings": [],
+        "evidence": [],
+        "debug": {"agent_mode": "named_product_shortcut"},
+        "sku": sku,
+        "skip_polish": True,
+    }
+
+
+def _display_value(value) -> str:
+    if value in (None, ""):
+        return ""
+    if isinstance(value, list):
+        return "，".join(_display_value(item) for item in value if item not in (None, ""))
+    if isinstance(value, dict):
+        label = _display_value(value.get("label"))
+        item_value = _display_value(value.get("value"))
+        if label and item_value:
+            return item_value if label == item_value else f"{label} {item_value}"
+        for key in ("value", "label", "text", "name"):
+            if value.get(key) not in (None, ""):
+                return _display_value(value.get(key))
+        return "，".join(f"{key}: {_display_value(item)}" for key, item in value.items() if item not in (None, ""))
+    return str(value).strip()
 
 
 def _attach_agent_quality(agent_result: dict, question: str) -> dict:

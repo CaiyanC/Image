@@ -3,6 +3,8 @@ from __future__ import annotations
 import re
 from typing import Any
 
+from . import customer_recommendation_ranker
+
 
 FACT_INTENTS = {"query_products", "product_detail", "compare_products", "recommend_products"}
 WRITE_INTENTS = {"propose_update", "propose_delete"}
@@ -245,6 +247,8 @@ def _is_high_price_row(row: dict[str, Any]) -> bool:
 
 def _has_product_type_mismatch(question: str, row: dict[str, Any]) -> bool:
     query = str(question or "")
+    if customer_recommendation_ranker.desired_product_type(query):
+        return customer_recommendation_ranker.is_obvious_product_type_mismatch(query, row)
     text = " ".join(
         str(row.get(key) or "")
         for key in ("product_name_cn", "product_name_en", "category", "sub_category")

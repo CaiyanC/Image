@@ -49,6 +49,22 @@ class CustomerEnterpriseGuardrailServiceTest(unittest.TestCase):
         self.assertIn("不能编造", result["answer"])
         self.assertNotIn("propose_update_product_field", result["answer"])
 
+    def test_airplane_alcohol_stove_question_is_conservative(self):
+        result = customer_enterprise_guardrail_service.evaluate_question("CS-B14 适合带上飞机吗？")
+
+        self.assertIsNotNone(result)
+        self.assertEqual(result["intent"], "safety_refusal")
+        self.assertIn("无法替代航司或安检规定", result["answer"])
+        self.assertIn("燃料", result["answer"])
+
+    def test_realtime_weather_question_is_not_treated_as_product_recommendation(self):
+        result = customer_enterprise_guardrail_service.evaluate_question("今天上海天气适合露营吗？")
+
+        self.assertIsNotNone(result)
+        self.assertEqual(result["intent"], "out_of_scope")
+        self.assertIn("没有实时天气数据", result["answer"])
+        self.assertEqual(result["results"], [])
+
 
 class CustomerAgentServiceTest(unittest.TestCase):
     def setUp(self):
@@ -137,6 +153,19 @@ class CustomerAgentServiceTest(unittest.TestCase):
         self.assertIsNotNone(result)
         self.assertEqual(result["results"][0]["sku"], "CS-G25")
         self.assertIn("找到", result["answer"])
+
+    def test_search_expands_pro_variant_from_natural_comparison_question(self):
+        self._add_product("CF-PG19", "瓦片烤盘", "锅具", "铝合金", "方形大空间")
+        self._add_product("CF-PG19Pro", "瓦片烤盘Pro", "锅具", "铝合金", "升级款")
+        self.db.commit()
+
+        rows = customer_agent_service.search_products(
+            self.db,
+            "客户问瓦片烤盘和 Pro 该选哪个，怎么回复？",
+            limit=20,
+        )
+
+        self.assertIn("CF-PG19Pro", {item["sku"] for item in rows})
 
     def test_process_lifecycle_query_returns_matching_products(self):
         result = customer_agent_service.process_agent_request(
@@ -1255,6 +1284,58 @@ class CustomerServiceServiceTest(unittest.IsolatedAsyncioTestCase):
 
         self.assertIsNone(captured["sku"])
         self.assertEqual(result["sku"], "CS-G25")
+
+    async def test_low_confidence_missing_runtime_result_retries_deterministic_intent(self):
+        original_runtime = customer_agent_runtime_service.process_agent_request
+        original_intent = customer_agent_intent_service.process_intent_request
+
+        async def fake_runtime(db, **kwargs):
+            return {
+                "answer": "没有找到足够匹配的产品资料。",
+                "intent": "recommend_products",
+                "answer_type": "recommendation",
+                "confidence": "low",
+                "needs_clarification": True,
+                "warnings": ["missing_product_results"],
+                "sources": [],
+                "actions": [],
+                "results": [],
+                "steps": [],
+                "debug": {"agent_mode": "llm_tool_calling"},
+                "skip_polish": True,
+            }
+
+        async def fake_intent(db, **kwargs):
+            return {
+                "answer": "悦行包适合公园野餐携带中小件餐具和水壶。",
+                "intent": "query_products",
+                "answer_type": "product_query",
+                "confidence": "high",
+                "needs_clarification": False,
+                "warnings": [],
+                "sources": [{"type": "product_search", "label": "产品检索", "count": 1}],
+                "actions": [],
+                "results": [{"sku": "CB-003", "product_name_cn": "悦行包", "category": "收纳包具"}],
+                "steps": [],
+                "debug": {"agent_mode": "deterministic_intent"},
+                "skip_polish": True,
+            }
+
+        customer_agent_runtime_service.process_agent_request = fake_runtime
+        customer_agent_intent_service.process_intent_request = fake_intent
+        try:
+            result = await customer_service_service.ask_customer_service(
+                self.db,
+                user_id="user-1",
+                question="悦行包适合公园野餐带餐具和水壶吗？",
+            )
+        finally:
+            customer_agent_runtime_service.process_agent_request = original_runtime
+            customer_agent_intent_service.process_intent_request = original_intent
+
+        self.assertEqual(result["intent"], "query_products")
+        self.assertEqual(result["results"][0]["sku"], "CB-003")
+        self.assertFalse(result["needs_clarification"])
 
     async def test_standalone_followup_does_not_pass_previous_result_skus(self):
         conversation = CustomerServiceConversation(id="conv-context", user_id="user-1", title="旧会话")

@@ -530,6 +530,7 @@ async def _query_products_result(db: Session, user_id: str, intent: CustomerInte
 
 
 async def _product_detail_result(db: Session, intent: CustomerIntent) -> dict:
+    intent.target_skus = [_resolve_existing_sku(db, sku) for sku in intent.target_skus]
     rows = []
     field_paths = [_resolve_query_field(field) for field in intent.requested_fields]
     field_paths = [path for path in field_paths if path]
@@ -592,6 +593,7 @@ async def _product_detail_result(db: Session, intent: CustomerIntent) -> dict:
 
 
 def _compare_result(db: Session, intent: CustomerIntent) -> dict:
+    intent.target_skus = [_resolve_existing_sku(db, sku) for sku in intent.target_skus]
     fields = intent.requested_fields or ["商品英文名称", "容量", "材质", "颜色", "卖点"]
     comparisons = []
     anomalies: list[dict[str, Any]] = []
@@ -643,6 +645,32 @@ def _compare_result(db: Session, intent: CustomerIntent) -> dict:
         anomalies=anomalies,
         suggested_followups=followups,
     )
+
+
+def _compose_compare_answer(
+    skus: list[str],
+    comparisons: list[dict[str, Any]],
+    warnings: list[str],
+    anomalies: list[dict[str, Any]],
+    followups: list[str],
+) -> str:
+    if not skus:
+        return "没有找到可对比的产品。"
+    lines = [f"先说结论：已对比 {'、'.join(skus)}，建议按客户更看重的容量、材质、卖点和使用场景来选。"]
+    for item in comparisons:
+        label = item.get("field_label") or "字段"
+        values = []
+        for entry in item.get("values") or []:
+            values.append(f"{entry.get('sku')}：{entry.get('value') or '暂无'}")
+        if values:
+            lines.append(f"{label}：" + "；".join(values))
+    if any("PRO" in sku.upper() for sku in skus):
+        lines.append("选择建议：如果客户想要升级款或更强配置，优先介绍 Pro；如果客户要稳妥常规款或基础方案，推荐基础款。")
+    if warnings:
+        lines.append("注意：" + "；".join(warnings[:2]))
+    if followups:
+        lines.append(f"下一步：{followups[0]}")
+    return "\n".join(lines)
 
 
 async def _recommend_result(db: Session, user_id: str, intent: CustomerIntent) -> dict:
@@ -889,11 +917,15 @@ def _parse_structured_filters(text: str) -> tuple[dict[str, Any], dict[str, Any]
 
     # Colloquial: detect category from product type keywords
     if not filters.get("product.category"):
-        cat_map = {"锅": "锅具", "锅子": "锅具", "套锅": "锅具", "煎锅": "锅具", "炒锅": "锅具",
-                   "炉": "炉具", "炉子": "炉具", "酒精炉": "炉具", "气炉": "炉具", "卡式炉": "炉具",
-                   "杯": "杯具", "壶": "壶具", "碗": "碗具", "盘": "盘具"}
-        for kw, cat in cat_map.items():
-            if kw in text:
+        positive_text = _positive_category_text(text)
+        cat_map = [
+            ("水壶", "水壶"), ("户外水壶", "水壶"), ("水具", "水具"), ("水杯", "水具"), ("杯", "水具"),
+            ("锅具", "锅具"), ("锅子", "锅具"), ("套锅", "锅具"), ("单锅", "锅具"), ("煎锅", "锅具"), ("炒锅", "锅具"), ("烤盘", "锅具"), ("锅", "锅具"),
+            ("酒精炉", "炉具"), ("气炉", "炉具"), ("卡式炉", "炉具"), ("炉具", "炉具"), ("炉子", "炉具"), ("炉", "炉具"),
+            ("餐具", "餐具"), ("勺", "餐具"), ("收纳包", "收纳包具"), ("包具", "收纳包具"),
+        ]
+        for kw, cat in cat_map:
+            if kw in positive_text:
                 filters["product.category"] = cat
                 break
 
@@ -915,6 +947,12 @@ def _parse_structured_filters(text: str) -> tuple[dict[str, Any], dict[str, Any]
             break
 
     return filters, negative_filters
+
+
+def _positive_category_text(text: str) -> str:
+    cleaned = str(text or "")
+    cleaned = re.sub(r"(?:不要|别要|不想要|排除|去掉|剔除|不是)\s*[\u4e00-\u9fa5A-Za-z0-9_\-]+", " ", cleaned)
+    return cleaned
 
 
 def _parse_semantic_query(text: str) -> str:
@@ -1018,9 +1056,21 @@ def _run_special_product_filter(db: Session, intent: CustomerIntent) -> list[dic
 def _rows_for_target_skus(db: Session, skus: list[str]) -> list[dict]:
     rows = []
     for sku in skus:
-        detail = product_service.get_product_detail(db, sku)
+        resolved_sku = _resolve_existing_sku(db, sku)
+        detail = product_service.get_product_detail(db, resolved_sku)
         rows.append(_detail_to_result_row(detail, matched_by="上下文结果"))
     return rows
+
+
+def _resolve_existing_sku(db: Session, sku: str) -> str:
+    text = str(sku or "").strip()
+    product = db.query(Product).filter(Product.sku == text).first()
+    if product:
+        return product.sku
+    product = db.query(Product).filter(Product.sku.ilike(text)).first()
+    if product:
+        return product.sku
+    return text
 
 
 def _detail_to_result_row(detail: dict[str, Any], *, matched_by: str) -> dict[str, Any]:

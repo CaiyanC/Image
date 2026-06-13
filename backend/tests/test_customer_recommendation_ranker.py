@@ -121,6 +121,63 @@ class CustomerRecommendationRankerTest(unittest.TestCase):
             customer_recommendation_ranker.recommendation_score("预算不高的炉具推荐一下", pot),
         )
 
+    def test_lightweight_one_two_person_pot_prefers_compact_over_family_cookset(self):
+        compact = {
+            "sku": "CW-C01-37",
+            "product_name_cn": "1-2人野营锅7件套",
+            "category": "锅具",
+            "capacity": "锅 900ML，碗 450ML",
+            "features": "轻量化套娃收纳，全包围防风",
+            "target_audience": "1-2人露营者，轻量徒步用户",
+            "usage_scenarios": "轻量徒步，双人露营，极简野炊",
+        }
+        family = {
+            "sku": "CW-C83",
+            "product_name_cn": "炊墨套锅",
+            "category": "锅具",
+            "capacity": "锅 3700ML，煎盘 2300ML",
+            "features": "家庭精致露营，可拆卸手柄",
+            "target_audience": "家庭户外野餐群体，多人露营",
+            "usage_scenarios": "家庭精致露营，房车自驾旅行，户外营地大餐",
+        }
+
+        ranked = customer_recommendation_ranker.fallback_rank(
+            [family, compact],
+            "推荐一款适合1-2人轻量徒步的锅具",
+        )
+
+        self.assertEqual(ranked[0]["row"]["sku"], "CW-C01-37")
+        self.assertGreater(
+            customer_recommendation_ranker.recommendation_score("推荐一款适合1-2人轻量徒步的锅具", compact),
+            customer_recommendation_ranker.recommendation_score("推荐一款适合1-2人轻量徒步的锅具", family),
+        )
+
+    def test_water_gear_request_penalizes_stove_and_pot_candidates(self):
+        kettle = {"sku": "CW-K03-37", "product_name_cn": "1.4升户外水壶", "category": "水壶", "capacity": "水壶 1400ml", "features": "轻量便携，户外补水，山野煮茶"}
+        stove = {"sku": "CS-B02-37", "product_name_cn": "酒精炉套装", "category": "酒精炉", "features": "户外加热"}
+        pot = {"sku": "CW-C93", "product_name_cn": "行山单锅", "category": "锅具", "capacity": "锅 1000ML", "features": "轻量徒步"}
+
+        ranked = customer_recommendation_ranker.fallback_rank(
+            [stove, pot, kettle],
+            "预算低一点，有没有水壶推荐？",
+        )
+
+        self.assertEqual(ranked[0]["row"]["sku"], "CW-K03-37")
+        self.assertTrue(customer_recommendation_ranker.is_obvious_product_type_mismatch("推荐轻便水具", stove))
+        self.assertTrue(customer_recommendation_ranker.is_obvious_product_type_mismatch("推荐轻便水具", pot))
+        self.assertFalse(customer_recommendation_ranker.is_obvious_product_type_mismatch("推荐轻便水具", kettle))
+
+    def test_negated_pot_request_with_water_target_prefers_water_gear(self):
+        cup = {"sku": "TW-502", "product_name_cn": "悦享杯套装", "category": "水具", "capacity": "350ml", "features": "轻量徒步，露营饮水"}
+        pot = {"sku": "CW-C93", "product_name_cn": "行山单锅", "category": "锅具", "capacity": "锅 1000ML", "features": "轻量徒步"}
+
+        ranked = customer_recommendation_ranker.fallback_rank(
+            [pot, cup],
+            "不要锅，推荐轻便水具",
+        )
+
+        self.assertEqual(ranked[0]["row"]["sku"], "TW-502")
+
 
 if __name__ == "__main__":
     unittest.main()
