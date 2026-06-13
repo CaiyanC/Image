@@ -389,6 +389,8 @@ def _build_detail(product: Product, db: Session) -> dict:
 # ── CRUD ──
 
 def get_products(db: Session, skip: int = 0, limit: int = 20, q: str = None):
+    skip = max(int(skip or 0), 0)
+    limit = min(max(int(limit or 20), 1), 100)
     query = db.query(Product)
     if q:
         like = f"%{q}%"
@@ -680,6 +682,11 @@ def _validate_product_data(data: dict):
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail=f"{label}（{field}）为必填项"
             )
+
+
+def validate_product_payload(data: dict) -> None:
+    _validate_product_data(data)
+
 
 def create_product(db: Session, data: dict, creator_id: str = None) -> Product:
     sku = data.get("sku", "").strip()

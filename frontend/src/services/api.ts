@@ -1,4 +1,5 @@
 const BASE_URL = import.meta.env.VITE_API_BASE_URL || '/api'
+const TRACE_CUSTOMER_AGENT = import.meta.env.VITE_TRACE_CUSTOMER_AGENT === 'true'
 
 import type { Product, ProductListResponse, ProductDraft } from '../types'
 
@@ -34,7 +35,7 @@ function normalizeErrorMessage(detail: unknown, status?: number) {
 }
 
 function shouldTraceCustomerAgent(url: string) {
-  return url.startsWith('/customer-service/ask') || url.includes('/customer-service/actions/')
+  return TRACE_CUSTOMER_AGENT && (url.startsWith('/customer-service/ask') || url.includes('/customer-service/actions/'))
 }
 
 function traceCustomerAgent(label: string, payload: unknown) {

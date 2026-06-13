@@ -22,6 +22,8 @@ def get_user_by_id(db: Session, user_id: str):
 
 
 def get_users(db: Session, skip: int = 0, limit: int = 100):
+    skip = max(int(skip or 0), 0)
+    limit = min(max(int(limit or 100), 1), 200)
     return db.query(User).offset(skip).limit(limit).all()
 
 

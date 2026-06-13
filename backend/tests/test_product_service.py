@@ -112,5 +112,32 @@ class ProductServiceVectorSyncTest(unittest.TestCase):
         self.assertFalse(product_service.get_product_by_sku(self.db, "FAILED-1").sync_flag)
 
 
+class ProductServicePaginationTest(unittest.TestCase):
+    def setUp(self):
+        engine = create_engine("sqlite:///:memory:")
+        Base.metadata.create_all(engine, tables=[Product.__table__])
+        self.Session = sessionmaker(bind=engine)
+        self.db = self.Session()
+        for index in range(125):
+            self.db.add(Product(
+                id=f"product-{index}",
+                sku=f"SKU-{index:03d}",
+                barcode=f"barcode-{index}",
+                product_name_cn=f"产品 {index}",
+                product_name_en=f"Product {index}",
+                brand="alocs",
+            ))
+        self.db.commit()
+
+    def tearDown(self):
+        self.db.close()
+
+    def test_get_products_clamps_unbounded_pagination(self):
+        items, total = product_service.get_products(self.db, skip=-50, limit=10000)
+
+        self.assertEqual(total, 125)
+        self.assertEqual(len(items), 100)
+
+
 if __name__ == "__main__":
     unittest.main()

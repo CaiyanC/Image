@@ -8,13 +8,23 @@ from sqlalchemy.orm import Session
 from ..models.operation_logs import OperationLog
 
 
-SENSITIVE_KEYS = {"password", "current_password", "new_password", "password_hash", "api_key"}
+SENSITIVE_KEY_PARTS = (
+    "password",
+    "passwd",
+    "pwd",
+    "api_key",
+    "apikey",
+    "secret",
+    "token",
+    "authorization",
+    "cookie",
+)
 
 
 def _sanitize(value: Any) -> Any:
     if isinstance(value, dict):
         return {
-            key: "***" if key in SENSITIVE_KEYS else _sanitize(val)
+            key: "***" if _is_sensitive_key(key) else _sanitize(val)
             for key, val in value.items()
         }
     if isinstance(value, list):
@@ -27,6 +37,11 @@ def _sanitize(value: Any) -> Any:
     except TypeError:
         return str(value)
     return value
+
+
+def _is_sensitive_key(key: Any) -> bool:
+    normalized = str(key or "").lower().replace("-", "_")
+    return any(part in normalized for part in SENSITIVE_KEY_PARTS)
 
 
 def _json_value(value: Any) -> Any:

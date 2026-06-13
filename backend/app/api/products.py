@@ -87,8 +87,8 @@ def vector_status(
 
 @router.get("")
 def get_products(
-    skip: int = 0,
-    limit: int = 20,
+    skip: int = Query(0, ge=0),
+    limit: int = Query(20, ge=1, le=100),
     q: str = Query(None),
     current_user: User = Depends(require_product_permission("read")),
     db: Session = Depends(get_db),
@@ -100,8 +100,8 @@ def get_products(
 @router.get("/search")
 def search_products(
     q: str = Query(..., description="Search keyword"),
-    skip: int = 0,
-    limit: int = 20,
+    skip: int = Query(0, ge=0),
+    limit: int = Query(20, ge=1, le=100),
     current_user: User = Depends(require_product_permission("read")),
     db: Session = Depends(get_db),
 ):
@@ -197,6 +197,13 @@ def update_product_full(
     current_user: User = Depends(require_product_permission("update")),
     db: Session = Depends(get_db),
 ):
+    if not product_service.get_product_by_sku(db, sku):
+        raise HTTPException(status_code=404, detail="Product not found")
+    body_sku = str(body.get("sku") or sku).strip()
+    if body_sku != sku:
+        raise HTTPException(status_code=400, detail="Request SKU must match product SKU")
+    body = {**body, "sku": sku}
+    product_service.validate_product_payload(body)
     product_service.delete_product(db, sku)
     product = product_service.create_product(
         db, body, creator_id=current_user.id
@@ -227,8 +234,6 @@ def delete_product(
     product = product_service.get_product_by_sku(db, sku)
     product_id = product.id if product else sku
     product_service.delete_product(db, sku)
-    # Remove from vector DB
-    product_service.delete_product_from_vector_db(db, sku)
     operation_log_service.log_operation(
         db,
         operator_id=current_user.id,

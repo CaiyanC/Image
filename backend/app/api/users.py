@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from sqlalchemy.orm import Session
 from typing import List
 from ..core.database import get_db
@@ -16,6 +16,8 @@ class AdminUserCreate(UserCreate):
 
 
 def _enrich_user_response(user, db):
+    if not user:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
     groups = get_user_groups(db, user.id)
     resp = UserResponse.model_validate(user)
     resp.groups = [UserGroupInfo(**g) for g in groups]
@@ -25,8 +27,8 @@ def _enrich_user_response(user, db):
 
 @router.get("", response_model=List[UserResponse])
 def list_users(
-    skip: int = 0,
-    limit: int = 100,
+    skip: int = Query(0, ge=0),
+    limit: int = Query(100, ge=1, le=200),
     _: User = Depends(get_current_super_admin),
     db: Session = Depends(get_db),
 ):

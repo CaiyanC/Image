@@ -4,14 +4,19 @@ import contextlib
 import io
 import unittest
 
+from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker
 from fastapi import HTTPException
 from pydantic import ValidationError
 
+from app.core.database import Base
 from app.api import customer_service as customer_service_api
 from app.api import generation as generation_api
 from app.api import products as products_api
+from app.api import users as users_api
+from app.models.product import Product
 from app.schemas.generation import ImagePayload
-from app.services import agent_trace_service
+from app.services import agent_trace_service, operation_log_service
 
 
 class FakeUpload:
@@ -58,6 +63,27 @@ class ApiInputSafetyTest(unittest.TestCase):
             agent_trace_service.TRACE_STDOUT = original_stdout
             agent_trace_service.TRACE_FULL_PAYLOAD = original_full_payload
 
+    def test_operation_log_sanitizes_sensitive_key_variants(self):
+        sanitized = operation_log_service._sanitize({
+            "Password": "plain",
+            "apiKey": "sk-secret",
+            "access_token": "token",
+            "Authorization": "Bearer token",
+            "nested": [{"clientSecret": "secret"}, {"safe": "ok"}],
+        })
+
+        self.assertEqual(sanitized["Password"], "***")
+        self.assertEqual(sanitized["apiKey"], "***")
+        self.assertEqual(sanitized["access_token"], "***")
+        self.assertEqual(sanitized["Authorization"], "***")
+        self.assertEqual(sanitized["nested"][0]["clientSecret"], "***")
+        self.assertEqual(sanitized["nested"][1]["safe"], "ok")
+
+    def test_missing_user_response_is_404_not_500(self):
+        with self.assertRaises(HTTPException) as ctx:
+            users_api._enrich_user_response(None, None)
+        self.assertEqual(ctx.exception.status_code, 404)
+
     def test_customer_service_request_rejects_unbounded_question(self):
         with self.assertRaises(ValidationError):
             customer_service_api.CustomerServiceAskRequest(question="x" * 2001)
@@ -84,6 +110,50 @@ class ApiInputSafetyTest(unittest.TestCase):
         self.assertIn("Le(le=100)", conversation_params["limit"])
         self.assertIn("Ge(ge=1)", review_params["limit"])
         self.assertIn("Le(le=500)", review_params["limit"])
+
+    def test_core_list_routes_have_server_side_pagination_bounds(self):
+        def route_by_path_and_method(router, path: str, method: str):
+            for route in router.routes:
+                if route.path == path and method in route.methods:
+                    return route
+            raise AssertionError(f"route not found: {method} {path}")
+
+        product_params = {
+            param.name: str(param.field_info.metadata)
+            for param in route_by_path_and_method(products_api.router, "/api/products", "GET").dependant.query_params
+        }
+        product_search_params = {
+            param.name: str(param.field_info.metadata)
+            for param in route_by_path_and_method(products_api.router, "/api/products/search", "GET").dependant.query_params
+        }
+        user_params = {
+            param.name: str(param.field_info.metadata)
+            for param in route_by_path_and_method(users_api.router, "/api/users", "GET").dependant.query_params
+        }
+
+        for params in (product_params, product_search_params, user_params):
+            self.assertIn("Ge(ge=0)", params["skip"])
+            self.assertIn("Ge(ge=1)", params["limit"])
+        self.assertIn("Le(le=100)", product_params["limit"])
+        self.assertIn("Le(le=100)", product_search_params["limit"])
+        self.assertIn("Le(le=200)", user_params["limit"])
+
+    def test_full_product_update_missing_product_is_404_before_payload_validation(self):
+        engine = create_engine("sqlite:///:memory:")
+        Base.metadata.create_all(engine, tables=[Product.__table__])
+        db = sessionmaker(bind=engine)()
+        try:
+            with self.assertRaises(HTTPException) as ctx:
+                products_api.update_product_full(
+                    "NO-SUCH-SKU",
+                    {},
+                    request=None,
+                    current_user=None,
+                    db=db,
+                )
+            self.assertEqual(ctx.exception.status_code, 404)
+        finally:
+            db.close()
 
     def test_reference_upload_rejects_unsupported_extension(self):
         upload = FakeUpload(b"hello", filename="ref.txt", content_type="text/plain")
