@@ -6,6 +6,25 @@ function isManagement(user: User | null): boolean {
   return user.groups.some((g) => g.group_name === '管理层')
 }
 
+function readStoredAuth(): Pick<AuthState, 'token' | 'user' | 'isManagement'> {
+  if (typeof window === 'undefined') {
+    return { token: null, user: null, isManagement: false }
+  }
+  const token = localStorage.getItem('token')
+  const userStr = localStorage.getItem('user')
+  if (!token || !userStr) {
+    return { token: null, user: null, isManagement: false }
+  }
+  try {
+    const user = JSON.parse(userStr) as User
+    return { token, user, isManagement: isManagement(user) }
+  } catch {
+    localStorage.removeItem('token')
+    localStorage.removeItem('user')
+    return { token: null, user: null, isManagement: false }
+  }
+}
+
 interface AuthState {
   token: string | null
   user: User | null
@@ -17,9 +36,7 @@ interface AuthState {
 }
 
 export const useAuthStore = create<AuthState>((set) => ({
-  token: null,
-  user: null,
-  isManagement: false,
+  ...readStoredAuth(),
   setAuth: (token, user) => {
     localStorage.setItem('token', token)
     localStorage.setItem('user', JSON.stringify(user))
@@ -35,16 +52,6 @@ export const useAuthStore = create<AuthState>((set) => ({
     set({ token: null, user: null, isManagement: false })
   },
   loadFromStorage: () => {
-    const token = localStorage.getItem('token')
-    const userStr = localStorage.getItem('user')
-    if (token && userStr) {
-      try {
-        const user = JSON.parse(userStr) as User
-        set({ token, user, isManagement: isManagement(user) })
-      } catch {
-        localStorage.removeItem('token')
-        localStorage.removeItem('user')
-      }
-    }
+    set(readStoredAuth())
   },
 }))
