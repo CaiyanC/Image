@@ -1,8 +1,11 @@
 import contextlib
 import io
 import json
+import tempfile
 import unittest
 import uuid
+from concurrent.futures import ThreadPoolExecutor
+from pathlib import Path
 
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
@@ -1523,6 +1526,75 @@ class CustomerServiceServiceTest(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(len(owner_history), 1)
         self.assertEqual(other_history, [])
+
+    def test_customer_conversations_are_isolated_under_20_parallel_users(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            engine = create_engine(
+                f"sqlite:///{Path(tmpdir) / 'parallel.db'}",
+                connect_args={"check_same_thread": False},
+                pool_size=10,
+                max_overflow=20,
+            )
+            Base.metadata.create_all(engine, tables=[
+                CustomerServiceConversation.__table__,
+                CustomerServiceMessage.__table__,
+            ])
+            Session = sessionmaker(bind=engine)
+
+            def worker(index: int):
+                db = Session()
+                try:
+                    user_id = f"parallel-user-{index}"
+                    conversation = customer_service_service._get_or_create_conversation(
+                        db,
+                        user_id,
+                        f"用户{index}的问题",
+                        f"SKU-{index}",
+                        None,
+                    )
+                    conversation_id = conversation.id
+                    db.add(CustomerServiceMessage(
+                        conversation_id=conversation_id,
+                        role="user",
+                        content=f"用户{index}的问题",
+                    ))
+                    db.add(CustomerServiceMessage(
+                        conversation_id=conversation_id,
+                        role="assistant",
+                        content=f"只属于用户{index}的回复",
+                    ))
+                    customer_service_service._touch_conversation(conversation, f"SKU-{index}")
+                    db.commit()
+
+                    listing = customer_service_service.list_conversations(db, user_id)
+                    own_history = customer_service_service._build_conversation_history(db, conversation_id, user_id)
+                    foreign_history = customer_service_service._build_conversation_history(
+                        db,
+                        conversation_id,
+                        f"parallel-other-{index}",
+                    )
+                    return {
+                        "conversation_id": conversation_id,
+                        "listing": listing,
+                        "own_history": own_history,
+                        "foreign_history": foreign_history,
+                    }
+                finally:
+                    db.close()
+
+            try:
+                with ThreadPoolExecutor(max_workers=20) as executor:
+                    results = list(executor.map(worker, range(20)))
+            finally:
+                engine.dispose()
+
+        self.assertEqual(len({item["conversation_id"] for item in results}), 20)
+        for index, result in enumerate(results):
+            self.assertEqual(result["listing"]["total"], 1)
+            self.assertIn(f"只属于用户{index}的回复", result["listing"]["items"][0]["last_message"])
+            self.assertEqual(result["listing"]["items"][0]["last_message_role"], "assistant")
+            self.assertEqual(len(result["own_history"]), 2)
+            self.assertEqual(result["foreign_history"], [])
 
 
 if __name__ == "__main__":
