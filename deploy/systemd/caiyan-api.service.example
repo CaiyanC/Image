@@ -1,0 +1,16 @@
+[Unit]
+Description=CaiYan API Service
+After=network.target postgresql.service
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/caiyan/backend
+EnvironmentFile=/opt/caiyan/backend/.env
+ExecStart=/opt/caiyan/backend/.venv/bin/python -m uvicorn app.main:app --host 127.0.0.1 --port 8000 --workers 4 --timeout-keep-alive 120
+Restart=always
+RestartSec=5
+User=caiyan
+Group=caiyan
+
+[Install]
+WantedBy=multi-user.target

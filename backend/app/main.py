@@ -2,16 +2,18 @@ import logging
 import os
 from logging.handlers import TimedRotatingFileHandler
 
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
+from sqlalchemy import text
 from .core.config import settings
 from .core.database import init_db, SessionLocal
 from .core.permission_constants import MANAGEMENT_GROUP_NAME
 from .core.security import get_password_hash
 from .models.user import User
 from .api import auth, users, generation, history, admin, products, groups, categories, drafts, customer_service, knowledge_base
+from .services import knowledge_service
 
 def _configure_error_logging() -> None:
     logs_dir = os.path.abspath(os.path.join(os.path.dirname(os.path.dirname(__file__)), "..", "logs"))
@@ -129,6 +131,45 @@ def startup():
     seed_default_admin()
 
 
+def _live_payload() -> dict:
+    return {"status": "ok", "app": settings.APP_NAME}
+
+
+def _ready_payload() -> dict:
+    db = SessionLocal()
+    try:
+        db.execute(text("SELECT 1"))
+        vector = knowledge_service.vector_status(db)
+        return {
+            "status": "ok" if vector.get("available") else "degraded",
+            "app": settings.APP_NAME,
+            "database": "ok",
+            "vector": vector,
+        }
+    except Exception as exc:
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "status": "unavailable",
+                "app": settings.APP_NAME,
+                "database": "error",
+                "error": str(exc),
+            },
+        ) from exc
+    finally:
+        db.close()
+
+
 @app.get("/api/health")
 def health_check():
-    return {"status": "ok", "app": settings.APP_NAME}
+    return _live_payload()
+
+
+@app.get("/api/health/live")
+def live_check():
+    return _live_payload()
+
+
+@app.get("/api/health/ready")
+def ready_check():
+    return _ready_payload()
