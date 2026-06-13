@@ -2,10 +2,11 @@ import json
 import re
 from typing import Any
 
-from sqlalchemy import text
+from sqlalchemy import distinct, func, text
 from sqlalchemy.orm import Session
 
 from ..models.knowledge_base import KnowledgeChunk, KnowledgeDocument
+from ..models.product import Product
 from . import dmxapi_service
 
 
@@ -35,6 +36,108 @@ def vector_status(db: Session) -> dict:
             "embedded_chunks": 0,
             "error": str(exc),
         }
+
+
+def health_report(db: Session) -> dict:
+    status = vector_status(db)
+    total_documents = db.query(KnowledgeDocument).count()
+    total_chunks = db.query(KnowledgeChunk).count()
+    total_products = db.query(Product).count()
+    status_counts = {
+        str(row[0] or "unknown"): int(row[1] or 0)
+        for row in db.query(KnowledgeChunk.embedding_status, func.count(KnowledgeChunk.id))
+        .group_by(KnowledgeChunk.embedding_status)
+        .all()
+    }
+    source_type_counts = {
+        str(row[0] or "unknown"): int(row[1] or 0)
+        for row in db.query(KnowledgeChunk.source_type, func.count(KnowledgeChunk.id))
+        .group_by(KnowledgeChunk.source_type)
+        .all()
+    }
+    indexed_product_skus = {
+        row[0]
+        for row in db.query(distinct(KnowledgeChunk.sku))
+        .filter(KnowledgeChunk.source_type == "product", KnowledgeChunk.sku.isnot(None))
+        .all()
+        if row[0]
+    }
+    embedded_product_skus = {
+        row[0]
+        for row in db.query(distinct(KnowledgeChunk.sku))
+        .filter(
+            KnowledgeChunk.source_type == "product",
+            KnowledgeChunk.sku.isnot(None),
+            KnowledgeChunk.embedding_status == "synced",
+        )
+        .all()
+        if row[0]
+    }
+    pending_products = db.query(Product).filter(Product.sync_flag.is_(False)).count()
+    failed_chunks = status_counts.get("failed", 0)
+    pending_chunks = status_counts.get("pending", 0)
+    embedded_chunks = status_counts.get("synced", 0)
+    coverage = (len(indexed_product_skus) / total_products) if total_products else 1.0
+    embedding_coverage = (embedded_chunks / total_chunks) if total_chunks else 0.0
+
+    recommendations: list[str] = []
+    if not status.get("available"):
+        recommendations.append("Enable PostgreSQL pgvector and embedding storage for semantic retrieval.")
+    if total_products and coverage < 1:
+        recommendations.append("Run product knowledge reindex so every product has searchable chunks.")
+    if total_chunks and embedding_coverage < 1:
+        recommendations.append("Run embedding sync for pending or failed chunks.")
+    if failed_chunks:
+        recommendations.append("Review failed chunks and retry embedding after fixing provider/config errors.")
+    if pending_products:
+        recommendations.append("Sync products marked as pending to keep answers fresh.")
+    if not total_chunks:
+        recommendations.append("Create or import product knowledge before enabling customer-service answers.")
+
+    grade = "healthy"
+    if not total_chunks or (total_products and coverage < 0.8):
+        grade = "critical"
+    elif recommendations:
+        grade = "warning"
+
+    return {
+        "grade": grade,
+        "vector": status,
+        "totals": {
+            "products": total_products,
+            "documents": total_documents,
+            "chunks": total_chunks,
+            "indexed_product_skus": len(indexed_product_skus),
+            "embedded_product_skus": len(embedded_product_skus),
+            "pending_products": pending_products,
+        },
+        "coverage": {
+            "product_index_coverage": round(coverage, 4),
+            "embedding_coverage": round(embedding_coverage, 4),
+        },
+        "embedding_status_counts": status_counts,
+        "source_type_counts": source_type_counts,
+        "samples": {
+            "failed_chunks": _sample_chunks(db, "failed"),
+            "pending_chunks": _sample_chunks(db, "pending"),
+        },
+        "recommendations": recommendations,
+    }
+
+
+async def search_preview(db: Session, query: str, sku: str | None = None, limit: int = 8) -> dict:
+    query_text = query.strip()
+    rows = await semantic_retrieve(db, query_text, sku=sku, limit=limit)
+    status = vector_status(db)
+    mode = "semantic" if status.get("available") and status.get("embedded_chunks", 0) > 0 else "keyword"
+    return {
+        "query": query_text,
+        "sku": sku,
+        "mode": mode,
+        "vector": status,
+        "count": len(rows),
+        "results": rows,
+    }
 
 
 def create_document(
@@ -148,6 +251,10 @@ async def semantic_retrieve(db: Session, query: str, sku: str | None = None, lim
 def _safe_json(value: str | None) -> dict:
     if not value:
         return {}
+    try:
+        return json.loads(value)
+    except json.JSONDecodeError:
+        return {}
 
 
 def _query_tokens(query: str) -> list[str]:
@@ -186,11 +293,29 @@ def _keyword_score(query: str, tokens: list[str], content: str) -> float:
         if token in text:
             score += min(len(token), 6)
     return score
-    try:
-        return json.loads(value)
-    except json.JSONDecodeError:
-        return {}
 
 
 def _vector_literal(values: list[float]) -> str:
     return "[" + ",".join(str(float(value)) for value in values) + "]"
+
+
+def _sample_chunks(db: Session, status: str, limit: int = 5) -> list[dict]:
+    rows = (
+        db.query(KnowledgeChunk)
+        .filter(KnowledgeChunk.embedding_status == status)
+        .order_by(KnowledgeChunk.updated_at.desc())
+        .limit(limit)
+        .all()
+    )
+    return [
+        {
+            "id": row.id,
+            "sku": row.sku,
+            "source_type": row.source_type,
+            "chunk_index": row.chunk_index,
+            "error": row.embedding_error,
+            "updated_at": str(row.updated_at) if row.updated_at else None,
+            "preview": (row.content or "")[:180],
+        }
+        for row in rows
+    ]

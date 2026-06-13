@@ -154,6 +154,52 @@ export interface CustomerServiceAskResult {
   steps: AgentStep[]
 }
 
+export interface KnowledgeBaseHealth {
+  grade: 'healthy' | 'warning' | 'critical' | string
+  vector: {
+    available: boolean
+    extension: boolean
+    embedding_column: boolean
+    chunks: number
+    embedded_chunks: number
+    error?: string
+  }
+  totals: {
+    products: number
+    documents: number
+    chunks: number
+    indexed_product_skus: number
+    embedded_product_skus: number
+    pending_products: number
+  }
+  coverage: {
+    product_index_coverage: number
+    embedding_coverage: number
+  }
+  embedding_status_counts: Record<string, number>
+  source_type_counts: Record<string, number>
+  samples: {
+    failed_chunks: Array<Record<string, unknown>>
+    pending_chunks: Array<Record<string, unknown>>
+  }
+  recommendations: string[]
+}
+
+export interface KnowledgeSearchPreview {
+  query: string
+  sku?: string | null
+  mode: string
+  count: number
+  vector: KnowledgeBaseHealth['vector']
+  results: Array<{
+    source_type?: string | null
+    sku?: string | null
+    content: string
+    metadata?: Record<string, unknown>
+    score?: number
+  }>
+}
+
 export type CustomerServiceStreamEvent =
   | { type: 'status'; message?: string; label?: string }
   | ({ type: 'meta' } & Omit<CustomerServiceAskResult, 'answer'>)
@@ -648,6 +694,19 @@ export const api = {
       embedded_chunks: number
       error?: string
     }>('/knowledge-base/status'),
+    health: () => request<KnowledgeBaseHealth>('/knowledge-base/health'),
+    searchPreview: (data: { query: string; sku?: string; limit?: number }) =>
+      request<KnowledgeSearchPreview>(
+        '/knowledge-base/search-preview',
+        { method: 'POST', body: JSON.stringify(data) },
+        60000,
+      ),
+    reindexProducts: (data: { mode?: 'pending' | 'full'; limit?: number; embed?: boolean }) =>
+      request<{ mode: string; indexed: Record<string, unknown>; embedding?: Record<string, unknown> | null; health: KnowledgeBaseHealth }>(
+        '/knowledge-base/reindex-products',
+        { method: 'POST', body: JSON.stringify(data) },
+        300000,
+      ),
   },
 
   categories: {

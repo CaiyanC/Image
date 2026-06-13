@@ -13,6 +13,7 @@ const AdminGroups = lazy(() => import('./pages/AdminGroups'))
 const AdminLogs = lazy(() => import('./pages/AdminLogs'))
 const ProductManagement = lazy(() => import('./pages/ProductManagement'))
 const CustomerService = lazy(() => import('./pages/CustomerService'))
+const KnowledgeBase = lazy(() => import('./pages/KnowledgeBase'))
 const ProductCreate = lazy(() => import('./pages/ProductCreate'))
 const DraftBox = lazy(() => import('./pages/DraftBox'))
 const Profile = lazy(() => import('./pages/Profile'))
@@ -116,6 +117,16 @@ export default function App() {
             <PermissionRoute permissionKey="ai.customer_service">
               <Layout>
                 <CustomerService />
+              </Layout>
+            </PermissionRoute>
+          }
+        />
+        <Route
+          path="/knowledge-base"
+          element={
+            <PermissionRoute permissionKey="ai.call">
+              <Layout>
+                <KnowledgeBase />
               </Layout>
             </PermissionRoute>
           }

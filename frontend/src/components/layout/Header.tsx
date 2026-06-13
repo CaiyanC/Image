@@ -33,6 +33,7 @@ export default function Header() {
 
   const navItems = [
     ...(has('ai.customer_service') ? [{ path: '/customer-service', label: '智能客服' }] : []),
+    ...(has('ai.call') ? [{ path: '/knowledge-base', label: '知识库' }] : []),
     ...(has('ai.generate') ? [{ path: '/', label: '创作' }] : []),
     ...(has('history.view') ? [{ path: '/history', label: '历史' }] : []),
     ...(has('product.read') ? [{ path: '/products', label: '产品' }] : []),
