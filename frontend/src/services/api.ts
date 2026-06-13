@@ -9,6 +9,7 @@ const ERROR_MESSAGES: Record<string, string> = {
   'Unauthorized': '登录已过期，请重新登录',
   'Could not validate credentials': '登录已过期，请重新登录',
   'Super admin privileges required': '没有管理员权限',
+  'Public registration is disabled': '公开注册已关闭，请联系管理员创建账号',
   'Permission required: product.edit': '没有产品编辑权限',
   'Permission required: product.read': '没有产品查看权限',
   'Permission required: product.create': '没有产品创建权限',

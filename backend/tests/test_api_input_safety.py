@@ -10,12 +10,15 @@ from fastapi import HTTPException
 from pydantic import ValidationError
 
 from app.core.database import Base
+from app.core.config import settings
+from app.api import auth as auth_api
 from app.api import customer_service as customer_service_api
 from app.api import generation as generation_api
 from app.api import products as products_api
 from app.api import users as users_api
 from app.models.product import Product
 from app.schemas.generation import ImagePayload
+from app.schemas.user import UserCreate
 from app.services import agent_trace_service, operation_log_service
 
 
@@ -39,6 +42,23 @@ class FakeProductUpload:
 
 
 class ApiInputSafetyTest(unittest.TestCase):
+    def test_public_registration_is_disabled_by_default(self):
+        original = settings.ENABLE_PUBLIC_REGISTRATION
+        settings.ENABLE_PUBLIC_REGISTRATION = False
+        try:
+            with self.assertRaises(HTTPException) as ctx:
+                auth_api.register(
+                    UserCreate(username="public-user", email=None, password="StrongPass123"),
+                    db=None,
+                )
+            self.assertEqual(ctx.exception.status_code, 403)
+        finally:
+            settings.ENABLE_PUBLIC_REGISTRATION = original
+
+    def test_new_user_password_requires_minimum_length(self):
+        with self.assertRaises(ValidationError):
+            UserCreate(username="weak-user", email=None, password="1234567")
+
     def test_trace_defaults_to_no_stdout_and_masks_sensitive_payload(self):
         original_stdout = agent_trace_service.TRACE_STDOUT
         original_full_payload = agent_trace_service.TRACE_FULL_PAYLOAD

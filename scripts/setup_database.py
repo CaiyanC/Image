@@ -1,16 +1,18 @@
 """
-Complete database setup script — drops old tables and creates all 34 new tables
+Complete database setup script – drops old tables and creates all 34 new tables
 based on 字段—数据库设计 5.25.docx
 """
+import os
+
 import psycopg2
 from psycopg2 import sql
 
 CONFIG = {
-    "host": "localhost",
-    "port": 5432,
-    "database": "product_knowledge",
-    "user": "postgres",
-    "password": "Cy040226~",
+    "host": os.getenv("PGHOST", "localhost"),
+    "port": int(os.getenv("PGPORT", "5432")),
+    "database": os.getenv("PGDATABASE", "product_knowledge"),
+    "user": os.getenv("PGUSER", "postgres"),
+    "password": os.getenv("PGPASSWORD", ""),
 }
 
 

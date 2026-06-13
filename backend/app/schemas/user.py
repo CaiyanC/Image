@@ -1,6 +1,6 @@
 from datetime import datetime
 from typing import Optional, List, Annotated
-from pydantic import BaseModel, BeforeValidator
+from pydantic import BaseModel, BeforeValidator, Field
 from .common import UuidStr
 
 
@@ -27,7 +27,7 @@ class UserBase(BaseModel):
 
 
 class UserCreate(UserBase):
-    password: str
+    password: str = Field(..., min_length=8, max_length=128)
     display_name: Optional[str] = None
 
 
@@ -48,11 +48,11 @@ class UserProfileUpdate(BaseModel):
 
 class PasswordChange(BaseModel):
     current_password: str
-    new_password: str
+    new_password: str = Field(..., min_length=8, max_length=128)
 
 
 class AdminPasswordReset(BaseModel):
-    new_password: str
+    new_password: str = Field(..., min_length=8, max_length=128)
 
 
 class UserResponse(UserBase):

@@ -40,18 +40,39 @@ def get_db():
 
 def init_db():
     """Create all tables and seed default data if not present."""
-    # Import all models so Base.metadata knows about them
-    import app.models  # noqa: F401
-    Base.metadata.create_all(bind=engine)
-    _ensure_products_compat_columns()
-    _init_vector_storage()
-
-    db = SessionLocal()
+    lock_conn = _acquire_init_lock()
     try:
-        _seed_default_groups(db)
-        _seed_default_permissions(db)
+        # Import all models so Base.metadata knows about them
+        import app.models  # noqa: F401
+        Base.metadata.create_all(bind=engine)
+        _ensure_products_compat_columns()
+        _init_vector_storage()
+
+        db = SessionLocal()
+        try:
+            _seed_default_groups(db)
+            _seed_default_permissions(db)
+        finally:
+            db.close()
     finally:
-        db.close()
+        _release_init_lock(lock_conn)
+
+
+def _acquire_init_lock():
+    if not settings.DATABASE_URL.startswith("postgresql"):
+        return None
+    conn = engine.connect()
+    conn.execute(text("SELECT pg_advisory_lock(2026061301)"))
+    return conn
+
+
+def _release_init_lock(conn) -> None:
+    if conn is None:
+        return
+    try:
+        conn.execute(text("SELECT pg_advisory_unlock(2026061301)"))
+    finally:
+        conn.close()
 
 
 def _init_vector_storage():

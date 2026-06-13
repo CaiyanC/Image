@@ -58,8 +58,8 @@ export default function Profile() {
       setError('请填写当前密码和新密码')
       return
     }
-    if (passwordForm.new_password.length < 6) {
-      setError('新密码至少 6 位')
+    if (passwordForm.new_password.length < 8) {
+      setError('新密码至少 8 位')
       return
     }
     if (passwordForm.new_password !== passwordForm.confirm_password) {

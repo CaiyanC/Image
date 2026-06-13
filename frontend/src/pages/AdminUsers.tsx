@@ -86,8 +86,8 @@ export default function AdminUsers() {
       setError('请填写用户名和密码')
       return
     }
-    if (newUser.password.length < 6) {
-      setError('密码至少 6 位')
+    if (newUser.password.length < 8) {
+      setError('密码至少 8 位')
       return
     }
     setError('')
@@ -129,8 +129,8 @@ export default function AdminUsers() {
 
   async function handleResetPassword() {
     if (!resetTarget) return
-    if (resetPassword.length < 6) {
-      setError('新密码至少 6 位')
+    if (resetPassword.length < 8) {
+      setError('新密码至少 8 位')
       return
     }
     try {
@@ -194,7 +194,7 @@ export default function AdminUsers() {
             <input
               value={newUser.password}
               onChange={(e) => setNewUser({ ...newUser, password: e.target.value })}
-              placeholder="密码（至少 6 位）"
+              placeholder="密码（至少 8 位）"
               type="password"
               className="glass-input px-3 py-2 text-sm"
             />
@@ -254,7 +254,7 @@ export default function AdminUsers() {
             <input
               value={resetPassword}
               onChange={(e) => setResetPassword(e.target.value)}
-              placeholder="输入新临时密码（至少 6 位）"
+              placeholder="输入新临时密码（至少 8 位）"
               type="password"
               className="glass-input px-3 py-2 text-sm md:w-80"
             />

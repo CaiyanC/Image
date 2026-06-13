@@ -4,6 +4,7 @@ import { api } from '../services/api'
 import { useAuthStore } from '../store/authStore'
 
 export default function Login() {
+  const allowPublicRegistration = import.meta.env.VITE_ENABLE_PUBLIC_REGISTRATION === 'true'
   const [username, setUsername] = useState('')
   const [password, setPassword] = useState('')
   const [error, setError] = useState('')
@@ -88,12 +89,18 @@ export default function Login() {
             {loading ? '登录中...' : '登录'}
           </button>
 
-          <div className="text-center text-sm text-apple-gray-medium">
-            还没有账号？{' '}
-            <Link to="/register" className="text-apple-blue hover:underline">
-              注册
-            </Link>
-          </div>
+          {allowPublicRegistration ? (
+            <div className="text-center text-sm text-apple-gray-medium">
+              还没有账号？{' '}
+              <Link to="/register" className="text-apple-blue hover:underline">
+                注册
+              </Link>
+            </div>
+          ) : (
+            <div className="text-center text-xs text-apple-gray-medium">
+              企业账号请联系管理员创建
+            </div>
+          )}
         </form>
       </div>
     </div>

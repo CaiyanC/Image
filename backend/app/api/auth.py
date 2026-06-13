@@ -1,6 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from sqlalchemy.orm import Session
 from ..core.database import get_db
+from ..core.config import settings
 from ..core.security import verify_password, create_access_token, get_current_user, require_permission
 from ..core.security import get_user_groups, get_user_permissions
 from ..models.user import User
@@ -20,6 +21,11 @@ router = APIRouter(prefix="/api/auth", tags=["auth"])
 
 @router.post("/register", response_model=UserResponse)
 def register(user_data: UserCreate, db: Session = Depends(get_db)):
+    if not settings.ENABLE_PUBLIC_REGISTRATION:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Public registration is disabled",
+        )
     return user_service.create_user(db, user_data)
 
 

@@ -3,6 +3,7 @@ import { Link, useNavigate } from 'react-router-dom'
 import { api } from '../services/api'
 
 export default function Register() {
+  const allowPublicRegistration = import.meta.env.VITE_ENABLE_PUBLIC_REGISTRATION === 'true'
   const [username, setUsername] = useState('')
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
@@ -15,13 +16,18 @@ export default function Register() {
     e.preventDefault()
     setError('')
 
+    if (!allowPublicRegistration) {
+      setError('公开注册已关闭，请联系管理员创建账号')
+      return
+    }
+
     if (password !== confirmPassword) {
       setError('两次输入的密码不一致')
       return
     }
 
-    if (password.length < 6) {
-      setError('密码长度至少6位')
+    if (password.length < 8) {
+      setError('密码长度至少8位')
       return
     }
 
@@ -47,7 +53,9 @@ export default function Register() {
       <div className="w-full max-w-md animate-slide-up">
         <div className="text-center mb-8">
           <h1 className="text-3xl font-bold text-apple-text tracking-tight">创建账号</h1>
-          <p className="text-apple-gray-medium mt-2">注册以开始使用 AI 创作平台</p>
+          <p className="text-apple-gray-medium mt-2">
+            {allowPublicRegistration ? '注册以开始使用 AI 创作平台' : '公开注册已关闭，请联系管理员创建账号'}
+          </p>
         </div>
 
         <form onSubmit={handleSubmit} className="glass p-8 space-y-5">
@@ -87,9 +95,9 @@ export default function Register() {
               value={password}
               onChange={(e) => setPassword(e.target.value)}
               className="glass-input w-full px-4 py-3 text-sm text-apple-text placeholder:text-apple-gray-medium"
-              placeholder="至少6位密码"
+              placeholder="至少8位密码"
               required
-              minLength={6}
+              minLength={8}
             />
           </div>
 
