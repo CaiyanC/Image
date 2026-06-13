@@ -1,5 +1,13 @@
 import unittest
+from unittest.mock import patch
 
+from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker
+
+from app.core.database import Base
+from app.models.knowledge_base import KnowledgeChunk, KnowledgeDocument
+from app.models.product import Product
+from app.services import product_vector_index_service
 from app.services.product_vector_index_service import build_product_documents, should_create_ivfflat_index
 
 
@@ -82,6 +90,46 @@ class ProductVectorIndexServiceTest(unittest.TestCase):
 
         self.assertEqual([doc["source_id"] for doc in docs], ["product:TW-141:profile"])
         self.assertIn("烽宴多功能聚能套锅", docs[0]["content"])
+
+    def test_index_product_marks_product_as_synced(self):
+        engine = create_engine("sqlite:///:memory:")
+        Base.metadata.create_all(engine, tables=[
+            Product.__table__,
+            KnowledgeDocument.__table__,
+            KnowledgeChunk.__table__,
+        ])
+        Session = sessionmaker(bind=engine)
+        db = Session()
+        try:
+            db.add(Product(
+                id="product-1",
+                sku="CS-G25",
+                barcode="barcode-CS-G25",
+                product_name_cn="Mini stove",
+                brand="alocs",
+                sync_flag=False,
+            ))
+            db.commit()
+            detail = {
+                "sku": "CS-G25",
+                "product_name_cn": "Mini stove",
+                "brand": "alocs",
+                "specs": {},
+                "business": {},
+                "content": {},
+                "qa_items": [],
+                "qa_negative": None,
+            }
+
+            with patch("app.services.product_service.get_product_detail", return_value=detail):
+                result = product_vector_index_service.index_product(db, "CS-G25")
+
+            db.expire_all()
+            product = db.query(Product).filter(Product.sku == "CS-G25").first()
+            self.assertEqual(result["chunks"], 1)
+            self.assertTrue(product.sync_flag)
+        finally:
+            db.close()
 
 
 if __name__ == "__main__":

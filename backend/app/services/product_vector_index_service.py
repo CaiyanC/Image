@@ -184,6 +184,10 @@ def index_product(db: Session, sku: str) -> dict[str, int]:
             embedding_status="pending",
         ))
 
+    product = db.query(Product).filter(Product.sku == sku).first()
+    if product:
+        product.sync_flag = True
+
     db.commit()
     return {"documents": len(docs), "chunks": len(docs)}
 
