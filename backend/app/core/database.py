@@ -7,6 +7,7 @@ from .config import settings
 engine = create_engine(
     settings.DATABASE_URL,
     echo=settings.DEBUG,
+    hide_parameters=True,
     pool_size=10,
     max_overflow=20,
     pool_timeout=30,
