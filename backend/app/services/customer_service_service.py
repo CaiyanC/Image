@@ -1,6 +1,8 @@
 ﻿import json
 import re
 
+from datetime import datetime, timezone
+
 from fastapi import HTTPException, status
 from sqlalchemy.orm import Session
 
@@ -29,18 +31,43 @@ def list_conversations(db: Session, user_id: str, skip: int = 0, limit: int = 30
     ).order_by(CustomerServiceConversation.updated_at.desc())
     total = query.count()
     items = query.offset(skip).limit(limit).all()
+    previews = _conversation_previews(db, [item.id for item in items])
     return {
-        "items": [
-            {
-                "id": item.id,
-                "title": item.title,
-                "sku": item.sku,
-                "created_at": str(item.created_at),
-                "updated_at": str(item.updated_at),
-            }
-            for item in items
-        ],
+        "items": [_conversation_list_item(item, previews.get(item.id, {})) for item in items],
         "total": total,
+    }
+
+
+def _conversation_previews(db: Session, conversation_ids: list[str]) -> dict[str, dict]:
+    if not conversation_ids:
+        return {}
+    previews: dict[str, dict] = {conversation_id: {} for conversation_id in conversation_ids}
+    rows = (
+        db.query(CustomerServiceMessage)
+        .filter(CustomerServiceMessage.conversation_id.in_(conversation_ids))
+        .order_by(CustomerServiceMessage.conversation_id.asc(), CustomerServiceMessage.created_at.desc())
+        .all()
+    )
+    for message in rows:
+        preview = previews.setdefault(message.conversation_id, {})
+        preview.setdefault("last_any", message)
+        if message.role == "assistant":
+            preview.setdefault("last_assistant", message)
+    return previews
+
+
+def _conversation_list_item(item: CustomerServiceConversation, preview: dict) -> dict:
+    preview_message = preview.get("last_assistant") or preview.get("last_any")
+    preview = str(preview_message.content or "") if preview_message else ""
+    return {
+        "id": item.id,
+        "title": item.title,
+        "sku": item.sku,
+        "last_message": preview[:120],
+        "last_message_role": preview_message.role if preview_message else None,
+        "last_message_at": str(preview_message.created_at) if preview_message and preview_message.created_at else None,
+        "created_at": str(item.created_at),
+        "updated_at": str(item.updated_at),
     }
 
 
@@ -183,8 +210,7 @@ async def ask_customer_service(
             sources_json=json.dumps(_sources_with_result_context(agent_result), ensure_ascii=False, default=str),
         )
         db.add(assistant_message)
-        conversation.sku = agent_result.get("sku")
-        conversation.title = _make_title(question, conversation.sku)
+        _touch_conversation(conversation, agent_result.get("sku"))
         db.commit()
         return {
             "conversation_id": conversation.id,
@@ -259,8 +285,7 @@ async def ask_customer_service(
             sources_json=json.dumps(_sources_with_result_context(agent_result), ensure_ascii=False, default=str),
         )
         db.add(assistant_message)
-        conversation.sku = agent_result.get("sku")
-        conversation.title = _make_title(question, conversation.sku)
+        _touch_conversation(conversation, agent_result.get("sku"))
         db.commit()
         return {
             "conversation_id": conversation.id,
@@ -348,8 +373,7 @@ async def ask_customer_service(
         sources_json=json.dumps(sources_with_meta, ensure_ascii=False, default=str),
     )
     db.add(assistant_message)
-    conversation.sku = resolved_sku
-    conversation.title = _make_title(question, resolved_sku)
+    _touch_conversation(conversation, resolved_sku)
     db.commit()
 
     return {
@@ -555,6 +579,12 @@ def _get_or_create_conversation(
     db.add(conversation)
     db.flush()
     return conversation
+
+
+def _touch_conversation(conversation: CustomerServiceConversation, sku: str | None = None) -> None:
+    if sku:
+        conversation.sku = sku
+    conversation.updated_at = datetime.now(timezone.utc)
 
 
 def _sources_with_result_context(agent_result: dict) -> list[dict]:
@@ -787,8 +817,14 @@ def _build_conversation_history(db: Session, conversation_id: str | None, user_i
     """Build conversation context from DB history (last 10 turns)."""
     if not conversation_id:
         return []
+    conversation = db.query(CustomerServiceConversation).filter(
+        CustomerServiceConversation.id == conversation_id,
+        CustomerServiceConversation.user_id == str(user_id),
+    ).first()
+    if not conversation:
+        return []
     messages = db.query(CustomerServiceMessage).filter(
-        CustomerServiceMessage.conversation_id == conversation_id
+        CustomerServiceMessage.conversation_id == conversation.id
     ).order_by(CustomerServiceMessage.created_at.desc()).limit(20).all()
     history = []
     for msg in reversed(messages):
@@ -919,6 +955,7 @@ def _save_and_return_guidance(db: Session, user_id: str, question: str, conversa
         sources_json=json.dumps(meta_sources, ensure_ascii=False, default=str),
     )
     db.add(assistant_message)
+    _touch_conversation(conversation)
     db.commit()
     return {
         "conversation_id": conversation.id,

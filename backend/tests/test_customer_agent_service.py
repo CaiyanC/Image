@@ -69,6 +69,8 @@ class CustomerAgentServiceTest(unittest.TestCase):
             ProductKeyword.__table__,
             AgentAction.__table__,
             OperationLog.__table__,
+            CustomerServiceConversation.__table__,
+            CustomerServiceMessage.__table__,
             KnowledgeDocument.__table__,
             KnowledgeChunk.__table__,
         ])
@@ -1473,6 +1475,54 @@ class CustomerServiceServiceTest(unittest.IsolatedAsyncioTestCase):
         self.assertIn("CW-C83-1", result["answer"])
         self.assertIn("价格定位", result["answer"])
         self.assertNotIn("推荐行山单锅", result["answer"])
+
+
+    def test_customer_conversation_title_stays_on_first_question_with_last_message_preview(self):
+        conversation = customer_service_service._get_or_create_conversation(
+            self.db,
+            "user-1",
+            "适合泡咖啡的小锅有吗？",
+            "CW-C93",
+            None,
+        )
+        first_title = conversation.title
+        self.db.add(CustomerServiceMessage(conversation_id=conversation.id, role="user", content="适合泡咖啡的小锅有吗？"))
+        self.db.add(CustomerServiceMessage(conversation_id=conversation.id, role="assistant", content="推荐 CW-C93。"))
+        self.db.commit()
+
+        same_conversation = customer_service_service._get_or_create_conversation(
+            self.db,
+            "user-1",
+            "还有别的吗？",
+            None,
+            conversation.id,
+        )
+        self.db.add(CustomerServiceMessage(conversation_id=conversation.id, role="user", content="还有别的吗？"))
+        self.db.add(CustomerServiceMessage(conversation_id=conversation.id, role="assistant", content="没有更多同类小锅。"))
+        customer_service_service._touch_conversation(same_conversation)
+        self.db.commit()
+
+        listing = customer_service_service.list_conversations(self.db, "user-1")
+
+        self.assertEqual(listing["items"][0]["title"], first_title)
+        self.assertIn("没有更多同类小锅", listing["items"][0]["last_message"])
+        self.assertEqual(listing["items"][0]["last_message_role"], "assistant")
+
+    def test_customer_conversation_history_is_scoped_to_user(self):
+        conversation = CustomerServiceConversation(id="private-conv", user_id="user-owner", title="私有会话")
+        self.db.add(conversation)
+        self.db.add(CustomerServiceMessage(
+            conversation_id="private-conv",
+            role="user",
+            content="这是一段不应该被别人读到的上下文",
+        ))
+        self.db.commit()
+
+        owner_history = customer_service_service._build_conversation_history(self.db, "private-conv", "user-owner")
+        other_history = customer_service_service._build_conversation_history(self.db, "private-conv", "user-other")
+
+        self.assertEqual(len(owner_history), 1)
+        self.assertEqual(other_history, [])
 
 
 if __name__ == "__main__":
