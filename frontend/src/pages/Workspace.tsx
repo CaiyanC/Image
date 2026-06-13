@@ -180,7 +180,7 @@ export default function Workspace() {
   }
 
   return (
-    <div className="flex h-[calc(100vh-3.5rem)] p-4 gap-4">
+    <div className="flex h-[calc(100vh-7rem)] gap-4 p-4 md:h-[calc(100vh-5rem)]">
       <div className="w-[40%] flex flex-col gap-4 min-w-[380px]">
         <div className="glass p-1.5 flex gap-1">
           {modes.map((m) => (

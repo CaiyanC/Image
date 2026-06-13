@@ -14,13 +14,15 @@ export default function Layout({ children }: LayoutProps) {
   }, [])
 
   return (
-    <div className="min-h-screen bg-gradient-subtle">
+    <div className="min-h-screen bg-gradient-subtle text-apple-text">
       <div className="fixed inset-0 overflow-hidden pointer-events-none">
-        <div className="absolute -top-40 -right-40 w-96 h-96 rounded-full bg-blue-400/10 blur-3xl" />
-        <div className="absolute -bottom-40 -left-40 w-96 h-96 rounded-full bg-purple-400/10 blur-3xl" />
+        <div className="absolute inset-0 subtle-grid" />
+        <div className="ambient-orb absolute -top-32 -right-28 h-[28rem] w-[28rem] bg-cyan-300/30" />
+        <div className="ambient-orb absolute left-[-10rem] top-1/3 h-[24rem] w-[24rem] bg-amber-300/28" />
+        <div className="ambient-orb absolute bottom-[-12rem] right-1/4 h-[26rem] w-[26rem] bg-emerald-300/22" />
       </div>
       <Header />
-      <main className="pt-14 relative z-10">
+      <main className="relative z-10 pt-28 md:pt-20">
         {children}
       </main>
     </div>

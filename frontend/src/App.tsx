@@ -208,8 +208,8 @@ export default function App() {
 
 function RouteFallback() {
   return (
-    <div className="min-h-screen bg-[#f6f3ee] text-[#2f241d] flex items-center justify-center">
-      <div className="px-6 py-4 rounded-2xl border border-[#d9c9b8] bg-white/80 text-sm tracking-[0.02em]">
+    <div className="flex min-h-screen items-center justify-center bg-gradient-subtle text-apple-text">
+      <div className="glass px-6 py-4 text-sm font-bold tracking-[0.02em]">
         页面加载中...
       </div>
     </div>
@@ -218,12 +218,17 @@ function RouteFallback() {
 
 function NoAccess() {
   return (
-    <div className="min-h-[calc(100vh-56px)] flex items-center justify-center px-4">
-      <div className="glass p-8 max-w-md w-full text-center">
-        <h1 className="text-xl font-semibold text-apple-text">没有访问权限</h1>
-        <p className="text-sm text-apple-gray-medium mt-2">
-          当前账号没有访问该页面的权限，请联系超级管理员调整所在团队权限。
-        </p>
+    <div className="flex min-h-[calc(100vh-7rem)] items-center justify-center px-4 md:min-h-[calc(100vh-5rem)]">
+      <div className="auth-card glass p-8 max-w-md w-full text-center">
+        <div className="relative z-10">
+          <div className="mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-2xl bg-gradient-accent text-lg font-black text-white shadow-[0_14px_28px_rgba(15,118,110,0.22)]">
+            !
+          </div>
+          <h1 className="text-xl font-black text-apple-text">没有访问权限</h1>
+          <p className="text-sm text-apple-gray-medium mt-2">
+            当前账号没有访问该页面的权限，请联系超级管理员调整所在团队权限。
+          </p>
+        </div>
       </div>
     </div>
   )
