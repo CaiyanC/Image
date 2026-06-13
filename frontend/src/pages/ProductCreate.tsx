@@ -90,6 +90,7 @@ export default function ProductCreate() {
   const [loading, setLoading] = useState(false)
   const [draftId, setDraftId] = useState<string | undefined>(urlDraftId)
   const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({})
+  const [notice, setNotice] = useState<{ type: 'success' | 'error'; text: string } | null>(null)
 
   const [sku, setSku] = useState('')
   const [barcode, setBarcode] = useState('')
@@ -610,7 +611,7 @@ export default function ProductCreate() {
         setMedia({ ...media, [key]: [...images, imageUrl] })
       } catch (err) {
         console.error('Image upload failed:', err)
-        alert('图片上传失败')
+        showNotice('error', '图片上传失败')
       }
     }
     event.target.value = ''
@@ -726,7 +727,7 @@ export default function ProductCreate() {
         })
       } catch (err) {
         console.error('Image upload failed:', err)
-        alert('图片上传失败')
+        showNotice('error', '图片上传失败')
       }
     }
     event.target.value = ''
@@ -806,9 +807,14 @@ export default function ProductCreate() {
     setPrompt({ prompts: templates.filter((_, i) => i !== index) })
   }
 
+  function showNotice(type: 'success' | 'error', text: string) {
+    setNotice({ type, text })
+    window.setTimeout(() => setNotice(null), 3500)
+  }
+
   async function handleSave() {
     if (!sku.trim()) {
-      alert('请输入 SKU')
+      showNotice('error', '请输入 SKU')
       return
     }
 
@@ -826,10 +832,10 @@ export default function ProductCreate() {
         setDraftId(created.id as any)
       }
       
-      alert('草稿保存成功')
+      showNotice('success', '草稿保存成功')
     } catch (err: any) {
       console.error('Save draft failed:', err)
-      alert(err?.message || '保存失败，请重试')
+      showNotice('error', err?.message || '保存失败，请重试')
     } finally {
       setLoading(false)
     }
@@ -910,11 +916,11 @@ export default function ProductCreate() {
 
       await api.drafts.publish(activeDraftId)
 
-      alert('发布成功')
+      showNotice('success', '发布成功')
       navigate('/products')
     } catch (err: any) {
       console.error('Publish failed:', err)
-      alert(err?.message || '发布失败，请重试')
+      showNotice('error', err?.message || '发布失败，请重试')
     } finally {
       setLoading(false)
     }
@@ -933,6 +939,15 @@ export default function ProductCreate() {
       <button onClick={() => navigate(draftId ? '/products/drafts' : '/products')} className="text-sm text-blue-500 hover:text-blue-700 mb-2 flex items-center gap-1">
         ← {draftId ? '返回草稿箱' : '返回产品管理'}
       </button>
+      {notice && (
+        <div className={`mb-4 rounded-xl border px-4 py-3 text-sm ${
+          notice.type === 'success'
+            ? 'border-green-200 bg-green-50 text-green-700'
+            : 'border-red-200 bg-red-50 text-red-700'
+        }`}>
+          {notice.text}
+        </div>
+      )}
       <div className="flex items-center justify-between mb-6">
         <div>
           <h1 className="text-2xl font-bold text-apple-text tracking-tight">

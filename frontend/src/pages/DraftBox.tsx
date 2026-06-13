@@ -12,6 +12,7 @@ export default function DraftBox() {
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
   const [batchMode, setBatchMode] = useState(false)
   const [batchConfirm, setBatchConfirm] = useState<'delete' | 'publish' | null>(null)
+  const [notice, setNotice] = useState<{ type: 'success' | 'error'; text: string } | null>(null)
 
   useEffect(() => {
     loadDrafts()
@@ -33,9 +34,10 @@ export default function DraftBox() {
     try {
       await api.drafts.publish(id)
       setDrafts(drafts.filter(d => d.id !== id))
+      showNotice('success', '草稿已发布')
     } catch (err: any) {
       console.error('Publish failed:', err)
-      alert(err?.message || '发布失败，请打开草稿检查必填字段')
+      showNotice('error', err?.message || '发布失败，请打开草稿检查必填字段')
     }
   }
 
@@ -72,6 +74,7 @@ export default function DraftBox() {
     setSelectedIds(new Set())
     setBatchMode(false)
     setBatchConfirm(null)
+    showNotice('success', `已删除 ${count} 个草稿`)
   }
 
   async function handleBatchPublish() {
@@ -93,8 +96,15 @@ export default function DraftBox() {
     setBatchMode(false)
     setBatchConfirm(null)
     if (failures.length > 0) {
-      alert(`成功发布 ${count} 个，失败 ${failures.length} 个：\n${failures.join('\n')}`)
+      showNotice('error', `成功发布 ${count} 个，失败 ${failures.length} 个：${failures.join('；')}`)
+    } else {
+      showNotice('success', `已发布 ${count} 个草稿`)
     }
+  }
+
+  function showNotice(type: 'success' | 'error', text: string) {
+    setNotice({ type, text })
+    window.setTimeout(() => setNotice(null), 3500)
   }
 
   const filteredDrafts = drafts.filter(d => {
@@ -149,6 +159,16 @@ export default function DraftBox() {
           )}
         </div>
       </div>
+
+      {notice && (
+        <div className={`mb-4 rounded-xl border px-4 py-3 text-sm ${
+          notice.type === 'success'
+            ? 'border-green-200 bg-green-50 text-green-700'
+            : 'border-red-200 bg-red-50 text-red-700'
+        }`}>
+          {notice.text}
+        </div>
+      )}
 
       {batchConfirm && (
         <div className="bg-red-50 border border-red-200 rounded-lg p-4 mb-4">
