@@ -2,6 +2,7 @@ from fastapi import APIRouter, Depends, Query, HTTPException, Request, status
 from sqlalchemy.orm import Session
 
 from ..core.database import get_db
+from ..core.permission_constants import MANAGEMENT_GROUP_NAME
 from ..core.security import get_user_groups, require_product_permission
 from ..models.user import User
 from ..schemas.product import (
@@ -14,7 +15,7 @@ router = APIRouter(prefix="/api/products/drafts", tags=["product-drafts"])
 
 def _is_management(user: User, db: Session) -> bool:
     for g in get_user_groups(db, user.id):
-        if g["group_name"] == "管理层":
+        if g["group_name"] == MANAGEMENT_GROUP_NAME:
             return True
     return False
 

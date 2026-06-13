@@ -4,11 +4,7 @@ from ..models.group import Group
 from ..models.user_group import UserGroup
 from ..models.user import User
 from ..models.permissions import GroupPermission, Permission
-
-PRESET_GROUPS = {
-    "管理层", "产品团队", "设计团队", "AI工程师", "AI内容岗",
-    "电商运营", "海外营销", "客服团队", "经销商", "外部达人", "广告代理商",
-}
+from ..core.permission_constants import MANAGEMENT_GROUP_NAME, PRESET_GROUP_NAMES
 
 
 def _group_to_dict(group: Group) -> dict:
@@ -16,7 +12,7 @@ def _group_to_dict(group: Group) -> dict:
         "id": group.id,
         "group_name": group.group_name,
         "description": group.description,
-        "is_preset": group.group_name in PRESET_GROUPS,
+        "is_preset": group.group_name in PRESET_GROUP_NAMES,
         "created_at": str(group.created_at) if group.created_at else None,
         "updated_at": str(group.updated_at) if group.updated_at else None,
     }
@@ -32,7 +28,7 @@ def _active_management_count(db: Session) -> int:
         Group, UserGroup.group_id == Group.id
     ).filter(
         User.is_active == True,  # noqa: E712
-        Group.group_name == "管理层",
+        Group.group_name == MANAGEMENT_GROUP_NAME,
     ).count()
 
 
@@ -136,7 +132,7 @@ def delete_group(db: Session, group_id: str):
     group = get_group_by_id(db, group_id)
     if not group:
         raise HTTPException(status_code=404, detail="Group not found")
-    if group.group_name in PRESET_GROUPS:
+    if group.group_name in PRESET_GROUP_NAMES:
         raise HTTPException(status_code=400, detail="Preset groups cannot be deleted")
     db.query(UserGroup).filter(UserGroup.group_id == group_id).delete()
     db.delete(group)
@@ -175,7 +171,7 @@ def remove_user_from_group(db: Session, group_id: str, user_id: str):
     ).first()
     if not ug:
         raise HTTPException(status_code=404, detail="User not in group")
-    if ug.group and ug.group.group_name == "管理层":
+    if ug.group and ug.group.group_name == MANAGEMENT_GROUP_NAME:
         user = db.query(User).filter(User.id == user_id).first()
         if user and user.is_active and _active_management_count(db) <= 1:
             raise HTTPException(

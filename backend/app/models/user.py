@@ -26,7 +26,7 @@ class User(Base):
         return [
             {
                 "group_id": ug.group_id,
-                "group_name": ug.group.name if ug.group else "",
+                "group_name": ug.group.group_name if ug.group else "",
                 "group_role": ug.group_role,
             }
             for ug in self.user_groups

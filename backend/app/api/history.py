@@ -3,6 +3,7 @@ from sqlalchemy.orm import Session
 from typing import List
 from datetime import date
 from ..core.database import get_db
+from ..core.permission_constants import MANAGEMENT_GROUP_NAME
 from ..core.security import get_current_admin_user, get_user_groups, require_permission
 from ..models.user import User
 from ..schemas.generation import GenerationResponse, GenerationStats
@@ -13,7 +14,7 @@ router = APIRouter(prefix="/api/history", tags=["history"])
 
 def _is_management(user: User, db: Session) -> bool:
     for g in get_user_groups(db, user.id):
-        if g["group_name"] == "管理层":
+        if g["group_name"] == MANAGEMENT_GROUP_NAME:
             return True
     return False
 

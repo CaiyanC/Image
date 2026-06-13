@@ -8,6 +8,7 @@ from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 from .core.config import settings
 from .core.database import init_db, SessionLocal
+from .core.permission_constants import MANAGEMENT_GROUP_NAME
 from .core.security import get_password_hash
 from .models.user import User
 from .api import auth, users, generation, history, admin, products, groups, categories, drafts, customer_service, knowledge_base
@@ -108,7 +109,7 @@ def seed_default_admin():
             # Assign admin to 管理员 group (primary) and 管理层 group
             from .models.group import Group as GroupModel
             from .models.user_group import UserGroup
-            management = db.query(GroupModel).filter(GroupModel.group_name == "管理层").first()
+            management = db.query(GroupModel).filter(GroupModel.group_name == MANAGEMENT_GROUP_NAME).first()
             product_manager = db.query(GroupModel).filter(GroupModel.group_name == "产品经理").first()
             if management:
                 db.add(UserGroup(user_id=admin.id, group_id=management.id, group_role="admin"))

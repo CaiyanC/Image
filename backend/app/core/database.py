@@ -3,6 +3,14 @@ import logging
 from sqlalchemy import create_engine, inspect, text
 from sqlalchemy.orm import sessionmaker, DeclarativeBase
 from .config import settings
+from .permission_constants import (
+    COMMON_PERMISSION_KEYS,
+    DEFAULT_GROUPS,
+    GROUP_PERMISSION_KEYS,
+    PERMISSION_DEFS,
+    PERMISSION_ROUTE_MAP,
+    ROUTE_DEFS,
+)
 
 engine = create_engine(
     settings.DATABASE_URL,
@@ -88,22 +96,9 @@ def _ensure_products_compat_columns():
 def _seed_default_groups(db):
     from ..models.group import Group
 
-    default_groups = [
-        ("产品团队", "产品管理部门，负责产品元数据录入与维护"),
-        ("设计团队", "设计部门，负责产品视觉素材与 AI 生成"),
-        ("电商运营", "电商运营岗位"),
-        ("海外营销", "海外市场营销"),
-        ("AI内容岗", "AI 内容生成岗位"),
-        ("客服团队", "客户服务"),
-        ("管理层", "管理决策层"),
-        ("AI工程师", "AI 技术团队"),
-        ("经销商", "外部经销商"),
-        ("外部达人", "外部 KOL/达人"),
-        ("广告代理商", "广告代理商"),
-    ]
     existing = {g.group_name: g for g in db.query(Group).all()}
     changed = False
-    for name, desc in default_groups:
+    for name, desc in DEFAULT_GROUPS:
         group = existing.get(name)
         if group:
             if not group.description:
@@ -121,30 +116,9 @@ def _seed_default_permissions(db):
     from ..models.permissions import Permission, GroupPermission
     from ..models.routes import Route, PermissionRoute
 
-    permission_defs = [
-        ("history.view", "查看历史记录", "page"),
-        ("profile.view", "查看个人资料", "page"),
-        ("category.read", "查看产品品类", "api"),
-        ("product.read", "查看产品", "page"),
-        ("product.create", "创建产品", "button"),
-        ("product.edit", "编辑产品", "button"),
-        ("product.delete", "删除产品", "button"),
-        ("product.review", "审核产品", "button"),
-        ("media.upload", "上传素材", "button"),
-        ("media.review", "审核素材", "button"),
-        ("media.download", "下载素材", "button"),
-        ("tag.edit", "编辑标签", "button"),
-        ("ai.call", "AI 调用", "api"),
-        ("ai.generate", "AI 生图", "api"),
-        ("ai.customer_service", "智能客服", "api"),
-        ("ai.authorize", "AI 调用授权", "button"),
-        ("competitor.view", "查看竞品图", "page"),
-        ("new_product.view", "查看新品图", "page"),
-        ("export.approved", "导出审批", "button"),
-    ]
     permissions = {p.permission_key: p for p in db.query(Permission).all()}
     changed = False
-    for key, name, permission_type in permission_defs:
+    for key, name, permission_type in PERMISSION_DEFS:
         permission = permissions.get(key)
         if not permission:
             permission = Permission(permission_key=key, permission_name=name, permission_type=permission_type)
@@ -161,21 +135,9 @@ def _seed_default_permissions(db):
     if changed:
         db.commit()
 
-    route_defs = [
-        ("/customer-service", "智能客服", "page"),
-        ("/", "工作区", "page"),
-        ("/history", "历史记录", "page"),
-        ("/profile", "个人资料", "page"),
-        ("/products", "产品管理", "page"),
-        ("/products/create", "新增产品", "page"),
-        ("/products/drafts", "草稿箱", "page"),
-        ("/admin/users", "用户管理", "page"),
-        ("/admin/groups", "用户组管理", "page"),
-        ("/admin/settings", "系统设置", "page"),
-    ]
     routes = {r.route_path: r for r in db.query(Route).all()}
     changed = False
-    for path, name, route_type in route_defs:
+    for path, name, route_type in ROUTE_DEFS:
         route = routes.get(path)
         if not route:
             route = Route(route_path=path, route_name=name, route_type=route_type)
@@ -192,27 +154,9 @@ def _seed_default_permissions(db):
     if changed:
         db.commit()
 
-    group_permission_map = {
-        "管理层": [key for key, _, _ in permission_defs],
-        "产品团队": [
-            "product.read", "product.create", "product.edit", "product.review",
-            "media.download", "tag.edit", "ai.call", "ai.generate", "ai.customer_service", "competitor.view", "new_product.view",
-        ],
-        "设计团队": [
-            "product.read", "product.edit", "media.upload", "media.review",
-            "media.download", "ai.call", "ai.generate", "ai.customer_service", "new_product.view",
-        ],
-        "AI工程师": ["ai.call", "ai.generate", "ai.customer_service", "ai.authorize", "media.download", "new_product.view"],
-        "AI内容岗": ["product.read", "media.download", "ai.call", "ai.generate", "ai.customer_service", "competitor.view", "new_product.view"],
-        "电商运营": ["product.read", "product.edit", "media.download", "ai.call", "ai.generate", "ai.customer_service", "new_product.view"],
-        "海外营销": ["product.read", "media.download", "ai.call", "ai.generate", "ai.customer_service", "competitor.view", "new_product.view"],
-        "客服团队": ["product.read", "ai.call", "ai.customer_service"],
-        "经销商": ["product.read", "media.download"],
-        "外部达人": ["product.read", "media.download"],
-        "广告代理商": ["product.read", "media.download"],
-    }
+    group_permission_map = {group_name: list(permission_keys) for group_name, permission_keys in GROUP_PERMISSION_KEYS.items()}
     for permission_keys in group_permission_map.values():
-        permission_keys.extend(["history.view", "profile.view"])
+        permission_keys.extend(COMMON_PERMISSION_KEYS)
         if "product.read" in permission_keys:
             permission_keys.append("category.read")
     groups = {g.group_name: g for g in db.query(Group).all()}
@@ -238,23 +182,13 @@ def _seed_default_permissions(db):
     if changed:
         db.commit()
 
-    permission_route_map = {
-        "ai.generate": ["/"],
-        "ai.customer_service": ["/customer-service"],
-        "history.view": ["/history"],
-        "profile.view": ["/profile"],
-        "product.read": ["/products", "/products/drafts"],
-        "product.create": ["/products/create"],
-        "product.edit": ["/products/create", "/products/drafts"],
-        "product.delete": ["/products"],
-    }
     routes = {r.route_path: r for r in db.query(Route).all()}
     existing_pairs = {
         (str(pr.permission_id), str(pr.route_id))
         for pr in db.query(PermissionRoute).all()
     }
     changed = False
-    for permission_key, route_paths in permission_route_map.items():
+    for permission_key, route_paths in PERMISSION_ROUTE_MAP.items():
         permission = permissions.get(permission_key)
         if not permission:
             continue
