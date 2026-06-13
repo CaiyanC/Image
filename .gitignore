@@ -12,6 +12,7 @@ uploads/
 backend/uploads/
 logs/
 backend/logs/
+backend/runtime/
 
 # Python virtual environment
 venv/

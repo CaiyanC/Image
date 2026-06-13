@@ -1,3 +1,5 @@
+import json
+import os
 import threading
 import uuid
 from concurrent.futures import ThreadPoolExecutor
@@ -9,9 +11,12 @@ from . import knowledge_service, operation_log_service, product_service, product
 
 
 MAX_JOBS = 100
+_RUNTIME_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "runtime"))
+_JOB_STORE_PATH = os.path.join(_RUNTIME_DIR, "knowledge_jobs.json")
 _LOCK = threading.RLock()
 _EXECUTOR = ThreadPoolExecutor(max_workers=1, thread_name_prefix="knowledge-job")
 _JOBS: dict[str, dict[str, Any]] = {}
+_LOADED = False
 
 
 def create_reindex_job(*, created_by: str, mode: str = "pending", limit: int | None = None, embed: bool = True) -> dict:
@@ -30,36 +35,44 @@ def create_embedding_retry_job(*, created_by: str, limit: int | None = 20) -> di
 
 def list_jobs(limit: int = 20) -> dict:
     with _LOCK:
+        _ensure_loaded_locked()
         items = sorted(_JOBS.values(), key=lambda item: item["created_at"], reverse=True)[:max(1, min(limit, MAX_JOBS))]
         return {"items": [_public_job(item) for item in items], "total": len(_JOBS)}
 
 
 def get_job(job_id: str) -> dict | None:
     with _LOCK:
+        _ensure_loaded_locked()
         job = _JOBS.get(job_id)
         return _public_job(job) if job else None
 
 
 def _create_job(kind: str, *, created_by: str, payload: dict[str, Any]) -> dict:
-    job_id = str(uuid.uuid4())
-    now = _now()
-    job = {
-        "id": job_id,
-        "kind": kind,
-        "status": "queued",
-        "stage": "queued",
-        "created_by": created_by,
-        "payload": payload,
-        "result": None,
-        "error": None,
-        "created_at": now,
-        "updated_at": now,
-        "started_at": None,
-        "finished_at": None,
-    }
     with _LOCK:
+        _ensure_loaded_locked()
+        active_job = _active_job_locked()
+        if active_job:
+            return _public_job(active_job)
+
+        job_id = str(uuid.uuid4())
+        now = _now()
+        job = {
+            "id": job_id,
+            "kind": kind,
+            "status": "queued",
+            "stage": "queued",
+            "created_by": created_by,
+            "payload": payload,
+            "result": None,
+            "error": None,
+            "created_at": now,
+            "updated_at": now,
+            "started_at": None,
+            "finished_at": None,
+        }
         _JOBS[job_id] = job
         _trim_jobs_locked()
+        _persist_jobs_locked()
     _EXECUTOR.submit(_run_job, job_id)
     return _public_job(job)
 
@@ -148,17 +161,20 @@ def _log_job(db, job: dict[str, Any] | None, status: str, error: str | None = No
 
 def _get_job_for_update(job_id: str) -> dict[str, Any] | None:
     with _LOCK:
+        _ensure_loaded_locked()
         job = _JOBS.get(job_id)
         return dict(job) if job else None
 
 
 def _update_job(job_id: str, **changes: Any) -> None:
     with _LOCK:
+        _ensure_loaded_locked()
         job = _JOBS.get(job_id)
         if not job:
             return
         job.update(changes)
         job["updated_at"] = _now()
+        _persist_jobs_locked()
 
 
 def _public_job(job: dict[str, Any] | None) -> dict:
@@ -185,6 +201,70 @@ def _trim_jobs_locked() -> None:
     ordered = sorted(_JOBS.values(), key=lambda item: item["created_at"])
     for job in ordered[:len(_JOBS) - MAX_JOBS]:
         _JOBS.pop(job["id"], None)
+
+
+def _active_job_locked() -> dict[str, Any] | None:
+    active = [
+        job
+        for job in _JOBS.values()
+        if job.get("status") in {"queued", "running"}
+    ]
+    if not active:
+        return None
+    return sorted(active, key=lambda item: item["created_at"])[0]
+
+
+def _ensure_loaded_locked() -> None:
+    global _LOADED
+    if _LOADED:
+        return
+    _LOADED = True
+    if not os.path.exists(_JOB_STORE_PATH):
+        return
+    try:
+        with open(_JOB_STORE_PATH, "r", encoding="utf-8") as file:
+            raw = json.load(file)
+    except Exception:
+        return
+    if not isinstance(raw, list):
+        return
+    changed = False
+    for item in raw:
+        if not isinstance(item, dict) or not item.get("id"):
+            continue
+        job = {
+            "id": str(item.get("id")),
+            "kind": str(item.get("kind") or "unknown"),
+            "status": str(item.get("status") or "failed"),
+            "stage": str(item.get("stage") or ""),
+            "created_by": str(item.get("created_by") or ""),
+            "payload": item.get("payload") if isinstance(item.get("payload"), dict) else {},
+            "result": item.get("result") if isinstance(item.get("result"), dict) else None,
+            "error": item.get("error"),
+            "created_at": str(item.get("created_at") or _now()),
+            "updated_at": str(item.get("updated_at") or _now()),
+            "started_at": item.get("started_at"),
+            "finished_at": item.get("finished_at"),
+        }
+        if job["status"] in {"queued", "running"}:
+            job["status"] = "failed"
+            job["stage"] = "interrupted"
+            job["error"] = "Service restarted before the job finished."
+            job["finished_at"] = _now()
+            job["updated_at"] = job["finished_at"]
+            changed = True
+        _JOBS[job["id"]] = job
+    if changed:
+        _persist_jobs_locked()
+
+
+def _persist_jobs_locked() -> None:
+    os.makedirs(_RUNTIME_DIR, exist_ok=True)
+    items = sorted(_JOBS.values(), key=lambda item: item["created_at"], reverse=True)[:MAX_JOBS]
+    temp_path = f"{_JOB_STORE_PATH}.tmp"
+    with open(temp_path, "w", encoding="utf-8") as file:
+        json.dump(items, file, ensure_ascii=False, indent=2, default=str)
+    os.replace(temp_path, _JOB_STORE_PATH)
 
 
 def _now() -> str:
