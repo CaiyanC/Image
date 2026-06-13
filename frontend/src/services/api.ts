@@ -200,6 +200,20 @@ export interface KnowledgeSearchPreview {
   }>
 }
 
+export interface KnowledgeJob {
+  id: string
+  kind: string
+  status: 'queued' | 'running' | 'succeeded' | 'failed' | string
+  stage: string
+  payload: Record<string, unknown>
+  result?: Record<string, unknown> | null
+  error?: string | null
+  created_at: string
+  updated_at: string
+  started_at?: string | null
+  finished_at?: string | null
+}
+
 export type CustomerServiceStreamEvent =
   | { type: 'status'; message?: string; label?: string }
   | ({ type: 'meta' } & Omit<CustomerServiceAskResult, 'answer'>)
@@ -707,6 +721,19 @@ export const api = {
         { method: 'POST', body: JSON.stringify(data) },
         300000,
       ),
+    createReindexJob: (data: { mode?: 'pending' | 'full'; limit?: number; embed?: boolean }) =>
+      request<KnowledgeJob>(
+        '/knowledge-base/jobs/reindex-products',
+        { method: 'POST', body: JSON.stringify(data) },
+      ),
+    retryEmbeddings: (data: { limit?: number }) =>
+      request<KnowledgeJob>(
+        '/knowledge-base/jobs/retry-embeddings',
+        { method: 'POST', body: JSON.stringify(data) },
+      ),
+    jobs: (limit = 20) =>
+      request<{ items: KnowledgeJob[]; total: number }>(`/knowledge-base/jobs?limit=${limit}`),
+    job: (id: string) => request<KnowledgeJob>(`/knowledge-base/jobs/${id}`),
   },
 
   categories: {

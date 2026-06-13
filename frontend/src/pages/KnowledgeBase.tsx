@@ -1,20 +1,31 @@
 import { useEffect, useState } from 'react'
 import type { ReactNode } from 'react'
 import { api } from '../services/api'
-import type { KnowledgeBaseHealth, KnowledgeSearchPreview } from '../services/api'
+import type { KnowledgeBaseHealth, KnowledgeJob, KnowledgeSearchPreview } from '../services/api'
 
 export default function KnowledgeBase() {
   const [health, setHealth] = useState<KnowledgeBaseHealth | null>(null)
   const [preview, setPreview] = useState<KnowledgeSearchPreview | null>(null)
   const [query, setQuery] = useState('camping coffee')
   const [sku, setSku] = useState('')
+  const [jobs, setJobs] = useState<KnowledgeJob[]>([])
   const [loading, setLoading] = useState(false)
-  const [reindexing, setReindexing] = useState(false)
+  const [jobLoading, setJobLoading] = useState(false)
   const [error, setError] = useState('')
 
   useEffect(() => {
     loadHealth()
+    loadJobs()
   }, [])
+
+  useEffect(() => {
+    if (!jobs.some((job) => isActiveJob(job.status))) return
+    const timer = window.setInterval(() => {
+      loadJobs()
+      loadHealth()
+    }, 2500)
+    return () => window.clearInterval(timer)
+  }, [jobs])
 
   async function loadHealth() {
     setError('')
@@ -22,6 +33,15 @@ export default function KnowledgeBase() {
       setHealth(await api.knowledgeBase.health())
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to load knowledge health')
+    }
+  }
+
+  async function loadJobs() {
+    try {
+      const result = await api.knowledgeBase.jobs(10)
+      setJobs(result.items)
+    } catch {
+      // Job polling should not block the health dashboard.
     }
   }
 
@@ -42,21 +62,35 @@ export default function KnowledgeBase() {
     }
   }
 
-  async function reindex(mode: 'pending' | 'full') {
-    setReindexing(true)
+  async function createReindexJob(mode: 'pending' | 'full') {
+    setJobLoading(true)
     setError('')
     try {
-      const result = await api.knowledgeBase.reindexProducts({ mode, limit: mode === 'full' ? undefined : 100, embed: true })
-      setHealth(result.health)
+      await api.knowledgeBase.createReindexJob({ mode, limit: mode === 'full' ? undefined : 100, embed: true })
+      await loadJobs()
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Reindex failed')
+      setError(err instanceof Error ? err.message : 'Failed to create reindex job')
     } finally {
-      setReindexing(false)
+      setJobLoading(false)
+    }
+  }
+
+  async function retryEmbeddings() {
+    setJobLoading(true)
+    setError('')
+    try {
+      await api.knowledgeBase.retryEmbeddings({ limit: 20 })
+      await loadJobs()
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to create retry job')
+    } finally {
+      setJobLoading(false)
     }
   }
 
   const productCoverage = percent(health?.coverage.product_index_coverage)
   const embeddingCoverage = percent(health?.coverage.embedding_coverage)
+  const hasActiveJob = jobs.some((job) => isActiveJob(job.status))
 
   return (
     <div className="mx-auto max-w-7xl p-4">
@@ -70,12 +104,15 @@ export default function KnowledgeBase() {
             </p>
           </div>
           <div className="flex flex-wrap gap-2">
-            <button className="btn-secondary px-4 py-2 text-sm" onClick={loadHealth} disabled={reindexing}>Refresh</button>
-            <button className="btn-secondary px-4 py-2 text-sm" onClick={() => reindex('pending')} disabled={reindexing}>
+            <button className="btn-secondary px-4 py-2 text-sm" onClick={() => { loadHealth(); loadJobs() }} disabled={jobLoading}>Refresh</button>
+            <button className="btn-secondary px-4 py-2 text-sm" onClick={() => createReindexJob('pending')} disabled={jobLoading || hasActiveJob}>
               Sync Pending
             </button>
-            <button className="btn-primary px-4 py-2 text-sm" onClick={() => reindex('full')} disabled={reindexing}>
-              {reindexing ? 'Running...' : 'Full Reindex'}
+            <button className="btn-secondary px-4 py-2 text-sm" onClick={retryEmbeddings} disabled={jobLoading || hasActiveJob}>
+              Retry Failed
+            </button>
+            <button className="btn-primary px-4 py-2 text-sm" onClick={() => createReindexJob('full')} disabled={jobLoading || hasActiveJob}>
+              {jobLoading || hasActiveJob ? 'Job Running...' : 'Full Reindex'}
             </button>
           </div>
         </div>
@@ -158,6 +195,10 @@ export default function KnowledgeBase() {
             )}
           </Panel>
 
+          <Panel title="Background Jobs">
+            <JobList jobs={jobs} onRefresh={loadJobs} />
+          </Panel>
+
           <Panel title="Embedding Status">
             <KeyValue data={health?.embedding_status_counts || {}} />
           </Panel>
@@ -235,6 +276,55 @@ function ChunkSamples({ title, items }: { title: string; items: Array<Record<str
       )}
     </Panel>
   )
+}
+
+function JobList({ jobs, onRefresh }: { jobs: KnowledgeJob[]; onRefresh: () => void }) {
+  if (!jobs.length) {
+    return (
+      <div className="space-y-3">
+        <p className="text-sm text-apple-gray-medium">No background jobs yet.</p>
+        <button type="button" className="btn-secondary px-3 py-1.5 text-xs" onClick={onRefresh}>Refresh Jobs</button>
+      </div>
+    )
+  }
+
+  return (
+    <div className="space-y-2">
+      {jobs.map((job) => {
+        const embeddingResult = job.result?.embedding
+        return (
+          <div key={job.id} className="rounded-xl bg-white/70 p-3 text-xs">
+            <div className="flex items-center justify-between gap-3">
+              <div>
+                <div className="font-bold text-apple-text">{job.kind}</div>
+                <div className="mt-1 text-apple-gray-medium">{job.stage}</div>
+              </div>
+              <span className={`rounded-full px-2 py-1 font-bold ${jobTone(job.status)}`}>{job.status}</span>
+            </div>
+            <div className="mt-2 font-mono text-[11px] text-apple-gray-medium">{job.id}</div>
+            {job.error && <div className="mt-2 rounded-lg bg-red-50 px-2 py-1 text-red-700">{job.error}</div>}
+            {Boolean(embeddingResult) && (
+              <div className="mt-2 rounded-lg bg-emerald-50 px-2 py-1 text-emerald-700">
+                embedding: {JSON.stringify(embeddingResult)}
+              </div>
+            )}
+          </div>
+        )
+      })}
+      <button type="button" className="btn-secondary px-3 py-1.5 text-xs" onClick={onRefresh}>Refresh Jobs</button>
+    </div>
+  )
+}
+
+function jobTone(status: string) {
+  if (status === 'succeeded') return 'bg-emerald-50 text-emerald-700'
+  if (status === 'failed') return 'bg-red-50 text-red-700'
+  if (status === 'running') return 'bg-blue-50 text-blue-700'
+  return 'bg-amber-50 text-amber-700'
+}
+
+function isActiveJob(status: string) {
+  return status === 'queued' || status === 'running'
 }
 
 function percent(value?: number) {

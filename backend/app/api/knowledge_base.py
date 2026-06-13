@@ -1,11 +1,11 @@
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from ..core.database import get_db
 from ..core.security import require_any_permission, require_permission
 from ..models.user import User
-from ..services import knowledge_service, product_service, product_vector_index_service
+from ..services import knowledge_job_service, knowledge_service, product_service, product_vector_index_service
 
 router = APIRouter(prefix="/api/knowledge-base", tags=["knowledge-base"])
 
@@ -29,6 +29,10 @@ class ProductReindexRequest(BaseModel):
     mode: str = "pending"
     limit: int | None = None
     embed: bool = True
+
+
+class EmbeddingRetryRequest(BaseModel):
+    limit: int | None = 20
 
 
 @router.get("/status")
@@ -80,6 +84,47 @@ async def reindex_products(
         "embedding": embedded,
         "health": knowledge_service.health_report(db),
     }
+
+
+@router.post("/jobs/reindex-products")
+def create_reindex_job(
+    body: ProductReindexRequest,
+    current_user: User = Depends(require_permission("ai.call")),
+):
+    return knowledge_job_service.create_reindex_job(
+        created_by=current_user.id,
+        mode=body.mode,
+        limit=body.limit,
+        embed=body.embed,
+    )
+
+
+@router.post("/jobs/retry-embeddings")
+def create_embedding_retry_job(
+    body: EmbeddingRetryRequest,
+    current_user: User = Depends(require_permission("ai.call")),
+):
+    limit = min(max(body.limit or 20, 1), 500)
+    return knowledge_job_service.create_embedding_retry_job(created_by=current_user.id, limit=limit)
+
+
+@router.get("/jobs")
+def list_jobs(
+    limit: int = Query(20, ge=1, le=100),
+    current_user: User = Depends(require_permission("ai.call")),
+):
+    return knowledge_job_service.list_jobs(limit=limit)
+
+
+@router.get("/jobs/{job_id}")
+def get_job(
+    job_id: str,
+    current_user: User = Depends(require_permission("ai.call")),
+):
+    job = knowledge_job_service.get_job(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+    return job
 
 
 @router.post("/documents")
