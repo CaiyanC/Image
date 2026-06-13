@@ -3,6 +3,7 @@ from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from ..core.database import get_db
+from ..core.rate_limit import enforce_rate_limit
 from ..core.security import require_any_permission, require_permission
 from ..models.user import User
 from ..services import knowledge_job_service, knowledge_service, product_service, product_vector_index_service
@@ -91,6 +92,7 @@ def create_reindex_job(
     body: ProductReindexRequest,
     current_user: User = Depends(require_permission("ai.call")),
 ):
+    enforce_rate_limit(user_id=current_user.id, scope="knowledge.reindex_job", limit=10, window_seconds=600)
     return knowledge_job_service.create_reindex_job(
         created_by=current_user.id,
         mode=body.mode,
@@ -104,6 +106,7 @@ def create_embedding_retry_job(
     body: EmbeddingRetryRequest,
     current_user: User = Depends(require_permission("ai.call")),
 ):
+    enforce_rate_limit(user_id=current_user.id, scope="knowledge.embedding_retry", limit=20, window_seconds=600)
     limit = min(max(body.limit or 20, 1), 500)
     return knowledge_job_service.create_embedding_retry_job(created_by=current_user.id, limit=limit)
 

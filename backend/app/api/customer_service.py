@@ -8,6 +8,7 @@ from starlette.responses import StreamingResponse
 from sqlalchemy.orm import Session
 
 from ..core.database import get_db
+from ..core.rate_limit import enforce_rate_limit
 from ..core.security import get_user_permissions, require_permission
 from ..models.user import User
 from ..services import agent_action_service, customer_service_service, operation_log_service
@@ -115,6 +116,7 @@ async def ask(
     current_user: User = Depends(require_permission("ai.customer_service")),
     db: Session = Depends(get_db),
 ):
+    enforce_rate_limit(user_id=current_user.id, scope="customer_service.ask", limit=60, window_seconds=60)
     result = await customer_service_service.ask_customer_service(
         db,
         user_id=current_user.id,
@@ -144,6 +146,7 @@ async def ask_stream(
     current_user: User = Depends(require_permission("ai.customer_service")),
     db: Session = Depends(get_db),
 ):
+    enforce_rate_limit(user_id=current_user.id, scope="customer_service.ask_stream", limit=60, window_seconds=60)
     async def event_stream():
         try:
             yield _sse("status", {"message": "agent_planning", "label": "正在理解问题并选择工具"})
