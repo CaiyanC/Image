@@ -58,6 +58,16 @@ export default function Register() {
           </p>
         </div>
 
+        {!allowPublicRegistration ? (
+          <div className="glass p-8 space-y-5 text-center">
+            <div className="rounded-xl border border-blue-100 bg-blue-50 px-4 py-3 text-sm text-blue-700">
+              当前系统已关闭公开注册。请联系管理员在“用户管理”中创建企业账号并分配团队权限。
+            </div>
+            <Link to="/login" className="btn-primary inline-flex w-full justify-center">
+              返回登录
+            </Link>
+          </div>
+        ) : (
         <form onSubmit={handleSubmit} className="glass p-8 space-y-5">
           {error && (
             <div className="bg-red-50 border border-red-200 text-red-600 px-4 py-3 rounded-xl text-sm">
@@ -128,6 +138,7 @@ export default function Register() {
             </Link>
           </p>
         </form>
+        )}
       </div>
     </div>
   )
