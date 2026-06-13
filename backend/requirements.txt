@@ -11,3 +11,4 @@ pydantic[email]==2.8.2
 aiofiles==24.1.0
 python-dotenv==1.0.1
 psycopg2-binary==2.9.9
+pytest==9.0.3
