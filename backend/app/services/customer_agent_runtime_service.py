@@ -711,7 +711,7 @@ async def _build_result_async(
                         "results": knowledge_rows,
                     },
                 ]
-    answer = await _finalize_answer(
+    final_response = await _finalize_answer(
         db,
         question,
         sku,
@@ -724,6 +724,8 @@ async def _build_result_async(
         route_hints=route_hints,
         answer_delta_callback=answer_delta_callback,
     )
+    answer = final_response.get("answer") if isinstance(final_response, dict) else final_response
+    answer_metadata_override = final_response.get("answer_metadata") if isinstance(final_response, dict) else None
     if enriched_results and answer and not _should_replace_recommendation_answer(answer, recommendation_question, enriched_results):
         active_preserve_llm_answer = True
     return _build_result(
@@ -735,6 +737,7 @@ async def _build_result_async(
         conversation_history=conversation_history or [],
         intent_override=intent_override,
         preserve_llm_answer=active_preserve_llm_answer,
+        answer_metadata_override=answer_metadata_override if isinstance(answer_metadata_override, dict) else None,
     )
 
 
@@ -748,6 +751,7 @@ def _build_result(
     direct_answer: bool = False,
     intent_override: str | None = None,
     preserve_llm_answer: bool = False,
+    answer_metadata_override: dict[str, Any] | None = None,
 ) -> dict:
     actions = _collect_actions(tool_results)
     raw_results = _collect_results(tool_results)
@@ -768,6 +772,9 @@ def _build_result(
     needs_clarification = _needs_clarification(clean_answer, raw_results, warnings)
     display_results = _merge_results_for_display(question, raw_results)
     suggested_followups = _suggested_followups(question, display_results, needs_clarification)
+    answer_metadata = _build_answer_metadata(clean_answer, display_results, warnings, needs_clarification)
+    if answer_metadata_override:
+        answer_metadata = {**answer_metadata, **answer_metadata_override}
     final_steps = [
         {
             "type": "llm_decision",
@@ -794,6 +801,7 @@ def _build_result(
         "suggested_followups": suggested_followups,
         "followups": suggested_followups,
         "evidence": _evidence_from_results(display_results),
+        "answer_metadata": answer_metadata,
         "debug": {
             "agent_mode": "llm_tool_calling",
             "intent": intent,
@@ -869,6 +877,24 @@ reason 字段必须说明你为什么选择这些 SKU，或者为什么判断为
                 "例如“我要买星空投影炉”“有没有星空投影炉”属于 specific_product；"
                 "“我想找一个适合高海拔的炉具”属于 scene_description。"
                 "最终只输出 JSON，可包含 resolved_skus、query_type、product_name、reason。"
+            ),
+        },
+        {
+            "role": "system",
+            "content": (
+                "请先直接回答用户原问题，再用证据补充。retrieved_products 和 tool_results 只是证据，不是最终答案。"
+                "不要把“找到 N 条产品资料”当成最终回答，也不要只复述检索结果列表。"
+                "如果资料里没有明确维护用户问到的信息，要明确说明“当前知识库没有维护/现有资料不足以确认”，不要编造。"
+                "如果资料里有相关字段或证据，就基于证据总结；如果资料不足，就先说明不足，再给出已能确认的信息。"
+            ),
+        },
+        {
+            "role": "system",
+            "content": (
+                "请先直接回答用户原问题，再用证据补充。retrieved_products 和 tool_results 只是证据，不是最终答案。"
+                "不要把“找到 N 条产品资料”当成最终回答，也不要只复述检索结果列表。"
+                "如果资料里没有明确维护用户问到的信息，要明确说明“当前知识库没有维护/现有资料不足以确认”，不要编造。"
+                "如果资料里有相关字段或证据，就基于证据总结；如果资料不足，就先说明不足，再给出已能确认的信息。"
             ),
         },
         {
@@ -1704,10 +1730,9 @@ async def _finalize_answer(
     conversation_context = _conversation_context_for_question(question, conversation_history)
     last_turn_summary = _last_turn_summary(db, conversation_id, user_id)
     retrieved_products = _collect_results(tool_results)
-    display_retrieved_products = _localize_product_field_keys(retrieved_products)
-    display_tool_results = _localize_product_field_keys(tool_results)
-    compact_retrieved_products = [_compact_retrieved_product_for_prompt(item) for item in display_retrieved_products[:5]]
-    compact_tool_results = _compact_prompt_tool_results(display_tool_results)
+    grouped_retrieved_products = _group_retrieved_products_by_sku(retrieved_products)
+    compact_retrieved_products = [_compact_retrieved_product_for_prompt(item) for item in grouped_retrieved_products[:5]]
+    compact_tool_results = _compact_prompt_tool_results(tool_results)
     effective_intent_hint = intent_hint or _infer_intent(
         question,
         tool_results,
@@ -1726,7 +1751,7 @@ async def _finalize_answer(
     if effective_intent_hint == "recommend_products":
         compact_retrieved_products = [
             _compact_recommendation_product_for_prompt(item)
-            for item in display_retrieved_products[:5]
+            for item in grouped_retrieved_products[:5]
         ]
         compact_tool_results = []
     prompt_route_hints = dict(route_hints or {})
@@ -1782,15 +1807,17 @@ async def _finalize_answer(
                 "【回答方式】"
                 "- 先给结论，再给依据。"
                 "- 对比类问题：直接给对比结论（哪个更轻/哪个容量更大/有什么区别）。"
-                "- 筛选类问题：列出符合条件的产品，不要只说\"找到N条资料\"。"
+                "- 筛选类问题：只有在用户明确是在做筛选/检索时，才列出符合条件的产品，不要只说\"找到N条资料\"。"
                 "- 推荐类问题：说明推荐理由，引用产品的具体参数或卖点。"
                 "- 参数查询：直接给参数值，来源是retrieved_products。"
+                "- 如果用户问的是某种说法能不能确认、能不能承诺、能不能宣传、是否有禁用/限制话术，先判断当前知识库有没有专门维护这类负向信息；如果没有，就直接说明暂无此数据，不要改写成产品介绍或参数罗列。"
                 "【上下文处理】"
                 "- 用户追问上一轮（为什么/理由/解释一下）：基于last_turn_summary.result_skus解释，不重新检索。"
                 "- 用户本轮重新说明了需求（新的人数/场景/预算）：以本轮question和tool_results为准。"
                 "- 用户说预算有限/便宜一点：优先推荐价格定位为中端或入门的产品，高端产品不作首选。"
                 "【格式要求】"
                 "- 不使用Markdown（不用**、###、表格语法）。"
+                "- 不使用任何HTML标签（不用<br>、<p>、<b>等）。"
                 "- 只输出JSON：{\"answer\":\"...\"}。"
             ),
         },
@@ -1817,15 +1844,21 @@ async def _finalize_answer(
     messages.insert(1, {
         "role": "system",
         "content": (
-            "\u6362\u63a8\u8350\u65f6\uff0c\u5982\u679c recommendation_context "
-            "\u91cc\u6709\u539f\u59cb\u54c1\u7c7b\u9700\u6c42\uff0c\u8981\u7528\u5b83\u5224\u65ad\u5019\u9009\u4ea7\u54c1"
-            "\u662f\u5426\u660e\u663e\u504f\u79bb\u7528\u6237\u6700\u521d\u9700\u6c42\u3002\u4f8b\u5982\u6700\u521d\u8981"
-            "\u201c\u9505\u201d\uff0c\u5019\u9009\u91cc\u51fa\u73b0\u201c\u70e7\u6c34\u58f6\u201d\u3001\u201c\u7089\u5177\u201d"
-            "\u7b49\u4e0d\u540c\u54c1\u7c7b\uff0c\u5e94\u4f18\u5148\u9009\u54c1\u7c7b\u4e00\u81f4\u7684\u5019\u9009\u3002"
-            "\u5982\u679c\u5019\u9009\u6c60\u91cc\u6ca1\u6709\u54c1\u7c7b\u4e00\u81f4\u7684\u4ea7\u54c1\uff0c"
-            "\u8981\u660e\u8bf4\u201c\u5f53\u524d\u54c1\u7c7b\u6682\u65e0\u66f4\u591a\u63a8\u8350\uff0c"
-            "\u4ee5\u4e0b\u662f\u76f8\u5173\u5468\u8fb9\u4ea7\u54c1\u201d\uff0c\u4e0d\u8981\u5728\u6ca1\u6709\u8bf4\u660e"
-            "\u7684\u60c5\u51b5\u4e0b\u76f4\u63a5\u8de8\u54c1\u7c7b\u63a8\u8350\u3002"
+            "Output JSON must include answer, answer_policy and evidence_insufficient. "
+            "Use answer_policy='insufficient_evidence' and evidence_insufficient=true when the available evidence does not explicitly maintain or confirm the information asked by the user. "
+            "Otherwise use answer_policy='normal' and evidence_insufficient=false."
+        ),
+    })
+    messages.insert(1, {
+        "role": "system",
+        "content": (
+            "回答时先直接回答用户原问题，再用证据补充。retrieved_products 和 tool_results 只是证据，不是最终答案。"
+            "不要把“找到 N 条产品资料”当成最终回答，也不要只复述检索结果列表。"
+            "如果资料里没有明确维护用户问到的信息，要明确说明“当前知识库没有维护/现有资料不足以确认”，不要编造。"
+            "如果资料里有相关字段或证据，就基于证据总结；如果资料不足，就先说明不足，再给出已能确认的信息。"
+            "同一个 SKU / product_id 的多个 chunk 已经在进入这里之前聚合成一个产品卡片，回答时按产品卡片分析，不要再拆回 chunk。"
+            "当用户问的是某种说法能不能确认、能不能承诺、能不能宣传、有没有禁用话术、资料是否维护时，优先回答“知识库有没有这类资料、资料能否支持确认”，不要改写成产品介绍、规格罗列或检索结果清单。"
+            "如果检索到的内容里没有专门维护的负向/限制/禁用信息，就不要把正向卖点、规格或通用产品描述拼成“不能承诺内容”；应直接说明当前知识库没有维护这类内容，最多补充可确认的基础资料。"
         ),
     })
     agent_trace_service.trace("FINAL_REQUEST", {"messages": messages})
@@ -1847,8 +1880,17 @@ async def _finalize_answer(
     agent_trace_service.trace("FINAL_RESPONSE", {"content": content})
     data = _parse_json_object(content)
     if data and data.get("answer"):
-        return str(((_parse_json_object(str(data["answer"])) or {}).get("answer")) or data["answer"]).strip()
-    return content.strip() or None
+        answer = str(((_parse_json_object(str(data["answer"])) or {}).get("answer")) or data["answer"])
+        evidence_insufficient = data.get("evidence_insufficient") is True or data.get("answer_policy") == "insufficient_evidence"
+        return {
+            "answer": _clean_customer_answer(answer),
+            "answer_metadata": {
+                "evidence_insufficient": evidence_insufficient,
+                "answer_policy": "insufficient_evidence" if evidence_insufficient else "normal",
+            },
+        }
+    cleaned = _clean_customer_answer(content)
+    return {"answer": cleaned, "answer_metadata": {}} if cleaned else None
 
 
 def _product_detail_prompt_target_skus(
@@ -1927,8 +1969,21 @@ def _compact_retrieved_product_for_prompt(product: Any) -> Any:
     if isinstance(product.get("content"), str) and not any(
         product.get(key) not in (None, "", [], {})
         for key in ("product_name_cn", "product_name_en", "category", "specs", "business")
-    ):
+    ) and not any(product.get(key) not in (None, "", [], {}) for key in ("evidence_sections", "matched_sections", "knowledge_matches")):
         return _compact_knowledge_result_for_prompt(product)
+
+    def _spec_entry_text(value: Any) -> str:
+        if value in (None, "", []):
+            return ""
+        if not isinstance(value, dict):
+            return str(value).strip()
+        label = str(value.get("label") or "").strip()
+        raw_value = str(value.get("value") or "").strip()
+        unit = str(value.get("unit") or "").strip()
+        if not raw_value:
+            return label
+        value_text = f"{raw_value}{unit}" if unit and not raw_value.endswith(unit) else raw_value
+        return f"{label}：{value_text}" if label else value_text
 
     def _first_text(value: Any, *, limit: int = 160) -> str:
         if value in (None, "", []):
@@ -1967,12 +2022,18 @@ def _compact_retrieved_product_for_prompt(product: Any) -> Any:
         ]
 
     specs = product.get("specs") or {}
+    if not isinstance(specs, dict):
+        specs = {}
     business = product.get("business") or {}
+    if not isinstance(business, dict):
+        business = {}
     content = product.get("content") or {}
     recommendation_match = product.get("recommendation_match") or {}
+    if not isinstance(recommendation_match, dict):
+        recommendation_match = {}
 
     for key, value in {
-        "capacity": _first_text(_first_item(specs.get("capacity"))),
+        "capacity": _spec_entry_text(_first_item(specs.get("capacity"))),
         "gross_weight_g": specs.get("gross_weight_g"),
         "body_material": _first_text(specs.get("body_material")),
         "surface_finish": _first_text(specs.get("surface_finish")),
@@ -1986,17 +2047,41 @@ def _compact_retrieved_product_for_prompt(product: Any) -> Any:
             compact[key] = value
 
     if content:
-        compact["content"] = {
-            key: _first_text(content.get(key), limit=160)
-            for key in ("title_cn", "title_en")
-            if content.get(key) not in (None, "", [])
-        }
+        if isinstance(content, dict):
+            compact["content"] = {
+                key: _first_text(content.get(key), limit=160)
+                for key in ("title_cn", "title_en")
+                if content.get(key) not in (None, "", [])
+            }
+        else:
+            compact["content"] = {"text": _first_text(content, limit=240)}
     if recommendation_match:
         compact["recommendation_match"] = {
             key: recommendation_match.get(key)
             for key in ("score", "score_reason", "matched", "missing_or_uncertain")
             if recommendation_match.get(key) not in (None, "", [])
         }
+    evidence_sections = product.get("evidence_sections") or []
+    if isinstance(evidence_sections, list) and evidence_sections:
+        compact["evidence_sections"] = [
+            _compact_evidence_section_for_prompt(section)
+            for section in evidence_sections[:12]
+            if isinstance(section, dict)
+        ]
+    matched_sections = product.get("matched_sections") or []
+    if isinstance(matched_sections, list) and matched_sections:
+        compact["matched_sections"] = [
+            str(section).strip()
+            for section in matched_sections
+            if str(section or "").strip()
+        ][:12]
+    knowledge_matches = product.get("knowledge_matches") or []
+    if isinstance(knowledge_matches, list) and knowledge_matches:
+        compact["knowledge_matches"] = [
+            _compact_knowledge_result_for_prompt(match)
+            for match in knowledge_matches[:8]
+            if isinstance(match, dict)
+        ]
     return compact
 
 
@@ -2033,14 +2118,16 @@ def _compact_prompt_tool_results(tool_results: list[dict]) -> list[dict]:
             if value not in (None, "", [], {}):
                 item[key] = value
         if result.get("results"):
+            grouped_results = _group_retrieved_products_by_sku(result.get("results") or [])
             if result.get("tool") == "semantic_search_knowledge":
-                item["results"] = [_compact_knowledge_result_for_prompt(row) for row in (result.get("results") or [])[:5]]
+                item["results"] = [_compact_retrieved_product_for_prompt(row) for row in grouped_results[:5]]
             else:
-                item["results"] = [_compact_retrieved_product_for_prompt(row) for row in (result.get("results") or [])[:5]]
+                item["results"] = [_compact_retrieved_product_for_prompt(row) for row in grouped_results[:5]]
         if result.get("detail"):
             item["detail"] = _compact_retrieved_product_for_prompt(result.get("detail"))
         if result.get("details"):
-            item["details"] = [_compact_retrieved_product_for_prompt(row) for row in (result.get("details") or [])[:3]]
+            grouped_details = _group_retrieved_products_by_sku(result.get("details") or [])
+            item["details"] = [_compact_retrieved_product_for_prompt(row) for row in grouped_details[:3]]
         if result.get("sources"):
             item["sources"] = (result.get("sources") or [])[:3]
         compacted.append(item or {"tool": result.get("tool")})
@@ -2065,6 +2152,18 @@ def _compact_knowledge_result_for_prompt(row: Any) -> Any:
         if compact_metadata:
             item["metadata"] = compact_metadata
     return item
+
+
+def _compact_evidence_section_for_prompt(section: dict[str, Any]) -> dict[str, Any]:
+    compact: dict[str, Any] = {}
+    for key in ("section", "source_type", "source_id", "title", "score"):
+        value = section.get(key)
+        if value not in (None, "", [], {}):
+            compact[key] = value
+    content = section.get("content")
+    if content not in (None, "", [], {}):
+        compact["content"] = str(content)[:500]
+    return compact
 
 
 def _has_specs_filter(question: str) -> bool:
@@ -2352,6 +2451,160 @@ def _collect_results(tool_results: list[dict]) -> list[dict]:
     return rows
 
 
+def _group_retrieved_products_by_sku(retrieved_products: list[dict]) -> list[dict]:
+    grouped: list[dict] = []
+    by_key: dict[str, dict] = {}
+    for raw in retrieved_products:
+        if not isinstance(raw, dict):
+            continue
+        key = _retrieved_product_group_key(raw)
+        if not key:
+            grouped.append(dict(raw))
+            continue
+        existing = by_key.get(key)
+        if existing is None:
+            existing = dict(raw)
+            existing["sku"] = str(existing.get("sku") or existing.get("product_id") or "").strip().upper() or existing.get("sku")
+            existing["evidence_sections"] = []
+            existing["matched_sections"] = []
+            existing["knowledge_matches"] = list(existing.get("knowledge_matches") or [])
+            by_key[key] = existing
+            grouped.append(existing)
+        _merge_retrieved_product_group(existing, raw)
+    return grouped
+
+
+def _retrieved_product_group_key(product: dict[str, Any]) -> str:
+    product_id = str(product.get("product_id") or product.get("id") or "").strip()
+    if product_id:
+        return f"product_id:{product_id}"
+    sku = str(product.get("sku") or "").strip().upper()
+    if sku:
+        return f"sku:{sku}"
+    return ""
+
+
+def _merge_retrieved_product_group(target: dict[str, Any], source: dict[str, Any]) -> None:
+    for key, value in source.items():
+        if key in {"evidence_sections", "matched_sections", "knowledge_matches"}:
+            continue
+        if target.get(key) in (None, "", [], {}) and value not in (None, "", [], {}):
+            target[key] = value
+
+    source_sections = _extract_evidence_sections(source)
+    if source_sections:
+        seen = {
+            (
+                str(item.get("section") or ""),
+                str(item.get("source_id") or ""),
+                str(item.get("content") or "")[:500],
+            )
+            for item in target.get("evidence_sections") or []
+            if isinstance(item, dict)
+        }
+        for item in source_sections:
+            key = (
+                str(item.get("section") or ""),
+                str(item.get("source_id") or ""),
+                str(item.get("content") or "")[:500],
+            )
+            if key in seen:
+                continue
+            seen.add(key)
+            target.setdefault("evidence_sections", []).append(item)
+
+    matched_sections = _extract_matched_sections(source)
+    if matched_sections:
+        existing = list(target.get("matched_sections") or [])
+        for section in matched_sections:
+            if section not in existing:
+                existing.append(section)
+        target["matched_sections"] = existing
+
+    source_knowledge_matches = source.get("knowledge_matches")
+    if isinstance(source_knowledge_matches, list) and source_knowledge_matches:
+        existing_matches = list(target.get("knowledge_matches") or [])
+        existing_keys = {
+            (
+                str(item.get("sku") or ""),
+                str(item.get("metadata", {}).get("source_id") if isinstance(item.get("metadata"), dict) else ""),
+                str(item.get("content") or "")[:500],
+            )
+            for item in existing_matches
+            if isinstance(item, dict)
+        }
+        for match in source_knowledge_matches:
+            if not isinstance(match, dict):
+                continue
+            key = (
+                str(match.get("sku") or ""),
+                str(match.get("metadata", {}).get("source_id") if isinstance(match.get("metadata"), dict) else ""),
+                str(match.get("content") or "")[:500],
+            )
+            if key in existing_keys:
+                continue
+            existing_keys.add(key)
+            existing_matches.append(match)
+        target["knowledge_matches"] = existing_matches
+
+
+def _extract_evidence_sections(product: dict[str, Any]) -> list[dict[str, Any]]:
+    sections: list[dict[str, Any]] = []
+    metadata = product.get("metadata") if isinstance(product.get("metadata"), dict) else {}
+    if isinstance(product.get("content"), str) and product.get("content"):
+        section_name = str(
+            metadata.get("section")
+            or metadata.get("title")
+            or product.get("section")
+            or product.get("source_type")
+            or "content"
+        ).strip()
+        sections.append({
+            "section": section_name,
+            "source_type": str(product.get("source_type") or metadata.get("source_type") or "").strip(),
+            "source_id": str(metadata.get("source_id") or product.get("source_id") or "").strip(),
+            "title": str(metadata.get("title") or product.get("title") or "").strip(),
+            "content": str(product.get("content") or "").strip(),
+            "score": product.get("score"),
+        })
+    if isinstance(product.get("content"), dict):
+        content = product.get("content") or {}
+        for key in ("title_cn", "title_en"):
+            value = content.get(key)
+            if value not in (None, "", [], {}):
+                sections.append({
+                    "section": key,
+                    "source_type": str(product.get("source_type") or metadata.get("source_type") or "").strip(),
+                    "source_id": str(metadata.get("source_id") or product.get("source_id") or "").strip(),
+                    "title": str(metadata.get("title") or product.get("title") or "").strip(),
+                    "content": str(value).strip(),
+                    "score": product.get("score"),
+                })
+    return sections
+
+
+def _extract_matched_sections(product: dict[str, Any]) -> list[str]:
+    sections: list[str] = []
+    metadata = product.get("metadata") if isinstance(product.get("metadata"), dict) else {}
+    for value in (
+        metadata.get("section"),
+        product.get("section"),
+    ):
+        text = str(value or "").strip()
+        if text and text not in sections:
+            sections.append(text)
+    if not sections:
+        for value in (
+            metadata.get("source_type"),
+            product.get("source_type"),
+            metadata.get("title"),
+        ):
+            text = str(value or "").strip()
+            if text and text not in sections:
+                sections.append(text)
+    return sections
+
+
 def _merge_results_for_display(question: str, results: list[dict]) -> list[dict]:
     merged: list[dict] = []
     by_sku: dict[str, dict] = {}
@@ -2461,6 +2714,8 @@ def _clean_customer_answer(answer: str) -> str:
     text = str(answer or "").strip()
     if not text:
         return ""
+    text = re.sub(r"<br\s*/?>", "\n", text, flags=re.I)
+    text = re.sub(r"<[^>]+>", "", text)
     text = re.sub(r"\*\*(.*?)\*\*", r"\1", text)
     text = re.sub(r"^#{1,6}\s*", "", text, flags=re.M)
     text = re.sub(r"`([^`]+)`", r"\1", text)
@@ -2607,6 +2862,24 @@ def _evidence_from_results(results: list[dict]) -> list[dict]:
         if not isinstance(item, dict):
             continue
         field_values = item.get("field_values") if isinstance(item.get("field_values"), dict) else {}
+        knowledge_matches = item.get("knowledge_matches") if isinstance(item.get("knowledge_matches"), list) else []
+        if not field_values and knowledge_matches:
+            for match in knowledge_matches[:3]:
+                if not isinstance(match, dict):
+                    continue
+                content = str(match.get("content") or "").strip()
+                if not content:
+                    continue
+                evidence.append({
+                    "sku": item.get("sku") or match.get("sku"),
+                    "product_name": item.get("product_name_cn") or item.get("product_name_en"),
+                    "field_label": "QA知识库",
+                    "value": content,
+                    "source_layer": "L5",
+                    "matched_by": match.get("matched_by") or "知识库",
+                })
+            if evidence:
+                continue
         if field_values:
             for label, value in field_values.items():
                 evidence.append({
@@ -2785,12 +3058,20 @@ def _fallback_answer(tool_results: list[dict]) -> str:
     results = _collect_results(tool_results)
     if not results:
         return "没有找到匹配的产品资料。"
-    lines = [f"找到 {len(results)} 条产品资料："]
-    for index, item in enumerate(results[:10], start=1):
+    display_results = _merge_results_for_display("", results)
+    if not display_results:
+        return "当前知识库现有资料不足以直接确认。"
+    lines = []
+    for item in display_results[:5]:
+        if not isinstance(item, dict):
+            continue
+        name = item.get("product_name_cn") or item.get("product_name_en") or ""
         field_values = item.get("field_values") or {}
         suffix = "，" + "，".join(f"{key}：{value}" for key, value in field_values.items()) if field_values else ""
-        lines.append(f"{index}. {item.get('sku')}，{item.get('product_name_cn') or ''}{suffix}")
-    return "\n".join(lines)
+        lines.append(f"{item.get('sku')}，{name}{suffix}")
+    if not lines:
+        return "当前知识库现有资料不足以直接确认。"
+    return "\n".join(["当前知识库已有相关资料，但不足以直接确认用户问题：", *lines])
 
 
 def _has_field_values(results: list[dict]) -> bool:
@@ -3111,6 +3392,14 @@ def _build_clarification_result(question: str, sku: str | None, dialogue_state: 
     result["agent_quality"] = quality
     result["debug"]["agent_quality"] = quality
     return result
+
+
+def _build_answer_metadata(answer: str, results: list[dict], warnings: list[str], needs_clarification: bool) -> dict[str, Any]:
+    evidence_insufficient = _uncertainty(answer, results, warnings, needs_clarification) in {"not_recorded", "insufficient_data"}
+    return {
+        "evidence_insufficient": evidence_insufficient,
+        "answer_policy": "insufficient_evidence" if evidence_insufficient else "normal",
+    }
 
 
 def _build_product_ambiguity_result(question: str, candidates: list[dict]) -> dict:

@@ -324,6 +324,7 @@ async def ask_customer_service(
             "warnings": agent_result.get("warnings") or [],
             "evidence": agent_result.get("evidence") or [],
             "agent_quality": agent_result.get("agent_quality") or {},
+            "answer_metadata": agent_result.get("answer_metadata") or {},
             "debug": agent_result.get("debug") or {},
             "sku": agent_result.get("sku"),
             "answer": agent_result["answer"],
@@ -407,8 +408,13 @@ async def ask_customer_service(
     if agent_result:
         stage_start = perf_counter()
         agent_result = _normalize_agent_result(agent_result)
-        if not agent_result.get("skip_polish"):
+        answer_metadata = agent_result.get("answer_metadata") if isinstance(agent_result.get("answer_metadata"), dict) else {}
+        skip_polish = bool(agent_result.get("skip_polish"))
+        if answer_metadata.get("evidence_insufficient") is True or answer_metadata.get("answer_policy") == "insufficient_evidence":
+            skip_polish = True
+        if not skip_polish:
             agent_result["answer"] = await _polish_customer_answer(db, question, agent_result)
+        agent_result["skip_polish"] = skip_polish
         agent_result = _attach_agent_quality(agent_result, question)
         conversation = _get_or_create_conversation(db, user_id, question, agent_result.get("sku"), conversation_id)
         db.add(CustomerServiceMessage(
@@ -458,6 +464,7 @@ async def ask_customer_service(
             "warnings": agent_result.get("warnings") or [],
             "evidence": agent_result.get("evidence") or [],
             "agent_quality": agent_result.get("agent_quality") or {},
+            "answer_metadata": agent_result.get("answer_metadata") or {},
             "debug": agent_result.get("debug") or {},
             "sku": agent_result.get("sku"),
             "answer": agent_result["answer"],
@@ -1406,6 +1413,9 @@ def _review_quality_summary(items: list[dict]) -> dict:
 async def _polish_customer_answer(db: Session, question: str, agent_result: dict) -> str:
     answer = str(agent_result.get("answer") or "").strip()
     if not answer or agent_result.get("answer_type") == "action_proposal":
+        return answer
+    answer_metadata = agent_result.get("answer_metadata") if isinstance(agent_result.get("answer_metadata"), dict) else {}
+    if answer_metadata.get("evidence_insufficient") is True or answer_metadata.get("answer_policy") == "insufficient_evidence":
         return answer
     evidence = agent_result.get("evidence") or []
     if not evidence and agent_result.get("uncertainty") == "confirmed":

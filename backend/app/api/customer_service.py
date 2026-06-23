@@ -232,6 +232,7 @@ async def ask_stream(
                 "warnings": result.get("warnings") or [],
                 "evidence": result.get("evidence") or [],
                 "agent_quality": result.get("agent_quality") or {},
+                "answer_metadata": result.get("answer_metadata") or {},
                 "debug": result.get("debug") or {},
                 "sku": result.get("sku"),
                 "sources": result.get("sources") or [],
