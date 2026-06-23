@@ -1,0 +1,897 @@
+INFO:     Started server process [17212]
+INFO:     Waiting for application startup.
+2026-06-12 14:17:45,875 INFO sqlalchemy.engine.Engine select pg_catalog.version()
+2026-06-12 14:17:45,875 INFO sqlalchemy.engine.Engine [raw sql] {}
+2026-06-12 14:17:45,876 INFO sqlalchemy.engine.Engine select current_schema()
+2026-06-12 14:17:45,876 INFO sqlalchemy.engine.Engine [raw sql] {}
+2026-06-12 14:17:45,876 INFO sqlalchemy.engine.Engine show standard_conforming_strings
+2026-06-12 14:17:45,876 INFO sqlalchemy.engine.Engine [raw sql] {}
+2026-06-12 14:17:45,877 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-06-12 14:17:45,882 INFO sqlalchemy.engine.Engine SELECT pg_catalog.pg_class.relname 
+FROM pg_catalog.pg_class JOIN pg_catalog.pg_namespace ON pg_catalog.pg_namespace.oid = pg_catalog.pg_class.relnamespace 
+WHERE pg_catalog.pg_class.relname = %(table_name)s AND pg_catalog.pg_class.relkind = ANY (ARRAY[%(param_1)s, %(param_2)s, %(param_3)s, %(param_4)s, %(param_5)s]) AND pg_catalog.pg_table_is_visible(pg_catalog.pg_class.oid) AND pg_catalog.pg_namespace.nspname != %(nspname_1)s
+2026-06-12 14:17:45,883 INFO sqlalchemy.engine.Engine [generated in 0.00089s] {'table_name': 'users', 'param_1': 'r', 'param_2': 'p', 'param_3': 'f', 'param_4': 'v', 'param_5': 'm', 'nspname_1': 'pg_catalog'}
+2026-06-12 14:17:45,887 INFO sqlalchemy.engine.Engine SELECT pg_catalog.pg_class.relname 
+FROM pg_catalog.pg_class JOIN pg_catalog.pg_namespace ON pg_catalog.pg_namespace.oid = pg_catalog.pg_class.relnamespace 
+WHERE pg_catalog.pg_class.relname = %(table_name)s AND pg_catalog.pg_class.relkind = ANY (ARRAY[%(param_1)s, %(param_2)s, %(param_3)s, %(param_4)s, %(param_5)s]) AND pg_catalog.pg_table_is_visible(pg_catalog.pg_class.oid) AND pg_catalog.pg_namespace.nspname != %(nspname_1)s
+2026-06-12 14:17:45,887 INFO sqlalchemy.engine.Engine [cached since 0.004947s ago] {'table_name': 'generations', 'param_1': 'r', 'param_2': 'p', 'param_3': 'f', 'param_4': 'v', 'param_5': 'm', 'nspname_1': 'pg_catalog'}
+2026-06-12 14:17:45,888 INFO sqlalchemy.engine.Engine SELECT pg_catalog.pg_class.relname 
+FROM pg_catalog.pg_class JOIN pg_catalog.pg_namespace ON pg_catalog.pg_namespace.oid = pg_catalog.pg_class.relnamespace 
+WHERE pg_catalog.pg_class.relname = %(table_name)s AND pg_catalog.pg_class.relkind = ANY (ARRAY[%(param_1)s, %(param_2)s, %(param_3)s, %(param_4)s, %(param_5)s]) AND pg_catalog.pg_table_is_visible(pg_catalog.pg_class.oid) AND pg_catalog.pg_namespace.nspname != %(nspname_1)s
+2026-06-12 14:17:45,888 INFO sqlalchemy.engine.Engine [cached since 0.00594s ago] {'table_name': 'system_config', 'param_1': 'r', 'param_2': 'p', 'param_3': 'f', 'param_4': 'v', 'param_5': 'm', 'nspname_1': 'pg_catalog'}
+2026-06-12 14:17:45,889 INFO sqlalchemy.engine.Engine SELECT pg_catalog.pg_class.relname 
+FROM pg_catalog.pg_class JOIN pg_catalog.pg_namespace ON pg_catalog.pg_namespace.oid = pg_catalog.pg_class.relnamespace 
+WHERE pg_catalog.pg_class.relname = %(table_name)s AND pg_catalog.pg_class.relkind = ANY (ARRAY[%(param_1)s, %(param_2)s, %(param_3)s, %(param_4)s, %(param_5)s]) AND pg_catalog.pg_table_is_visible(pg_catalog.pg_class.oid) AND pg_catalog.pg_namespace.nspname != %(nspname_1)s
+2026-06-12 14:17:45,889 INFO sqlalchemy.engine.Engine [cached since 0.006661s ago] {'table_name': 'groups', 'param_1': 'r', 'param_2': 'p', 'param_3': 'f', 'param_4': 'v', 'param_5': 'm', 'nspname_1': 'pg_catalog'}
+2026-06-12 14:17:45,889 INFO sqlalchemy.engine.Engine SELECT pg_catalog.pg_class.relname 
+FROM pg_catalog.pg_class JOIN pg_catalog.pg_namespace ON pg_catalog.pg_namespace.oid = pg_catalog.pg_class.relnamespace 
+WHERE pg_catalog.pg_class.relname = %(table_name)s AND pg_catalog.pg_class.relkind = ANY (ARRAY[%(param_1)s, %(param_2)s, %(param_3)s, %(param_4)s, %(param_5)s]) AND pg_catalog.pg_table_is_visible(pg_catalog.pg_class.oid) AND pg_catalog.pg_namespace.nspname != %(nspname_1)s
+2026-06-12 14:17:45,889 INFO sqlalchemy.engine.Engine [cached since 0.007366s ago] {'table_name': 'user_groups', 'param_1': 'r', 'param_2': 'p', 'param_3': 'f', 'param_4': 'v', 'param_5': 'm', 'nspname_1': 'pg_catalog'}
+2026-06-12 14:17:45,890 INFO sqlalchemy.engine.Engine SELECT pg_catalog.pg_class.relname 
+FROM pg_catalog.pg_class JOIN pg_catalog.pg_namespace ON pg_catalog.pg_namespace.oid = pg_catalog.pg_class.relnamespace 
+WHERE pg_catalog.pg_class.relname = %(table_name)s AND pg_catalog.pg_class.relkind = ANY (ARRAY[%(param_1)s, %(param_2)s, %(param_3)s, %(param_4)s, %(param_5)s]) AND pg_catalog.pg_table_is_visible(pg_catalog.pg_class.oid) AND pg_catalog.pg_namespace.nspname != %(nspname_1)s
+2026-06-12 14:17:45,890 INFO sqlalchemy.engine.Engine [cached since 0.008067s ago] {'table_name': 'permissions', 'param_1': 'r', 'param_2': 'p', 'param_3': 'f', 'param_4': 'v', 'param_5': 'm', 'nspname_1': 'pg_catalog'}
+2026-06-12 14:17:45,891 INFO sqlalchemy.engine.Engine SELECT pg_catalog.pg_class.relname 
+FROM pg_catalog.pg_class JOIN pg_catalog.pg_namespace ON pg_catalog.pg_namespace.oid = pg_catalog.pg_class.relnamespace 
+WHERE pg_catalog.pg_class.relname = %(table_name)s AND pg_catalog.pg_class.relkind = ANY (ARRAY[%(param_1)s, %(param_2)s, %(param_3)s, %(param_4)s, %(param_5)s]) AND pg_catalog.pg_table_is_visible(pg_catalog.pg_class.oid) AND pg_catalog.pg_namespace.nspname != %(nspname_1)s
+2026-06-12 14:17:45,891 INFO sqlalchemy.engine.Engine [cached since 0.009048s ago] {'table_name': 'group_permissions', 'param_1': 'r', 'param_2': 'p', 'param_3': 'f', 'param_4': 'v', 'param_5': 'm', 'nspname_1': 'pg_catalog'}
+2026-06-12 14:17:45,892 INFO sqlalchemy.engine.Engine SELECT pg_catalog.pg_class.relname 
+FROM pg_catalog.pg_class JOIN pg_catalog.pg_namespace ON pg_catalog.pg_namespace.oid = pg_catalog.pg_class.relnamespace 
+WHERE pg_catalog.pg_class.relname = %(table_name)s AND pg_catalog.pg_class.relkind = ANY (ARRAY[%(param_1)s, %(param_2)s, %(param_3)s, %(param_4)s, %(param_5)s]) AND pg_catalog.pg_table_is_visible(pg_catalog.pg_class.oid) AND pg_catalog.pg_namespace.nspname != %(nspname_1)s
+2026-06-12 14:17:45,892 INFO sqlalchemy.engine.Engine [cached since 0.009963s ago] {'table_name': 'routes', 'param_1': 'r', 'param_2': 'p', 'param_3': 'f', 'param_4': 'v', 'param_5': 'm', 'nspname_1': 'pg_catalog'}
+2026-06-12 14:17:45,893 INFO sqlalchemy.engine.Engine SELECT pg_catalog.pg_class.relname 
+FROM pg_catalog.pg_class JOIN pg_catalog.pg_namespace ON pg_catalog.pg_namespace.oid = pg_catalog.pg_class.relnamespace 
+WHERE pg_catalog.pg_class.relname = %(table_name)s AND pg_catalog.pg_class.relkind = ANY (ARRAY[%(param_1)s, %(param_2)s, %(param_3)s, %(param_4)s, %(param_5)s]) AND pg_catalog.pg_table_is_visible(pg_catalog.pg_class.oid) AND pg_catalog.pg_namespace.nspname != %(nspname_1)s
+2026-06-12 14:17:45,893 INFO sqlalchemy.engine.Engine [cached since 0.01103s ago] {'table_name': 'permission_routes', 'param_1': 'r', 'param_2': 'p', 'param_3': 'f', 'param_4': 'v', 'param_5': 'm', 'nspname_1': 'pg_catalog'}
+2026-06-12 14:17:45,894 INFO sqlalchemy.engine.Engine SELECT pg_catalog.pg_class.relname 
+FROM pg_catalog.pg_class JOIN pg_catalog.pg_namespace ON pg_catalog.pg_namespace.oid = pg_catalog.pg_class.relnamespace 
+WHERE pg_catalog.pg_class.relname = %(table_name)s AND pg_catalog.pg_class.relkind = ANY (ARRAY[%(param_1)s, %(param_2)s, %(param_3)s, %(param_4)s, %(param_5)s]) AND pg_catalog.pg_table_is_visible(pg_catalog.pg_class.oid) AND pg_catalog.pg_namespace.nspname != %(nspname_1)s
+2026-06-12 14:17:45,894 INFO sqlalchemy.engine.Engine [cached since 0.01194s ago] {'table_name': 'operation_logs', 'param_1': 'r', 'param_2': 'p', 'param_3': 'f', 'param_4': 'v', 'param_5': 'm', 'nspname_1': 'pg_catalog'}
+2026-06-12 14:17:45,896 INFO sqlalchemy.engine.Engine SELECT pg_catalog.pg_class.relname 
+FROM pg_catalog.pg_class JOIN pg_catalog.pg_namespace ON pg_catalog.pg_namespace.oid = pg_catalog.pg_class.relnamespace 
+WHERE pg_catalog.pg_class.relname = %(table_name)s AND pg_catalog.pg_class.relkind = ANY (ARRAY[%(param_1)s, %(param_2)s, %(param_3)s, %(param_4)s, %(param_5)s]) AND pg_catalog.pg_table_is_visible(pg_catalog.pg_class.oid) AND pg_catalog.pg_namespace.nspname != %(nspname_1)s
+2026-06-12 14:17:45,896 INFO sqlalchemy.engine.Engine [cached since 0.0141s ago] {'table_name': 'agent_actions', 'param_1': 'r', 'param_2': 'p', 'param_3': 'f', 'param_4': 'v', 'param_5': 'm', 'nspname_1': 'pg_catalog'}
+2026-06-12 14:17:45,897 INFO sqlalchemy.engine.Engine SELECT pg_catalog.pg_class.relname 
+FROM pg_catalog.pg_class JOIN pg_catalog.pg_namespace ON pg_catalog.pg_namespace.oid = pg_catalog.pg_class.relnamespace 
+WHERE pg_catalog.pg_class.relname = %(table_name)s AND pg_catalog.pg_class.relkind = ANY (ARRAY[%(param_1)s, %(param_2)s, %(param_3)s, %(param_4)s, %(param_5)s]) AND pg_catalog.pg_table_is_visible(pg_catalog.pg_class.oid) AND pg_catalog.pg_namespace.nspname != %(nspname_1)s
+2026-06-12 14:17:45,898 INFO sqlalchemy.engine.Engine [cached since 0.01582s ago] {'table_name': 'agent_traces', 'param_1': 'r', 'param_2': 'p', 'param_3': 'f', 'param_4': 'v', 'param_5': 'm', 'nspname_1': 'pg_catalog'}
+2026-06-12 14:17:45,898 INFO sqlalchemy.engine.Engine SELECT pg_catalog.pg_class.relname 
+FROM pg_catalog.pg_class JOIN pg_catalog.pg_namespace ON pg_catalog.pg_namespace.oid = pg_catalog.pg_class.relnamespace 
+WHERE pg_catalog.pg_class.relname = %(table_name)s AND pg_catalog.pg_class.relkind = ANY (ARRAY[%(param_1)s, %(param_2)s, %(param_3)s, %(param_4)s, %(param_5)s]) AND pg_catalog.pg_table_is_visible(pg_catalog.pg_class.oid) AND pg_catalog.pg_namespace.nspname != %(nspname_1)s
+2026-06-12 14:17:45,899 INFO sqlalchemy.engine.Engine [cached since 0.01686s ago] {'table_name': 'field_configs', 'param_1': 'r', 'param_2': 'p', 'param_3': 'f', 'param_4': 'v', 'param_5': 'm', 'nspname_1': 'pg_catalog'}
+2026-06-12 14:17:45,900 INFO sqlalchemy.engine.Engine SELECT pg_catalog.pg_class.relname 
+FROM pg_catalog.pg_class JOIN pg_catalog.pg_namespace ON pg_catalog.pg_namespace.oid = pg_catalog.pg_class.relnamespace 
+WHERE pg_catalog.pg_class.relname = %(table_name)s AND pg_catalog.pg_class.relkind = ANY (ARRAY[%(param_1)s, %(param_2)s, %(param_3)s, %(param_4)s, %(param_5)s]) AND pg_catalog.pg_table_is_visible(pg_catalog.pg_class.oid) AND pg_catalog.pg_namespace.nspname != %(nspname_1)s
+2026-06-12 14:17:45,900 INFO sqlalchemy.engine.Engine [cached since 0.01802s ago] {'table_name': 'entity_field_values', 'param_1': 'r', 'param_2': 'p', 'param_3': 'f', 'param_4': 'v', 'param_5': 'm', 'nspname_1': 'pg_catalog'}
+2026-06-12 14:17:45,901 INFO sqlalchemy.engine.Engine SELECT pg_catalog.pg_class.relname 
+FROM pg_catalog.pg_class JOIN pg_catalog.pg_namespace ON pg_catalog.pg_namespace.oid = pg_catalog.pg_class.relnamespace 
+WHERE pg_catalog.pg_class.relname = %(table_name)s AND pg_catalog.pg_class.relkind = ANY (ARRAY[%(param_1)s, %(param_2)s, %(param_3)s, %(param_4)s, %(param_5)s]) AND pg_catalog.pg_table_is_visible(pg_catalog.pg_class.oid) AND pg_catalog.pg_namespace.nspname != %(nspname_1)s
+2026-06-12 14:17:45,901 INFO sqlalchemy.engine.Engine [cached since 0.01949s ago] {'table_name': 'ai_tasks', 'param_1': 'r', 'param_2': 'p', 'param_3': 'f', 'param_4': 'v', 'param_5': 'm', 'nspname_1': 'pg_catalog'}
+2026-06-12 14:17:45,903 INFO sqlalchemy.engine.Engine SELECT pg_catalog.pg_class.relname 
+FROM pg_catalog.pg_class JOIN pg_catalog.pg_namespace ON pg_catalog.pg_namespace.oid = pg_catalog.pg_class.relnamespace 
+WHERE pg_catalog.pg_class.relname = %(table_name)s AND pg_catalog.pg_class.relkind = ANY (ARRAY[%(param_1)s, %(param_2)s, %(param_3)s, %(param_4)s, %(param_5)s]) AND pg_catalog.pg_table_is_visible(pg_catalog.pg_class.oid) AND pg_catalog.pg_namespace.nspname != %(nspname_1)s
+2026-06-12 14:17:45,903 INFO sqlalchemy.engine.Engine [cached since 0.02159s ago] {'table_name': 'product_drafts', 'param_1': 'r', 'param_2': 'p', 'param_3': 'f', 'param_4': 'v', 'param_5': 'm', 'nspname_1': 'pg_catalog'}
+2026-06-12 14:17:45,905 INFO sqlalchemy.engine.Engine SELECT pg_catalog.pg_class.relname 
+FROM pg_catalog.pg_class JOIN pg_catalog.pg_namespace ON pg_catalog.pg_namespace.oid = pg_catalog.pg_class.relnamespace 
+WHERE pg_catalog.pg_class.relname = %(table_name)s AND pg_catalog.pg_class.relkind = ANY (ARRAY[%(param_1)s, %(param_2)s, %(param_3)s, %(param_4)s, %(param_5)s]) AND pg_catalog.pg_table_is_visible(pg_catalog.pg_class.oid) AND pg_catalog.pg_namespace.nspname != %(nspname_1)s
+2026-06-12 14:17:45,905 INFO sqlalchemy.engine.Engine [cached since 0.02308s ago] {'table_name': 'product_categories', 'param_1': 'r', 'param_2': 'p', 'param_3': 'f', 'param_4': 'v', 'param_5': 'm', 'nspname_1': 'pg_catalog'}
+2026-06-12 14:17:45,905 INFO sqlalchemy.engine.Engine SELECT pg_catalog.pg_class.relname 
+FROM pg_catalog.pg_class JOIN pg_catalog.pg_namespace ON pg_catalog.pg_namespace.oid = pg_catalog.pg_class.relnamespace 
+WHERE pg_catalog.pg_class.relname = %(table_name)s AND pg_catalog.pg_class.relkind = ANY (ARRAY[%(param_1)s, %(param_2)s, %(param_3)s, %(param_4)s, %(param_5)s]) AND pg_catalog.pg_table_is_visible(pg_catalog.pg_class.oid) AND pg_catalog.pg_namespace.nspname != %(nspname_1)s
+2026-06-12 14:17:45,906 INFO sqlalchemy.engine.Engine [cached since 0.02379s ago] {'table_name': 'product_prompts', 'param_1': 'r', 'param_2': 'p', 'param_3': 'f', 'param_4': 'v', 'param_5': 'm', 'nspname_1': 'pg_catalog'}
+2026-06-12 14:17:45,906 INFO sqlalchemy.engine.Engine SELECT pg_catalog.pg_class.relname 
+FROM pg_catalog.pg_class JOIN pg_catalog.pg_namespace ON pg_catalog.pg_namespace.oid = pg_catalog.pg_class.relnamespace 
+WHERE pg_catalog.pg_class.relname = %(table_name)s AND pg_catalog.pg_class.relkind = ANY (ARRAY[%(param_1)s, %(param_2)s, %(param_3)s, %(param_4)s, %(param_5)s]) AND pg_catalog.pg_table_is_visible(pg_catalog.pg_class.oid) AND pg_catalog.pg_namespace.nspname != %(nspname_1)s
+2026-06-12 14:17:45,906 INFO sqlalchemy.engine.Engine [cached since 0.02439s ago] {'table_name': 'products', 'param_1': 'r', 'param_2': 'p', 'param_3': 'f', 'param_4': 'v', 'param_5': 'm', 'nspname_1': 'pg_catalog'}
+2026-06-12 14:17:45,907 INFO sqlalchemy.engine.Engine SELECT pg_catalog.pg_class.relname 
+FROM pg_catalog.pg_class JOIN pg_catalog.pg_namespace ON pg_catalog.pg_namespace.oid = pg_catalog.pg_class.relnamespace 
+WHERE pg_catalog.pg_class.relname = %(table_name)s AND pg_catalog.pg_class.relkind = ANY (ARRAY[%(param_1)s, %(param_2)s, %(param_3)s, %(param_4)s, %(param_5)s]) AND pg_catalog.pg_table_is_visible(pg_catalog.pg_class.oid) AND pg_catalog.pg_namespace.nspname != %(nspname_1)s
+2026-06-12 14:17:45,907 INFO sqlalchemy.engine.Engine [cached since 0.02499s ago] {'table_name': 'product_specs', 'param_1': 'r', 'param_2': 'p', 'param_3': 'f', 'param_4': 'v', 'param_5': 'm', 'nspname_1': 'pg_catalog'}
+2026-06-12 14:17:45,907 INFO sqlalchemy.engine.Engine SELECT pg_catalog.pg_class.relname 
+FROM pg_catalog.pg_class JOIN pg_catalog.pg_namespace ON pg_catalog.pg_namespace.oid = pg_catalog.pg_class.relnamespace 
+WHERE pg_catalog.pg_class.relname = %(table_name)s AND pg_catalog.pg_class.relkind = ANY (ARRAY[%(param_1)s, %(param_2)s, %(param_3)s, %(param_4)s, %(param_5)s]) AND pg_catalog.pg_table_is_visible(pg_catalog.pg_class.oid) AND pg_catalog.pg_namespace.nspname != %(nspname_1)s
+2026-06-12 14:17:45,907 INFO sqlalchemy.engine.Engine [cached since 0.0256s ago] {'table_name': 'product_business', 'param_1': 'r', 'param_2': 'p', 'param_3': 'f', 'param_4': 'v', 'param_5': 'm', 'nspname_1': 'pg_catalog'}
+2026-06-12 14:17:45,908 INFO sqlalchemy.engine.Engine SELECT pg_catalog.pg_class.relname 
+FROM pg_catalog.pg_class JOIN pg_catalog.pg_namespace ON pg_catalog.pg_namespace.oid = pg_catalog.pg_class.relnamespace 
+WHERE pg_catalog.pg_class.relname = %(table_name)s AND pg_catalog.pg_class.relkind = ANY (ARRAY[%(param_1)s, %(param_2)s, %(param_3)s, %(param_4)s, %(param_5)s]) AND pg_catalog.pg_table_is_visible(pg_catalog.pg_class.oid) AND pg_catalog.pg_namespace.nspname != %(nspname_1)s
+2026-06-12 14:17:45,908 INFO sqlalchemy.engine.Engine [cached since 0.02616s ago] {'table_name': 'product_content', 'param_1': 'r', 'param_2': 'p', 'param_3': 'f', 'param_4': 'v', 'param_5': 'm', 'nspname_1': 'pg_catalog'}
+2026-06-12 14:17:45,908 INFO sqlalchemy.engine.Engine SELECT pg_catalog.pg_class.relname 
+FROM pg_catalog.pg_class JOIN pg_catalog.pg_namespace ON pg_catalog.pg_namespace.oid = pg_catalog.pg_class.relnamespace 
+WHERE pg_catalog.pg_class.relname = %(table_name)s AND pg_catalog.pg_class.relkind = ANY (ARRAY[%(param_1)s, %(param_2)s, %(param_3)s, %(param_4)s, %(param_5)s]) AND pg_catalog.pg_table_is_visible(pg_catalog.pg_class.oid) AND pg_catalog.pg_namespace.nspname != %(nspname_1)s
+2026-06-12 14:17:45,909 INFO sqlalchemy.engine.Engine [cached since 0.02678s ago] {'table_name': 'product_media', 'param_1': 'r', 'param_2': 'p', 'param_3': 'f', 'param_4': 'v', 'param_5': 'm', 'nspname_1': 'pg_catalog'}
+2026-06-12 14:17:45,909 INFO sqlalchemy.engine.Engine SELECT pg_catalog.pg_class.relname 
+FROM pg_catalog.pg_class JOIN pg_catalog.pg_namespace ON pg_catalog.pg_namespace.oid = pg_catalog.pg_class.relnamespace 
+WHERE pg_catalog.pg_class.relname = %(table_name)s AND pg_catalog.pg_class.relkind = ANY (ARRAY[%(param_1)s, %(param_2)s, %(param_3)s, %(param_4)s, %(param_5)s]) AND pg_catalog.pg_table_is_visible(pg_catalog.pg_class.oid) AND pg_catalog.pg_namespace.nspname != %(nspname_1)s
+2026-06-12 14:17:45,909 INFO sqlalchemy.engine.Engine [cached since 0.02737s ago] {'table_name': 'product_qa', 'param_1': 'r', 'param_2': 'p', 'param_3': 'f', 'param_4': 'v', 'param_5': 'm', 'nspname_1': 'pg_catalog'}
+2026-06-12 14:17:45,910 INFO sqlalchemy.engine.Engine SELECT pg_catalog.pg_class.relname 
+FROM pg_catalog.pg_class JOIN pg_catalog.pg_namespace ON pg_catalog.pg_namespace.oid = pg_catalog.pg_class.relnamespace 
+WHERE pg_catalog.pg_class.relname = %(table_name)s AND pg_catalog.pg_class.relkind = ANY (ARRAY[%(param_1)s, %(param_2)s, %(param_3)s, %(param_4)s, %(param_5)s]) AND pg_catalog.pg_table_is_visible(pg_catalog.pg_class.oid) AND pg_catalog.pg_namespace.nspname != %(nspname_1)s
+2026-06-12 14:17:45,910 INFO sqlalchemy.engine.Engine [cached since 0.02791s ago] {'table_name': 'product_qa_negative', 'param_1': 'r', 'param_2': 'p', 'param_3': 'f', 'param_4': 'v', 'param_5': 'm', 'nspname_1': 'pg_catalog'}
+2026-06-12 14:17:45,910 INFO sqlalchemy.engine.Engine SELECT pg_catalog.pg_class.relname 
+FROM pg_catalog.pg_class JOIN pg_catalog.pg_namespace ON pg_catalog.pg_namespace.oid = pg_catalog.pg_class.relnamespace 
+WHERE pg_catalog.pg_class.relname = %(table_name)s AND pg_catalog.pg_class.relkind = ANY (ARRAY[%(param_1)s, %(param_2)s, %(param_3)s, %(param_4)s, %(param_5)s]) AND pg_catalog.pg_table_is_visible(pg_catalog.pg_class.oid) AND pg_catalog.pg_namespace.nspname != %(nspname_1)s
+2026-06-12 14:17:45,911 INFO sqlalchemy.engine.Engine [cached since 0.02877s ago] {'table_name': 'qa_answers', 'param_1': 'r', 'param_2': 'p', 'param_3': 'f', 'param_4': 'v', 'param_5': 'm', 'nspname_1': 'pg_catalog'}
+2026-06-12 14:17:45,912 INFO sqlalchemy.engine.Engine SELECT pg_catalog.pg_class.relname 
+FROM pg_catalog.pg_class JOIN pg_catalog.pg_namespace ON pg_catalog.pg_namespace.oid = pg_catalog.pg_class.relnamespace 
+WHERE pg_catalog.pg_class.relname = %(table_name)s AND pg_catalog.pg_class.relkind = ANY (ARRAY[%(param_1)s, %(param_2)s, %(param_3)s, %(param_4)s, %(param_5)s]) AND pg_catalog.pg_table_is_visible(pg_catalog.pg_class.oid) AND pg_catalog.pg_namespace.nspname != %(nspname_1)s
+2026-06-12 14:17:45,912 INFO sqlalchemy.engine.Engine [cached since 0.03039s ago] {'table_name': 'qa_tags', 'param_1': 'r', 'param_2': 'p', 'param_3': 'f', 'param_4': 'v', 'param_5': 'm', 'nspname_1': 'pg_catalog'}
+2026-06-12 14:17:45,913 INFO sqlalchemy.engine.Engine SELECT pg_catalog.pg_class.relname 
+FROM pg_catalog.pg_class JOIN pg_catalog.pg_namespace ON pg_catalog.pg_namespace.oid = pg_catalog.pg_class.relnamespace 
+WHERE pg_catalog.pg_class.relname = %(table_name)s AND pg_catalog.pg_class.relkind = ANY (ARRAY[%(param_1)s, %(param_2)s, %(param_3)s, %(param_4)s, %(param_5)s]) AND pg_catalog.pg_table_is_visible(pg_catalog.pg_class.oid) AND pg_catalog.pg_namespace.nspname != %(nspname_1)s
+2026-06-12 14:17:45,913 INFO sqlalchemy.engine.Engine [cached since 0.03162s ago] {'table_name': 'qa_tag_relations', 'param_1': 'r', 'param_2': 'p', 'param_3': 'f', 'param_4': 'v', 'param_5': 'm', 'nspname_1': 'pg_catalog'}
+2026-06-12 14:17:45,914 INFO sqlalchemy.engine.Engine SELECT pg_catalog.pg_class.relname 
+FROM pg_catalog.pg_class JOIN pg_catalog.pg_namespace ON pg_catalog.pg_namespace.oid = pg_catalog.pg_class.relnamespace 
+WHERE pg_catalog.pg_class.relname = %(table_name)s AND pg_catalog.pg_class.relkind = ANY (ARRAY[%(param_1)s, %(param_2)s, %(param_3)s, %(param_4)s, %(param_5)s]) AND pg_catalog.pg_table_is_visible(pg_catalog.pg_class.oid) AND pg_catalog.pg_namespace.nspname != %(nspname_1)s
+2026-06-12 14:17:45,914 INFO sqlalchemy.engine.Engine [cached since 0.03258s ago] {'table_name': 'ai_generated_assets', 'param_1': 'r', 'param_2': 'p', 'param_3': 'f', 'param_4': 'v', 'param_5': 'm', 'nspname_1': 'pg_catalog'}
+2026-06-12 14:17:45,915 INFO sqlalchemy.engine.Engine SELECT pg_catalog.pg_class.relname 
+FROM pg_catalog.pg_class JOIN pg_catalog.pg_namespace ON pg_catalog.pg_namespace.oid = pg_catalog.pg_class.relnamespace 
+WHERE pg_catalog.pg_class.relname = %(table_name)s AND pg_catalog.pg_class.relkind = ANY (ARRAY[%(param_1)s, %(param_2)s, %(param_3)s, %(param_4)s, %(param_5)s]) AND pg_catalog.pg_table_is_visible(pg_catalog.pg_class.oid) AND pg_catalog.pg_namespace.nspname != %(nspname_1)s
+2026-06-12 14:17:45,915 INFO sqlalchemy.engine.Engine [cached since 0.03339s ago] {'table_name': 'listing_channels', 'param_1': 'r', 'param_2': 'p', 'param_3': 'f', 'param_4': 'v', 'param_5': 'm', 'nspname_1': 'pg_catalog'}
+2026-06-12 14:17:45,916 INFO sqlalchemy.engine.Engine SELECT pg_catalog.pg_class.relname 
+FROM pg_catalog.pg_class JOIN pg_catalog.pg_namespace ON pg_catalog.pg_namespace.oid = pg_catalog.pg_class.relnamespace 
+WHERE pg_catalog.pg_class.relname = %(table_name)s AND pg_catalog.pg_class.relkind = ANY (ARRAY[%(param_1)s, %(param_2)s, %(param_3)s, %(param_4)s, %(param_5)s]) AND pg_catalog.pg_table_is_visible(pg_catalog.pg_class.oid) AND pg_catalog.pg_namespace.nspname != %(nspname_1)s
+2026-06-12 14:17:45,916 INFO sqlalchemy.engine.Engine [cached since 0.03412s ago] {'table_name': 'product_listing_channels', 'param_1': 'r', 'param_2': 'p', 'param_3': 'f', 'param_4': 'v', 'param_5': 'm', 'nspname_1': 'pg_catalog'}
+2026-06-12 14:17:45,916 INFO sqlalchemy.engine.Engine SELECT pg_catalog.pg_class.relname 
+FROM pg_catalog.pg_class JOIN pg_catalog.pg_namespace ON pg_catalog.pg_namespace.oid = pg_catalog.pg_class.relnamespace 
+WHERE pg_catalog.pg_class.relname = %(table_name)s AND pg_catalog.pg_class.relkind = ANY (ARRAY[%(param_1)s, %(param_2)s, %(param_3)s, %(param_4)s, %(param_5)s]) AND pg_catalog.pg_table_is_visible(pg_catalog.pg_class.oid) AND pg_catalog.pg_namespace.nspname != %(nspname_1)s
+2026-06-12 14:17:45,917 INFO sqlalchemy.engine.Engine [cached since 0.0348s ago] {'table_name': 'sales_regions', 'param_1': 'r', 'param_2': 'p', 'param_3': 'f', 'param_4': 'v', 'param_5': 'm', 'nspname_1': 'pg_catalog'}
+2026-06-12 14:17:45,918 INFO sqlalchemy.engine.Engine SELECT pg_catalog.pg_class.relname 
+FROM pg_catalog.pg_class JOIN pg_catalog.pg_namespace ON pg_catalog.pg_namespace.oid = pg_catalog.pg_class.relnamespace 
+WHERE pg_catalog.pg_class.relname = %(table_name)s AND pg_catalog.pg_class.relkind = ANY (ARRAY[%(param_1)s, %(param_2)s, %(param_3)s, %(param_4)s, %(param_5)s]) AND pg_catalog.pg_table_is_visible(pg_catalog.pg_class.oid) AND pg_catalog.pg_namespace.nspname != %(nspname_1)s
+2026-06-12 14:17:45,918 INFO sqlalchemy.engine.Engine [cached since 0.03626s ago] {'table_name': 'product_sales_regions', 'param_1': 'r', 'param_2': 'p', 'param_3': 'f', 'param_4': 'v', 'param_5': 'm', 'nspname_1': 'pg_catalog'}
+2026-06-12 14:17:45,919 INFO sqlalchemy.engine.Engine SELECT pg_catalog.pg_class.relname 
+FROM pg_catalog.pg_class JOIN pg_catalog.pg_namespace ON pg_catalog.pg_namespace.oid = pg_catalog.pg_class.relnamespace 
+WHERE pg_catalog.pg_class.relname = %(table_name)s AND pg_catalog.pg_class.relkind = ANY (ARRAY[%(param_1)s, %(param_2)s, %(param_3)s, %(param_4)s, %(param_5)s]) AND pg_catalog.pg_table_is_visible(pg_catalog.pg_class.oid) AND pg_catalog.pg_namespace.nspname != %(nspname_1)s
+2026-06-12 14:17:45,919 INFO sqlalchemy.engine.Engine [cached since 0.03747s ago] {'table_name': 'certifications', 'param_1': 'r', 'param_2': 'p', 'param_3': 'f', 'param_4': 'v', 'param_5': 'm', 'nspname_1': 'pg_catalog'}
+2026-06-12 14:17:45,921 INFO sqlalchemy.engine.Engine SELECT pg_catalog.pg_class.relname 
+FROM pg_catalog.pg_class JOIN pg_catalog.pg_namespace ON pg_catalog.pg_namespace.oid = pg_catalog.pg_class.relnamespace 
+WHERE pg_catalog.pg_class.relname = %(table_name)s AND pg_catalog.pg_class.relkind = ANY (ARRAY[%(param_1)s, %(param_2)s, %(param_3)s, %(param_4)s, %(param_5)s]) AND pg_catalog.pg_table_is_visible(pg_catalog.pg_class.oid) AND pg_catalog.pg_namespace.nspname != %(nspname_1)s
+2026-06-12 14:17:45,921 INFO sqlalchemy.engine.Engine [cached since 0.03911s ago] {'table_name': 'product_certifications', 'param_1': 'r', 'param_2': 'p', 'param_3': 'f', 'param_4': 'v', 'param_5': 'm', 'nspname_1': 'pg_catalog'}
+2026-06-12 14:17:45,922 INFO sqlalchemy.engine.Engine SELECT pg_catalog.pg_class.relname 
+FROM pg_catalog.pg_class JOIN pg_catalog.pg_namespace ON pg_catalog.pg_namespace.oid = pg_catalog.pg_class.relnamespace 
+WHERE pg_catalog.pg_class.relname = %(table_name)s AND pg_catalog.pg_class.relkind = ANY (ARRAY[%(param_1)s, %(param_2)s, %(param_3)s, %(param_4)s, %(param_5)s]) AND pg_catalog.pg_table_is_visible(pg_catalog.pg_class.oid) AND pg_catalog.pg_namespace.nspname != %(nspname_1)s
+2026-06-12 14:17:45,922 INFO sqlalchemy.engine.Engine [cached since 0.04029s ago] {'table_name': 'keywords', 'param_1': 'r', 'param_2': 'p', 'param_3': 'f', 'param_4': 'v', 'param_5': 'm', 'nspname_1': 'pg_catalog'}
+2026-06-12 14:17:45,923 INFO sqlalchemy.engine.Engine SELECT pg_catalog.pg_class.relname 
+FROM pg_catalog.pg_class JOIN pg_catalog.pg_namespace ON pg_catalog.pg_namespace.oid = pg_catalog.pg_class.relnamespace 
+WHERE pg_catalog.pg_class.relname = %(table_name)s AND pg_catalog.pg_class.relkind = ANY (ARRAY[%(param_1)s, %(param_2)s, %(param_3)s, %(param_4)s, %(param_5)s]) AND pg_catalog.pg_table_is_visible(pg_catalog.pg_class.oid) AND pg_catalog.pg_namespace.nspname != %(nspname_1)s
+2026-06-12 14:17:45,923 INFO sqlalchemy.engine.Engine [cached since 0.0412s ago] {'table_name': 'product_keywords', 'param_1': 'r', 'param_2': 'p', 'param_3': 'f', 'param_4': 'v', 'param_5': 'm', 'nspname_1': 'pg_catalog'}
+2026-06-12 14:17:45,924 INFO sqlalchemy.engine.Engine SELECT pg_catalog.pg_class.relname 
+FROM pg_catalog.pg_class JOIN pg_catalog.pg_namespace ON pg_catalog.pg_namespace.oid = pg_catalog.pg_class.relnamespace 
+WHERE pg_catalog.pg_class.relname = %(table_name)s AND pg_catalog.pg_class.relkind = ANY (ARRAY[%(param_1)s, %(param_2)s, %(param_3)s, %(param_4)s, %(param_5)s]) AND pg_catalog.pg_table_is_visible(pg_catalog.pg_class.oid) AND pg_catalog.pg_namespace.nspname != %(nspname_1)s
+2026-06-12 14:17:45,924 INFO sqlalchemy.engine.Engine [cached since 0.04201s ago] {'table_name': 'knowledge_documents', 'param_1': 'r', 'param_2': 'p', 'param_3': 'f', 'param_4': 'v', 'param_5': 'm', 'nspname_1': 'pg_catalog'}
+2026-06-12 14:17:45,924 INFO sqlalchemy.engine.Engine SELECT pg_catalog.pg_class.relname 
+FROM pg_catalog.pg_class JOIN pg_catalog.pg_namespace ON pg_catalog.pg_namespace.oid = pg_catalog.pg_class.relnamespace 
+WHERE pg_catalog.pg_class.relname = %(table_name)s AND pg_catalog.pg_class.relkind = ANY (ARRAY[%(param_1)s, %(param_2)s, %(param_3)s, %(param_4)s, %(param_5)s]) AND pg_catalog.pg_table_is_visible(pg_catalog.pg_class.oid) AND pg_catalog.pg_namespace.nspname != %(nspname_1)s
+2026-06-12 14:17:45,924 INFO sqlalchemy.engine.Engine [cached since 0.04268s ago] {'table_name': 'knowledge_chunks', 'param_1': 'r', 'param_2': 'p', 'param_3': 'f', 'param_4': 'v', 'param_5': 'm', 'nspname_1': 'pg_catalog'}
+2026-06-12 14:17:45,925 INFO sqlalchemy.engine.Engine SELECT pg_catalog.pg_class.relname 
+FROM pg_catalog.pg_class JOIN pg_catalog.pg_namespace ON pg_catalog.pg_namespace.oid = pg_catalog.pg_class.relnamespace 
+WHERE pg_catalog.pg_class.relname = %(table_name)s AND pg_catalog.pg_class.relkind = ANY (ARRAY[%(param_1)s, %(param_2)s, %(param_3)s, %(param_4)s, %(param_5)s]) AND pg_catalog.pg_table_is_visible(pg_catalog.pg_class.oid) AND pg_catalog.pg_namespace.nspname != %(nspname_1)s
+2026-06-12 14:17:45,925 INFO sqlalchemy.engine.Engine [cached since 0.04363s ago] {'table_name': 'customer_service_conversations', 'param_1': 'r', 'param_2': 'p', 'param_3': 'f', 'param_4': 'v', 'param_5': 'm', 'nspname_1': 'pg_catalog'}
+2026-06-12 14:17:45,926 INFO sqlalchemy.engine.Engine SELECT pg_catalog.pg_class.relname 
+FROM pg_catalog.pg_class JOIN pg_catalog.pg_namespace ON pg_catalog.pg_namespace.oid = pg_catalog.pg_class.relnamespace 
+WHERE pg_catalog.pg_class.relname = %(table_name)s AND pg_catalog.pg_class.relkind = ANY (ARRAY[%(param_1)s, %(param_2)s, %(param_3)s, %(param_4)s, %(param_5)s]) AND pg_catalog.pg_table_is_visible(pg_catalog.pg_class.oid) AND pg_catalog.pg_namespace.nspname != %(nspname_1)s
+2026-06-12 14:17:45,926 INFO sqlalchemy.engine.Engine [cached since 0.0446s ago] {'table_name': 'customer_service_messages', 'param_1': 'r', 'param_2': 'p', 'param_3': 'f', 'param_4': 'v', 'param_5': 'm', 'nspname_1': 'pg_catalog'}
+2026-06-12 14:17:45,927 INFO sqlalchemy.engine.Engine COMMIT
+2026-06-12 14:17:45,936 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-06-12 14:17:45,936 INFO sqlalchemy.engine.Engine SELECT pg_catalog.pg_attribute.attname AS name, pg_catalog.format_type(pg_catalog.pg_attribute.atttypid, pg_catalog.pg_attribute.atttypmod) AS format_type, (SELECT pg_catalog.pg_get_expr(pg_catalog.pg_attrdef.adbin, pg_catalog.pg_attrdef.adrelid) AS pg_get_expr_1 
+FROM pg_catalog.pg_attrdef 
+WHERE pg_catalog.pg_attrdef.adrelid = pg_catalog.pg_attribute.attrelid AND pg_catalog.pg_attrdef.adnum = pg_catalog.pg_attribute.attnum AND pg_catalog.pg_attribute.atthasdef) AS "default", pg_catalog.pg_attribute.attnotnull AS not_null, pg_catalog.pg_class.relname AS table_name, pg_catalog.pg_description.description AS comment, pg_catalog.pg_attribute.attgenerated AS generated, (SELECT json_build_object(%(json_build_object_2)s, pg_catalog.pg_attribute.attidentity = %(attidentity_1)s, %(json_build_object_3)s, pg_catalog.pg_sequence.seqstart, %(json_build_object_4)s, pg_catalog.pg_sequence.seqincrement, %(json_build_object_5)s, pg_catalog.pg_sequence.seqmin, %(json_build_object_6)s, pg_catalog.pg_sequence.seqmax, %(json_build_object_7)s, pg_catalog.pg_sequence.seqcache, %(json_build_object_8)s, pg_catalog.pg_sequence.seqcycle) AS json_build_object_1 
+FROM pg_catalog.pg_sequence 
+WHERE pg_catalog.pg_attribute.attidentity != %(attidentity_2)s AND pg_catalog.pg_sequence.seqrelid = CAST(CAST(pg_catalog.pg_get_serial_sequence(CAST(CAST(pg_catalog.pg_attribute.attrelid AS REGCLASS) AS TEXT), pg_catalog.pg_attribute.attname) AS REGCLASS) AS OID)) AS identity_options 
+FROM pg_catalog.pg_class LEFT OUTER JOIN pg_catalog.pg_attribute ON pg_catalog.pg_class.oid = pg_catalog.pg_attribute.attrelid AND pg_catalog.pg_attribute.attnum > %(attnum_1)s AND NOT pg_catalog.pg_attribute.attisdropped LEFT OUTER JOIN pg_catalog.pg_description ON pg_catalog.pg_description.objoid = pg_catalog.pg_attribute.attrelid AND pg_catalog.pg_description.objsubid = pg_catalog.pg_attribute.attnum JOIN pg_catalog.pg_namespace ON pg_catalog.pg_namespace.oid = pg_catalog.pg_class.relnamespace 
+WHERE pg_catalog.pg_class.relkind = ANY (ARRAY[%(param_1)s, %(param_2)s, %(param_3)s, %(param_4)s, %(param_5)s]) AND pg_catalog.pg_table_is_visible(pg_catalog.pg_class.oid) AND pg_catalog.pg_namespace.nspname != %(nspname_1)s AND pg_catalog.pg_class.relname IN (%(filter_names_1)s) ORDER BY pg_catalog.pg_class.relname, pg_catalog.pg_attribute.attnum
+2026-06-12 14:17:45,936 INFO sqlalchemy.engine.Engine [generated in 0.00043s] {'json_build_object_2': 'always', 'attidentity_1': 'a', 'json_build_object_3': 'start', 'json_build_object_4': 'increment', 'json_build_object_5': 'minvalue', 'json_build_object_6': 'maxvalue', 'json_build_object_7': 'cache', 'json_build_object_8': 'cycle', 'attidentity_2': '', 'attnum_1': 0, 'param_1': 'r', 'param_2': 'p', 'param_3': 'f', 'param_4': 'v', 'param_5': 'm', 'nspname_1': 'pg_catalog', 'filter_names_1': 'products'}
+2026-06-12 14:17:45,950 INFO sqlalchemy.engine.Engine SELECT pg_catalog.pg_type.typname AS name, pg_catalog.format_type(pg_catalog.pg_type.typbasetype, pg_catalog.pg_type.typtypmod) AS attype, NOT pg_catalog.pg_type.typnotnull AS nullable, pg_catalog.pg_type.typdefault AS "default", pg_catalog.pg_type_is_visible(pg_catalog.pg_type.oid) AS visible, pg_catalog.pg_namespace.nspname AS schema, domain_constraints.condefs, domain_constraints.connames, pg_catalog.pg_collation.collname 
+FROM pg_catalog.pg_type JOIN pg_catalog.pg_namespace ON pg_catalog.pg_namespace.oid = pg_catalog.pg_type.typnamespace LEFT OUTER JOIN pg_catalog.pg_collation ON pg_catalog.pg_type.typcollation = pg_catalog.pg_collation.oid LEFT OUTER JOIN (SELECT pg_catalog.pg_constraint.contypid AS contypid, array_agg(pg_catalog.pg_get_constraintdef(pg_catalog.pg_constraint.oid, %(pg_get_constraintdef_1)s)) AS condefs, array_agg(CAST(pg_catalog.pg_constraint.conname AS TEXT)) AS connames 
+FROM pg_catalog.pg_constraint 
+WHERE pg_catalog.pg_constraint.contypid != %(contypid_1)s GROUP BY pg_catalog.pg_constraint.contypid) AS domain_constraints ON pg_catalog.pg_type.oid = domain_constraints.contypid 
+WHERE pg_catalog.pg_type.typtype = %(typtype_1)s ORDER BY pg_catalog.pg_namespace.nspname, pg_catalog.pg_type.typname
+2026-06-12 14:17:45,950 INFO sqlalchemy.engine.Engine [generated in 0.00038s] {'pg_get_constraintdef_1': True, 'contypid_1': 0, 'typtype_1': 'd'}
+2026-06-12 14:17:45,960 INFO sqlalchemy.engine.Engine SELECT pg_catalog.pg_type.typname AS name, pg_catalog.pg_type_is_visible(pg_catalog.pg_type.oid) AS visible, pg_catalog.pg_namespace.nspname AS schema, lbl_agg.labels AS labels 
+FROM pg_catalog.pg_type JOIN pg_catalog.pg_namespace ON pg_catalog.pg_namespace.oid = pg_catalog.pg_type.typnamespace LEFT OUTER JOIN (SELECT pg_catalog.pg_enum.enumtypid AS enumtypid, array_agg(CAST(pg_catalog.pg_enum.enumlabel AS TEXT) ORDER BY pg_catalog.pg_enum.enumsortorder) AS labels 
+FROM pg_catalog.pg_enum GROUP BY pg_catalog.pg_enum.enumtypid) AS lbl_agg ON pg_catalog.pg_type.oid = lbl_agg.enumtypid 
+WHERE pg_catalog.pg_type.typtype = %(typtype_1)s ORDER BY pg_catalog.pg_namespace.nspname, pg_catalog.pg_type.typname
+2026-06-12 14:17:45,960 INFO sqlalchemy.engine.Engine [generated in 0.00030s] {'typtype_1': 'e'}
+2026-06-12 14:17:45,965 INFO sqlalchemy.engine.Engine ROLLBACK
+2026-06-12 14:17:45,966 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-06-12 14:17:45,966 INFO sqlalchemy.engine.Engine CREATE EXTENSION IF NOT EXISTS vector
+2026-06-12 14:17:45,966 INFO sqlalchemy.engine.Engine [generated in 0.00022s] {}
+2026-06-12 14:17:45,969 INFO sqlalchemy.engine.Engine ALTER TABLE knowledge_chunks ADD COLUMN IF NOT EXISTS embedding vector
+2026-06-12 14:17:45,970 INFO sqlalchemy.engine.Engine [generated in 0.00038s] {}
+2026-06-12 14:17:45,971 INFO sqlalchemy.engine.Engine SELECT vector_dims(embedding) FROM knowledge_chunks WHERE embedding IS NOT NULL LIMIT 1
+2026-06-12 14:17:45,971 INFO sqlalchemy.engine.Engine [generated in 0.00033s] {}
+2026-06-12 14:17:45,974 INFO sqlalchemy.engine.Engine COMMIT
+2026-06-12 14:17:46,013 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-06-12 14:17:46,015 INFO sqlalchemy.engine.Engine SELECT groups.id AS groups_id, groups.group_name AS groups_group_name, groups.description AS groups_description, groups.created_at AS groups_created_at, groups.updated_at AS groups_updated_at 
+FROM groups
+2026-06-12 14:17:46,015 INFO sqlalchemy.engine.Engine [generated in 0.00022s] {}
+2026-06-12 14:17:46,020 INFO sqlalchemy.engine.Engine SELECT permissions.id AS permissions_id, permissions.permission_key AS permissions_permission_key, permissions.permission_name AS permissions_permission_name, permissions.permission_type AS permissions_permission_type, permissions.description AS permissions_description, permissions.created_at AS permissions_created_at, permissions.updated_at AS permissions_updated_at 
+FROM permissions
+2026-06-12 14:17:46,020 INFO sqlalchemy.engine.Engine [generated in 0.00025s] {}
+2026-06-12 14:17:46,023 INFO sqlalchemy.engine.Engine SELECT routes.id AS routes_id, routes.route_path AS routes_route_path, routes.route_name AS routes_route_name, routes.parent_id AS routes_parent_id, routes.route_type AS routes_route_type, routes.component_path AS routes_component_path, routes.description AS routes_description, routes.created_at AS routes_created_at, routes.updated_at AS routes_updated_at 
+FROM routes
+2026-06-12 14:17:46,023 INFO sqlalchemy.engine.Engine [generated in 0.00017s] {}
+2026-06-12 14:17:46,025 INFO sqlalchemy.engine.Engine SELECT groups.id AS groups_id, groups.group_name AS groups_group_name, groups.description AS groups_description, groups.created_at AS groups_created_at, groups.updated_at AS groups_updated_at 
+FROM groups
+2026-06-12 14:17:46,025 INFO sqlalchemy.engine.Engine [cached since 0.01016s ago] {}
+2026-06-12 14:17:46,025 INFO sqlalchemy.engine.Engine SELECT permissions.id AS permissions_id, permissions.permission_key AS permissions_permission_key, permissions.permission_name AS permissions_permission_name, permissions.permission_type AS permissions_permission_type, permissions.description AS permissions_description, permissions.created_at AS permissions_created_at, permissions.updated_at AS permissions_updated_at 
+FROM permissions
+2026-06-12 14:17:46,026 INFO sqlalchemy.engine.Engine [cached since 0.005968s ago] {}
+2026-06-12 14:17:46,027 INFO sqlalchemy.engine.Engine SELECT group_permissions.id AS group_permissions_id, group_permissions.group_id AS group_permissions_group_id, group_permissions.permission_id AS group_permissions_permission_id, group_permissions.created_at AS group_permissions_created_at 
+FROM group_permissions
+2026-06-12 14:17:46,027 INFO sqlalchemy.engine.Engine [generated in 0.00038s] {}
+2026-06-12 14:17:46,034 INFO sqlalchemy.engine.Engine SELECT routes.id AS routes_id, routes.route_path AS routes_route_path, routes.route_name AS routes_route_name, routes.parent_id AS routes_parent_id, routes.route_type AS routes_route_type, routes.component_path AS routes_component_path, routes.description AS routes_description, routes.created_at AS routes_created_at, routes.updated_at AS routes_updated_at 
+FROM routes
+2026-06-12 14:17:46,034 INFO sqlalchemy.engine.Engine [cached since 0.01074s ago] {}
+2026-06-12 14:17:46,035 INFO sqlalchemy.engine.Engine SELECT permission_routes.id AS permission_routes_id, permission_routes.permission_id AS permission_routes_permission_id, permission_routes.route_id AS permission_routes_route_id, permission_routes.created_at AS permission_routes_created_at 
+FROM permission_routes
+2026-06-12 14:17:46,035 INFO sqlalchemy.engine.Engine [generated in 0.00011s] {}
+2026-06-12 14:17:46,037 INFO sqlalchemy.engine.Engine ROLLBACK
+2026-06-12 14:17:46,038 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-06-12 14:17:46,038 INFO sqlalchemy.engine.Engine SELECT product_categories.id AS product_categories_id, product_categories.category_name AS product_categories_category_name, product_categories.parent_id AS product_categories_parent_id, product_categories.description AS product_categories_description, product_categories.created_at AS product_categories_created_at 
+FROM product_categories 
+ LIMIT %(param_1)s
+2026-06-12 14:17:46,038 INFO sqlalchemy.engine.Engine [generated in 0.00012s] {'param_1': 1}
+2026-06-12 14:17:46,040 INFO sqlalchemy.engine.Engine ROLLBACK
+2026-06-12 14:17:46,040 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-06-12 14:17:46,041 INFO sqlalchemy.engine.Engine SELECT users.id AS users_id, users.username AS users_username, users.user_type AS users_user_type, users.password_hash AS users_password_hash, users.display_name AS users_display_name, users.email AS users_email, users.is_active AS users_is_active, users.created_at AS users_created_at, users.updated_at AS users_updated_at 
+FROM users 
+WHERE users.username = %(username_1)s 
+ LIMIT %(param_1)s
+2026-06-12 14:17:46,042 INFO sqlalchemy.engine.Engine [generated in 0.00013s] {'username_1': 'admin', 'param_1': 1}
+2026-06-12 14:17:46,047 INFO sqlalchemy.engine.Engine SELECT user_groups.user_id AS user_groups_user_id, user_groups.id AS user_groups_id, user_groups.group_id AS user_groups_group_id, user_groups.group_role AS user_groups_group_role, user_groups.created_at AS user_groups_created_at, user_groups.updated_at AS user_groups_updated_at 
+FROM user_groups 
+WHERE user_groups.user_id IN (%(primary_keys_1)s)
+2026-06-12 14:17:46,047 INFO sqlalchemy.engine.Engine [generated in 0.00023s] {'primary_keys_1': UUID('a14abd3f-f062-48b3-b762-8245f44b881e')}
+2026-06-12 14:17:46,050 INFO sqlalchemy.engine.Engine SELECT groups.id AS groups_id, groups.group_name AS groups_group_name, groups.description AS groups_description, groups.created_at AS groups_created_at, groups.updated_at AS groups_updated_at 
+FROM groups 
+WHERE groups.id IN (%(primary_keys_1)s)
+2026-06-12 14:17:46,050 INFO sqlalchemy.engine.Engine [generated in 0.00017s] {'primary_keys_1': UUID('3e540c19-668d-4b68-8d8d-303969b23e7b')}
+2026-06-12 14:17:46,051 INFO sqlalchemy.engine.Engine ROLLBACK
+INFO:     Application startup complete.
+INFO:     Uvicorn running on http://0.0.0.0:8000 (Press CTRL+C to quit)
+2026-06-12 14:17:50,881 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-06-12 14:17:50,881 INFO sqlalchemy.engine.Engine SELECT users.id AS users_id, users.username AS users_username, users.user_type AS users_user_type, users.password_hash AS users_password_hash, users.display_name AS users_display_name, users.email AS users_email, users.is_active AS users_is_active, users.created_at AS users_created_at, users.updated_at AS users_updated_at 
+FROM users 
+WHERE users.username = %(username_1)s 
+ LIMIT %(param_1)s
+2026-06-12 14:17:50,881 INFO sqlalchemy.engine.Engine [cached since 4.84s ago] {'username_1': 'admin', 'param_1': 1}
+2026-06-12 14:17:50,883 INFO sqlalchemy.engine.Engine SELECT user_groups.user_id AS user_groups_user_id, user_groups.id AS user_groups_id, user_groups.group_id AS user_groups_group_id, user_groups.group_role AS user_groups_group_role, user_groups.created_at AS user_groups_created_at, user_groups.updated_at AS user_groups_updated_at 
+FROM user_groups 
+WHERE user_groups.user_id IN (%(primary_keys_1)s)
+2026-06-12 14:17:50,883 INFO sqlalchemy.engine.Engine [cached since 4.836s ago] {'primary_keys_1': UUID('a14abd3f-f062-48b3-b762-8245f44b881e')}
+2026-06-12 14:17:50,883 INFO sqlalchemy.engine.Engine SELECT groups.id AS groups_id, groups.group_name AS groups_group_name, groups.description AS groups_description, groups.created_at AS groups_created_at, groups.updated_at AS groups_updated_at 
+FROM groups 
+WHERE groups.id IN (%(primary_keys_1)s)
+2026-06-12 14:17:50,884 INFO sqlalchemy.engine.Engine [cached since 4.833s ago] {'primary_keys_1': UUID('3e540c19-668d-4b68-8d8d-303969b23e7b')}
+2026-06-12 14:17:51,167 INFO sqlalchemy.engine.Engine SELECT user_groups.id AS user_groups_id, user_groups.user_id AS user_groups_user_id, user_groups.group_id AS user_groups_group_id, user_groups.group_role AS user_groups_group_role, user_groups.created_at AS user_groups_created_at, user_groups.updated_at AS user_groups_updated_at, groups.id AS groups_id, groups.group_name AS groups_group_name, groups.description AS groups_description, groups.created_at AS groups_created_at, groups.updated_at AS groups_updated_at 
+FROM user_groups JOIN groups ON user_groups.group_id = groups.id 
+WHERE user_groups.user_id = %(user_id_1)s::UUID
+2026-06-12 14:17:51,168 INFO sqlalchemy.engine.Engine [generated in 0.00030s] {'user_id_1': UUID('a14abd3f-f062-48b3-b762-8245f44b881e')}
+2026-06-12 14:17:51,170 INFO sqlalchemy.engine.Engine SELECT groups.id AS groups_id, groups.group_name AS groups_group_name, groups.description AS groups_description, groups.created_at AS groups_created_at, groups.updated_at AS groups_updated_at 
+FROM groups 
+WHERE groups.id IN (%(primary_keys_1)s)
+2026-06-12 14:17:51,170 INFO sqlalchemy.engine.Engine [generated in 0.00030s] {'primary_keys_1': UUID('3e540c19-668d-4b68-8d8d-303969b23e7b')}
+2026-06-12 14:17:51,232 INFO sqlalchemy.engine.Engine SELECT user_groups.id AS user_groups_id, user_groups.user_id AS user_groups_user_id, user_groups.group_id AS user_groups_group_id, user_groups.group_role AS user_groups_group_role, user_groups.created_at AS user_groups_created_at, user_groups.updated_at AS user_groups_updated_at 
+FROM user_groups JOIN groups ON user_groups.group_id = groups.id 
+WHERE user_groups.user_id = %(user_id_1)s::UUID AND groups.group_name = %(group_name_1)s 
+ LIMIT %(param_1)s
+2026-06-12 14:17:51,233 INFO sqlalchemy.engine.Engine [generated in 0.00044s] {'user_id_1': UUID('a14abd3f-f062-48b3-b762-8245f44b881e'), 'group_name_1': '管理层', 'param_1': 1}
+2026-06-12 14:17:51,235 INFO sqlalchemy.engine.Engine SELECT groups.id AS groups_id, groups.group_name AS groups_group_name, groups.description AS groups_description, groups.created_at AS groups_created_at, groups.updated_at AS groups_updated_at 
+FROM groups 
+WHERE groups.id IN (%(primary_keys_1)s)
+2026-06-12 14:17:51,235 INFO sqlalchemy.engine.Engine [cached since 0.06441s ago] {'primary_keys_1': UUID('3e540c19-668d-4b68-8d8d-303969b23e7b')}
+2026-06-12 14:17:51,237 INFO sqlalchemy.engine.Engine SELECT permissions.permission_key AS permissions_permission_key 
+FROM permissions ORDER BY permissions.permission_key
+2026-06-12 14:17:51,237 INFO sqlalchemy.engine.Engine [generated in 0.00022s] {}
+INFO:     127.0.0.1:3853 - "POST /api/auth/login HTTP/1.1" 200 OK
+2026-06-12 14:17:51,246 INFO sqlalchemy.engine.Engine ROLLBACK
+2026-06-12 14:17:51,257 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-06-12 14:17:51,260 INFO sqlalchemy.engine.Engine SELECT users.id AS users_id, users.username AS users_username, users.user_type AS users_user_type, users.password_hash AS users_password_hash, users.display_name AS users_display_name, users.email AS users_email, users.is_active AS users_is_active, users.created_at AS users_created_at, users.updated_at AS users_updated_at 
+FROM users 
+WHERE users.id = %(id_1)s 
+ LIMIT %(param_1)s
+2026-06-12 14:17:51,261 INFO sqlalchemy.engine.Engine [generated in 0.00053s] {'id_1': 'a14abd3f-f062-48b3-b762-8245f44b881e', 'param_1': 1}
+2026-06-12 14:17:51,265 INFO sqlalchemy.engine.Engine SELECT user_groups.user_id AS user_groups_user_id, user_groups.id AS user_groups_id, user_groups.group_id AS user_groups_group_id, user_groups.group_role AS user_groups_group_role, user_groups.created_at AS user_groups_created_at, user_groups.updated_at AS user_groups_updated_at 
+FROM user_groups 
+WHERE user_groups.user_id IN (%(primary_keys_1)s)
+2026-06-12 14:17:51,265 INFO sqlalchemy.engine.Engine [cached since 5.217s ago] {'primary_keys_1': UUID('a14abd3f-f062-48b3-b762-8245f44b881e')}
+2026-06-12 14:17:51,268 INFO sqlalchemy.engine.Engine SELECT groups.id AS groups_id, groups.group_name AS groups_group_name, groups.description AS groups_description, groups.created_at AS groups_created_at, groups.updated_at AS groups_updated_at 
+FROM groups 
+WHERE groups.id IN (%(primary_keys_1)s)
+2026-06-12 14:17:51,268 INFO sqlalchemy.engine.Engine [cached since 5.217s ago] {'primary_keys_1': UUID('3e540c19-668d-4b68-8d8d-303969b23e7b')}
+2026-06-12 14:17:51,271 INFO sqlalchemy.engine.Engine SELECT user_groups.id AS user_groups_id, user_groups.user_id AS user_groups_user_id, user_groups.group_id AS user_groups_group_id, user_groups.group_role AS user_groups_group_role, user_groups.created_at AS user_groups_created_at, user_groups.updated_at AS user_groups_updated_at 
+FROM user_groups JOIN groups ON user_groups.group_id = groups.id 
+WHERE user_groups.user_id = %(user_id_1)s::UUID AND groups.group_name = %(group_name_1)s 
+ LIMIT %(param_1)s
+2026-06-12 14:17:51,272 INFO sqlalchemy.engine.Engine [cached since 0.03957s ago] {'user_id_1': UUID('a14abd3f-f062-48b3-b762-8245f44b881e'), 'group_name_1': '管理层', 'param_1': 1}
+2026-06-12 14:17:51,275 INFO sqlalchemy.engine.Engine SELECT groups.id AS groups_id, groups.group_name AS groups_group_name, groups.description AS groups_description, groups.created_at AS groups_created_at, groups.updated_at AS groups_updated_at 
+FROM groups 
+WHERE groups.id IN (%(primary_keys_1)s)
+2026-06-12 14:17:51,276 INFO sqlalchemy.engine.Engine [cached since 0.1053s ago] {'primary_keys_1': UUID('3e540c19-668d-4b68-8d8d-303969b23e7b')}
+2026-06-12 14:17:51,284 INFO sqlalchemy.engine.Engine SELECT customer_service_messages.id AS customer_service_messages_id, customer_service_messages.conversation_id AS customer_service_messages_conversation_id, customer_service_messages.role AS customer_service_messages_role, customer_service_messages.content AS customer_service_messages_content, customer_service_messages.sku AS customer_service_messages_sku, customer_service_messages.sources_json AS customer_service_messages_sources_json, customer_service_messages.created_at AS customer_service_messages_created_at 
+FROM customer_service_messages JOIN customer_service_conversations ON customer_service_conversations.id = customer_service_messages.conversation_id 
+WHERE customer_service_conversations.user_id = %(user_id_1)s AND customer_service_messages.role = %(role_1)s ORDER BY customer_service_messages.created_at DESC 
+ LIMIT %(param_1)s
+2026-06-12 14:17:51,285 INFO sqlalchemy.engine.Engine [generated in 0.00052s] {'user_id_1': 'a14abd3f-f062-48b3-b762-8245f44b881e', 'role_1': 'assistant', 'param_1': 50}
+[CUSTOMER_AGENT_TOOL_SELECTION_REQUEST] {
+  "messages": [
+    {
+      "role": "system",
+      "content": "你是内部产品数据库 Agent。你可以自己选择后端白名单工具查询产品、读取详情、提出修改或删除建议。严禁编写 SQL，严禁直接执行写库。所有修改/删除只能调用 propose_* 工具生成待确认动作。如果用户要查询多个产品、条形码、类目或功能，优先调用 search_products。如果同时有精确条件和模糊语义需求，优先调用 hybrid_search_products。search_products 支持 term 全字段搜索，也支持 filters 精确筛选，例如 {\"负责人\":\"Yao\",\"类目\":\"锅具\"}。如果用户在问题文本或历史对话里明确给了 SKU，并问单品字段，调用 get_product_detail。如果用户说“这些/刚才那些/上面这些”，使用 previous_result_skus。如果本轮问题是完整的新需求（例如重新说明人数、场景、用途、产品类型），以当前问题为准重新检索；不要把上一轮 SKU 当默认范围。如果本轮是“预算不高/便宜点/性价比”等追问，要继承上一轮用户的场景、人群和用途，但必须重新按价格定位、产品定位和候选资料判断，不能把高端定位产品说成低预算推荐。如果用户在历史对话里已经给过范围，本轮追问如“哪种适合送礼/三个年轻人用哪个好”，要结合 conversation_history 和 previous_result_skus 决定工具。凡是涉及产品事实、推荐、对比、筛选、修改或删除，必须先调用工具；只有闲聊、解释能力边界或澄清问题可以直接 answer。如果问题缺少必要范围，不要猜，输出澄清 answer。做推荐/送礼/适合谁时，优先读取候选产品的容量、材质、卖点、使用场景、目标人群、情绪价值，再给取舍理由。如果 recent_feedback_lessons 里有相似问题，要避免重复其中的错误。复杂任务可以多轮调用工具，例如先 search_products，再对结果 SKU 调 propose_update_product_field。你必须只输出 JSON，不要 Markdown。格式：{\"tool_calls\":[{\"name\":\"search_products\",\"arguments\":{\"term\":\"\",\"filters\":{\"负责人\":\"Yao\",\"类目\":\"锅具\"},\"fields\":[\"容量\"]}}]}如果确实不需要工具，输出 {\"answer\":\"...\"}。"
+    },
+    {
+      "role": "user",
+      "content": "{\"question\": \"TW-104-37 ?????????????????\", \"previous_result_skus\": [], \"conversation_context\": {\"mode\": \"current_question\", \"previous_user_need\": \"\", \"instruction\": \"本轮问题信息较完整，优先按当前问题重新检索和回答；历史只作背景参考。\"}, \"conversation_history\": [], \"recent_feedback_lessons\": [], \"available_tools\": [{\"name\": \"search_products\", \"description\": \"全字段查询多条产品信息。适合 SKU、条形码、名称、品牌、系列、类目、等级、生命周期、负责人、备注、容量、重量、材质、颜色、工艺、热源、功率、卖点、目标人群、定位、价格定位、情绪价值、使用场景、竞品、标题、描述、关键词、listing 等条件。\", \"arguments\": {\"term\": \"搜索词，例如 SKU、条形码、负责人、锅、防滑条、露营泡咖啡、300ml、Yao\", \"filters\": \"可选，结构化筛选。例如 {\\\"负责人\\\":\\\"Yao\\\",\\\"类目\\\":\\\"锅\\\"} 或 {\\\"product.person_in_charge\\\":\\\"Yao\\\"}\", \"fields\": \"可选，要重点返回的字段名列表，例如 容量、材质、卖点\", \"limit\": \"可选，默认 50\"}}, {\"name\": \"semantic_search_knowledge\", \"description\": \"语义/关键词检索产品知识库。适合露营泡咖啡、情绪价值、使用场景、模糊需求等问题。V1 使用知识库关键词兜底，后续可升级 pgvector 相似度。\", \"arguments\": {\"query\": \"用户的语义需求\", \"sku\": \"可选，限定 SKU\", \"limit\": \"可选，默认 8\"}}, {\"name\": \"hybrid_search_products\", \"description\": \"融合查询产品。精确条件走产品 SQL filters，模糊语义需求走知识库/pgvector，再按 SKU 合并排序。适合“负责人Yao且适合露营泡咖啡的锅”。\", \"arguments\": {\"term\": \"可选，全字段关键词\", \"filters\": \"可选，结构化筛选，例如 {\\\"负责人\\\":\\\"Yao\\\",\\\"类目\\\":\\\"锅具\\\"}\", \"semantic_query\": \"可选，模糊语义需求，例如 适合露营泡咖啡\", \"fields\": \"可选，要重点返回的字段名列表\", \"limit\": \"可选，默认 50\"}}, {\"name\": \"get_product_detail\", \"description\": \"读取一个或多个 SKU 的完整产品资料。适合单品追问、上一轮结果继续对比、推荐前补全资料。\", \"arguments\": {\"sku\": \"单个产品 SKU\", \"skus\": \"可选，多个 SKU 数组\"}}, {\"name\": \"propose_update_product_field\", \"description\": \"提出修改字段建议，只创建待确认动作，不直接写库。\", \"arguments\": {\"sku\": \"单个产品 SKU\", \"skus\": \"可选，多个 SKU 数组\", \"field\": \"字段中文名或字段路径\", \"new_value\": \"新值\"}}, {\"name\": \"propose_delete_product_info\", \"description\": \"提出局部删除建议。V1 支持清空白名单字段。\", \"arguments\": {\"sku\": \"单个产品 SKU\", \"skus\": \"可选，多个 SKU 数组\", \"field\": \"要清空的字段中文名或字段路径\"}}, {\"name\": \"propose_delete_product\", \"description\": \"提出删除整个产品建议，只创建强确认动作，不直接删除。\", \"arguments\": {\"sku\": \"产品 SKU\"}}]}"
+    }
+  ],
+  "tools": [
+    {
+      "name": "search_products",
+      "description": "全字段查询多条产品信息。适合 SKU、条形码、名称、品牌、系列、类目、等级、生命周期、负责人、备注、容量、重量、材质、颜色、工艺、热源、功率、卖点、目标人群、定位、价格定位、情绪价值、使用场景、竞品、标题、描述、关键词、listing 等条件。",
+      "arguments": {
+        "term": "搜索词，例如 SKU、条形码、负责人、锅、防滑条、露营泡咖啡、300ml、Yao",
+        "filters": "可选，结构化筛选。例如 {\"负责人\":\"Yao\",\"类目\":\"锅\"} 或 {\"product.person_in_charge\":\"Yao\"}",
+        "fields": "可选，要重点返回的字段名列表，例如 容量、材质、卖点",
+        "limit": "可选，默认 50"
+      }
+    },
+    {
+      "name": "semantic_search_knowledge",
+      "description": "语义/关键词检索产品知识库。适合露营泡咖啡、情绪价值、使用场景、模糊需求等问题。V1 使用知识库关键词兜底，后续可升级 pgvector 相似度。",
+      "arguments": {
+        "query": "用户的语义需求",
+        "sku": "可选，限定 SKU",
+        "limit": "可选，默认 8"
+      }
+    },
+    {
+      "name": "hybrid_search_products",
+      "description": "融合查询产品。精确条件走产品 SQL filters，模糊语义需求走知识库/pgvector，再按 SKU 合并排序。适合“负责人Yao且适合露营泡咖啡的锅”。",
+      "arguments": {
+        "term": "可选，全字段关键词",
+        "filters": "可选，结构化筛选，例如 {\"负责人\":\"Yao\",\"类目\":\"锅具\"}",
+        "semantic_query": "可选，模糊语义需求，例如 适合露营泡咖啡",
+        "fields": "可选，要重点返回的字段名列表",
+        "limit": "可选，默认 50"
+      }
+    },
+    {
+      "name": "get_product_detail",
+      "description": "读取一个或多个 SKU 的完整产品资料。适合单品追问、上一轮结果继续对比、推荐前补全资料。",
+      "arguments": {
+        "sku": "单个产品 SKU",
+        "skus": "可选，多个 SKU 数组"
+      }
+    },
+    {
+      "name": "propose_update_product_field",
+      "description": "提出修改字段建议，只创建待确认动作，不直接写库。",
+      "arguments": {
+        "sku": "单个产品 SKU",
+        "skus": "可选，多个 SKU 数组",
+        "field": "字段中文名或字段路径",
+        "new_value": "新值"
+      }
+    },
+    {
+      "name": "propose_delete_product_info",
+      "description": "提出局部删除建议。V1 支持清空白名单字段。",
+      "arguments": {
+        "sku": "单个产品 SKU",
+        "skus": "可选，多个 SKU 数组",
+        "field": "要清空的字段中文名或字段路径"
+      }
+    },
+    {
+      "name": "propose_delete_product",
+      "description": "提出删除整个产品建议，只创建强确认动作，不直接删除。",
+      "arguments": {
+        "sku": "产品 SKU"
+      }
+    }
+  ]
+}
+INFO:     [CUSTOMER_AGENT_TOOL_SELECTION_REQUEST] {
+  "messages": [
+    {
+      "role": "system",
+      "content": "你是内部产品数据库 Agent。你可以自己选择后端白名单工具查询产品、读取详情、提出修改或删除建议。严禁编写 SQL，严禁直接执行写库。所有修改/删除只能调用 propose_* 工具生成待确认动作。如果用户要查询多个产品、条形码、类目或功能，优先调用 search_products。如果同时有精确条件和模糊语义需求，优先调用 hybrid_search_products。search_products 支持 term 全字段搜索，也支持 filters 精确筛选，例如 {\"负责人\":\"Yao\",\"类目\":\"锅具\"}。如果用户在问题文本或历史对话里明确给了 SKU，并问单品字段，调用 get_product_detail。如果用户说“这些/刚才那些/上面这些”，使用 previous_result_skus。如果本轮问题是完整的新需求（例如重新说明人数、场景、用途、产品类型），以当前问题为准重新检索；不要把上一轮 SKU 当默认范围。如果本轮是“预算不高/便宜点/性价比”等追问，要继承上一轮用户的场景、人群和用途，但必须重新按价格定位、产品定位和候选资料判断，不能把高端定位产品说成低预算推荐。如果用户在历史对话里已经给过范围，本轮追问如“哪种适合送礼/三个年轻人用哪个好”，要结合 conversation_history 和 previous_result_skus 决定工具。凡是涉及产品事实、推荐、对比、筛选、修改或删除，必须先调用工具；只有闲聊、解释能力边界或澄清问题可以直接 answer。如果问题缺少必要范围，不要猜，输出澄清 answer。做推荐/送礼/适合谁时，优先读取候选产品的容量、材质、卖点、使用场景、目标人群、情绪价值，再给取舍理由。如果 recent_feedback_lessons 里有相似问题，要避免重复其中的错误。复杂任务可以多轮调用工具，例如先 search_products，再对结果 SKU 调 propose_update_product_field。你必须只输出 JSON，不要 Markdown。格式：{\"tool_calls\":[{\"name\":\"search_products\",\"arguments\":{\"term\":\"\",\"filters\":{\"负责人\":\"Yao\",\"类目\":\"锅具\"},\"fields\":[\"容量\"]}}]}如果确实不需要工具，输出 {\"answer\":\"...\"}。"
+    },
+    {
+      "role": "user",
+      "content": "{\"question\": \"TW-104-37 ?????????????????\", \"previous_result_skus\": [], \"conversation_context\": {\"mode\": \"current_question\", \"previous_user_need\": \"\", \"instruction\": \"本轮问题信息较完整，优先按当前问题重新检索和回答；历史只作背景参考。\"}, \"conversation_history\": [], \"recent_feedback_lessons\": [], \"available_tools\": [{\"name\": \"search_products\", \"description\": \"全字段查询多条产品信息。适合 SKU、条形码、名称、品牌、系列、类目、等级、生命周期、负责人、备注、容量、重量、材质、颜色、工艺、热源、功率、卖点、目标人群、定位、价格定位、情绪价值、使用场景、竞品、标题、描述、关键词、listing 等条件。\", \"arguments\": {\"term\": \"搜索词，例如 SKU、条形码、负责人、锅、防滑条、露营泡咖啡、300ml、Yao\", \"filters\": \"可选，结构化筛选。例如 {\\\"负责人\\\":\\\"Yao\\\",\\\"类目\\\":\\\"锅\\\"} 或 {\\\"product.person_in_charge\\\":\\\"Yao\\\"}\", \"fields\": \"可选，要重点返回的字段名列表，例如 容量、材质、卖点\", \"limit\": \"可选，默认 50\"}}, {\"name\": \"semantic_search_knowledge\", \"description\": \"语义/关键词检索产品知识库。适合露营泡咖啡、情绪价值、使用场景、模糊需求等问题。V1 使用知识库关键词兜底，后续可升级 pgvector 相似度。\", \"arguments\": {\"query\": \"用户的语义需求\", \"sku\": \"可选，限定 SKU\", \"limit\": \"可选，默认 8\"}}, {\"name\": \"hybrid_search_products\", \"description\": \"融合查询产品。精确条件走产品 SQL filters，模糊语义需求走知识库/pgvector，再按 SKU 合并排序。适合“负责人Yao且适合露营泡咖啡的锅”。\", \"arguments\": {\"term\": \"可选，全字段关键词\", \"filters\": \"可选，结构化筛选，例如 {\\\"负责人\\\":\\\"Yao\\\",\\\"类目\\\":\\\"锅具\\\"}\", \"semantic_query\": \"可选，模糊语义需求，例如 适合露营泡咖啡\", \"fields\": \"可选，要重点返回的字段名列表\", \"limit\": \"可选，默认 50\"}}, {\"name\": \"get_product_detail\", \"description\": \"读取一个或多个 SKU 的完整产品资料。适合单品追问、上一轮结果继续对比、推荐前补全资料。\", \"arguments\": {\"sku\": \"单个产品 SKU\", \"skus\": \"可选，多个 SKU 数组\"}}, {\"name\": \"propose_update_product_field\", \"description\": \"提出修改字段建议，只创建待确认动作，不直接写库。\", \"arguments\": {\"sku\": \"单个产品 SKU\", \"skus\": \"可选，多个 SKU 数组\", \"field\": \"字段中文名或字段路径\", \"new_value\": \"新值\"}}, {\"name\": \"propose_delete_product_info\", \"description\": \"提出局部删除建议。V1 支持清空白名单字段。\", \"arguments\": {\"sku\": \"单个产品 SKU\", \"skus\": \"可选，多个 SKU 数组\", \"field\": \"要清空的字段中文名或字段路径\"}}, {\"name\": \"propose_delete_product\", \"description\": \"提出删除整个产品建议，只创建强确认动作，不直接删除。\", \"arguments\": {\"sku\": \"产品 SKU\"}}]}"
+    }
+  ],
+  "tools": [
+    {
+      "name": "search_products",
+      "description": "全字段查询多条产品信息。适合 SKU、条形码、名称、品牌、系列、类目、等级、生命周期、负责人、备注、容量、重量、材质、颜色、工艺、热源、功率、卖点、目标人群、定位、价格定位、情绪价值、使用场景、竞品、标题、描述、关键词、listing 等条件。",
+      "arguments": {
+        "term": "搜索词，例如 SKU、条形码、负责人、锅、防滑条、露营泡咖啡、300ml、Yao",
+        "filters": "可选，结构化筛选。例如 {\"负责人\":\"Yao\",\"类目\":\"锅\"} 或 {\"product.person_in_charge\":\"Yao\"}",
+        "fields": "可选，要重点返回的字段名列表，例如 容量、材质、卖点",
+        "limit": "可选，默认 50"
+      }
+    },
+    {
+      "name": "semantic_search_knowledge",
+      "description": "语义/关键词检索产品知识库。适合露营泡咖啡、情绪价值、使用场景、模糊需求等问题。V1 使用知识库关键词兜底，后续可升级 pgvector 相似度。",
+      "arguments": {
+        "query": "用户的语义需求",
+        "sku": "可选，限定 SKU",
+        "limit": "可选，默认 8"
+      }
+    },
+    {
+      "name": "hybrid_search_products",
+      "description": "融合查询产品。精确条件走产品 SQL filters，模糊语义需求走知识库/pgvector，再按 SKU 合并排序。适合“负责人Yao且适合露营泡咖啡的锅”。",
+      "arguments": {
+        "term": "可选，全字段关键词",
+        "filters": "可选，结构化筛选，例如 {\"负责人\":\"Yao\",\"类目\":\"锅具\"}",
+        "semantic_query": "可选，模糊语义需求，例如 适合露营泡咖啡",
+        "fields": "可选，要重点返回的字段名列表",
+        "limit": "可选，默认 50"
+      }
+    },
+    {
+      "name": "get_product_detail",
+      "description": "读取一个或多个 SKU 的完整产品资料。适合单品追问、上一轮结果继续对比、推荐前补全资料。",
+      "arguments": {
+        "sku": "单个产品 SKU",
+        "skus": "可选，多个 SKU 数组"
+      }
+    },
+    {
+      "name": "propose_update_product_field",
+      "description": "提出修改字段建议，只创建待确认动作，不直接写库。",
+      "arguments": {
+        "sku": "单个产品 SKU",
+        "skus": "可选，多个 SKU 数组",
+        "field": "字段中文名或字段路径",
+        "new_value": "新值"
+      }
+    },
+    {
+      "name": "propose_delete_product_info",
+      "description": "提出局部删除建议。V1 支持清空白名单字段。",
+      "arguments": {
+        "sku": "单个产品 SKU",
+        "skus": "可选，多个 SKU 数组",
+        "field": "要清空的字段中文名或字段路径"
+      }
+    },
+    {
+      "name": "propose_delete_product",
+      "description": "提出删除整个产品建议，只创建强确认动作，不直接删除。",
+      "arguments": {
+        "sku": "产品 SKU"
+      }
+    }
+  ]
+}
+2026-06-12 14:17:51,317 INFO sqlalchemy.engine.Engine SELECT system_config.id AS system_config_id, system_config.config_key AS system_config_config_key, system_config.config_value AS system_config_config_value, system_config.description AS system_config_description, system_config.updated_at AS system_config_updated_at 
+FROM system_config 
+WHERE system_config.config_key LIKE %(config_key_1)s ESCAPE '\'
+2026-06-12 14:17:51,317 INFO sqlalchemy.engine.Engine [generated in 0.00024s] {'config_key_1': 'model_%'}
+2026-06-12 14:17:51,321 INFO sqlalchemy.engine.Engine SELECT system_config.id AS system_config_id, system_config.config_key AS system_config_config_key, system_config.config_value AS system_config_config_value, system_config.description AS system_config_description, system_config.updated_at AS system_config_updated_at 
+FROM system_config 
+WHERE system_config.config_key = %(config_key_1)s 
+ LIMIT %(param_1)s
+2026-06-12 14:17:51,321 INFO sqlalchemy.engine.Engine [generated in 0.00030s] {'config_key_1': 'model_gpt-4o-mini', 'param_1': 1}
+2026-06-12 14:17:51,324 INFO sqlalchemy.engine.Engine SELECT system_config.id AS system_config_id, system_config.config_key AS system_config_config_key, system_config.config_value AS system_config_config_value, system_config.description AS system_config_description, system_config.updated_at AS system_config_updated_at 
+FROM system_config 
+WHERE system_config.config_key = %(config_key_1)s 
+ LIMIT %(param_1)s
+2026-06-12 14:17:51,324 INFO sqlalchemy.engine.Engine [cached since 0.003085s ago] {'config_key_1': 'model_gpt-image-2-ssvip', 'param_1': 1}
+2026-06-12 14:17:51,326 INFO sqlalchemy.engine.Engine SELECT system_config.id AS system_config_id, system_config.config_key AS system_config_config_key, system_config.config_value AS system_config_config_value, system_config.description AS system_config_description, system_config.updated_at AS system_config_updated_at 
+FROM system_config 
+WHERE system_config.config_key = %(config_key_1)s 
+ LIMIT %(param_1)s
+2026-06-12 14:17:51,326 INFO sqlalchemy.engine.Engine [cached since 0.004875s ago] {'config_key_1': 'model_gpt-image-2', 'param_1': 1}
+2026-06-12 14:17:51,327 INFO sqlalchemy.engine.Engine SELECT system_config.id AS system_config_id, system_config.config_key AS system_config_config_key, system_config.config_value AS system_config_config_value, system_config.description AS system_config_description, system_config.updated_at AS system_config_updated_at 
+FROM system_config 
+WHERE system_config.config_key = %(config_key_1)s 
+ LIMIT %(param_1)s
+2026-06-12 14:17:51,327 INFO sqlalchemy.engine.Engine [cached since 0.006244s ago] {'config_key_1': 'model_gemini-3.1-flash-image-preview', 'param_1': 1}
+2026-06-12 14:17:51,330 INFO sqlalchemy.engine.Engine SELECT system_config.id AS system_config_id, system_config.config_key AS system_config_config_key, system_config.config_value AS system_config_config_value, system_config.description AS system_config_description, system_config.updated_at AS system_config_updated_at 
+FROM system_config 
+WHERE system_config.config_key = %(config_key_1)s 
+ LIMIT %(param_1)s
+2026-06-12 14:17:51,330 INFO sqlalchemy.engine.Engine [cached since 0.008998s ago] {'config_key_1': 'model_qwen-embedding', 'param_1': 1}
+2026-06-12 14:17:51,331 INFO sqlalchemy.engine.Engine SELECT system_config.id AS system_config_id, system_config.config_key AS system_config_config_key, system_config.config_value AS system_config_config_value, system_config.description AS system_config_description, system_config.updated_at AS system_config_updated_at 
+FROM system_config 
+WHERE system_config.config_key = %(config_key_1)s 
+ LIMIT %(param_1)s
+2026-06-12 14:17:51,331 INFO sqlalchemy.engine.Engine [cached since 0.01044s ago] {'config_key_1': 'model_text-embedding-3-small', 'param_1': 1}
+2026-06-12 14:17:51,332 INFO sqlalchemy.engine.Engine SELECT system_config.id AS system_config_id, system_config.config_key AS system_config_config_key, system_config.config_value AS system_config_config_value, system_config.description AS system_config_description, system_config.updated_at AS system_config_updated_at 
+FROM system_config 
+WHERE system_config.config_key = %(config_key_1)s 
+ LIMIT %(param_1)s
+2026-06-12 14:17:51,333 INFO sqlalchemy.engine.Engine [cached since 0.01167s ago] {'config_key_1': 'model_deepseek-customer-service', 'param_1': 1}
+[CUSTOMER_AGENT_AI_REQUEST] {
+  "url": "https://api.deepseek.com/v1/chat/completions",
+  "body": {
+    "model": "deepseek-chat",
+    "messages": [
+      {
+        "role": "system",
+        "content": "你是内部产品数据库 Agent。你可以自己选择后端白名单工具查询产品、读取详情、提出修改或删除建议。严禁编写 SQL，严禁直接执行写库。所有修改/删除只能调用 propose_* 工具生成待确认动作。如果用户要查询多个产品、条形码、类目或功能，优先调用 search_products。如果同时有精确条件和模糊语义需求，优先调用 hybrid_search_products。search_products 支持 term 全字段搜索，也支持 filters 精确筛选，例如 {\"负责人\":\"Yao\",\"类目\":\"锅具\"}。如果用户在问题文本或历史对话里明确给了 SKU，并问单品字段，调用 get_product_detail。如果用户说“这些/刚才那些/上面这些”，使用 previous_result_skus。如果本轮问题是完整的新需求（例如重新说明人数、场景、用途、产品类型），以当前问题为准重新检索；不要把上一轮 SKU 当默认范围。如果本轮是“预算不高/便宜点/性价比”等追问，要继承上一轮用户的场景、人群和用途，但必须重新按价格定位、产品定位和候选资料判断，不能把高端定位产品说成低预算推荐。如果用户在历史对话里已经给过范围，本轮追问如“哪种适合送礼/三个年轻人用哪个好”，要结合 conversation_history 和 previous_result_skus 决定工具。凡是涉及产品事实、推荐、对比、筛选、修改或删除，必须先调用工具；只有闲聊、解释能力边界或澄清问题可以直接 answer。如果问题缺少必要范围，不要猜，输出澄清 answer。做推荐/送礼/适合谁时，优先读取候选产品的容量、材质、卖点、使用场景、目标人群、情绪价值，再给取舍理由。如果 recent_feedback_lessons 里有相似问题，要避免重复其中的错误。复杂任务可以多轮调用工具，例如先 search_products，再对结果 SKU 调 propose_update_product_field。你必须只输出 JSON，不要 Markdown。格式：{\"tool_calls\":[{\"name\":\"search_products\",\"arguments\":{\"term\":\"\",\"filters\":{\"负责人\":\"Yao\",\"类目\":\"锅具\"},\"fields\":[\"容量\"]}}]}如果确实不需要工具，输出 {\"answer\":\"...\"}。"
+      },
+      {
+        "role": "user",
+        "content": "{\"question\": \"TW-104-37 ?????????????????\", \"previous_result_skus\": [], \"conversation_context\": {\"mode\": \"current_question\", \"previous_user_need\": \"\", \"instruction\": \"本轮问题信息较完整，优先按当前问题重新检索和回答；历史只作背景参考。\"}, \"conversation_history\": [], \"recent_feedback_lessons\": [], \"available_tools\": [{\"name\": \"search_products\", \"description\": \"全字段查询多条产品信息。适合 SKU、条形码、名称、品牌、系列、类目、等级、生命周期、负责人、备注、容量、重量、材质、颜色、工艺、热源、功率、卖点、目标人群、定位、价格定位、情绪价值、使用场景、竞品、标题、描述、关键词、listing 等条件。\", \"arguments\": {\"term\": \"搜索词，例如 SKU、条形码、负责人、锅、防滑条、露营泡咖啡、300ml、Yao\", \"filters\": \"可选，结构化筛选。例如 {\\\"负责人\\\":\\\"Yao\\\",\\\"类目\\\":\\\"锅\\\"} 或 {\\\"product.person_in_charge\\\":\\\"Yao\\\"}\", \"fields\": \"可选，要重点返回的字段名列表，例如 容量、材质、卖点\", \"limit\": \"可选，默认 50\"}}, {\"name\": \"semantic_search_knowledge\", \"description\": \"语义/关键词检索产品知识库。适合露营泡咖啡、情绪价值、使用场景、模糊需求等问题。V1 使用知识库关键词兜底，后续可升级 pgvector 相似度。\", \"arguments\": {\"query\": \"用户的语义需求\", \"sku\": \"可选，限定 SKU\", \"limit\": \"可选，默认 8\"}}, {\"name\": \"hybrid_search_products\", \"description\": \"融合查询产品。精确条件走产品 SQL filters，模糊语义需求走知识库/pgvector，再按 SKU 合并排序。适合“负责人Yao且适合露营泡咖啡的锅”。\", \"arguments\": {\"term\": \"可选，全字段关键词\", \"filters\": \"可选，结构化筛选，例如 {\\\"负责人\\\":\\\"Yao\\\",\\\"类目\\\":\\\"锅具\\\"}\", \"semantic_query\": \"可选，模糊语义需求，例如 适合露营泡咖啡\", \"fields\": \"可选，要重点返回的字段名列表\", \"limit\": \"可选，默认 50\"}}, {\"name\": \"get_product_detail\", \"description\": \"读取一个或多个 SKU 的完整产品资料。适合单品追问、上一轮结果继续对比、推荐前补全资料。\", \"arguments\": {\"sku\": \"单个产品 SKU\", \"skus\": \"可选，多个 SKU 数组\"}}, {\"name\": \"propose_update_product_field\", \"description\": \"提出修改字段建议，只创建待确认动作，不直接写库。\", \"arguments\": {\"sku\": \"单个产品 SKU\", \"skus\": \"可选，多个 SKU 数组\", \"field\": \"字段中文名或字段路径\", \"new_value\": \"新值\"}}, {\"name\": \"propose_delete_product_info\", \"description\": \"提出局部删除建议。V1 支持清空白名单字段。\", \"arguments\": {\"sku\": \"单个产品 SKU\", \"skus\": \"可选，多个 SKU 数组\", \"field\": \"要清空的字段中文名或字段路径\"}}, {\"name\": \"propose_delete_product\", \"description\": \"提出删除整个产品建议，只创建强确认动作，不直接删除。\", \"arguments\": {\"sku\": \"产品 SKU\"}}]}"
+      }
+    ],
+    "temperature": 0,
+    "max_tokens": "***"
+  }
+}
+INFO:     [CUSTOMER_AGENT_AI_REQUEST] {
+  "url": "https://api.deepseek.com/v1/chat/completions",
+  "body": {
+    "model": "deepseek-chat",
+    "messages": [
+      {
+        "role": "system",
+        "content": "你是内部产品数据库 Agent。你可以自己选择后端白名单工具查询产品、读取详情、提出修改或删除建议。严禁编写 SQL，严禁直接执行写库。所有修改/删除只能调用 propose_* 工具生成待确认动作。如果用户要查询多个产品、条形码、类目或功能，优先调用 search_products。如果同时有精确条件和模糊语义需求，优先调用 hybrid_search_products。search_products 支持 term 全字段搜索，也支持 filters 精确筛选，例如 {\"负责人\":\"Yao\",\"类目\":\"锅具\"}。如果用户在问题文本或历史对话里明确给了 SKU，并问单品字段，调用 get_product_detail。如果用户说“这些/刚才那些/上面这些”，使用 previous_result_skus。如果本轮问题是完整的新需求（例如重新说明人数、场景、用途、产品类型），以当前问题为准重新检索；不要把上一轮 SKU 当默认范围。如果本轮是“预算不高/便宜点/性价比”等追问，要继承上一轮用户的场景、人群和用途，但必须重新按价格定位、产品定位和候选资料判断，不能把高端定位产品说成低预算推荐。如果用户在历史对话里已经给过范围，本轮追问如“哪种适合送礼/三个年轻人用哪个好”，要结合 conversation_history 和 previous_result_skus 决定工具。凡是涉及产品事实、推荐、对比、筛选、修改或删除，必须先调用工具；只有闲聊、解释能力边界或澄清问题可以直接 answer。如果问题缺少必要范围，不要猜，输出澄清 answer。做推荐/送礼/适合谁时，优先读取候选产品的容量、材质、卖点、使用场景、目标人群、情绪价值，再给取舍理由。如果 recent_feedback_lessons 里有相似问题，要避免重复其中的错误。复杂任务可以多轮调用工具，例如先 search_products，再对结果 SKU 调 propose_update_product_field。你必须只输出 JSON，不要 Markdown。格式：{\"tool_calls\":[{\"name\":\"search_products\",\"arguments\":{\"term\":\"\",\"filters\":{\"负责人\":\"Yao\",\"类目\":\"锅具\"},\"fields\":[\"容量\"]}}]}如果确实不需要工具，输出 {\"answer\":\"...\"}。"
+      },
+      {
+        "role": "user",
+        "content": "{\"question\": \"TW-104-37 ?????????????????\", \"previous_result_skus\": [], \"conversation_context\": {\"mode\": \"current_question\", \"previous_user_need\": \"\", \"instruction\": \"本轮问题信息较完整，优先按当前问题重新检索和回答；历史只作背景参考。\"}, \"conversation_history\": [], \"recent_feedback_lessons\": [], \"available_tools\": [{\"name\": \"search_products\", \"description\": \"全字段查询多条产品信息。适合 SKU、条形码、名称、品牌、系列、类目、等级、生命周期、负责人、备注、容量、重量、材质、颜色、工艺、热源、功率、卖点、目标人群、定位、价格定位、情绪价值、使用场景、竞品、标题、描述、关键词、listing 等条件。\", \"arguments\": {\"term\": \"搜索词，例如 SKU、条形码、负责人、锅、防滑条、露营泡咖啡、300ml、Yao\", \"filters\": \"可选，结构化筛选。例如 {\\\"负责人\\\":\\\"Yao\\\",\\\"类目\\\":\\\"锅\\\"} 或 {\\\"product.person_in_charge\\\":\\\"Yao\\\"}\", \"fields\": \"可选，要重点返回的字段名列表，例如 容量、材质、卖点\", \"limit\": \"可选，默认 50\"}}, {\"name\": \"semantic_search_knowledge\", \"description\": \"语义/关键词检索产品知识库。适合露营泡咖啡、情绪价值、使用场景、模糊需求等问题。V1 使用知识库关键词兜底，后续可升级 pgvector 相似度。\", \"arguments\": {\"query\": \"用户的语义需求\", \"sku\": \"可选，限定 SKU\", \"limit\": \"可选，默认 8\"}}, {\"name\": \"hybrid_search_products\", \"description\": \"融合查询产品。精确条件走产品 SQL filters，模糊语义需求走知识库/pgvector，再按 SKU 合并排序。适合“负责人Yao且适合露营泡咖啡的锅”。\", \"arguments\": {\"term\": \"可选，全字段关键词\", \"filters\": \"可选，结构化筛选，例如 {\\\"负责人\\\":\\\"Yao\\\",\\\"类目\\\":\\\"锅具\\\"}\", \"semantic_query\": \"可选，模糊语义需求，例如 适合露营泡咖啡\", \"fields\": \"可选，要重点返回的字段名列表\", \"limit\": \"可选，默认 50\"}}, {\"name\": \"get_product_detail\", \"description\": \"读取一个或多个 SKU 的完整产品资料。适合单品追问、上一轮结果继续对比、推荐前补全资料。\", \"arguments\": {\"sku\": \"单个产品 SKU\", \"skus\": \"可选，多个 SKU 数组\"}}, {\"name\": \"propose_update_product_field\", \"description\": \"提出修改字段建议，只创建待确认动作，不直接写库。\", \"arguments\": {\"sku\": \"单个产品 SKU\", \"skus\": \"可选，多个 SKU 数组\", \"field\": \"字段中文名或字段路径\", \"new_value\": \"新值\"}}, {\"name\": \"propose_delete_product_info\", \"description\": \"提出局部删除建议。V1 支持清空白名单字段。\", \"arguments\": {\"sku\": \"单个产品 SKU\", \"skus\": \"可选，多个 SKU 数组\", \"field\": \"要清空的字段中文名或字段路径\"}}, {\"name\": \"propose_delete_product\", \"description\": \"提出删除整个产品建议，只创建强确认动作，不直接删除。\", \"arguments\": {\"sku\": \"产品 SKU\"}}]}"
+      }
+    ],
+    "temperature": 0,
+    "max_tokens": "***"
+  }
+}
+[CUSTOMER_AGENT_AI_RESPONSE] {
+  "id": "1fa15291-f9f9-43cf-9212-3268d2782259",
+  "object": "chat.completion",
+  "created": 1781245075,
+  "model": "deepseek-v4-flash",
+  "choices": [
+    {
+      "index": 0,
+      "message": {
+        "role": "assistant",
+        "content": "{\"tool_calls\":[{\"name\":\"search_products\",\"arguments\":{\"term\":\"TW-104-37\",\"filters\":{},\"fields\":[],\"limit\":10}}]}"
+      },
+      "logprobs": null,
+      "finish_reason": "stop"
+    }
+  ],
+  "usage": {
+    "prompt_tokens": "***",
+    "completion_tokens": "***",
+    "total_tokens": "***",
+    "prompt_tokens_details": "***",
+    "prompt_cache_hit_tokens": "***",
+    "prompt_cache_miss_tokens": "***"
+  },
+  "system_fingerprint": "fp_8b330d02d0_prod0820_fp8_kvcache_20260402"
+}
+INFO:     [CUSTOMER_AGENT_AI_RESPONSE] {
+  "id": "1fa15291-f9f9-43cf-9212-3268d2782259",
+  "object": "chat.completion",
+  "created": 1781245075,
+  "model": "deepseek-v4-flash",
+  "choices": [
+    {
+      "index": 0,
+      "message": {
+        "role": "assistant",
+        "content": "{\"tool_calls\":[{\"name\":\"search_products\",\"arguments\":{\"term\":\"TW-104-37\",\"filters\":{},\"fields\":[],\"limit\":10}}]}"
+      },
+      "logprobs": null,
+      "finish_reason": "stop"
+    }
+  ],
+  "usage": {
+    "prompt_tokens": "***",
+    "completion_tokens": "***",
+    "total_tokens": "***",
+    "prompt_tokens_details": "***",
+    "prompt_cache_hit_tokens": "***",
+    "prompt_cache_miss_tokens": "***"
+  },
+  "system_fingerprint": "fp_8b330d02d0_prod0820_fp8_kvcache_20260402"
+}
+[CUSTOMER_AGENT_TOOL_SELECTION_RESPONSE] {
+  "round": 1,
+  "content": "{\"tool_calls\":[{\"name\":\"search_products\",\"arguments\":{\"term\":\"TW-104-37\",\"filters\":{},\"fields\":[],\"limit\":10}}]}"
+}
+INFO:     [CUSTOMER_AGENT_TOOL_SELECTION_RESPONSE] {
+  "round": 1,
+  "content": "{\"tool_calls\":[{\"name\":\"search_products\",\"arguments\":{\"term\":\"TW-104-37\",\"filters\":{},\"fields\":[],\"limit\":10}}]}"
+}
+[CUSTOMER_AGENT_TOOL_CALL] {
+  "name": "search_products",
+  "arguments": {
+    "term": "TW-104-37",
+    "filters": {},
+    "fields": [],
+    "limit": 10
+  }
+}
+INFO:     [CUSTOMER_AGENT_TOOL_CALL] {
+  "name": "search_products",
+  "arguments": {
+    "term": "TW-104-37",
+    "filters": {},
+    "fields": [],
+    "limit": 10
+  }
+}
+2026-06-12 14:17:52,639 INFO sqlalchemy.engine.Engine SELECT products.id AS products_id, products.sku AS products_sku, products.barcode AS products_barcode, products.product_name_cn AS products_product_name_cn, products.product_name_en AS products_product_name_en, products.brand AS products_brand, products.series AS products_series, products.category AS products_category, products.sub_category AS products_sub_category, products.product_level AS products_product_level, products.launch_date AS products_launch_date, products.lifecycle_status AS products_lifecycle_status, products.person_in_charge AS products_person_in_charge, products.active_flag AS products_active_flag, products.sync_flag AS products_sync_flag, products.quality_note AS products_quality_note, products.status_note AS products_status_note, products.created_at AS products_created_at, products.updated_at AS products_updated_at, product_specs.id AS product_specs_id, product_specs.product_id AS product_specs_product_id, product_specs.size_info AS product_specs_size_info, product_specs.capacity AS product_specs_capacity, product_specs.gross_weight_g AS product_specs_gross_weight_g, product_specs.body_material AS product_specs_body_material, product_specs.color AS product_specs_color, product_specs.surface_finish AS product_specs_surface_finish, product_specs.heat_source AS product_specs_heat_source, product_specs.power AS product_specs_power, product_specs.technical_advantages AS product_specs_technical_advantages, product_specs.usage_instruction AS product_specs_usage_instruction, product_specs.created_at AS product_specs_created_at, product_specs.updated_at AS product_specs_updated_at, product_business.id AS product_business_id, product_business.product_id AS product_business_product_id, product_business.top_selling_points AS product_business_top_selling_points, product_business.target_audience AS product_business_target_audience, product_business.positioning AS product_business_positioning, product_business.price_positioning AS product_business_price_positioning, product_business.emotional_value AS product_business_emotional_value, product_business.usage_scenarios AS product_business_usage_scenarios, product_business.competitor_benchmark AS product_business_competitor_benchmark, product_business.created_at AS product_business_created_at, product_business.updated_at AS product_business_updated_at, product_content.id AS product_content_id, product_content.product_id AS product_content_product_id, product_content.title_en AS product_content_title_en, product_content.title_cn AS product_content_title_cn, product_content.long_description_en AS product_content_long_description_en, product_content.long_description_cn AS product_content_long_description_cn, product_content.long_description_ja AS product_content_long_description_ja, product_content.search_keywords AS product_content_search_keywords, product_content.amazon_title AS product_content_amazon_title, product_content.website_title AS product_content_website_title, product_content.bullet_points AS product_content_bullet_points, product_content.a_plus_content AS product_content_a_plus_content, product_content.listing_cn AS product_content_listing_cn, product_content.listing_en AS product_content_listing_en, product_content.listing_ja AS product_content_listing_ja, product_content.created_at AS product_content_created_at, product_content.updated_at AS product_content_updated_at 
+FROM products LEFT OUTER JOIN product_specs ON product_specs.product_id = products.id LEFT OUTER JOIN product_business ON product_business.product_id = products.id LEFT OUTER JOIN product_content ON product_content.product_id = products.id 
+WHERE CAST(products.sku AS VARCHAR) ILIKE %(param_1)s OR CAST(products.barcode AS VARCHAR) ILIKE %(param_2)s OR CAST(products.product_name_cn AS VARCHAR) ILIKE %(param_3)s OR CAST(products.product_name_en AS VARCHAR) ILIKE %(param_4)s OR CAST(products.brand AS VARCHAR) ILIKE %(param_5)s OR CAST(products.series AS VARCHAR) ILIKE %(param_6)s OR CAST(products.category AS VARCHAR) ILIKE %(param_7)s OR CAST(products.sub_category AS VARCHAR) ILIKE %(param_8)s OR CAST(products.product_level AS VARCHAR) ILIKE %(param_9)s OR CAST(products.lifecycle_status AS VARCHAR) ILIKE %(param_10)s OR CAST(products.person_in_charge AS VARCHAR) ILIKE %(param_11)s OR CAST(products.quality_note AS VARCHAR) ILIKE %(param_12)s OR CAST(products.status_note AS VARCHAR) ILIKE %(param_13)s OR CAST(product_specs.size_info AS VARCHAR) ILIKE %(param_14)s OR CAST(product_specs.capacity AS VARCHAR) ILIKE %(param_15)s OR CAST(product_specs.gross_weight_g AS VARCHAR) ILIKE %(param_16)s OR CAST(product_specs.body_material AS VARCHAR) ILIKE %(param_17)s OR CAST(product_specs.color AS VARCHAR) ILIKE %(param_18)s OR CAST(product_specs.surface_finish AS VARCHAR) ILIKE %(param_19)s OR CAST(product_specs.heat_source AS VARCHAR) ILIKE %(param_20)s OR CAST(product_specs.power AS VARCHAR) ILIKE %(param_21)s OR CAST(product_specs.technical_advantages AS VARCHAR) ILIKE %(param_22)s OR CAST(product_specs.usage_instruction AS VARCHAR) ILIKE %(param_23)s OR CAST(product_business.top_selling_points AS VARCHAR) ILIKE %(param_24)s OR CAST(product_business.target_audience AS VARCHAR) ILIKE %(param_25)s OR CAST(product_business.positioning AS VARCHAR) ILIKE %(param_26)s OR CAST(product_business.price_positioning AS VARCHAR) ILIKE %(param_27)s OR CAST(product_business.emotional_value AS VARCHAR) ILIKE %(param_28)s OR CAST(product_business.usage_scenarios AS VARCHAR) ILIKE %(param_29)s OR CAST(product_business.competitor_benchmark AS VARCHAR) ILIKE %(param_30)s OR CAST(product_content.title_en AS VARCHAR) ILIKE %(param_31)s OR CAST(product_content.title_cn AS VARCHAR) ILIKE %(param_32)s OR CAST(product_content.long_description_en AS VARCHAR) ILIKE %(param_33)s OR CAST(product_content.long_description_cn AS VARCHAR) ILIKE %(param_34)s OR CAST(product_content.long_description_ja AS VARCHAR) ILIKE %(param_35)s OR CAST(product_content.search_keywords AS VARCHAR) ILIKE %(param_36)s OR CAST(product_content.amazon_title AS VARCHAR) ILIKE %(param_37)s OR CAST(product_content.website_title AS VARCHAR) ILIKE %(param_38)s OR CAST(product_content.bullet_points AS VARCHAR) ILIKE %(param_39)s OR CAST(product_content.a_plus_content AS VARCHAR) ILIKE %(param_40)s OR CAST(product_content.listing_cn AS VARCHAR) ILIKE %(param_41)s OR CAST(product_content.listing_en AS VARCHAR) ILIKE %(param_42)s OR CAST(product_content.listing_ja AS VARCHAR) ILIKE %(param_43)s OR CAST(products.sku AS VARCHAR) ILIKE %(param_44)s OR CAST(products.barcode AS VARCHAR) ILIKE %(param_45)s OR CAST(products.product_name_cn AS VARCHAR) ILIKE %(param_46)s OR CAST(products.product_name_en AS VARCHAR) ILIKE %(param_47)s OR CAST(products.brand AS VARCHAR) ILIKE %(param_48)s OR CAST(products.series AS VARCHAR) ILIKE %(param_49)s OR CAST(products.category AS VARCHAR) ILIKE %(param_50)s OR CAST(products.sub_category AS VARCHAR) ILIKE %(param_51)s OR CAST(products.product_level AS VARCHAR) ILIKE %(param_52)s OR CAST(products.lifecycle_status AS VARCHAR) ILIKE %(param_53)s OR CAST(products.person_in_charge AS VARCHAR) ILIKE %(param_54)s OR CAST(products.quality_note AS VARCHAR) ILIKE %(param_55)s OR CAST(products.status_note AS VARCHAR) ILIKE %(param_56)s OR CAST(product_specs.size_info AS VARCHAR) ILIKE %(param_57)s OR CAST(product_specs.capacity AS VARCHAR) ILIKE %(param_58)s OR CAST(product_specs.gross_weight_g AS VARCHAR) ILIKE %(param_59)s OR CAST(product_specs.body_material AS VARCHAR) ILIKE %(param_60)s OR CAST(product_specs.color AS VARCHAR) ILIKE %(param_61)s OR CAST(product_specs.surface_finish AS VARCHAR) ILIKE %(param_62)s OR CAST(product_specs.heat_source AS VARCHAR) ILIKE %(param_63)s OR CAST(product_specs.power AS VARCHAR) ILIKE %(param_64)s OR CAST(product_specs.technical_advantages AS VARCHAR) ILIKE %(param_65)s OR CAST(product_specs.usage_instruction AS VARCHAR) ILIKE %(param_66)s OR CAST(product_business.top_selling_points AS VARCHAR) ILIKE %(param_67)s OR CAST(product_business.target_audience AS VARCHAR) ILIKE %(param_68)s OR CAST(product_business.positioning AS VARCHAR) ILIKE %(param_69)s OR CAST(product_business.price_positioning AS VARCHAR) ILIKE %(param_70)s OR CAST(product_business.emotional_value AS VARCHAR) ILIKE %(param_71)s OR CAST(product_business.usage_scenarios AS VARCHAR) ILIKE %(param_72)s OR CAST(product_business.competitor_benchmark AS VARCHAR) ILIKE %(param_73)s OR CAST(product_content.title_en AS VARCHAR) ILIKE %(param_74)s OR CAST(product_content.title_cn AS VARCHAR) ILIKE %(param_75)s OR CAST(product_content.long_description_en AS VARCHAR) ILIKE %(param_76)s OR CAST(product_content.long_description_cn AS VARCHAR) ILIKE %(param_77)s OR CAST(product_content.long_description_ja AS VARCHAR) ILIKE %(param_78)s OR CAST(product_content.search_keywords AS VARCHAR) ILIKE %(param_79)s OR CAST(product_content.amazon_title AS VARCHAR) ILIKE %(param_80)s OR CAST(product_content.website_title AS VARCHAR) ILIKE %(param_81)s OR CAST(product_content.bullet_points AS VARCHAR) ILIKE %(param_82)s OR CAST(product_content.a_plus_content AS VARCHAR) ILIKE %(param_83)s OR CAST(product_content.listing_cn AS VARCHAR) ILIKE %(param_84)s OR CAST(product_content.listing_en AS VARCHAR) ILIKE %(param_85)s OR CAST(product_content.listing_ja AS VARCHAR) ILIKE %(param_86)s 
+ LIMIT %(param_87)s
+2026-06-12 14:17:52,639 INFO sqlalchemy.engine.Engine [generated in 0.00075s] {'param_1': '%TW-104-37%', 'param_2': '%TW-104-37%', 'param_3': '%TW-104-37%', 'param_4': '%TW-104-37%', 'param_5': '%TW-104-37%', 'param_6': '%TW-104-37%', 'param_7': '%TW-104-37%', 'param_8': '%TW-104-37%', 'param_9': '%TW-104-37%', 'param_10': '%TW-104-37%', 'param_11': '%TW-104-37%', 'param_12': '%TW-104-37%', 'param_13': '%TW-104-37%', 'param_14': '%TW-104-37%', 'param_15': '%TW-104-37%', 'param_16': '%TW-104-37%', 'param_17': '%TW-104-37%', 'param_18': '%TW-104-37%', 'param_19': '%TW-104-37%', 'param_20': '%TW-104-37%', 'param_21': '%TW-104-37%', 'param_22': '%TW-104-37%', 'param_23': '%TW-104-37%', 'param_24': '%TW-104-37%', 'param_25': '%TW-104-37%', 'param_26': '%TW-104-37%', 'param_27': '%TW-104-37%', 'param_28': '%TW-104-37%', 'param_29': '%TW-104-37%', 'param_30': '%TW-104-37%', 'param_31': '%TW-104-37%', 'param_32': '%TW-104-37%', 'param_33': '%TW-104-37%', 'param_34': '%TW-104-37%', 'param_35': '%TW-104-37%', 'param_36': '%TW-104-37%', 'param_37': '%TW-104-37%', 'param_38': '%TW-104-37%', 'param_39': '%TW-104-37%', 'param_40': '%TW-104-37%', 'param_41': '%TW-104-37%', 'param_42': '%TW-104-37%', 'param_43': '%TW-104-37%', 'param_44': '%TW-104-37具%', 'param_45': '%TW-104-37具%', 'param_46': '%TW-104-37具%', 'param_47': '%TW-104-37具%', 'param_48': '%TW-104-37具%', 'param_49': '%TW-104-37具%', 'param_50': '%TW-104-37具%', 'param_51': '%TW-104-37具%', 'param_52': '%TW-104-37具%', 'param_53': '%TW-104-37具%', 'param_54': '%TW-104-37具%', 'param_55': '%TW-104-37具%', 'param_56': '%TW-104-37具%', 'param_57': '%TW-104-37具%', 'param_58': '%TW-104-37具%', 'param_59': '%TW-104-37具%', 'param_60': '%TW-104-37具%', 'param_61': '%TW-104-37具%', 'param_62': '%TW-104-37具%', 'param_63': '%TW-104-37具%', 'param_64': '%TW-104-37具%', 'param_65': '%TW-104-37具%', 'param_66': '%TW-104-37具%', 'param_67': '%TW-104-37具%', 'param_68': '%TW-104-37具%', 'param_69': '%TW-104-37具%', 'param_70': '%TW-104-37具%', 'param_71': '%TW-104-37具%', 'param_72': '%TW-104-37具%', 'param_73': '%TW-104-37具%', 'param_74': '%TW-104-37具%', 'param_75': '%TW-104-37具%', 'param_76': '%TW-104-37具%', 'param_77': '%TW-104-37具%', 'param_78': '%TW-104-37具%', 'param_79': '%TW-104-37具%', 'param_80': '%TW-104-37具%', 'param_81': '%TW-104-37具%', 'param_82': '%TW-104-37具%', 'param_83': '%TW-104-37具%', 'param_84': '%TW-104-37具%', 'param_85': '%TW-104-37具%', 'param_86': '%TW-104-37具%', 'param_87': 10}
+[CUSTOMER_AGENT_TOOL_RESULT] {
+  "ok": true,
+  "tool": "search_products",
+  "query": "TW-104-37",
+  "filters": {},
+  "count": 1,
+  "results": [
+    {
+      "sku": "TW-104-37",
+      "barcode": "6959291001101",
+      "product_name_cn": "折叠多功能勺",
+      "product_name_en": "folding multi-functional spoon",
+      "brand": "alocs爱路客",
+      "series": "归野主题-行者",
+      "category": "餐具",
+      "sub_category": null,
+      "product_level": "C类品",
+      "lifecycle_status": "常规品",
+      "person_in_charge": "",
+      "quality_note": null,
+      "status_note": null,
+      "capacity": "/",
+      "body_material": "硬质氧化铝合金",
+      "color": "氧化铝本色",
+      "surface_finish": "硬质氧化",
+      "heat_source": "/",
+      "power": "/",
+      "matched_by": "SKU",
+      "features": "/",
+      "target_audience": "轻量徒步爱好者, 单人露营者, 户外通勤者, 应急备用用户",
+      "positioning": "折叠便携设计，几乎不占用空间。兼具勺子、叉子、开瓶器等多种功能，材质坚固耐用，易清洁好打理，是户外出行与应急备用的必备单品。",
+      "price_positioning": "高端",
+      "usage_scenarios": "轻量徒步，单人露营，户外通勤，应急备用，短途出行",
+      "emotional_value": "折叠便携，多功能设计，满足户外用餐与应急需求，提升户外出行便利性，让你随时能吃上热饭喝上热水"
+    }
+  ]
+}
+INFO:     [CUSTOMER_AGENT_TOOL_RESULT] {
+  "ok": true,
+  "tool": "search_products",
+  "query": "TW-104-37",
+  "filters": {},
+  "count": 1,
+  "results": [
+    {
+      "sku": "TW-104-37",
+      "barcode": "6959291001101",
+      "product_name_cn": "折叠多功能勺",
+      "product_name_en": "folding multi-functional spoon",
+      "brand": "alocs爱路客",
+      "series": "归野主题-行者",
+      "category": "餐具",
+      "sub_category": null,
+      "product_level": "C类品",
+      "lifecycle_status": "常规品",
+      "person_in_charge": "",
+      "quality_note": null,
+      "status_note": null,
+      "capacity": "/",
+      "body_material": "硬质氧化铝合金",
+      "color": "氧化铝本色",
+      "surface_finish": "硬质氧化",
+      "heat_source": "/",
+      "power": "/",
+      "matched_by": "SKU",
+      "features": "/",
+      "target_audience": "轻量徒步爱好者, 单人露营者, 户外通勤者, 应急备用用户",
+      "positioning": "折叠便携设计，几乎不占用空间。兼具勺子、叉子、开瓶器等多种功能，材质坚固耐用，易清洁好打理，是户外出行与应急备用的必备单品。",
+      "price_positioning": "高端",
+      "usage_scenarios": "轻量徒步，单人露营，户外通勤，应急备用，短途出行",
+      "emotional_value": "折叠便携，多功能设计，满足户外用餐与应急需求，提升户外出行便利性，让你随时能吃上热饭喝上热水"
+    }
+  ]
+}
+2026-06-12 14:17:52,692 INFO sqlalchemy.engine.Engine SELECT system_config.id AS system_config_id, system_config.config_key AS system_config_config_key, system_config.config_value AS system_config_config_value, system_config.description AS system_config_description, system_config.updated_at AS system_config_updated_at 
+FROM system_config 
+WHERE system_config.config_key LIKE %(config_key_1)s ESCAPE '\'
+2026-06-12 14:17:52,692 INFO sqlalchemy.engine.Engine [cached since 1.375s ago] {'config_key_1': 'model_%'}
+2026-06-12 14:17:52,693 INFO sqlalchemy.engine.Engine SELECT system_config.id AS system_config_id, system_config.config_key AS system_config_config_key, system_config.config_value AS system_config_config_value, system_config.description AS system_config_description, system_config.updated_at AS system_config_updated_at 
+FROM system_config 
+WHERE system_config.config_key = %(config_key_1)s 
+ LIMIT %(param_1)s
+2026-06-12 14:17:52,693 INFO sqlalchemy.engine.Engine [cached since 1.372s ago] {'config_key_1': 'model_gpt-4o-mini', 'param_1': 1}
+2026-06-12 14:17:52,694 INFO sqlalchemy.engine.Engine SELECT system_config.id AS system_config_id, system_config.config_key AS system_config_config_key, system_config.config_value AS system_config_config_value, system_config.description AS system_config_description, system_config.updated_at AS system_config_updated_at 
+FROM system_config 
+WHERE system_config.config_key = %(config_key_1)s 
+ LIMIT %(param_1)s
+2026-06-12 14:17:52,695 INFO sqlalchemy.engine.Engine [cached since 1.374s ago] {'config_key_1': 'model_gpt-image-2-ssvip', 'param_1': 1}
+2026-06-12 14:17:52,696 INFO sqlalchemy.engine.Engine SELECT system_config.id AS system_config_id, system_config.config_key AS system_config_config_key, system_config.config_value AS system_config_config_value, system_config.description AS system_config_description, system_config.updated_at AS system_config_updated_at 
+FROM system_config 
+WHERE system_config.config_key = %(config_key_1)s 
+ LIMIT %(param_1)s
+2026-06-12 14:17:52,697 INFO sqlalchemy.engine.Engine [cached since 1.376s ago] {'config_key_1': 'model_gpt-image-2', 'param_1': 1}
+2026-06-12 14:17:52,698 INFO sqlalchemy.engine.Engine SELECT system_config.id AS system_config_id, system_config.config_key AS system_config_config_key, system_config.config_value AS system_config_config_value, system_config.description AS system_config_description, system_config.updated_at AS system_config_updated_at 
+FROM system_config 
+WHERE system_config.config_key = %(config_key_1)s 
+ LIMIT %(param_1)s
+2026-06-12 14:17:52,698 INFO sqlalchemy.engine.Engine [cached since 1.377s ago] {'config_key_1': 'model_gemini-3.1-flash-image-preview', 'param_1': 1}
+2026-06-12 14:17:52,699 INFO sqlalchemy.engine.Engine SELECT system_config.id AS system_config_id, system_config.config_key AS system_config_config_key, system_config.config_value AS system_config_config_value, system_config.description AS system_config_description, system_config.updated_at AS system_config_updated_at 
+FROM system_config 
+WHERE system_config.config_key = %(config_key_1)s 
+ LIMIT %(param_1)s
+2026-06-12 14:17:52,699 INFO sqlalchemy.engine.Engine [cached since 1.378s ago] {'config_key_1': 'model_qwen-embedding', 'param_1': 1}
+2026-06-12 14:17:52,700 INFO sqlalchemy.engine.Engine SELECT system_config.id AS system_config_id, system_config.config_key AS system_config_config_key, system_config.config_value AS system_config_config_value, system_config.description AS system_config_description, system_config.updated_at AS system_config_updated_at 
+FROM system_config 
+WHERE system_config.config_key = %(config_key_1)s 
+ LIMIT %(param_1)s
+2026-06-12 14:17:52,700 INFO sqlalchemy.engine.Engine [cached since 1.379s ago] {'config_key_1': 'model_text-embedding-3-small', 'param_1': 1}
+2026-06-12 14:17:52,701 INFO sqlalchemy.engine.Engine SELECT system_config.id AS system_config_id, system_config.config_key AS system_config_config_key, system_config.config_value AS system_config_config_value, system_config.description AS system_config_description, system_config.updated_at AS system_config_updated_at 
+FROM system_config 
+WHERE system_config.config_key = %(config_key_1)s 
+ LIMIT %(param_1)s
+2026-06-12 14:17:52,701 INFO sqlalchemy.engine.Engine [cached since 1.381s ago] {'config_key_1': 'model_deepseek-customer-service', 'param_1': 1}
+[CUSTOMER_AGENT_AI_REQUEST] {
+  "url": "https://api.deepseek.com/v1/chat/completions",
+  "body": {
+    "model": "deepseek-chat",
+    "messages": [
+      {
+        "role": "system",
+        "content": "你是内部产品数据库 Agent。你可以自己选择后端白名单工具查询产品、读取详情、提出修改或删除建议。严禁编写 SQL，严禁直接执行写库。所有修改/删除只能调用 propose_* 工具生成待确认动作。如果用户要查询多个产品、条形码、类目或功能，优先调用 search_products。如果同时有精确条件和模糊语义需求，优先调用 hybrid_search_products。search_products 支持 term 全字段搜索，也支持 filters 精确筛选，例如 {\"负责人\":\"Yao\",\"类目\":\"锅具\"}。如果用户在问题文本或历史对话里明确给了 SKU，并问单品字段，调用 get_product_detail。如果用户说“这些/刚才那些/上面这些”，使用 previous_result_skus。如果本轮问题是完整的新需求（例如重新说明人数、场景、用途、产品类型），以当前问题为准重新检索；不要把上一轮 SKU 当默认范围。如果本轮是“预算不高/便宜点/性价比”等追问，要继承上一轮用户的场景、人群和用途，但必须重新按价格定位、产品定位和候选资料判断，不能把高端定位产品说成低预算推荐。如果用户在历史对话里已经给过范围，本轮追问如“哪种适合送礼/三个年轻人用哪个好”，要结合 conversation_history 和 previous_result_skus 决定工具。凡是涉及产品事实、推荐、对比、筛选、修改或删除，必须先调用工具；只有闲聊、解释能力边界或澄清问题可以直接 answer。如果问题缺少必要范围，不要猜，输出澄清 answer。做推荐/送礼/适合谁时，优先读取候选产品的容量、材质、卖点、使用场景、目标人群、情绪价值，再给取舍理由。如果 recent_feedback_lessons 里有相似问题，要避免重复其中的错误。复杂任务可以多轮调用工具，例如先 search_products，再对结果 SKU 调 propose_update_product_field。你必须只输出 JSON，不要 Markdown。格式：{\"tool_calls\":[{\"name\":\"search_products\",\"arguments\":{\"term\":\"\",\"filters\":{\"负责人\":\"Yao\",\"类目\":\"锅具\"},\"fields\":[\"容量\"]}}]}如果确实不需要工具，输出 {\"answer\":\"...\"}。"
+      },
+      {
+        "role": "user",
+        "content": "{\"question\": \"TW-104-37 ?????????????????\", \"previous_result_skus\": [], \"conversation_context\": {\"mode\": \"current_question\", \"previous_user_need\": \"\", \"instruction\": \"本轮问题信息较完整，优先按当前问题重新检索和回答；历史只作背景参考。\"}, \"conversation_history\": [], \"recent_feedback_lessons\": [], \"available_tools\": [{\"name\": \"search_products\", \"description\": \"全字段查询多条产品信息。适合 SKU、条形码、名称、品牌、系列、类目、等级、生命周期、负责人、备注、容量、重量、材质、颜色、工艺、热源、功率、卖点、目标人群、定位、价格定位、情绪价值、使用场景、竞品、标题、描述、关键词、listing 等条件。\", \"arguments\": {\"term\": \"搜索词，例如 SKU、条形码、负责人、锅、防滑条、露营泡咖啡、300ml、Yao\", \"filters\": \"可选，结构化筛选。例如 {\\\"负责人\\\":\\\"Yao\\\",\\\"类目\\\":\\\"锅\\\"} 或 {\\\"product.person_in_charge\\\":\\\"Yao\\\"}\", \"fields\": \"可选，要重点返回的字段名列表，例如 容量、材质、卖点\", \"limit\": \"可选，默认 50\"}}, {\"name\": \"semantic_search_knowledge\", \"description\": \"语义/关键词检索产品知识库。适合露营泡咖啡、情绪价值、使用场景、模糊需求等问题。V1 使用知识库关键词兜底，后续可升级 pgvector 相似度。\", \"arguments\": {\"query\": \"用户的语义需求\", \"sku\": \"可选，限定 SKU\", \"limit\": \"可选，默认 8\"}}, {\"name\": \"hybrid_search_products\", \"description\": \"融合查询产品。精确条件走产品 SQL filters，模糊语义需求走知识库/pgvector，再按 SKU 合并排序。适合“负责人Yao且适合露营泡咖啡的锅”。\", \"arguments\": {\"term\": \"可选，全字段关键词\", \"filters\": \"可选，结构化筛选，例如 {\\\"负责人\\\":\\\"Yao\\\",\\\"类目\\\":\\\"锅具\\\"}\", \"semantic_query\": \"可选，模糊语义需求，例如 适合露营泡咖啡\", \"fields\": \"可选，要重点返回的字段名列表\", \"limit\": \"可选，默认 50\"}}, {\"name\": \"get_product_detail\", \"description\": \"读取一个或多个 SKU 的完整产品资料。适合单品追问、上一轮结果继续对比、推荐前补全资料。\", \"arguments\": {\"sku\": \"单个产品 SKU\", \"skus\": \"可选，多个 SKU 数组\"}}, {\"name\": \"propose_update_product_field\", \"description\": \"提出修改字段建议，只创建待确认动作，不直接写库。\", \"arguments\": {\"sku\": \"单个产品 SKU\", \"skus\": \"可选，多个 SKU 数组\", \"field\": \"字段中文名或字段路径\", \"new_value\": \"新值\"}}, {\"name\": \"propose_delete_product_info\", \"description\": \"提出局部删除建议。V1 支持清空白名单字段。\", \"arguments\": {\"sku\": \"单个产品 SKU\", \"skus\": \"可选，多个 SKU 数组\", \"field\": \"要清空的字段中文名或字段路径\"}}, {\"name\": \"propose_delete_product\", \"description\": \"提出删除整个产品建议，只创建强确认动作，不直接删除。\", \"arguments\": {\"sku\": \"产品 SKU\"}}]}"
+      },
+      {
+        "role": "assistant",
+        "content": "{\"tool_calls\":[{\"name\":\"search_products\",\"arguments\":{\"term\":\"TW-104-37\",\"filters\":{},\"fields\":[],\"limit\":10}}]}"
+      },
+      {
+        "role": "user",
+        "content": "{\"tool_results\": [{\"ok\": true, \"tool\": \"search_products\", \"query\": \"TW-104-37\", \"filters\": {}, \"count\": 1, \"results\": [{\"sku\": \"TW-104-37\", \"barcode\": \"6959291001101\", \"product_name_cn\": \"折叠多功能勺\", \"product_name_en\": \"folding multi-functional spoon\", \"brand\": \"alocs爱路客\", \"series\": \"归野主题-行者\", \"category\": \"餐具\", \"sub_category\": null, \"product_level\": \"C类品\", \"lifecycle_status\": \"常规品\", \"person_in_charge\": \"\", \"quality_note\": null, \"status_note\": null, \"capacity\": \"/\", \"body_material\": \"硬质氧化铝合金\", \"color\": \"氧化铝本色\", \"surface_finish\": \"硬质氧化\", \"heat_source\": \"/\", \"power\": \"/\", \"matched_by\": \"SKU\", \"features\": \"/\", \"target_audience\": \"轻量徒步爱好者, 单人露营者, 户外通勤者, 应急备用用户\", \"positioning\": \"折叠便携设计，几乎不占用空间。兼具勺子、叉子、开瓶器等多种功能，材质坚固耐用，易清洁好打理，是户外出行与应急备用的必备单品。\", \"price_positioning\": \"高端\", \"usage_scenarios\": \"轻量徒步，单人露营，户外通勤，应急备用，短途出行\", \"emotional_value\": \"折叠便携，多功能设计，满足户外用餐与应急需求，提升户外出行便利性，让你随时能吃上热饭喝上热水\"}]}], \"instruction\": \"你可以继续调用工具，或输出 {\\\"answer\\\":\\\"...\\\"} 结束。\"}"
+      }
+    ],
+    "temperature": 0,
+    "max_tokens": "***"
+  }
+}
+INFO:     [CUSTOMER_AGENT_AI_REQUEST] {
+  "url": "https://api.deepseek.com/v1/chat/completions",
+  "body": {
+    "model": "deepseek-chat",
+    "messages": [
+      {
+        "role": "system",
+        "content": "你是内部产品数据库 Agent。你可以自己选择后端白名单工具查询产品、读取详情、提出修改或删除建议。严禁编写 SQL，严禁直接执行写库。所有修改/删除只能调用 propose_* 工具生成待确认动作。如果用户要查询多个产品、条形码、类目或功能，优先调用 search_products。如果同时有精确条件和模糊语义需求，优先调用 hybrid_search_products。search_products 支持 term 全字段搜索，也支持 filters 精确筛选，例如 {\"负责人\":\"Yao\",\"类目\":\"锅具\"}。如果用户在问题文本或历史对话里明确给了 SKU，并问单品字段，调用 get_product_detail。如果用户说“这些/刚才那些/上面这些”，使用 previous_result_skus。如果本轮问题是完整的新需求（例如重新说明人数、场景、用途、产品类型），以当前问题为准重新检索；不要把上一轮 SKU 当默认范围。如果本轮是“预算不高/便宜点/性价比”等追问，要继承上一轮用户的场景、人群和用途，但必须重新按价格定位、产品定位和候选资料判断，不能把高端定位产品说成低预算推荐。如果用户在历史对话里已经给过范围，本轮追问如“哪种适合送礼/三个年轻人用哪个好”，要结合 conversation_history 和 previous_result_skus 决定工具。凡是涉及产品事实、推荐、对比、筛选、修改或删除，必须先调用工具；只有闲聊、解释能力边界或澄清问题可以直接 answer。如果问题缺少必要范围，不要猜，输出澄清 answer。做推荐/送礼/适合谁时，优先读取候选产品的容量、材质、卖点、使用场景、目标人群、情绪价值，再给取舍理由。如果 recent_feedback_lessons 里有相似问题，要避免重复其中的错误。复杂任务可以多轮调用工具，例如先 search_products，再对结果 SKU 调 propose_update_product_field。你必须只输出 JSON，不要 Markdown。格式：{\"tool_calls\":[{\"name\":\"search_products\",\"arguments\":{\"term\":\"\",\"filters\":{\"负责人\":\"Yao\",\"类目\":\"锅具\"},\"fields\":[\"容量\"]}}]}如果确实不需要工具，输出 {\"answer\":\"...\"}。"
+      },
+      {
+        "role": "user",
+        "content": "{\"question\": \"TW-104-37 ?????????????????\", \"previous_result_skus\": [], \"conversation_context\": {\"mode\": \"current_question\", \"previous_user_need\": \"\", \"instruction\": \"本轮问题信息较完整，优先按当前问题重新检索和回答；历史只作背景参考。\"}, \"conversation_history\": [], \"recent_feedback_lessons\": [], \"available_tools\": [{\"name\": \"search_products\", \"description\": \"全字段查询多条产品信息。适合 SKU、条形码、名称、品牌、系列、类目、等级、生命周期、负责人、备注、容量、重量、材质、颜色、工艺、热源、功率、卖点、目标人群、定位、价格定位、情绪价值、使用场景、竞品、标题、描述、关键词、listing 等条件。\", \"arguments\": {\"term\": \"搜索词，例如 SKU、条形码、负责人、锅、防滑条、露营泡咖啡、300ml、Yao\", \"filters\": \"可选，结构化筛选。例如 {\\\"负责人\\\":\\\"Yao\\\",\\\"类目\\\":\\\"锅\\\"} 或 {\\\"product.person_in_charge\\\":\\\"Yao\\\"}\", \"fields\": \"可选，要重点返回的字段名列表，例如 容量、材质、卖点\", \"limit\": \"可选，默认 50\"}}, {\"name\": \"semantic_search_knowledge\", \"description\": \"语义/关键词检索产品知识库。适合露营泡咖啡、情绪价值、使用场景、模糊需求等问题。V1 使用知识库关键词兜底，后续可升级 pgvector 相似度。\", \"arguments\": {\"query\": \"用户的语义需求\", \"sku\": \"可选，限定 SKU\", \"limit\": \"可选，默认 8\"}}, {\"name\": \"hybrid_search_products\", \"description\": \"融合查询产品。精确条件走产品 SQL filters，模糊语义需求走知识库/pgvector，再按 SKU 合并排序。适合“负责人Yao且适合露营泡咖啡的锅”。\", \"arguments\": {\"term\": \"可选，全字段关键词\", \"filters\": \"可选，结构化筛选，例如 {\\\"负责人\\\":\\\"Yao\\\",\\\"类目\\\":\\\"锅具\\\"}\", \"semantic_query\": \"可选，模糊语义需求，例如 适合露营泡咖啡\", \"fields\": \"可选，要重点返回的字段名列表\", \"limit\": \"可选，默认 50\"}}, {\"name\": \"get_product_detail\", \"description\": \"读取一个或多个 SKU 的完整产品资料。适合单品追问、上一轮结果继续对比、推荐前补全资料。\", \"arguments\": {\"sku\": \"单个产品 SKU\", \"skus\": \"可选，多个 SKU 数组\"}}, {\"name\": \"propose_update_product_field\", \"description\": \"提出修改字段建议，只创建待确认动作，不直接写库。\", \"arguments\": {\"sku\": \"单个产品 SKU\", \"skus\": \"可选，多个 SKU 数组\", \"field\": \"字段中文名或字段路径\", \"new_value\": \"新值\"}}, {\"name\": \"propose_delete_product_info\", \"description\": \"提出局部删除建议。V1 支持清空白名单字段。\", \"arguments\": {\"sku\": \"单个产品 SKU\", \"skus\": \"可选，多个 SKU 数组\", \"field\": \"要清空的字段中文名或字段路径\"}}, {\"name\": \"propose_delete_product\", \"description\": \"提出删除整个产品建议，只创建强确认动作，不直接删除。\", \"arguments\": {\"sku\": \"产品 SKU\"}}]}"
+      },
+      {
+        "role": "assistant",
+        "content": "{\"tool_calls\":[{\"name\":\"search_products\",\"arguments\":{\"term\":\"TW-104-37\",\"filters\":{},\"fields\":[],\"limit\":10}}]}"
+      },
+      {
+        "role": "user",
+        "content": "{\"tool_results\": [{\"ok\": true, \"tool\": \"search_products\", \"query\": \"TW-104-37\", \"filters\": {}, \"count\": 1, \"results\": [{\"sku\": \"TW-104-37\", \"barcode\": \"6959291001101\", \"product_name_cn\": \"折叠多功能勺\", \"product_name_en\": \"folding multi-functional spoon\", \"brand\": \"alocs爱路客\", \"series\": \"归野主题-行者\", \"category\": \"餐具\", \"sub_category\": null, \"product_level\": \"C类品\", \"lifecycle_status\": \"常规品\", \"person_in_charge\": \"\", \"quality_note\": null, \"status_note\": null, \"capacity\": \"/\", \"body_material\": \"硬质氧化铝合金\", \"color\": \"氧化铝本色\", \"surface_finish\": \"硬质氧化\", \"heat_source\": \"/\", \"power\": \"/\", \"matched_by\": \"SKU\", \"features\": \"/\", \"target_audience\": \"轻量徒步爱好者, 单人露营者, 户外通勤者, 应急备用用户\", \"positioning\": \"折叠便携设计，几乎不占用空间。兼具勺子、叉子、开瓶器等多种功能，材质坚固耐用，易清洁好打理，是户外出行与应急备用的必备单品。\", \"price_positioning\": \"高端\", \"usage_scenarios\": \"轻量徒步，单人露营，户外通勤，应急备用，短途出行\", \"emotional_value\": \"折叠便携，多功能设计，满足户外用餐与应急需求，提升户外出行便利性，让你随时能吃上热饭喝上热水\"}]}], \"instruction\": \"你可以继续调用工具，或输出 {\\\"answer\\\":\\\"...\\\"} 结束。\"}"
+      }
+    ],
+    "temperature": 0,
+    "max_tokens": "***"
+  }
+}
+[CUSTOMER_AGENT_AI_RESPONSE] {
+  "id": "39590308-ab9c-4a6c-ae24-8dad1b971c77",
+  "object": "chat.completion",
+  "created": 1781245076,
+  "model": "deepseek-v4-flash",
+  "choices": [
+    {
+      "index": 0,
+      "message": {
+        "role": "assistant",
+        "content": "{\"answer\":\"产品 TW-104-37 是 alocs 爱路客 归野主题-行者系列的「折叠多功能勺」。\\n\\n- **材质**：硬质氧化铝合金\\n- **颜色**：氧化铝本色\\n- **定位**：高端\\n- **目标人群**：轻量徒步爱好者、单人露营者、户外通勤者、应急备用用户\\n- **使用场景**：轻量徒步、单人露营、户外通勤、应急备用、短途出行\\n- **核心卖点**：折叠便携，几乎不占空间；兼具勺子、叉子、开瓶器等多种功能；材质坚固耐用，易清洁好打理。\\n- **情绪价值**：提升户外出行便利性，让你随时能吃上热饭喝上热水。\\n\\n请问您需要了解该产品的其他信息，或者需要我做什么操作（如修改字段、删除等）？\"}"
+      },
+      "logprobs": null,
+      "finish_reason": "stop"
+    }
+  ],
+  "usage": {
+    "prompt_tokens": "***",
+    "completion_tokens": "***",
+    "total_tokens": "***",
+    "prompt_tokens_details": "***",
+    "prompt_cache_hit_tokens": "***",
+    "prompt_cache_miss_tokens": "***"
+  },
+  "system_fingerprint": "fp_8b330d02d0_prod0820_fp8_kvcache_20260402"
+}
+INFO:     [CUSTOMER_AGENT_AI_RESPONSE] {
+  "id": "39590308-ab9c-4a6c-ae24-8dad1b971c77",
+  "object": "chat.completion",
+  "created": 1781245076,
+  "model": "deepseek-v4-flash",
+  "choices": [
+    {
+      "index": 0,
+      "message": {
+        "role": "assistant",
+        "content": "{\"answer\":\"产品 TW-104-37 是 alocs 爱路客 归野主题-行者系列的「折叠多功能勺」。\\n\\n- **材质**：硬质氧化铝合金\\n- **颜色**：氧化铝本色\\n- **定位**：高端\\n- **目标人群**：轻量徒步爱好者、单人露营者、户外通勤者、应急备用用户\\n- **使用场景**：轻量徒步、单人露营、户外通勤、应急备用、短途出行\\n- **核心卖点**：折叠便携，几乎不占空间；兼具勺子、叉子、开瓶器等多种功能；材质坚固耐用，易清洁好打理。\\n- **情绪价值**：提升户外出行便利性，让你随时能吃上热饭喝上热水。\\n\\n请问您需要了解该产品的其他信息，或者需要我做什么操作（如修改字段、删除等）？\"}"
+      },
+      "logprobs": null,
+      "finish_reason": "stop"
+    }
+  ],
+  "usage": {
+    "prompt_tokens": "***",
+    "completion_tokens": "***",
+    "total_tokens": "***",
+    "prompt_tokens_details": "***",
+    "prompt_cache_hit_tokens": "***",
+    "prompt_cache_miss_tokens": "***"
+  },
+  "system_fingerprint": "fp_8b330d02d0_prod0820_fp8_kvcache_20260402"
+}
+[CUSTOMER_AGENT_TOOL_SELECTION_RESPONSE] {
+  "round": 2,
+  "content": "{\"answer\":\"产品 TW-104-37 是 alocs 爱路客 归野主题-行者系列的「折叠多功能勺」。\\n\\n- **材质**：硬质氧化铝合金\\n- **颜色**：氧化铝本色\\n- **定位**：高端\\n- **目标人群**：轻量徒步爱好者、单人露营者、户外通勤者、应急备用用户\\n- **使用场景**：轻量徒步、单人露营、户外通勤、应急备用、短途出行\\n- **核心卖点**：折叠便携，几乎不占空间；兼具勺子、叉子、开瓶器等多种功能；材质坚固耐用，易清洁好打理。\\n- **情绪价值**：提升户外出行便利性，让你随时能吃上热饭喝上热水。\\n\\n请问您需要了解该产品的其他信息，或者需要我做什么操作（如修改字段、删除等）？\"}"
+}
+INFO:     [CUSTOMER_AGENT_TOOL_SELECTION_RESPONSE] {
+  "round": 2,
+  "content": "{\"answer\":\"产品 TW-104-37 是 alocs 爱路客 归野主题-行者系列的「折叠多功能勺」。\\n\\n- **材质**：硬质氧化铝合金\\n- **颜色**：氧化铝本色\\n- **定位**：高端\\n- **目标人群**：轻量徒步爱好者、单人露营者、户外通勤者、应急备用用户\\n- **使用场景**：轻量徒步、单人露营、户外通勤、应急备用、短途出行\\n- **核心卖点**：折叠便携，几乎不占空间；兼具勺子、叉子、开瓶器等多种功能；材质坚固耐用，易清洁好打理。\\n- **情绪价值**：提升户外出行便利性，让你随时能吃上热饭喝上热水。\\n\\n请问您需要了解该产品的其他信息，或者需要我做什么操作（如修改字段、删除等）？\"}"
+}
+[CUSTOMER_AGENT_FINAL_RESPONSE] {
+  "content": "产品 TW-104-37 是 alocs 爱路客 归野主题-行者系列的「折叠多功能勺」。\n\n- **材质**：硬质氧化铝合金\n- **颜色**：氧化铝本色\n- **定位**：高端\n- **目标人群**：轻量徒步爱好者、单人露营者、户外通勤者、应急备用用户\n- **使用场景**：轻量徒步、单人露营、户外通勤、应急备用、短途出行\n- **核心卖点**：折叠便携，几乎不占空间；兼具勺子、叉子、开瓶器等多种功能；材质坚固耐用，易清洁好打理。\n- **情绪价值**：提升户外出行便利性，让你随时能吃上热饭喝上热水。\n\n请问您需要了解该产品的其他信息，或者需要我做什么操作（如修改字段、删除等）？"
+}
+INFO:     [CUSTOMER_AGENT_FINAL_RESPONSE] {
+  "content": "产品 TW-104-37 是 alocs 爱路客 归野主题-行者系列的「折叠多功能勺」。\n\n- **材质**：硬质氧化铝合金\n- **颜色**：氧化铝本色\n- **定位**：高端\n- **目标人群**：轻量徒步爱好者、单人露营者、户外通勤者、应急备用用户\n- **使用场景**：轻量徒步、单人露营、户外通勤、应急备用、短途出行\n- **核心卖点**：折叠便携，几乎不占空间；兼具勺子、叉子、开瓶器等多种功能；材质坚固耐用，易清洁好打理。\n- **情绪价值**：提升户外出行便利性，让你随时能吃上热饭喝上热水。\n\n请问您需要了解该产品的其他信息，或者需要我做什么操作（如修改字段、删除等）？"
+}
+2026-06-12 14:17:55,436 INFO sqlalchemy.engine.Engine INSERT INTO customer_service_conversations (id, user_id, title, sku, created_at, updated_at) VALUES (%(id)s, %(user_id)s, %(title)s, %(sku)s, %(created_at)s, %(updated_at)s)
+2026-06-12 14:17:55,436 INFO sqlalchemy.engine.Engine [generated in 0.00024s] {'id': '7505390b-e3e1-4187-bf91-0625e44fd284', 'user_id': 'a14abd3f-f062-48b3-b762-8245f44b881e', 'title': 'TW-104-37 TW-104-37 ?????????????????', 'sku': 'TW-104-37', 'created_at': datetime.datetime(2026, 6, 12, 6, 17, 55, 436241, tzinfo=datetime.timezone.utc), 'updated_at': datetime.datetime(2026, 6, 12, 6, 17, 55, 436241, tzinfo=datetime.timezone.utc)}
+2026-06-12 14:17:55,449 INFO sqlalchemy.engine.Engine INSERT INTO customer_service_messages (id, conversation_id, role, content, sku, sources_json, created_at) VALUES (%(id__0)s, %(conversation_id__0)s, %(role__0)s, %(content__0)s, %(sku__0)s, %(sources_json__0)s, %(created_at__0)s), (%(id__1)s, %(conversation_id__1)s, %(role__1)s, %(content__1)s, %(sku__1)s, %(sources_json__1)s, %(created_at__1)s)
+2026-06-12 14:17:55,449 INFO sqlalchemy.engine.Engine [generated in 0.00014s (insertmanyvalues) 1/1 (unordered)] {'conversation_id__0': '7505390b-e3e1-4187-bf91-0625e44fd284', 'sku__0': 'TW-104-37', 'created_at__0': datetime.datetime(2026, 6, 12, 6, 17, 55, 449244, tzinfo=datetime.timezone.utc), 'content__0': 'TW-104-37 ?????????????????', 'id__0': 'edc4a30a-79f9-4111-91c5-95ee189f0027', 'sources_json__0': None, 'role__0': 'user', 'conversation_id__1': '7505390b-e3e1-4187-bf91-0625e44fd284', 'sku__1': 'TW-104-37', 'created_at__1': datetime.datetime(2026, 6, 12, 6, 17, 55, 449244, tzinfo=datetime.timezone.utc), 'content__1': '产品 TW-104-37 是 alocs 爱路客 归野主题-行者系列的「折叠多功能勺」。\n\n- 材质：硬质氧化铝合金\n- 颜色：氧化铝本色\n- 定位：高端\n- 目标人群：轻量徒步爱好者、单人露营者、户外通勤者、应急备用用户\n- 使用场景：轻量徒步、单人露营、户外通勤、应急备用、短途出行\n- 核心卖点：折叠便携，几乎不占空间；兼具勺子、叉子、开瓶器等多种功能；材质坚固耐用，易清洁好打理。\n- 情绪价值：提升户外出行便利性，让你随时能吃上热饭喝上热水。\n\n请问您需要了解该产品的其他信息，或者需要我做什么操作（如修改字段、删除等）？', 'id__1': '68086e57-4e5d-4389-b9b8-8ed8a9fd0303', 'sources_json__1': '[{"type": "product_search", "label": "AI工具查询", "query": "TW-104-37", "count": 1}, {"type": "agent_meta", "label": "客服回复元数据", "intent": "query_product ... (3384 characters truncated) ... 于工具结果推理回答", "detail": "根据工具返回的数据整理结论、依据和下一步建议", "ok": true}]}, {"type": "agent_context", "label": "上下文结果", "result_skus": ["TW-104-37"], "count": 1}]', 'role__1': 'assistant'}
+2026-06-12 14:17:55,468 INFO sqlalchemy.engine.Engine COMMIT
+2026-06-12 14:17:55,469 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-06-12 14:17:55,470 INFO sqlalchemy.engine.Engine SELECT customer_service_conversations.id AS customer_service_conversations_id, customer_service_conversations.user_id AS customer_service_conversations_user_id, customer_service_conversations.title AS customer_service_conversations_title, customer_service_conversations.sku AS customer_service_conversations_sku, customer_service_conversations.created_at AS customer_service_conversations_created_at, customer_service_conversations.updated_at AS customer_service_conversations_updated_at 
+FROM customer_service_conversations 
+WHERE customer_service_conversations.id = %(pk_1)s
+2026-06-12 14:17:55,470 INFO sqlalchemy.engine.Engine [generated in 0.00017s] {'pk_1': '7505390b-e3e1-4187-bf91-0625e44fd284'}
+2026-06-12 14:17:55,472 INFO sqlalchemy.engine.Engine SELECT customer_service_messages.id AS customer_service_messages_id, customer_service_messages.conversation_id AS customer_service_messages_conversation_id, customer_service_messages.role AS customer_service_messages_role, customer_service_messages.content AS customer_service_messages_content, customer_service_messages.sku AS customer_service_messages_sku, customer_service_messages.sources_json AS customer_service_messages_sources_json, customer_service_messages.created_at AS customer_service_messages_created_at 
+FROM customer_service_messages 
+WHERE customer_service_messages.id = %(pk_1)s
+2026-06-12 14:17:55,472 INFO sqlalchemy.engine.Engine [generated in 0.00019s] {'pk_1': '68086e57-4e5d-4389-b9b8-8ed8a9fd0303'}
+2026-06-12 14:17:55,474 INFO sqlalchemy.engine.Engine SELECT users.id AS users_id, users.username AS users_username, users.user_type AS users_user_type, users.password_hash AS users_password_hash, users.display_name AS users_display_name, users.email AS users_email, users.is_active AS users_is_active, users.created_at AS users_created_at, users.updated_at AS users_updated_at 
+FROM users 
+WHERE users.id = %(pk_1)s
+2026-06-12 14:17:55,474 INFO sqlalchemy.engine.Engine [generated in 0.00020s] {'pk_1': UUID('a14abd3f-f062-48b3-b762-8245f44b881e')}
+2026-06-12 14:17:55,478 INFO sqlalchemy.engine.Engine SELECT user_groups.id AS user_groups_id, user_groups.user_id AS user_groups_user_id, user_groups.group_id AS user_groups_group_id, user_groups.group_role AS user_groups_group_role, user_groups.created_at AS user_groups_created_at, user_groups.updated_at AS user_groups_updated_at 
+FROM user_groups 
+WHERE %(param_1)s = user_groups.user_id
+2026-06-12 14:17:55,478 INFO sqlalchemy.engine.Engine [generated in 0.00068s] {'param_1': UUID('a14abd3f-f062-48b3-b762-8245f44b881e')}
+2026-06-12 14:17:55,481 INFO sqlalchemy.engine.Engine SELECT groups.id AS groups_id, groups.group_name AS groups_group_name, groups.description AS groups_description, groups.created_at AS groups_created_at, groups.updated_at AS groups_updated_at 
+FROM groups 
+WHERE groups.id IN (%(primary_keys_1)s)
+2026-06-12 14:17:55,481 INFO sqlalchemy.engine.Engine [cached since 9.43s ago] {'primary_keys_1': UUID('3e540c19-668d-4b68-8d8d-303969b23e7b')}
+2026-06-12 14:17:55,484 INFO sqlalchemy.engine.Engine INSERT INTO operation_logs (id, operator_id, operator_type, action_type, action_name, target_type, target_id, target_name, request_data, response_data, status, error_message, ip_address, user_agent, created_at) VALUES (%(id)s, %(operator_id)s, %(operator_type)s, %(action_type)s, %(action_name)s, %(target_type)s, %(target_id)s, %(target_name)s, %(request_data)s, %(response_data)s, %(status)s, %(error_message)s, %(ip_address)s, %(user_agent)s, %(created_at)s)
+2026-06-12 14:17:55,484 INFO sqlalchemy.engine.Engine [generated in 0.00030s] {'id': '0733b153-085d-42d9-9926-43b97b8788ab', 'operator_id': 'a14abd3f-f062-48b3-b762-8245f44b881e', 'operator_type': 'human', 'action_type': 'ask', 'action_name': '智能客服问答', 'target_type': 'customer_service', 'target_id': '7505390b-e3e1-4187-bf91-0625e44fd284', 'target_name': 'TW-104-37', 'request_data': '{"question": "TW-104-37 ?????????????????", "sku": "TW-104-37"}', 'response_data': '{"answer": "\\u4ea7\\u54c1 TW-104-37 \\u662f alocs \\u7231\\u8def\\u5ba2 \\u5f52\\u91ce\\u4e3b\\u9898-\\u884c\\u8005\\u7cfb\\u5217\\u7684\\u300c\\u62 ... (1452 characters truncated) ... 0\\u9664\\u7b49\\uff09\\uff1f", "sources": [{"type": "product_search", "label": "AI\\u5de5\\u5177\\u67e5\\u8be2", "query": "TW-104-37", "count": 1}]}', 'status': 'success', 'error_message': None, 'ip_address': '127.0.0.1', 'user_agent': 'python-requests/2.34.2', 'created_at': datetime.datetime(2026, 6, 12, 6, 17, 55, 484243, tzinfo=datetime.timezone.utc)}
+2026-06-12 14:17:55,508 INFO sqlalchemy.engine.Engine COMMIT
+2026-06-12 14:17:55,509 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-06-12 14:17:55,511 INFO sqlalchemy.engine.Engine SELECT operation_logs.id, operation_logs.operator_id, operation_logs.operator_type, operation_logs.action_type, operation_logs.action_name, operation_logs.target_type, operation_logs.target_id, operation_logs.target_name, operation_logs.request_data, operation_logs.response_data, operation_logs.status, operation_logs.error_message, operation_logs.ip_address, operation_logs.user_agent, operation_logs.created_at 
+FROM operation_logs 
+WHERE operation_logs.id = %(pk_1)s
+2026-06-12 14:17:55,511 INFO sqlalchemy.engine.Engine [generated in 0.00014s] {'pk_1': '0733b153-085d-42d9-9926-43b97b8788ab'}
+INFO:     127.0.0.1:3854 - "POST /api/customer-service/ask HTTP/1.1" 200 OK
+2026-06-12 14:17:55,517 INFO sqlalchemy.engine.Engine ROLLBACK

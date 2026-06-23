@@ -1,0 +1,835 @@
+
+[notice] A new release of pip is available: 26.1.1 -> 26.1.2
+[notice] To update, run: python.exe -m pip install --upgrade pip
+INFO:     Uvicorn running on http://0.0.0.0:8000 (Press CTRL+C to quit)
+INFO:     Started parent process [19960]
+D:\CaiYan\Image-Generation-feature-v5\backend\venv\lib\site-packages\pydantic\_internal\_fields.py:161: UserWarning: Field "model_name" has conflict with protected namespace "model_".
+
+You may be able to resolve this warning by setting `model_config['protected_namespaces'] = ()`.
+  warnings.warn(
+D:\CaiYan\Image-Generation-feature-v5\backend\venv\lib\site-packages\pydantic\_internal\_fields.py:161: UserWarning: Field "model_name" has conflict with protected namespace "model_".
+
+You may be able to resolve this warning by setting `model_config['protected_namespaces'] = ()`.
+  warnings.warn(
+D:\CaiYan\Image-Generation-feature-v5\backend\venv\lib\site-packages\pydantic\_internal\_fields.py:161: UserWarning: Field "model_name" has conflict with protected namespace "model_".
+
+You may be able to resolve this warning by setting `model_config['protected_namespaces'] = ()`.
+  warnings.warn(
+D:\CaiYan\Image-Generation-feature-v5\backend\venv\lib\site-packages\pydantic\_internal\_fields.py:161: UserWarning: Field "model_name" has conflict with protected namespace "model_".
+
+You may be able to resolve this warning by setting `model_config['protected_namespaces'] = ()`.
+  warnings.warn(
+INFO:     Started server process [6660]
+INFO:     Waiting for application startup.
+INFO:     Started server process [6008]
+INFO:     Waiting for application startup.
+INFO:     Started server process [29620]
+INFO:     Waiting for application startup.
+INFO:     Started server process [23272]
+INFO:     Waiting for application startup.
+INFO:     Application startup complete.
+INFO:     Application startup complete.
+INFO:     Application startup complete.
+INFO:     Application startup complete.
+INFO:     [CUSTOMER_PERF] {"trace_id": "279ae842b5934037aad6b581233dc8d2", "stage": "ask_stream.precheck", "elapsed_ms": 7.44, "extra": {"permission_checked": true, "rate_limit_checked": true}}
+INFO:     [CUSTOMER_PERF] {"trace_id": "279ae842b5934037aad6b581233dc8d2", "stage": "customer_faq_fast_path", "elapsed_ms": 1.01, "extra": {"hit": false, "intent": null, "agent_mode": null}}
+INFO:     [CUSTOMER_PERF] {"trace_id": "279ae842b5934037aad6b581233dc8d2", "stage": "guardrail.evaluate_question", "elapsed_ms": 0.03, "extra": {"matched": false}}
+INFO:     [CUSTOMER_PERF] {"trace_id": "279ae842b5934037aad6b581233dc8d2", "stage": "context_read", "elapsed_ms": 0.01, "extra": {"entity_stack_count": 0, "conversation_history_count": 0, "previous_result_skus_count": 0, "recommendation_context_present": false}}
+INFO:     [CUSTOMER_PERF] {"trace_id": "279ae842b5934037aad6b581233dc8d2", "stage": "named_product_shortcut", "elapsed_ms": 9.13, "extra": {"hit": false, "agent_mode": null}}
+INFO:     [CUSTOMER_PERF] {"trace_id": "279ae842b5934037aad6b581233dc8d2", "stage": "hybrid_search_products.semantic_retrieve", "elapsed_ms": 440.04, "extra": {"semantic_query": "推荐三款适合露营多人做饭的套锅", "semantic_rows": 20}}
+INFO:     [CUSTOMER_PERF] {"trace_id": "279ae842b5934037aad6b581233dc8d2", "stage": "hybrid_search_products.breakdown", "elapsed_ms": 257.8, "extra": {"sql_filter_ms": 1.74, "embedding_query_ms": 0.0, "vector_search_ms": 0.0, "merge_rank_ms": 0.01, "get_detail_ms": 257.54, "candidates_count": 9, "prompt_chars": 22886}}
+INFO:     [CUSTOMER_PERF] {"trace_id": "279ae842b5934037aad6b581233dc8d2", "stage": "tool.execute_async", "elapsed_ms": 701.34, "extra": {"tool": "hybrid_search_products", "async_call": true, "ok": true}}
+INFO:     [CUSTOMER_PERF] {"trace_id": "279ae842b5934037aad6b581233dc8d2", "stage": "recommendation_fast_path", "elapsed_ms": 702.33, "extra": {"hit": true, "semantic_query": "推荐三款适合露营多人做饭的套锅", "count": 9}}
+INFO:     [CUSTOMER_PERF] {"trace_id": "279ae842b5934037aad6b581233dc8d2", "stage": "recommendation_rank_and_prepare", "elapsed_ms": 164.02, "extra": {"ranked_count": 5, "enriched_count": 5}}
+INFO:     [CUSTOMER_AGENT_FINAL_REQUEST] {
+  "messages": {
+    "type": "list",
+    "count": 3,
+    "sample": [
+      {
+        "role": "system",
+        "content": "你是alocs爱路客的产品客服助手。【核心规则，最高优先级】1. 严禁引入retrieved_products之外的产品事实、参数、认证、价格或库存。2. 工具结果里没有的信息，必须说\"暂无此数据\"，不得推断或编造。3. 用户没有问到的话题不要主动引入（用户没问认证就不提认证，没问食品级就不提食品级）。产品数据可能包含嵌套的specs字段，specs里的内容（如gross_weight_g/body_material/surface_finish等）都是产品属性，回答时需要一...<chars:632>"
+      },
+      {
+        "role": "system",
+        "content": "换推荐时，如果 recommendation_context 里有原始品类需求，要用它判断候选产品是否明显偏离用户最初需求。例如最初要“锅”，候选里出现“烧水壶”、“炉具”等不同品类，应优先选品类一致的候选。如果候选池里没有品类一致的产品，要明说“当前品类暂无更多推荐，以下是相关周边产品”，不要在没有说明的情况下直接跨品类推荐。"
+      },
+      {
+        "role": "user",
+        "content": "{\"question\": \"推荐三款适合露营多人做饭的套锅\", \"conversation_context\": {\"mode\": \"current_question\", \"previous_user_need\": \"\", \"combined_user_need\": \"推荐三款适合露营多人做饭的套锅\", \"instruction\": \"本轮问题信息较完整，优先按当前问题重新检索和回答；历史只作背景参考。\", \"summary\": \"场景=露营；人群=露营；品类=套锅\", \"sl...<chars:3110>"
+      }
+    ]
+  }
+}
+INFO:     [CUSTOMER_AGENT_AI_STREAM_REQUEST] {
+  "url": "https://api.deepseek.com/v1/chat/completions",
+  "body": {
+    "model": "deepseek-v4-pro",
+    "messages": {
+      "type": "list",
+      "count": 3,
+      "sample": [
+        {
+          "role": "system",
+          "content": "你是alocs爱路客的产品客服助手。【核心规则，最高优先级】1. 严禁引入retrieved_products之外的产品事实、参数、认证、价格或库存。2. 工具结果里没有的信息，必须说\"暂无此数据\"，不得推断或编造。3. 用户没有问到的话题不要主动引入（用户没问认证就不提认证，没问食品级就不提食品级）。产品数据可能包含嵌套的specs字段，specs里的内容（如gross_weight_g/body_material/surface_finish等）都是产品属性，回答时需要一...<chars:632>"
+        },
+        {
+          "role": "system",
+          "content": "换推荐时，如果 recommendation_context 里有原始品类需求，要用它判断候选产品是否明显偏离用户最初需求。例如最初要“锅”，候选里出现“烧水壶”、“炉具”等不同品类，应优先选品类一致的候选。如果候选池里没有品类一致的产品，要明说“当前品类暂无更多推荐，以下是相关周边产品”，不要在没有说明的情况下直接跨品类推荐。"
+        },
+        {
+          "role": "user",
+          "content": "{\"question\": \"推荐三款适合露营多人做饭的套锅\", \"conversation_context\": {\"mode\": \"current_question\", \"previous_user_need\": \"\", \"combined_user_need\": \"推荐三款适合露营多人做饭的套锅\", \"instruction\": \"本轮问题信息较完整，优先按当前问题重新检索和回答；历史只作背景参考。\", \"summary\": \"场景=露营；人群=露营；品类=套锅\", \"sl...<chars:3110>"
+        }
+      ]
+    },
+    "temperature": 0.2,
+    "max_tokens": "***",
+    "stream": true
+  }
+}
+INFO:     [CUSTOMER_PERF] {"trace_id": "279ae842b5934037aad6b581233dc8d2", "stage": "sse_first_answer_delta", "elapsed_ms": 10484.86, "extra": {}}
+INFO:     [CUSTOMER_PERF] {"trace_id": "279ae842b5934037aad6b581233dc8d2", "stage": "llm_call", "elapsed_ms": 12411.02, "extra": {"llm_call_index": 1, "purpose": "final_answer", "model": "deepseek-v4-pro", "prompt_chars": 3907, "prompt_tokens_est": 976, "completion_chars": 385, "completion_tokens_est": 96, "retries": 0, "timeout": false, "fallback": false, "error": null}}
+INFO:     [CUSTOMER_AGENT_FINAL_RESPONSE] {
+  "content": "{\"answer\": \"为您找到两款适合露营多人做饭的套锅，当前品类暂无第三款，以下是这两款的推荐详情：\n\n第一款：CW-C05-37 露营套锅  \n这款是10件全套配置，包含锅、碗、勺、铲等，一套满足煎炒煮炖。适合3-4人使用，总重约1030克，收纳后仅一个收纳包，携带方便。锅具容量包括1.7升汤锅、1.4升浅锅和7.5英寸煎盘，材质为硬质氧化铝合金，耐用易洁。定位高端，尤其适合家庭和小型团建露营。\n\n第二款：CW-C83 露营套锅  \n轻量化微压不沾套锅，包含3700毫升...<chars:385>"
+}
+INFO:     [CUSTOMER_PERF] {"trace_id": "279ae842b5934037aad6b581233dc8d2", "stage": "process_agent_request", "elapsed_ms": 13380.22, "extra": {"hit": true, "intent": "recommend_products", "agent_mode": "llm_tool_calling"}}
+INFO:     [CUSTOMER_PERF] {"trace_id": "279ae842b5934037aad6b581233dc8d2", "stage": "save_messages_and_commit", "elapsed_ms": 93.95, "extra": {"branch": "agent", "skip_polish": true}}
+INFO:     [CUSTOMER_PERF] {"trace_id": "279ae842b5934037aad6b581233dc8d2", "stage": "ask_customer_service.total", "elapsed_ms": 13496.17, "extra": {"branch": "agent", "intent": "recommend_products", "agent_mode": "llm_tool_calling"}}
+INFO:     [CUSTOMER_PERF] {"trace_id": "279ae842b5934037aad6b581233dc8d2", "stage": "summary", "elapsed_ms": 13506.75, "extra": {"llm_call_count": 1, "llm_calls": [{"llm_call_index": 1, "purpose": "final_answer", "model": "deepseek-v4-pro", "prompt_chars": 3907, "prompt_tokens_est": 976, "completion_chars": 385, "completion_tokens_est": 96, "retries": 0, "timeout": false, "fallback": false, "error": null}], "stages": [{"stage": "ask_stream.precheck", "elapsed_ms": 7.44, "extra": {"permission_checked": true, "rate_limit_checked": true}}, {"stage": "customer_faq_fast_path", "elapsed_ms": 1.01, "extra": {"hit": false, "intent": null, "agent_mode": null}}, {"stage": "guardrail.evaluate_question", "elapsed_ms": 0.03, "extra": {"matched": false}}, {"stage": "context_read", "elapsed_ms": 0.01, "extra": {"entity_stack_count": 0, "conversation_history_count": 0, "previous_result_skus_count": 0, "recommendation_context_present": false}}, {"stage": "named_product_shortcut", "elapsed_ms": 9.13, "extra": {"hit": false, "agent_mode": null}}, {"stage": "hybrid_search_products.semantic_retrieve", "elapsed_ms": 440.04, "extra": {"semantic_query": "推荐三款适合露营多人做饭的套锅", "semantic_rows": 20}}, {"stage": "hybrid_search_products.breakdown", "elapsed_ms": 257.8, "extra": {"sql_filter_ms": 1.74, "embedding_query_ms": 0.0, "vector_search_ms": 0.0, "merge_rank_ms": 0.01, "get_detail_ms": 257.54, "candidates_count": 9, "prompt_chars": 22886}}, {"stage": "tool.execute_async", "elapsed_ms": 701.34, "extra": {"tool": "hybrid_search_products", "async_call": true, "ok": true}}, {"stage": "recommendation_fast_path", "elapsed_ms": 702.33, "extra": {"hit": true, "semantic_query": "推荐三款适合露营多人做饭的套锅", "count": 9}}, {"stage": "recommendation_rank_and_prepare", "elapsed_ms": 164.02, "extra": {"ranked_count": 5, "enriched_count": 5}}, {"stage": "process_agent_request", "elapsed_ms": 13380.22, "extra": {"hit": true, "intent": "recommend_products", "agent_mode": "llm_tool_calling"}}, {"stage": "save_messages_and_commit", "elapsed_ms": 93.95, "extra": {"branch": "agent", "skip_polish": true}}, {"stage": "ask_customer_service.total", "elapsed_ms": 13496.17, "extra": {"branch": "agent", "intent": "recommend_products", "agent_mode": "llm_tool_calling"}}], "first_answer_delta_ms": 10484.86, "done_ms": null, "final_answer": "{\"answer\": \"为您找到两款适合露营多人做饭的套锅，当前品类暂无第三款，以下是这两款的推荐详情：\n\n第一款：CW-C05-37 露营套锅  \n这款是10件全套配置，包含锅、碗、勺、铲等，一套满足煎炒煮炖。适合3-4人使用，总重约1030克，收纳后仅一个收纳包，携带方便。锅具容量包括1.7升汤锅、1.4升浅锅和7.5英寸煎盘，材质为硬质氧化铝合金，耐用易洁。定位高端，尤其适合家庭和小型团建露营。\n\n第二款：CW-C83 露营套锅  \n轻量化微压不沾套锅，包含3700毫升汤锅和2300毫升煎盘，总重2000克。锅体采用硬质氧化铝合金与白蜡木手柄，配备可拆卸手柄和复底设计，不挑炉具，水性涂层可实现无油煎蛋且易清洁。同样定位高端，适合家庭精致露营、房车自驾等多人场景，兼顾室内外使用。\n\n如需更多选择，目前暂无其他同品类套锅，这两款均能满足多人户外烹饪需求。\"}", "intent": "recommend_products", "agent_mode": "llm_tool_calling"}}
+INFO:     [CUSTOMER_PERF] {"trace_id": "279ae842b5934037aad6b581233dc8d2", "stage": "ask_stream.service_call", "elapsed_ms": 13497.84, "extra": {"conversation_id": "feae902c-a245-44e2-a10d-67f4ac96e43f", "intent": "recommend_products", "agent_mode": "llm_tool_calling"}}
+INFO:     [CUSTOMER_PERF] {"trace_id": "279ae842b5934037aad6b581233dc8d2", "stage": "sse_done", "elapsed_ms": 13589.76, "extra": {}}
+INFO:     [CUSTOMER_PERF] {"trace_id": "279ae842b5934037aad6b581233dc8d2", "stage": "ask_stream.total", "elapsed_ms": 13590.67, "extra": {"conversation_id": "feae902c-a245-44e2-a10d-67f4ac96e43f", "intent": "recommend_products"}}
+INFO:     [CUSTOMER_PERF] {"trace_id": "279ae842b5934037aad6b581233dc8d2", "stage": "summary", "elapsed_ms": 13593.41, "extra": {"llm_call_count": 1, "llm_calls": [{"llm_call_index": 1, "purpose": "final_answer", "model": "deepseek-v4-pro", "prompt_chars": 3907, "prompt_tokens_est": 976, "completion_chars": 385, "completion_tokens_est": 96, "retries": 0, "timeout": false, "fallback": false, "error": null}], "stages": [{"stage": "ask_stream.precheck", "elapsed_ms": 7.44, "extra": {"permission_checked": true, "rate_limit_checked": true}}, {"stage": "customer_faq_fast_path", "elapsed_ms": 1.01, "extra": {"hit": false, "intent": null, "agent_mode": null}}, {"stage": "guardrail.evaluate_question", "elapsed_ms": 0.03, "extra": {"matched": false}}, {"stage": "context_read", "elapsed_ms": 0.01, "extra": {"entity_stack_count": 0, "conversation_history_count": 0, "previous_result_skus_count": 0, "recommendation_context_present": false}}, {"stage": "named_product_shortcut", "elapsed_ms": 9.13, "extra": {"hit": false, "agent_mode": null}}, {"stage": "hybrid_search_products.semantic_retrieve", "elapsed_ms": 440.04, "extra": {"semantic_query": "推荐三款适合露营多人做饭的套锅", "semantic_rows": 20}}, {"stage": "hybrid_search_products.breakdown", "elapsed_ms": 257.8, "extra": {"sql_filter_ms": 1.74, "embedding_query_ms": 0.0, "vector_search_ms": 0.0, "merge_rank_ms": 0.01, "get_detail_ms": 257.54, "candidates_count": 9, "prompt_chars": 22886}}, {"stage": "tool.execute_async", "elapsed_ms": 701.34, "extra": {"tool": "hybrid_search_products", "async_call": true, "ok": true}}, {"stage": "recommendation_fast_path", "elapsed_ms": 702.33, "extra": {"hit": true, "semantic_query": "推荐三款适合露营多人做饭的套锅", "count": 9}}, {"stage": "recommendation_rank_and_prepare", "elapsed_ms": 164.02, "extra": {"ranked_count": 5, "enriched_count": 5}}, {"stage": "process_agent_request", "elapsed_ms": 13380.22, "extra": {"hit": true, "intent": "recommend_products", "agent_mode": "llm_tool_calling"}}, {"stage": "save_messages_and_commit", "elapsed_ms": 93.95, "extra": {"branch": "agent", "skip_polish": true}}, {"stage": "ask_customer_service.total", "elapsed_ms": 13496.17, "extra": {"branch": "agent", "intent": "recommend_products", "agent_mode": "llm_tool_calling"}}, {"stage": "ask_stream.service_call", "elapsed_ms": 13497.84, "extra": {"conversation_id": "feae902c-a245-44e2-a10d-67f4ac96e43f", "intent": "recommend_products", "agent_mode": "llm_tool_calling"}}, {"stage": "ask_stream.total", "elapsed_ms": 13590.67, "extra": {"conversation_id": "feae902c-a245-44e2-a10d-67f4ac96e43f", "intent": "recommend_products"}}], "first_answer_delta_ms": 10484.86, "done_ms": 13589.76, "final_answer": "{\"answer\": \"为您找到两款适合露营多人做饭的套锅，当前品类暂无第三款，以下是这两款的推荐详情：\n\n第一款：CW-C05-37 露营套锅  \n这款是10件全套配置，包含锅、碗、勺、铲等，一套满足煎炒煮炖。适合3-4人使用，总重约1030克，收纳后仅一个收纳包，携带方便。锅具容量包括1.7升汤锅、1.4升浅锅和7.5英寸煎盘，材质为硬质氧化铝合金，耐用易洁。定位高端，尤其适合家庭和小型团建露营。\n\n第二款：CW-C83 露营套锅  \n轻量化微压不沾套锅，包含3700毫升汤锅和2300毫升煎盘，总重2000克。锅体采用硬质氧化铝合金与白蜡木手柄，配备可拆卸手柄和复底设计，不挑炉具，水性涂层可实现无油煎蛋且易清洁。同样定位高端，适合家庭精致露营、房车自驾等多人场景，兼顾室内外使用。\n\n如需更多选择，目前暂无其他同品类套锅，这两款均能满足多人户外烹饪需求。\"}", "intent": "recommend_products", "agent_mode": "llm_tool_calling"}}
+INFO:     [CUSTOMER_PERF] {"trace_id": "6420aebfea6449c4b7d255c848f05133", "stage": "ask_stream.precheck", "elapsed_ms": 8.64, "extra": {"permission_checked": true, "rate_limit_checked": true}}
+INFO:     [CUSTOMER_PERF] {"trace_id": "6420aebfea6449c4b7d255c848f05133", "stage": "customer_faq_fast_path", "elapsed_ms": 0.03, "extra": {"hit": false, "intent": null, "agent_mode": null}}
+INFO:     [CUSTOMER_PERF] {"trace_id": "6420aebfea6449c4b7d255c848f05133", "stage": "guardrail.evaluate_question", "elapsed_ms": 0.04, "extra": {"matched": false}}
+INFO:     [CUSTOMER_PERF] {"trace_id": "6420aebfea6449c4b7d255c848f05133", "stage": "context_read", "elapsed_ms": 36.87, "extra": {"entity_stack_count": 5, "conversation_history_count": 2, "previous_result_skus_count": 0, "recommendation_context_present": false}}
+INFO:     [CUSTOMER_PERF] {"trace_id": "6420aebfea6449c4b7d255c848f05133", "stage": "named_product_shortcut", "elapsed_ms": 6.3, "extra": {"hit": false, "agent_mode": null}}
+INFO:     [CUSTOMER_PERF] {"trace_id": "6420aebfea6449c4b7d255c848f05133", "stage": "tool.execute", "elapsed_ms": 0.7, "extra": {"tool": "get_product_detail", "async_call": false, "ok": true}}
+INFO:     [CUSTOMER_PERF] {"trace_id": "6420aebfea6449c4b7d255c848f05133", "stage": "tool.execute_async", "elapsed_ms": 1.06, "extra": {"tool": "get_product_detail", "async_call": true, "ok": true}}
+INFO:     [CUSTOMER_PERF] {"trace_id": "6420aebfea6449c4b7d255c848f05133", "stage": "compare_fast_path", "elapsed_ms": 2.12, "extra": {"hit": true, "skus": ["CW-C05-37", "CW-C83"], "count": 2}}
+INFO:     [CUSTOMER_AGENT_FINAL_REQUEST] {
+  "messages": {
+    "type": "list",
+    "count": 3,
+    "sample": [
+      {
+        "role": "system",
+        "content": "你是alocs爱路客的产品客服助手。【核心规则，最高优先级】1. 严禁引入retrieved_products之外的产品事实、参数、认证、价格或库存。2. 工具结果里没有的信息，必须说\"暂无此数据\"，不得推断或编造。3. 用户没有问到的话题不要主动引入（用户没问认证就不提认证，没问食品级就不提食品级）。产品数据可能包含嵌套的specs字段，specs里的内容（如gross_weight_g/body_material/surface_finish等）都是产品属性，回答时需要一...<chars:632>"
+      },
+      {
+        "role": "system",
+        "content": "换推荐时，如果 recommendation_context 里有原始品类需求，要用它判断候选产品是否明显偏离用户最初需求。例如最初要“锅”，候选里出现“烧水壶”、“炉具”等不同品类，应优先选品类一致的候选。如果候选池里没有品类一致的产品，要明说“当前品类暂无更多推荐，以下是相关周边产品”，不要在没有说明的情况下直接跨品类推荐。"
+      },
+      {
+        "role": "user",
+        "content": "{\"question\": \"对比一下刚才推荐的高端和入门款\", \"conversation_context\": {\"mode\": \"budget_followup\", \"previous_user_need\": \"推荐三款适合露营多人做饭的套锅\", \"combined_user_need\": \"推荐三款适合露营多人做饭的套锅；追加条件：对比一下刚才推荐的高端和入门款\", \"instruction\": \"本轮是预算/性价比追问，继承上一轮场景、人群和用途，并重新按价格定位筛选。...<chars:4388>"
+      }
+    ]
+  }
+}
+INFO:     [CUSTOMER_AGENT_AI_STREAM_REQUEST] {
+  "url": "https://api.deepseek.com/v1/chat/completions",
+  "body": {
+    "model": "deepseek-v4-pro",
+    "messages": {
+      "type": "list",
+      "count": 3,
+      "sample": [
+        {
+          "role": "system",
+          "content": "你是alocs爱路客的产品客服助手。【核心规则，最高优先级】1. 严禁引入retrieved_products之外的产品事实、参数、认证、价格或库存。2. 工具结果里没有的信息，必须说\"暂无此数据\"，不得推断或编造。3. 用户没有问到的话题不要主动引入（用户没问认证就不提认证，没问食品级就不提食品级）。产品数据可能包含嵌套的specs字段，specs里的内容（如gross_weight_g/body_material/surface_finish等）都是产品属性，回答时需要一...<chars:632>"
+        },
+        {
+          "role": "system",
+          "content": "换推荐时，如果 recommendation_context 里有原始品类需求，要用它判断候选产品是否明显偏离用户最初需求。例如最初要“锅”，候选里出现“烧水壶”、“炉具”等不同品类，应优先选品类一致的候选。如果候选池里没有品类一致的产品，要明说“当前品类暂无更多推荐，以下是相关周边产品”，不要在没有说明的情况下直接跨品类推荐。"
+        },
+        {
+          "role": "user",
+          "content": "{\"question\": \"对比一下刚才推荐的高端和入门款\", \"conversation_context\": {\"mode\": \"budget_followup\", \"previous_user_need\": \"推荐三款适合露营多人做饭的套锅\", \"combined_user_need\": \"推荐三款适合露营多人做饭的套锅；追加条件：对比一下刚才推荐的高端和入门款\", \"instruction\": \"本轮是预算/性价比追问，继承上一轮场景、人群和用途，并重新按价格定位筛选。...<chars:4388>"
+        }
+      ]
+    },
+    "temperature": 0.2,
+    "max_tokens": "***",
+    "stream": true
+  }
+}
+INFO:     [CUSTOMER_PERF] {"trace_id": "6420aebfea6449c4b7d255c848f05133", "stage": "sse_first_answer_delta", "elapsed_ms": 5159.94, "extra": {}}
+INFO:     [CUSTOMER_PERF] {"trace_id": "6420aebfea6449c4b7d255c848f05133", "stage": "llm_call", "elapsed_ms": 8751.65, "extra": {"llm_call_index": 1, "purpose": "final_answer", "model": "deepseek-v4-pro", "prompt_chars": 5185, "prompt_tokens_est": 1296, "completion_chars": 505, "completion_tokens_est": 126, "retries": 0, "timeout": false, "fallback": false, "error": null}}
+INFO:     [CUSTOMER_AGENT_FINAL_RESPONSE] {
+  "content": "{\"answer\":\"在上一轮为您推荐的两款露营套锅中，可以将CW-C05-37视为更偏向入门或高性价比的选择，CW-C83则是功能更全面的高端款。具体对比如下：\n\n结论先行：如果追求轻量便携和配件齐全的一站式高性价比体验，优先考虑CW-C05-37；如果更看重不粘性能、大容量以及在不同炉具上的通用性，且预算更充裕，推荐选择CW-C83。\n\n依据如下：\n重量上，CW-C05-37总重1030克，明显比2000克的CW-C83更轻便，适合对负重有要求的徒步或短途露营。\n容量与配...<chars:505>"
+}
+INFO:     [CUSTOMER_PERF] {"trace_id": "6420aebfea6449c4b7d255c848f05133", "stage": "process_agent_request", "elapsed_ms": 9046.79, "extra": {"hit": true, "intent": "compare_products", "agent_mode": "llm_tool_calling"}}
+INFO:     [CUSTOMER_PERF] {"trace_id": "6420aebfea6449c4b7d255c848f05133", "stage": "save_messages_and_commit", "elapsed_ms": 27.81, "extra": {"branch": "agent", "skip_polish": true}}
+INFO:     [CUSTOMER_PERF] {"trace_id": "6420aebfea6449c4b7d255c848f05133", "stage": "ask_customer_service.total", "elapsed_ms": 9153.39, "extra": {"branch": "agent", "intent": "compare_products", "agent_mode": "llm_tool_calling"}}
+INFO:     [CUSTOMER_PERF] {"trace_id": "6420aebfea6449c4b7d255c848f05133", "stage": "summary", "elapsed_ms": 9165.65, "extra": {"llm_call_count": 1, "llm_calls": [{"llm_call_index": 1, "purpose": "final_answer", "model": "deepseek-v4-pro", "prompt_chars": 5185, "prompt_tokens_est": 1296, "completion_chars": 505, "completion_tokens_est": 126, "retries": 0, "timeout": false, "fallback": false, "error": null}], "stages": [{"stage": "ask_stream.precheck", "elapsed_ms": 8.64, "extra": {"permission_checked": true, "rate_limit_checked": true}}, {"stage": "customer_faq_fast_path", "elapsed_ms": 0.03, "extra": {"hit": false, "intent": null, "agent_mode": null}}, {"stage": "guardrail.evaluate_question", "elapsed_ms": 0.04, "extra": {"matched": false}}, {"stage": "context_read", "elapsed_ms": 36.87, "extra": {"entity_stack_count": 5, "conversation_history_count": 2, "previous_result_skus_count": 0, "recommendation_context_present": false}}, {"stage": "named_product_shortcut", "elapsed_ms": 6.3, "extra": {"hit": false, "agent_mode": null}}, {"stage": "tool.execute", "elapsed_ms": 0.7, "extra": {"tool": "get_product_detail", "async_call": false, "ok": true}}, {"stage": "tool.execute_async", "elapsed_ms": 1.06, "extra": {"tool": "get_product_detail", "async_call": true, "ok": true}}, {"stage": "compare_fast_path", "elapsed_ms": 2.12, "extra": {"hit": true, "skus": ["CW-C05-37", "CW-C83"], "count": 2}}, {"stage": "process_agent_request", "elapsed_ms": 9046.79, "extra": {"hit": true, "intent": "compare_products", "agent_mode": "llm_tool_calling"}}, {"stage": "save_messages_and_commit", "elapsed_ms": 27.81, "extra": {"branch": "agent", "skip_polish": true}}, {"stage": "ask_customer_service.total", "elapsed_ms": 9153.39, "extra": {"branch": "agent", "intent": "compare_products", "agent_mode": "llm_tool_calling"}}], "first_answer_delta_ms": 5159.94, "done_ms": null, "final_answer": "{\"answer\":\"在上一轮为您推荐的两款露营套锅中，可以将CW-C05-37视为更偏向入门或高性价比的选择，CW-C83则是功能更全面的高端款。具体对比如下：\n\n结论先行：如果追求轻量便携和配件齐全的一站式高性价比体验，优先考虑CW-C05-37；如果更看重不粘性能、大容量以及在不同炉具上的通用性，且预算更充裕，推荐选择CW-C83。\n\n依据如下：\n重量上，CW-C05-37总重1030克，明显比2000克的CW-C83更轻便，适合对负重有要求的徒步或短途露营。\n容量与配件方面，CW-C05-37是10件全套配置，包含锅、碗、勺、铲等，一套满足煎炒煮炖，适合3-4人使用，收纳后也仅一个包；CW-C83则包含3700毫升汤锅和2300毫升煎盘，容量更大，但配件相对精简，定位是“一锅N用”。\n功能涂层上，CW-C83配备了水性不沾涂层，可无油煎蛋并易于清洁，加上复底设计，能兼容电磁炉等多种炉具，实现室内外两用；CW-C05-37的锅体是硬质氧化铝合金材质，耐用但未强调不沾涂层和全炉具兼容性。\n综合来看，CW-C05-37在价格和基础实用性上会更友好，而CW-C83则胜在烹饪体验和场景适应性上。}", "intent": "compare_products", "agent_mode": "llm_tool_calling"}}
+INFO:     [CUSTOMER_PERF] {"trace_id": "6420aebfea6449c4b7d255c848f05133", "stage": "ask_stream.service_call", "elapsed_ms": 9155.36, "extra": {"conversation_id": "feae902c-a245-44e2-a10d-67f4ac96e43f", "intent": "compare_products", "agent_mode": "llm_tool_calling"}}
+INFO:     [CUSTOMER_PERF] {"trace_id": "6420aebfea6449c4b7d255c848f05133", "stage": "sse_done", "elapsed_ms": 9192.21, "extra": {}}
+INFO:     [CUSTOMER_PERF] {"trace_id": "6420aebfea6449c4b7d255c848f05133", "stage": "ask_stream.total", "elapsed_ms": 9206.1, "extra": {"conversation_id": "feae902c-a245-44e2-a10d-67f4ac96e43f", "intent": "compare_products"}}
+INFO:     [CUSTOMER_PERF] {"trace_id": "6420aebfea6449c4b7d255c848f05133", "stage": "summary", "elapsed_ms": 9206.62, "extra": {"llm_call_count": 1, "llm_calls": [{"llm_call_index": 1, "purpose": "final_answer", "model": "deepseek-v4-pro", "prompt_chars": 5185, "prompt_tokens_est": 1296, "completion_chars": 505, "completion_tokens_est": 126, "retries": 0, "timeout": false, "fallback": false, "error": null}], "stages": [{"stage": "ask_stream.precheck", "elapsed_ms": 8.64, "extra": {"permission_checked": true, "rate_limit_checked": true}}, {"stage": "customer_faq_fast_path", "elapsed_ms": 0.03, "extra": {"hit": false, "intent": null, "agent_mode": null}}, {"stage": "guardrail.evaluate_question", "elapsed_ms": 0.04, "extra": {"matched": false}}, {"stage": "context_read", "elapsed_ms": 36.87, "extra": {"entity_stack_count": 5, "conversation_history_count": 2, "previous_result_skus_count": 0, "recommendation_context_present": false}}, {"stage": "named_product_shortcut", "elapsed_ms": 6.3, "extra": {"hit": false, "agent_mode": null}}, {"stage": "tool.execute", "elapsed_ms": 0.7, "extra": {"tool": "get_product_detail", "async_call": false, "ok": true}}, {"stage": "tool.execute_async", "elapsed_ms": 1.06, "extra": {"tool": "get_product_detail", "async_call": true, "ok": true}}, {"stage": "compare_fast_path", "elapsed_ms": 2.12, "extra": {"hit": true, "skus": ["CW-C05-37", "CW-C83"], "count": 2}}, {"stage": "process_agent_request", "elapsed_ms": 9046.79, "extra": {"hit": true, "intent": "compare_products", "agent_mode": "llm_tool_calling"}}, {"stage": "save_messages_and_commit", "elapsed_ms": 27.81, "extra": {"branch": "agent", "skip_polish": true}}, {"stage": "ask_customer_service.total", "elapsed_ms": 9153.39, "extra": {"branch": "agent", "intent": "compare_products", "agent_mode": "llm_tool_calling"}}, {"stage": "ask_stream.service_call", "elapsed_ms": 9155.36, "extra": {"conversation_id": "feae902c-a245-44e2-a10d-67f4ac96e43f", "intent": "compare_products", "agent_mode": "llm_tool_calling"}}, {"stage": "ask_stream.total", "elapsed_ms": 9206.1, "extra": {"conversation_id": "feae902c-a245-44e2-a10d-67f4ac96e43f", "intent": "compare_products"}}], "first_answer_delta_ms": 5159.94, "done_ms": 9192.21, "final_answer": "{\"answer\":\"在上一轮为您推荐的两款露营套锅中，可以将CW-C05-37视为更偏向入门或高性价比的选择，CW-C83则是功能更全面的高端款。具体对比如下：\n\n结论先行：如果追求轻量便携和配件齐全的一站式高性价比体验，优先考虑CW-C05-37；如果更看重不粘性能、大容量以及在不同炉具上的通用性，且预算更充裕，推荐选择CW-C83。\n\n依据如下：\n重量上，CW-C05-37总重1030克，明显比2000克的CW-C83更轻便，适合对负重有要求的徒步或短途露营。\n容量与配件方面，CW-C05-37是10件全套配置，包含锅、碗、勺、铲等，一套满足煎炒煮炖，适合3-4人使用，收纳后也仅一个包；CW-C83则包含3700毫升汤锅和2300毫升煎盘，容量更大，但配件相对精简，定位是“一锅N用”。\n功能涂层上，CW-C83配备了水性不沾涂层，可无油煎蛋并易于清洁，加上复底设计，能兼容电磁炉等多种炉具，实现室内外两用；CW-C05-37的锅体是硬质氧化铝合金材质，耐用但未强调不沾涂层和全炉具兼容性。\n综合来看，CW-C05-37在价格和基础实用性上会更友好，而CW-C83则胜在烹饪体验和场景适应性上。}", "intent": "compare_products", "agent_mode": "llm_tool_calling"}}
+INFO:     [CUSTOMER_PERF] {"trace_id": "83b5bf78245042f19fd6d0e98d238ffd", "stage": "ask_stream.precheck", "elapsed_ms": 0.92, "extra": {"permission_checked": true, "rate_limit_checked": true}}
+INFO:     [CUSTOMER_PERF] {"trace_id": "83b5bf78245042f19fd6d0e98d238ffd", "stage": "customer_faq_fast_path", "elapsed_ms": 0.02, "extra": {"hit": false, "intent": null, "agent_mode": null}}
+INFO:     [CUSTOMER_PERF] {"trace_id": "83b5bf78245042f19fd6d0e98d238ffd", "stage": "guardrail.evaluate_question", "elapsed_ms": 0.02, "extra": {"matched": false}}
+INFO:     [CUSTOMER_PERF] {"trace_id": "83b5bf78245042f19fd6d0e98d238ffd", "stage": "context_read", "elapsed_ms": 0.0, "extra": {"entity_stack_count": 0, "conversation_history_count": 0, "previous_result_skus_count": 0, "recommendation_context_present": false}}
+INFO:     [CUSTOMER_PERF] {"trace_id": "83b5bf78245042f19fd6d0e98d238ffd", "stage": "named_product_shortcut", "elapsed_ms": 2.6, "extra": {"hit": false, "agent_mode": null}}
+INFO:     [CUSTOMER_PERF] {"trace_id": "83b5bf78245042f19fd6d0e98d238ffd", "stage": "tool.execute", "elapsed_ms": 47.09, "extra": {"tool": "get_product_detail", "async_call": false, "ok": true}}
+INFO:     [CUSTOMER_PERF] {"trace_id": "83b5bf78245042f19fd6d0e98d238ffd", "stage": "tool.execute_async", "elapsed_ms": 47.43, "extra": {"tool": "get_product_detail", "async_call": true, "ok": true}}
+INFO:     [CUSTOMER_AGENT_FINAL_REQUEST] {
+  "messages": {
+    "type": "list",
+    "count": 3,
+    "sample": [
+      {
+        "role": "system",
+        "content": "你是alocs爱路客的产品客服助手。【核心规则，最高优先级】1. 严禁引入retrieved_products之外的产品事实、参数、认证、价格或库存。2. 工具结果里没有的信息，必须说\"暂无此数据\"，不得推断或编造。3. 用户没有问到的话题不要主动引入（用户没问认证就不提认证，没问食品级就不提食品级）。产品数据可能包含嵌套的specs字段，specs里的内容（如gross_weight_g/body_material/surface_finish等）都是产品属性，回答时需要一...<chars:632>"
+      },
+      {
+        "role": "system",
+        "content": "换推荐时，如果 recommendation_context 里有原始品类需求，要用它判断候选产品是否明显偏离用户最初需求。例如最初要“锅”，候选里出现“烧水壶”、“炉具”等不同品类，应优先选品类一致的候选。如果候选池里没有品类一致的产品，要明说“当前品类暂无更多推荐，以下是相关周边产品”，不要在没有说明的情况下直接跨品类推荐。"
+      },
+      {
+        "role": "user",
+        "content": "{\"question\": \"CW-C83、CW-C01-37、CW-C05-37这三款锅具体有什么区别\", \"conversation_context\": {\"mode\": \"comparison_followup\", \"previous_user_need\": \"\", \"combined_user_need\": \"CW-C83、CW-C01-37、CW-C05-37这三款锅具体有什么区别\", \"instruction\": \"本轮问题信息较完整，优先按当前问题重新检索和回答；...<chars:4542>"
+      }
+    ]
+  }
+}
+INFO:     [CUSTOMER_AGENT_AI_REQUEST] {
+  "url": "https://api.deepseek.com/v1/chat/completions",
+  "body": {
+    "model": "deepseek-v4-pro",
+    "messages": {
+      "type": "list",
+      "count": 3,
+      "sample": [
+        {
+          "role": "system",
+          "content": "你是alocs爱路客的产品客服助手。【核心规则，最高优先级】1. 严禁引入retrieved_products之外的产品事实、参数、认证、价格或库存。2. 工具结果里没有的信息，必须说\"暂无此数据\"，不得推断或编造。3. 用户没有问到的话题不要主动引入（用户没问认证就不提认证，没问食品级就不提食品级）。产品数据可能包含嵌套的specs字段，specs里的内容（如gross_weight_g/body_material/surface_finish等）都是产品属性，回答时需要一...<chars:632>"
+        },
+        {
+          "role": "system",
+          "content": "换推荐时，如果 recommendation_context 里有原始品类需求，要用它判断候选产品是否明显偏离用户最初需求。例如最初要“锅”，候选里出现“烧水壶”、“炉具”等不同品类，应优先选品类一致的候选。如果候选池里没有品类一致的产品，要明说“当前品类暂无更多推荐，以下是相关周边产品”，不要在没有说明的情况下直接跨品类推荐。"
+        },
+        {
+          "role": "user",
+          "content": "{\"question\": \"CW-C83、CW-C01-37、CW-C05-37这三款锅具体有什么区别\", \"conversation_context\": {\"mode\": \"comparison_followup\", \"previous_user_need\": \"\", \"combined_user_need\": \"CW-C83、CW-C01-37、CW-C05-37这三款锅具体有什么区别\", \"instruction\": \"本轮问题信息较完整，优先按当前问题重新检索和回答；...<chars:4542>"
+        }
+      ]
+    },
+    "temperature": 0.2,
+    "max_tokens": "***"
+  }
+}
+INFO:     [CUSTOMER_PERF] {"trace_id": "83b5bf78245042f19fd6d0e98d238ffd", "stage": "ai_semaphore_wait", "elapsed_ms": null, "extra": {"ai_semaphore_wait_ms": 0.16, "acquired": true, "queue_timeout_seconds": 8.0, "max_concurrent_requests": 10}}
+INFO:     [CUSTOMER_AGENT_AI_SEMAPHORE_WAIT] {
+  "ai_semaphore_wait_ms": 0.16,
+  "acquired": true,
+  "queue_timeout_seconds": 8.0,
+  "max_concurrent_requests": 10
+}
+INFO:     [CUSTOMER_AGENT_AI_RESPONSE] {
+  "id": "7565d901-3f50-4c51-9284-2c70d1cfd316",
+  "object": "chat.completion",
+  "created": 1782009492,
+  "model": "deepseek-v4-pro",
+  "choices": {
+    "type": "list",
+    "count": 1,
+    "sample": [
+      {
+        "index": 0,
+        "message": {
+          "role": "assistant",
+          "content": "{\n  \"answer\": \"CW-C01-37、CW-C05-37、CW-C83这三款锅具的核心区别在于重量、适用人数、配件数量和设计定位。CW-C01-37最轻（595克），专为1-2人轻量徒步或双人露营设计，自带双燃料（燃气/酒精）炉头和全包围防风底座；CW-C05-37重量中等（1030克），是10件套大全，包含锅、碗、勺、铲等整套配件，适合3-4人家庭或小型团建，收纳在一个包里；CW-C83重量最重（2000克），容量达3700毫升，采用水性不沾涂层、快拆手柄和复底...<chars:275>",
+          "reasoning_content": "我们被要求比较三款产品：CW-C83、CW-C01-37、CW-C05-37。我们要从检索到的产品详情中提取区别。\n\n从数据：\n- CW-C83：gross_weight_g=2000.0，卖点：轻量便携 健康不沾 一锅N用；复底设计 不挑炉具；水性涂层 无油煎蛋。场景：家庭精致露营；房车自驾旅行；户外营地大餐。受众：精致露营玩家, 家庭户外野餐群体, 房车自驾旅行者, 户外与居家双栖用户。定位：全炉具兼容的轻量化微压不沾套锅，快拆手柄设计，实现室内外烹饪场景的无缝切换。co...<chars:1588>"
+        },
+        "logprobs": null,
+        "finish_reason": "stop"
+      }
+    ]
+  },
+  "usage": {
+    "prompt_tokens": "***",
+    "completion_tokens": "***",
+    "total_tokens": "***",
+    "prompt_tokens_details": "***",
+    "completion_tokens_details": "***",
+    "prompt_cache_hit_tokens": "***",
+    "prompt_cache_miss_tokens": "***"
+  },
+  "system_fingerprint": "fp_9954b31ca7_prod0820_fp8_kvcache_20260402"
+}
+INFO:     [CUSTOMER_PERF] {"trace_id": "83b5bf78245042f19fd6d0e98d238ffd", "stage": "llm_call", "elapsed_ms": 11531.87, "extra": {"llm_call_index": 1, "purpose": "final_answer", "model": "deepseek-v4-pro", "prompt_chars": 5339, "prompt_tokens_est": 1334, "completion_chars": 275, "completion_tokens_est": 68, "retries": 0, "timeout": false, "fallback": false, "error": null}}
+INFO:     [CUSTOMER_AGENT_FINAL_RESPONSE] {
+  "content": "{\n  \"answer\": \"CW-C01-37、CW-C05-37、CW-C83这三款锅具的核心区别在于重量、适用人数、配件数量和设计定位。CW-C01-37最轻（595克），专为1-2人轻量徒步或双人露营设计，自带双燃料（燃气/酒精）炉头和全包围防风底座；CW-C05-37重量中等（1030克），是10件套大全，包含锅、碗、勺、铲等整套配件，适合3-4人家庭或小型团建，收纳在一个包里；CW-C83重量最重（2000克），容量达3700毫升，采用水性不沾涂层、快拆手柄和复底...<chars:275>"
+}
+INFO:     [CUSTOMER_PERF] {"trace_id": "83b5bf78245042f19fd6d0e98d238ffd", "stage": "process_agent_request", "elapsed_ms": 11675.36, "extra": {"hit": true, "intent": "compare_products", "agent_mode": "llm_tool_calling"}}
+INFO:     [CUSTOMER_PERF] {"trace_id": "83b5bf78245042f19fd6d0e98d238ffd", "stage": "save_messages_and_commit", "elapsed_ms": 65.52, "extra": {"branch": "agent", "skip_polish": true}}
+INFO:     [CUSTOMER_PERF] {"trace_id": "83b5bf78245042f19fd6d0e98d238ffd", "stage": "ask_customer_service.total", "elapsed_ms": 11745.75, "extra": {"branch": "agent", "intent": "compare_products", "agent_mode": "llm_tool_calling"}}
+INFO:     [CUSTOMER_PERF] {"trace_id": "83b5bf78245042f19fd6d0e98d238ffd", "stage": "summary", "elapsed_ms": 11749.45, "extra": {"llm_call_count": 1, "llm_calls": [{"llm_call_index": 1, "purpose": "final_answer", "model": "deepseek-v4-pro", "prompt_chars": 5339, "prompt_tokens_est": 1334, "completion_chars": 275, "completion_tokens_est": 68, "retries": 0, "timeout": false, "fallback": false, "error": null}], "stages": [{"stage": "ask_stream.precheck", "elapsed_ms": 0.92, "extra": {"permission_checked": true, "rate_limit_checked": true}}, {"stage": "customer_faq_fast_path", "elapsed_ms": 0.02, "extra": {"hit": false, "intent": null, "agent_mode": null}}, {"stage": "guardrail.evaluate_question", "elapsed_ms": 0.02, "extra": {"matched": false}}, {"stage": "context_read", "elapsed_ms": 0.0, "extra": {"entity_stack_count": 0, "conversation_history_count": 0, "previous_result_skus_count": 0, "recommendation_context_present": false}}, {"stage": "named_product_shortcut", "elapsed_ms": 2.6, "extra": {"hit": false, "agent_mode": null}}, {"stage": "tool.execute", "elapsed_ms": 47.09, "extra": {"tool": "get_product_detail", "async_call": false, "ok": true}}, {"stage": "tool.execute_async", "elapsed_ms": 47.43, "extra": {"tool": "get_product_detail", "async_call": true, "ok": true}}, {"stage": "process_agent_request", "elapsed_ms": 11675.36, "extra": {"hit": true, "intent": "compare_products", "agent_mode": "llm_tool_calling"}}, {"stage": "save_messages_and_commit", "elapsed_ms": 65.52, "extra": {"branch": "agent", "skip_polish": true}}, {"stage": "ask_customer_service.total", "elapsed_ms": 11745.75, "extra": {"branch": "agent", "intent": "compare_products", "agent_mode": "llm_tool_calling"}}], "first_answer_delta_ms": null, "done_ms": null, "final_answer": "CW-C01-37、CW-C05-37、CW-C83这三款锅具的核心区别在于重量、适用人数、配件数量和设计定位。CW-C01-37最轻（595克），专为1-2人轻量徒步或双人露营设计，自带双燃料（燃气/酒精）炉头和全包围防风底座；CW-C05-37重量中等（1030克），是10件套大全，包含锅、碗、勺、铲等整套配件，适合3-4人家庭或小型团建，收纳在一个包里；CW-C83重量最重（2000克），容量达3700毫升，采用水性不沾涂层、快拆手柄和复底设计，可兼容电磁炉等多种炉具，主打家庭精致露营、房车自驾等场景。", "intent": "compare_products", "agent_mode": "llm_tool_calling"}}
+INFO:     [CUSTOMER_PERF] {"trace_id": "83b5bf78245042f19fd6d0e98d238ffd", "stage": "ask_stream.service_call", "elapsed_ms": 11747.9, "extra": {"conversation_id": "9c5e18d4-7834-4b78-98c9-4081b97b8775", "intent": "compare_products", "agent_mode": "llm_tool_calling"}}
+INFO:     [CUSTOMER_PERF] {"trace_id": "83b5bf78245042f19fd6d0e98d238ffd", "stage": "sse_first_answer_delta", "elapsed_ms": 11786.87, "extra": {}}
+INFO:     [CUSTOMER_PERF] {"trace_id": "83b5bf78245042f19fd6d0e98d238ffd", "stage": "sse_done", "elapsed_ms": 13125.7, "extra": {}}
+INFO:     [CUSTOMER_PERF] {"trace_id": "83b5bf78245042f19fd6d0e98d238ffd", "stage": "ask_stream.total", "elapsed_ms": 13127.09, "extra": {"conversation_id": "9c5e18d4-7834-4b78-98c9-4081b97b8775", "intent": "compare_products"}}
+INFO:     [CUSTOMER_PERF] {"trace_id": "83b5bf78245042f19fd6d0e98d238ffd", "stage": "summary", "elapsed_ms": 13127.48, "extra": {"llm_call_count": 1, "llm_calls": [{"llm_call_index": 1, "purpose": "final_answer", "model": "deepseek-v4-pro", "prompt_chars": 5339, "prompt_tokens_est": 1334, "completion_chars": 275, "completion_tokens_est": 68, "retries": 0, "timeout": false, "fallback": false, "error": null}], "stages": [{"stage": "ask_stream.precheck", "elapsed_ms": 0.92, "extra": {"permission_checked": true, "rate_limit_checked": true}}, {"stage": "customer_faq_fast_path", "elapsed_ms": 0.02, "extra": {"hit": false, "intent": null, "agent_mode": null}}, {"stage": "guardrail.evaluate_question", "elapsed_ms": 0.02, "extra": {"matched": false}}, {"stage": "context_read", "elapsed_ms": 0.0, "extra": {"entity_stack_count": 0, "conversation_history_count": 0, "previous_result_skus_count": 0, "recommendation_context_present": false}}, {"stage": "named_product_shortcut", "elapsed_ms": 2.6, "extra": {"hit": false, "agent_mode": null}}, {"stage": "tool.execute", "elapsed_ms": 47.09, "extra": {"tool": "get_product_detail", "async_call": false, "ok": true}}, {"stage": "tool.execute_async", "elapsed_ms": 47.43, "extra": {"tool": "get_product_detail", "async_call": true, "ok": true}}, {"stage": "process_agent_request", "elapsed_ms": 11675.36, "extra": {"hit": true, "intent": "compare_products", "agent_mode": "llm_tool_calling"}}, {"stage": "save_messages_and_commit", "elapsed_ms": 65.52, "extra": {"branch": "agent", "skip_polish": true}}, {"stage": "ask_customer_service.total", "elapsed_ms": 11745.75, "extra": {"branch": "agent", "intent": "compare_products", "agent_mode": "llm_tool_calling"}}, {"stage": "ask_stream.service_call", "elapsed_ms": 11747.9, "extra": {"conversation_id": "9c5e18d4-7834-4b78-98c9-4081b97b8775", "intent": "compare_products", "agent_mode": "llm_tool_calling"}}, {"stage": "ask_stream.total", "elapsed_ms": 13127.09, "extra": {"conversation_id": "9c5e18d4-7834-4b78-98c9-4081b97b8775", "intent": "compare_products"}}], "first_answer_delta_ms": 11786.87, "done_ms": 13125.7, "final_answer": "CW-C01-37、CW-C05-37、CW-C83这三款锅具的核心区别在于重量、适用人数、配件数量和设计定位。CW-C01-37最轻（595克），专为1-2人轻量徒步或双人露营设计，自带双燃料（燃气/酒精）炉头和全包围防风底座；CW-C05-37重量中等（1030克），是10件套大全，包含锅、碗、勺、铲等整套配件，适合3-4人家庭或小型团建，收纳在一个包里；CW-C83重量最重（2000克），容量达3700毫升，采用水性不沾涂层、快拆手柄和复底设计，可兼容电磁炉等多种炉具，主打家庭精致露营、房车自驾等场景。", "intent": "compare_products", "agent_mode": "llm_tool_calling"}}
+--- Logging error ---
+Traceback (most recent call last):
+  File "D:\CaiYan\Image-Generation-feature-v5\backend\venv\lib\site-packages\sqlalchemy\engine\base.py", line 1967, in _exec_single_context
+    self.dialect.do_execute(
+  File "D:\CaiYan\Image-Generation-feature-v5\backend\venv\lib\site-packages\sqlalchemy\engine\default.py", line 941, in do_execute
+    cursor.execute(statement, parameters)
+psycopg2.ProgrammingError: can't adapt type 'dict'
+
+The above exception was the direct cause of the following exception:
+
+Traceback (most recent call last):
+  File "D:\CaiYan\Image-Generation-feature-v5\backend\venv\lib\site-packages\starlette\middleware\errors.py", line 164, in __call__
+    await self.app(scope, receive, _send)
+  File "D:\CaiYan\Image-Generation-feature-v5\backend\venv\lib\site-packages\starlette\middleware\cors.py", line 85, in __call__
+    await self.app(scope, receive, send)
+  File "D:\CaiYan\Image-Generation-feature-v5\backend\venv\lib\site-packages\starlette\middleware\exceptions.py", line 65, in __call__
+    await wrap_app_handling_exceptions(self.app, conn)(scope, receive, send)
+  File "D:\CaiYan\Image-Generation-feature-v5\backend\venv\lib\site-packages\starlette\_exception_handler.py", line 64, in wrapped_app
+    raise exc
+  File "D:\CaiYan\Image-Generation-feature-v5\backend\venv\lib\site-packages\starlette\_exception_handler.py", line 53, in wrapped_app
+    await app(scope, receive, sender)
+  File "D:\CaiYan\Image-Generation-feature-v5\backend\venv\lib\site-packages\starlette\routing.py", line 756, in __call__
+    await self.middleware_stack(scope, receive, send)
+  File "D:\CaiYan\Image-Generation-feature-v5\backend\venv\lib\site-packages\starlette\routing.py", line 776, in app
+    await route.handle(scope, receive, send)
+  File "D:\CaiYan\Image-Generation-feature-v5\backend\venv\lib\site-packages\starlette\routing.py", line 297, in handle
+    await self.app(scope, receive, send)
+  File "D:\CaiYan\Image-Generation-feature-v5\backend\venv\lib\site-packages\starlette\routing.py", line 77, in app
+    await wrap_app_handling_exceptions(app, request)(scope, receive, send)
+  File "D:\CaiYan\Image-Generation-feature-v5\backend\venv\lib\site-packages\starlette\_exception_handler.py", line 64, in wrapped_app
+    raise exc
+  File "D:\CaiYan\Image-Generation-feature-v5\backend\venv\lib\site-packages\starlette\_exception_handler.py", line 53, in wrapped_app
+    await app(scope, receive, sender)
+  File "D:\CaiYan\Image-Generation-feature-v5\backend\venv\lib\site-packages\starlette\routing.py", line 72, in app
+    response = await func(request)
+  File "D:\CaiYan\Image-Generation-feature-v5\backend\venv\lib\site-packages\fastapi\routing.py", line 278, in app
+    raw_response = await run_endpoint_function(
+  File "D:\CaiYan\Image-Generation-feature-v5\backend\venv\lib\site-packages\fastapi\routing.py", line 193, in run_endpoint_function
+    return await run_in_threadpool(dependant.call, **values)
+  File "D:\CaiYan\Image-Generation-feature-v5\backend\venv\lib\site-packages\starlette\concurrency.py", line 42, in run_in_threadpool
+    return await anyio.to_thread.run_sync(func, *args)
+  File "D:\CaiYan\Image-Generation-feature-v5\backend\venv\lib\site-packages\anyio\to_thread.py", line 63, in run_sync
+    return await get_async_backend().run_sync_in_worker_thread(
+  File "D:\CaiYan\Image-Generation-feature-v5\backend\venv\lib\site-packages\anyio\_backends\_asyncio.py", line 2518, in run_sync_in_worker_thread
+    return await future
+  File "D:\CaiYan\Image-Generation-feature-v5\backend\venv\lib\site-packages\anyio\_backends\_asyncio.py", line 1002, in run
+    result = context.run(func, *args)
+  File "D:\CaiYan\Image-Generation-feature-v5\backend\app\api\products.py", line 260, in update_product_specs
+    result = product_service.update_product_specs(db, sku, body)
+  File "D:\CaiYan\Image-Generation-feature-v5\backend\app\services\product_service.py", line 908, in update_product_specs
+    db.commit()
+  File "D:\CaiYan\Image-Generation-feature-v5\backend\venv\lib\site-packages\sqlalchemy\orm\session.py", line 2028, in commit
+    trans.commit(_to_root=True)
+  File "<string>", line 2, in commit
+  File "D:\CaiYan\Image-Generation-feature-v5\backend\venv\lib\site-packages\sqlalchemy\orm\state_changes.py", line 139, in _go
+    ret_value = fn(self, *arg, **kw)
+  File "D:\CaiYan\Image-Generation-feature-v5\backend\venv\lib\site-packages\sqlalchemy\orm\session.py", line 1313, in commit
+    self._prepare_impl()
+  File "<string>", line 2, in _prepare_impl
+  File "D:\CaiYan\Image-Generation-feature-v5\backend\venv\lib\site-packages\sqlalchemy\orm\state_changes.py", line 139, in _go
+    ret_value = fn(self, *arg, **kw)
+  File "D:\CaiYan\Image-Generation-feature-v5\backend\venv\lib\site-packages\sqlalchemy\orm\session.py", line 1288, in _prepare_impl
+    self.session.flush()
+  File "D:\CaiYan\Image-Generation-feature-v5\backend\venv\lib\site-packages\sqlalchemy\orm\session.py", line 4352, in flush
+    self._flush(objects)
+  File "D:\CaiYan\Image-Generation-feature-v5\backend\venv\lib\site-packages\sqlalchemy\orm\session.py", line 4487, in _flush
+    with util.safe_reraise():
+  File "D:\CaiYan\Image-Generation-feature-v5\backend\venv\lib\site-packages\sqlalchemy\util\langhelpers.py", line 146, in __exit__
+    raise exc_value.with_traceback(exc_tb)
+  File "D:\CaiYan\Image-Generation-feature-v5\backend\venv\lib\site-packages\sqlalchemy\orm\session.py", line 4448, in _flush
+    flush_context.execute()
+  File "D:\CaiYan\Image-Generation-feature-v5\backend\venv\lib\site-packages\sqlalchemy\orm\unitofwork.py", line 466, in execute
+    rec.execute(self)
+  File "D:\CaiYan\Image-Generation-feature-v5\backend\venv\lib\site-packages\sqlalchemy\orm\unitofwork.py", line 642, in execute
+    util.preloaded.orm_persistence.save_obj(
+  File "D:\CaiYan\Image-Generation-feature-v5\backend\venv\lib\site-packages\sqlalchemy\orm\persistence.py", line 85, in save_obj
+    _emit_update_statements(
+  File "D:\CaiYan\Image-Generation-feature-v5\backend\venv\lib\site-packages\sqlalchemy\orm\persistence.py", line 912, in _emit_update_statements
+    c = connection.execute(
+  File "D:\CaiYan\Image-Generation-feature-v5\backend\venv\lib\site-packages\sqlalchemy\engine\base.py", line 1418, in execute
+    return meth(
+  File "D:\CaiYan\Image-Generation-feature-v5\backend\venv\lib\site-packages\sqlalchemy\sql\elements.py", line 515, in _execute_on_connection
+    return connection._execute_clauseelement(
+  File "D:\CaiYan\Image-Generation-feature-v5\backend\venv\lib\site-packages\sqlalchemy\engine\base.py", line 1640, in _execute_clauseelement
+    ret = self._execute_context(
+  File "D:\CaiYan\Image-Generation-feature-v5\backend\venv\lib\site-packages\sqlalchemy\engine\base.py", line 1846, in _execute_context
+    return self._exec_single_context(
+  File "D:\CaiYan\Image-Generation-feature-v5\backend\venv\lib\site-packages\sqlalchemy\engine\base.py", line 1986, in _exec_single_context
+    self._handle_dbapi_exception(
+  File "D:\CaiYan\Image-Generation-feature-v5\backend\venv\lib\site-packages\sqlalchemy\engine\base.py", line 2355, in _handle_dbapi_exception
+    raise sqlalchemy_exception.with_traceback(exc_info[2]) from e
+  File "D:\CaiYan\Image-Generation-feature-v5\backend\venv\lib\site-packages\sqlalchemy\engine\base.py", line 1967, in _exec_single_context
+    self.dialect.do_execute(
+  File "D:\CaiYan\Image-Generation-feature-v5\backend\venv\lib\site-packages\sqlalchemy\engine\default.py", line 941, in do_execute
+    cursor.execute(statement, parameters)
+sqlalchemy.exc.ProgrammingError: (psycopg2.ProgrammingError) can't adapt type 'dict'
+[SQL: UPDATE product_specs SET capacity=%(capacity)s, gross_weight_g=%(gross_weight_g)s, body_material=%(body_material)s, technical_advantages=%(technical_advantages)s, usage_instruction=%(usage_instruction)s, updated_at=%(updated_at)s WHERE product_specs.id = %(product_specs_id)s]
+[SQL parameters hidden due to hide_parameters=True]
+(Background on this error at: https://sqlalche.me/e/20/f405)
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "C:\Users\wnt\AppData\Local\Programs\Python\Python310\lib\logging\handlers.py", line 74, in emit
+    self.doRollover()
+  File "C:\Users\wnt\AppData\Local\Programs\Python\Python310\lib\logging\handlers.py", line 435, in doRollover
+    self.rotate(self.baseFilename, dfn)
+  File "C:\Users\wnt\AppData\Local\Programs\Python\Python310\lib\logging\handlers.py", line 115, in rotate
+    os.rename(source, dest)
+PermissionError: [WinError 32] 另一个程序正在使用此文件，进程无法访问。: 'D:\\CaiYan\\Image-Generation-feature-v5\\logs\\error.log' -> 'D:\\CaiYan\\Image-Generation-feature-v5\\logs\\error.log.2026-06-19'
+Call stack:
+  File "<string>", line 1, in <module>
+  File "C:\Users\wnt\AppData\Local\Programs\Python\Python310\lib\multiprocessing\spawn.py", line 116, in spawn_main
+    exitcode = _main(fd, parent_sentinel)
+  File "C:\Users\wnt\AppData\Local\Programs\Python\Python310\lib\multiprocessing\spawn.py", line 129, in _main
+    return self._bootstrap(parent_sentinel)
+  File "C:\Users\wnt\AppData\Local\Programs\Python\Python310\lib\multiprocessing\process.py", line 314, in _bootstrap
+    self.run()
+  File "C:\Users\wnt\AppData\Local\Programs\Python\Python310\lib\multiprocessing\process.py", line 108, in run
+    self._target(*self._args, **self._kwargs)
+  File "D:\CaiYan\Image-Generation-feature-v5\backend\venv\lib\site-packages\uvicorn\_subprocess.py", line 80, in subprocess_started
+    target(sockets=sockets)
+  File "D:\CaiYan\Image-Generation-feature-v5\backend\venv\lib\site-packages\uvicorn\supervisors\multiprocess.py", line 63, in target
+    return self.real_target(sockets)
+  File "D:\CaiYan\Image-Generation-feature-v5\backend\venv\lib\site-packages\uvicorn\server.py", line 65, in run
+    return asyncio.run(self.serve(sockets=sockets))
+  File "C:\Users\wnt\AppData\Local\Programs\Python\Python310\lib\asyncio\runners.py", line 44, in run
+    return loop.run_until_complete(main)
+  File "C:\Users\wnt\AppData\Local\Programs\Python\Python310\lib\asyncio\base_events.py", line 633, in run_until_complete
+    self.run_forever()
+  File "C:\Users\wnt\AppData\Local\Programs\Python\Python310\lib\asyncio\base_events.py", line 600, in run_forever
+    self._run_once()
+  File "C:\Users\wnt\AppData\Local\Programs\Python\Python310\lib\asyncio\base_events.py", line 1896, in _run_once
+    handle._run()
+  File "C:\Users\wnt\AppData\Local\Programs\Python\Python310\lib\asyncio\events.py", line 80, in _run
+    self._context.run(self._callback, *self._args)
+  File "D:\CaiYan\Image-Generation-feature-v5\backend\venv\lib\site-packages\uvicorn\protocols\http\httptools_impl.py", line 401, in run_asgi
+    result = await app(  # type: ignore[func-returns-value]
+  File "D:\CaiYan\Image-Generation-feature-v5\backend\venv\lib\site-packages\uvicorn\middleware\proxy_headers.py", line 70, in __call__
+    return await self.app(scope, receive, send)
+  File "D:\CaiYan\Image-Generation-feature-v5\backend\venv\lib\site-packages\fastapi\applications.py", line 1054, in __call__
+    await super().__call__(scope, receive, send)
+  File "D:\CaiYan\Image-Generation-feature-v5\backend\venv\lib\site-packages\starlette\applications.py", line 123, in __call__
+    await self.middleware_stack(scope, receive, send)
+  File "D:\CaiYan\Image-Generation-feature-v5\backend\venv\lib\site-packages\starlette\middleware\errors.py", line 176, in __call__
+    response = await self.handler(request, exc)
+  File "D:\CaiYan\Image-Generation-feature-v5\backend\app\main.py", line 66, in global_exception_handler
+    logging.getLogger("app").exception("Unhandled request error: %s %s", request.method, request.url.path)
+Message: 'Unhandled request error: %s %s'
+Arguments: ('PUT', '/api/products/TEST-PMD-3C5D325F/specs')
+--- Logging error ---
+Traceback (most recent call last):
+  File "D:\CaiYan\Image-Generation-feature-v5\backend\venv\lib\site-packages\sqlalchemy\engine\base.py", line 1967, in _exec_single_context
+    self.dialect.do_execute(
+  File "D:\CaiYan\Image-Generation-feature-v5\backend\venv\lib\site-packages\sqlalchemy\engine\default.py", line 941, in do_execute
+    cursor.execute(statement, parameters)
+psycopg2.ProgrammingError: can't adapt type 'dict'
+
+The above exception was the direct cause of the following exception:
+
+Traceback (most recent call last):
+  File "D:\CaiYan\Image-Generation-feature-v5\backend\venv\lib\site-packages\uvicorn\protocols\http\httptools_impl.py", line 401, in run_asgi
+    result = await app(  # type: ignore[func-returns-value]
+  File "D:\CaiYan\Image-Generation-feature-v5\backend\venv\lib\site-packages\uvicorn\middleware\proxy_headers.py", line 70, in __call__
+    return await self.app(scope, receive, send)
+  File "D:\CaiYan\Image-Generation-feature-v5\backend\venv\lib\site-packages\fastapi\applications.py", line 1054, in __call__
+    await super().__call__(scope, receive, send)
+  File "D:\CaiYan\Image-Generation-feature-v5\backend\venv\lib\site-packages\starlette\applications.py", line 123, in __call__
+    await self.middleware_stack(scope, receive, send)
+  File "D:\CaiYan\Image-Generation-feature-v5\backend\venv\lib\site-packages\starlette\middleware\errors.py", line 186, in __call__
+    raise exc
+  File "D:\CaiYan\Image-Generation-feature-v5\backend\venv\lib\site-packages\starlette\middleware\errors.py", line 164, in __call__
+    await self.app(scope, receive, _send)
+  File "D:\CaiYan\Image-Generation-feature-v5\backend\venv\lib\site-packages\starlette\middleware\cors.py", line 85, in __call__
+    await self.app(scope, receive, send)
+  File "D:\CaiYan\Image-Generation-feature-v5\backend\venv\lib\site-packages\starlette\middleware\exceptions.py", line 65, in __call__
+    await wrap_app_handling_exceptions(self.app, conn)(scope, receive, send)
+  File "D:\CaiYan\Image-Generation-feature-v5\backend\venv\lib\site-packages\starlette\_exception_handler.py", line 64, in wrapped_app
+    raise exc
+  File "D:\CaiYan\Image-Generation-feature-v5\backend\venv\lib\site-packages\starlette\_exception_handler.py", line 53, in wrapped_app
+    await app(scope, receive, sender)
+  File "D:\CaiYan\Image-Generation-feature-v5\backend\venv\lib\site-packages\starlette\routing.py", line 756, in __call__
+    await self.middleware_stack(scope, receive, send)
+  File "D:\CaiYan\Image-Generation-feature-v5\backend\venv\lib\site-packages\starlette\routing.py", line 776, in app
+    await route.handle(scope, receive, send)
+  File "D:\CaiYan\Image-Generation-feature-v5\backend\venv\lib\site-packages\starlette\routing.py", line 297, in handle
+    await self.app(scope, receive, send)
+  File "D:\CaiYan\Image-Generation-feature-v5\backend\venv\lib\site-packages\starlette\routing.py", line 77, in app
+    await wrap_app_handling_exceptions(app, request)(scope, receive, send)
+  File "D:\CaiYan\Image-Generation-feature-v5\backend\venv\lib\site-packages\starlette\_exception_handler.py", line 64, in wrapped_app
+    raise exc
+  File "D:\CaiYan\Image-Generation-feature-v5\backend\venv\lib\site-packages\starlette\_exception_handler.py", line 53, in wrapped_app
+    await app(scope, receive, sender)
+  File "D:\CaiYan\Image-Generation-feature-v5\backend\venv\lib\site-packages\starlette\routing.py", line 72, in app
+    response = await func(request)
+  File "D:\CaiYan\Image-Generation-feature-v5\backend\venv\lib\site-packages\fastapi\routing.py", line 278, in app
+    raw_response = await run_endpoint_function(
+  File "D:\CaiYan\Image-Generation-feature-v5\backend\venv\lib\site-packages\fastapi\routing.py", line 193, in run_endpoint_function
+    return await run_in_threadpool(dependant.call, **values)
+  File "D:\CaiYan\Image-Generation-feature-v5\backend\venv\lib\site-packages\starlette\concurrency.py", line 42, in run_in_threadpool
+    return await anyio.to_thread.run_sync(func, *args)
+  File "D:\CaiYan\Image-Generation-feature-v5\backend\venv\lib\site-packages\anyio\to_thread.py", line 63, in run_sync
+    return await get_async_backend().run_sync_in_worker_thread(
+  File "D:\CaiYan\Image-Generation-feature-v5\backend\venv\lib\site-packages\anyio\_backends\_asyncio.py", line 2518, in run_sync_in_worker_thread
+    return await future
+  File "D:\CaiYan\Image-Generation-feature-v5\backend\venv\lib\site-packages\anyio\_backends\_asyncio.py", line 1002, in run
+    result = context.run(func, *args)
+  File "D:\CaiYan\Image-Generation-feature-v5\backend\app\api\products.py", line 260, in update_product_specs
+    result = product_service.update_product_specs(db, sku, body)
+  File "D:\CaiYan\Image-Generation-feature-v5\backend\app\services\product_service.py", line 908, in update_product_specs
+    db.commit()
+  File "D:\CaiYan\Image-Generation-feature-v5\backend\venv\lib\site-packages\sqlalchemy\orm\session.py", line 2028, in commit
+    trans.commit(_to_root=True)
+  File "<string>", line 2, in commit
+  File "D:\CaiYan\Image-Generation-feature-v5\backend\venv\lib\site-packages\sqlalchemy\orm\state_changes.py", line 139, in _go
+    ret_value = fn(self, *arg, **kw)
+  File "D:\CaiYan\Image-Generation-feature-v5\backend\venv\lib\site-packages\sqlalchemy\orm\session.py", line 1313, in commit
+    self._prepare_impl()
+  File "<string>", line 2, in _prepare_impl
+  File "D:\CaiYan\Image-Generation-feature-v5\backend\venv\lib\site-packages\sqlalchemy\orm\state_changes.py", line 139, in _go
+    ret_value = fn(self, *arg, **kw)
+  File "D:\CaiYan\Image-Generation-feature-v5\backend\venv\lib\site-packages\sqlalchemy\orm\session.py", line 1288, in _prepare_impl
+    self.session.flush()
+  File "D:\CaiYan\Image-Generation-feature-v5\backend\venv\lib\site-packages\sqlalchemy\orm\session.py", line 4352, in flush
+    self._flush(objects)
+  File "D:\CaiYan\Image-Generation-feature-v5\backend\venv\lib\site-packages\sqlalchemy\orm\session.py", line 4487, in _flush
+    with util.safe_reraise():
+  File "D:\CaiYan\Image-Generation-feature-v5\backend\venv\lib\site-packages\sqlalchemy\util\langhelpers.py", line 146, in __exit__
+    raise exc_value.with_traceback(exc_tb)
+  File "D:\CaiYan\Image-Generation-feature-v5\backend\venv\lib\site-packages\sqlalchemy\orm\session.py", line 4448, in _flush
+    flush_context.execute()
+  File "D:\CaiYan\Image-Generation-feature-v5\backend\venv\lib\site-packages\sqlalchemy\orm\unitofwork.py", line 466, in execute
+    rec.execute(self)
+  File "D:\CaiYan\Image-Generation-feature-v5\backend\venv\lib\site-packages\sqlalchemy\orm\unitofwork.py", line 642, in execute
+    util.preloaded.orm_persistence.save_obj(
+  File "D:\CaiYan\Image-Generation-feature-v5\backend\venv\lib\site-packages\sqlalchemy\orm\persistence.py", line 85, in save_obj
+    _emit_update_statements(
+  File "D:\CaiYan\Image-Generation-feature-v5\backend\venv\lib\site-packages\sqlalchemy\orm\persistence.py", line 912, in _emit_update_statements
+    c = connection.execute(
+  File "D:\CaiYan\Image-Generation-feature-v5\backend\venv\lib\site-packages\sqlalchemy\engine\base.py", line 1418, in execute
+    return meth(
+  File "D:\CaiYan\Image-Generation-feature-v5\backend\venv\lib\site-packages\sqlalchemy\sql\elements.py", line 515, in _execute_on_connection
+    return connection._execute_clauseelement(
+  File "D:\CaiYan\Image-Generation-feature-v5\backend\venv\lib\site-packages\sqlalchemy\engine\base.py", line 1640, in _execute_clauseelement
+    ret = self._execute_context(
+  File "D:\CaiYan\Image-Generation-feature-v5\backend\venv\lib\site-packages\sqlalchemy\engine\base.py", line 1846, in _execute_context
+    return self._exec_single_context(
+  File "D:\CaiYan\Image-Generation-feature-v5\backend\venv\lib\site-packages\sqlalchemy\engine\base.py", line 1986, in _exec_single_context
+    self._handle_dbapi_exception(
+  File "D:\CaiYan\Image-Generation-feature-v5\backend\venv\lib\site-packages\sqlalchemy\engine\base.py", line 2355, in _handle_dbapi_exception
+    raise sqlalchemy_exception.with_traceback(exc_info[2]) from e
+  File "D:\CaiYan\Image-Generation-feature-v5\backend\venv\lib\site-packages\sqlalchemy\engine\base.py", line 1967, in _exec_single_context
+    self.dialect.do_execute(
+  File "D:\CaiYan\Image-Generation-feature-v5\backend\venv\lib\site-packages\sqlalchemy\engine\default.py", line 941, in do_execute
+    cursor.execute(statement, parameters)
+sqlalchemy.exc.ProgrammingError: (psycopg2.ProgrammingError) can't adapt type 'dict'
+[SQL: UPDATE product_specs SET capacity=%(capacity)s, gross_weight_g=%(gross_weight_g)s, body_material=%(body_material)s, technical_advantages=%(technical_advantages)s, usage_instruction=%(usage_instruction)s, updated_at=%(updated_at)s WHERE product_specs.id = %(product_specs_id)s]
+[SQL parameters hidden due to hide_parameters=True]
+(Background on this error at: https://sqlalche.me/e/20/f405)
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "C:\Users\wnt\AppData\Local\Programs\Python\Python310\lib\logging\handlers.py", line 74, in emit
+    self.doRollover()
+  File "C:\Users\wnt\AppData\Local\Programs\Python\Python310\lib\logging\handlers.py", line 435, in doRollover
+    self.rotate(self.baseFilename, dfn)
+  File "C:\Users\wnt\AppData\Local\Programs\Python\Python310\lib\logging\handlers.py", line 115, in rotate
+    os.rename(source, dest)
+PermissionError: [WinError 32] 另一个程序正在使用此文件，进程无法访问。: 'D:\\CaiYan\\Image-Generation-feature-v5\\logs\\error.log' -> 'D:\\CaiYan\\Image-Generation-feature-v5\\logs\\error.log.2026-06-19'
+Call stack:
+  File "<string>", line 1, in <module>
+  File "C:\Users\wnt\AppData\Local\Programs\Python\Python310\lib\multiprocessing\spawn.py", line 116, in spawn_main
+    exitcode = _main(fd, parent_sentinel)
+  File "C:\Users\wnt\AppData\Local\Programs\Python\Python310\lib\multiprocessing\spawn.py", line 129, in _main
+    return self._bootstrap(parent_sentinel)
+  File "C:\Users\wnt\AppData\Local\Programs\Python\Python310\lib\multiprocessing\process.py", line 314, in _bootstrap
+    self.run()
+  File "C:\Users\wnt\AppData\Local\Programs\Python\Python310\lib\multiprocessing\process.py", line 108, in run
+    self._target(*self._args, **self._kwargs)
+  File "D:\CaiYan\Image-Generation-feature-v5\backend\venv\lib\site-packages\uvicorn\_subprocess.py", line 80, in subprocess_started
+    target(sockets=sockets)
+  File "D:\CaiYan\Image-Generation-feature-v5\backend\venv\lib\site-packages\uvicorn\supervisors\multiprocess.py", line 63, in target
+    return self.real_target(sockets)
+  File "D:\CaiYan\Image-Generation-feature-v5\backend\venv\lib\site-packages\uvicorn\server.py", line 65, in run
+    return asyncio.run(self.serve(sockets=sockets))
+  File "C:\Users\wnt\AppData\Local\Programs\Python\Python310\lib\asyncio\runners.py", line 44, in run
+    return loop.run_until_complete(main)
+  File "C:\Users\wnt\AppData\Local\Programs\Python\Python310\lib\asyncio\base_events.py", line 633, in run_until_complete
+    self.run_forever()
+  File "C:\Users\wnt\AppData\Local\Programs\Python\Python310\lib\asyncio\base_events.py", line 600, in run_forever
+    self._run_once()
+  File "C:\Users\wnt\AppData\Local\Programs\Python\Python310\lib\asyncio\base_events.py", line 1896, in _run_once
+    handle._run()
+  File "C:\Users\wnt\AppData\Local\Programs\Python\Python310\lib\asyncio\events.py", line 80, in _run
+    self._context.run(self._callback, *self._args)
+  File "D:\CaiYan\Image-Generation-feature-v5\backend\venv\lib\site-packages\uvicorn\protocols\http\httptools_impl.py", line 406, in run_asgi
+    self.logger.error(msg, exc_info=exc)
+Message: 'Exception in ASGI application\n'
+Arguments: ()
+ERROR:    Exception in ASGI application
+Traceback (most recent call last):
+  File "D:\CaiYan\Image-Generation-feature-v5\backend\venv\lib\site-packages\sqlalchemy\engine\base.py", line 1967, in _exec_single_context
+    self.dialect.do_execute(
+  File "D:\CaiYan\Image-Generation-feature-v5\backend\venv\lib\site-packages\sqlalchemy\engine\default.py", line 941, in do_execute
+    cursor.execute(statement, parameters)
+psycopg2.ProgrammingError: can't adapt type 'dict'
+
+The above exception was the direct cause of the following exception:
+
+Traceback (most recent call last):
+  File "D:\CaiYan\Image-Generation-feature-v5\backend\venv\lib\site-packages\uvicorn\protocols\http\httptools_impl.py", line 401, in run_asgi
+    result = await app(  # type: ignore[func-returns-value]
+  File "D:\CaiYan\Image-Generation-feature-v5\backend\venv\lib\site-packages\uvicorn\middleware\proxy_headers.py", line 70, in __call__
+    return await self.app(scope, receive, send)
+  File "D:\CaiYan\Image-Generation-feature-v5\backend\venv\lib\site-packages\fastapi\applications.py", line 1054, in __call__
+    await super().__call__(scope, receive, send)
+  File "D:\CaiYan\Image-Generation-feature-v5\backend\venv\lib\site-packages\starlette\applications.py", line 123, in __call__
+    await self.middleware_stack(scope, receive, send)
+  File "D:\CaiYan\Image-Generation-feature-v5\backend\venv\lib\site-packages\starlette\middleware\errors.py", line 186, in __call__
+    raise exc
+  File "D:\CaiYan\Image-Generation-feature-v5\backend\venv\lib\site-packages\starlette\middleware\errors.py", line 164, in __call__
+    await self.app(scope, receive, _send)
+  File "D:\CaiYan\Image-Generation-feature-v5\backend\venv\lib\site-packages\starlette\middleware\cors.py", line 85, in __call__
+    await self.app(scope, receive, send)
+  File "D:\CaiYan\Image-Generation-feature-v5\backend\venv\lib\site-packages\starlette\middleware\exceptions.py", line 65, in __call__
+    await wrap_app_handling_exceptions(self.app, conn)(scope, receive, send)
+  File "D:\CaiYan\Image-Generation-feature-v5\backend\venv\lib\site-packages\starlette\_exception_handler.py", line 64, in wrapped_app
+    raise exc
+  File "D:\CaiYan\Image-Generation-feature-v5\backend\venv\lib\site-packages\starlette\_exception_handler.py", line 53, in wrapped_app
+    await app(scope, receive, sender)
+  File "D:\CaiYan\Image-Generation-feature-v5\backend\venv\lib\site-packages\starlette\routing.py", line 756, in __call__
+    await self.middleware_stack(scope, receive, send)
+  File "D:\CaiYan\Image-Generation-feature-v5\backend\venv\lib\site-packages\starlette\routing.py", line 776, in app
+    await route.handle(scope, receive, send)
+  File "D:\CaiYan\Image-Generation-feature-v5\backend\venv\lib\site-packages\starlette\routing.py", line 297, in handle
+    await self.app(scope, receive, send)
+  File "D:\CaiYan\Image-Generation-feature-v5\backend\venv\lib\site-packages\starlette\routing.py", line 77, in app
+    await wrap_app_handling_exceptions(app, request)(scope, receive, send)
+  File "D:\CaiYan\Image-Generation-feature-v5\backend\venv\lib\site-packages\starlette\_exception_handler.py", line 64, in wrapped_app
+    raise exc
+  File "D:\CaiYan\Image-Generation-feature-v5\backend\venv\lib\site-packages\starlette\_exception_handler.py", line 53, in wrapped_app
+    await app(scope, receive, sender)
+  File "D:\CaiYan\Image-Generation-feature-v5\backend\venv\lib\site-packages\starlette\routing.py", line 72, in app
+    response = await func(request)
+  File "D:\CaiYan\Image-Generation-feature-v5\backend\venv\lib\site-packages\fastapi\routing.py", line 278, in app
+    raw_response = await run_endpoint_function(
+  File "D:\CaiYan\Image-Generation-feature-v5\backend\venv\lib\site-packages\fastapi\routing.py", line 193, in run_endpoint_function
+    return await run_in_threadpool(dependant.call, **values)
+  File "D:\CaiYan\Image-Generation-feature-v5\backend\venv\lib\site-packages\starlette\concurrency.py", line 42, in run_in_threadpool
+    return await anyio.to_thread.run_sync(func, *args)
+  File "D:\CaiYan\Image-Generation-feature-v5\backend\venv\lib\site-packages\anyio\to_thread.py", line 63, in run_sync
+    return await get_async_backend().run_sync_in_worker_thread(
+  File "D:\CaiYan\Image-Generation-feature-v5\backend\venv\lib\site-packages\anyio\_backends\_asyncio.py", line 2518, in run_sync_in_worker_thread
+    return await future
+  File "D:\CaiYan\Image-Generation-feature-v5\backend\venv\lib\site-packages\anyio\_backends\_asyncio.py", line 1002, in run
+    result = context.run(func, *args)
+  File "D:\CaiYan\Image-Generation-feature-v5\backend\app\api\products.py", line 260, in update_product_specs
+    result = product_service.update_product_specs(db, sku, body)
+  File "D:\CaiYan\Image-Generation-feature-v5\backend\app\services\product_service.py", line 908, in update_product_specs
+    db.commit()
+  File "D:\CaiYan\Image-Generation-feature-v5\backend\venv\lib\site-packages\sqlalchemy\orm\session.py", line 2028, in commit
+    trans.commit(_to_root=True)
+  File "<string>", line 2, in commit
+  File "D:\CaiYan\Image-Generation-feature-v5\backend\venv\lib\site-packages\sqlalchemy\orm\state_changes.py", line 139, in _go
+    ret_value = fn(self, *arg, **kw)
+  File "D:\CaiYan\Image-Generation-feature-v5\backend\venv\lib\site-packages\sqlalchemy\orm\session.py", line 1313, in commit
+    self._prepare_impl()
+  File "<string>", line 2, in _prepare_impl
+  File "D:\CaiYan\Image-Generation-feature-v5\backend\venv\lib\site-packages\sqlalchemy\orm\state_changes.py", line 139, in _go
+    ret_value = fn(self, *arg, **kw)
+  File "D:\CaiYan\Image-Generation-feature-v5\backend\venv\lib\site-packages\sqlalchemy\orm\session.py", line 1288, in _prepare_impl
+    self.session.flush()
+  File "D:\CaiYan\Image-Generation-feature-v5\backend\venv\lib\site-packages\sqlalchemy\orm\session.py", line 4352, in flush
+    self._flush(objects)
+  File "D:\CaiYan\Image-Generation-feature-v5\backend\venv\lib\site-packages\sqlalchemy\orm\session.py", line 4487, in _flush
+    with util.safe_reraise():
+  File "D:\CaiYan\Image-Generation-feature-v5\backend\venv\lib\site-packages\sqlalchemy\util\langhelpers.py", line 146, in __exit__
+    raise exc_value.with_traceback(exc_tb)
+  File "D:\CaiYan\Image-Generation-feature-v5\backend\venv\lib\site-packages\sqlalchemy\orm\session.py", line 4448, in _flush
+    flush_context.execute()
+  File "D:\CaiYan\Image-Generation-feature-v5\backend\venv\lib\site-packages\sqlalchemy\orm\unitofwork.py", line 466, in execute
+    rec.execute(self)
+  File "D:\CaiYan\Image-Generation-feature-v5\backend\venv\lib\site-packages\sqlalchemy\orm\unitofwork.py", line 642, in execute
+    util.preloaded.orm_persistence.save_obj(
+  File "D:\CaiYan\Image-Generation-feature-v5\backend\venv\lib\site-packages\sqlalchemy\orm\persistence.py", line 85, in save_obj
+    _emit_update_statements(
+  File "D:\CaiYan\Image-Generation-feature-v5\backend\venv\lib\site-packages\sqlalchemy\orm\persistence.py", line 912, in _emit_update_statements
+    c = connection.execute(
+  File "D:\CaiYan\Image-Generation-feature-v5\backend\venv\lib\site-packages\sqlalchemy\engine\base.py", line 1418, in execute
+    return meth(
+  File "D:\CaiYan\Image-Generation-feature-v5\backend\venv\lib\site-packages\sqlalchemy\sql\elements.py", line 515, in _execute_on_connection
+    return connection._execute_clauseelement(
+  File "D:\CaiYan\Image-Generation-feature-v5\backend\venv\lib\site-packages\sqlalchemy\engine\base.py", line 1640, in _execute_clauseelement
+    ret = self._execute_context(
+  File "D:\CaiYan\Image-Generation-feature-v5\backend\venv\lib\site-packages\sqlalchemy\engine\base.py", line 1846, in _execute_context
+    return self._exec_single_context(
+  File "D:\CaiYan\Image-Generation-feature-v5\backend\venv\lib\site-packages\sqlalchemy\engine\base.py", line 1986, in _exec_single_context
+    self._handle_dbapi_exception(
+  File "D:\CaiYan\Image-Generation-feature-v5\backend\venv\lib\site-packages\sqlalchemy\engine\base.py", line 2355, in _handle_dbapi_exception
+    raise sqlalchemy_exception.with_traceback(exc_info[2]) from e
+  File "D:\CaiYan\Image-Generation-feature-v5\backend\venv\lib\site-packages\sqlalchemy\engine\base.py", line 1967, in _exec_single_context
+    self.dialect.do_execute(
+  File "D:\CaiYan\Image-Generation-feature-v5\backend\venv\lib\site-packages\sqlalchemy\engine\default.py", line 941, in do_execute
+    cursor.execute(statement, parameters)
+sqlalchemy.exc.ProgrammingError: (psycopg2.ProgrammingError) can't adapt type 'dict'
+[SQL: UPDATE product_specs SET capacity=%(capacity)s, gross_weight_g=%(gross_weight_g)s, body_material=%(body_material)s, technical_advantages=%(technical_advantages)s, usage_instruction=%(usage_instruction)s, updated_at=%(updated_at)s WHERE product_specs.id = %(product_specs_id)s]
+[SQL parameters hidden due to hide_parameters=True]
+(Background on this error at: https://sqlalche.me/e/20/f405)
+--- Logging error ---
+Traceback (most recent call last):
+  File "D:\CaiYan\Image-Generation-feature-v5\backend\venv\lib\site-packages\sqlalchemy\engine\base.py", line 1967, in _exec_single_context
+    self.dialect.do_execute(
+  File "D:\CaiYan\Image-Generation-feature-v5\backend\venv\lib\site-packages\sqlalchemy\engine\default.py", line 941, in do_execute
+    cursor.execute(statement, parameters)
+psycopg2.ProgrammingError: can't adapt type 'dict'
+
+The above exception was the direct cause of the following exception:
+
+Traceback (most recent call last):
+  File "D:\CaiYan\Image-Generation-feature-v5\backend\venv\lib\site-packages\uvicorn\protocols\http\httptools_impl.py", line 401, in run_asgi
+    result = await app(  # type: ignore[func-returns-value]
+  File "D:\CaiYan\Image-Generation-feature-v5\backend\venv\lib\site-packages\uvicorn\middleware\proxy_headers.py", line 70, in __call__
+    return await self.app(scope, receive, send)
+  File "D:\CaiYan\Image-Generation-feature-v5\backend\venv\lib\site-packages\fastapi\applications.py", line 1054, in __call__
+    await super().__call__(scope, receive, send)
+  File "D:\CaiYan\Image-Generation-feature-v5\backend\venv\lib\site-packages\starlette\applications.py", line 123, in __call__
+    await self.middleware_stack(scope, receive, send)
+  File "D:\CaiYan\Image-Generation-feature-v5\backend\venv\lib\site-packages\starlette\middleware\errors.py", line 186, in __call__
+    raise exc
+  File "D:\CaiYan\Image-Generation-feature-v5\backend\venv\lib\site-packages\starlette\middleware\errors.py", line 164, in __call__
+    await self.app(scope, receive, _send)
+  File "D:\CaiYan\Image-Generation-feature-v5\backend\venv\lib\site-packages\starlette\middleware\cors.py", line 85, in __call__
+    await self.app(scope, receive, send)
+  File "D:\CaiYan\Image-Generation-feature-v5\backend\venv\lib\site-packages\starlette\middleware\exceptions.py", line 65, in __call__
+    await wrap_app_handling_exceptions(self.app, conn)(scope, receive, send)
+  File "D:\CaiYan\Image-Generation-feature-v5\backend\venv\lib\site-packages\starlette\_exception_handler.py", line 64, in wrapped_app
+    raise exc
+  File "D:\CaiYan\Image-Generation-feature-v5\backend\venv\lib\site-packages\starlette\_exception_handler.py", line 53, in wrapped_app
+    await app(scope, receive, sender)
+  File "D:\CaiYan\Image-Generation-feature-v5\backend\venv\lib\site-packages\starlette\routing.py", line 756, in __call__
+    await self.middleware_stack(scope, receive, send)
+  File "D:\CaiYan\Image-Generation-feature-v5\backend\venv\lib\site-packages\starlette\routing.py", line 776, in app
+    await route.handle(scope, receive, send)
+  File "D:\CaiYan\Image-Generation-feature-v5\backend\venv\lib\site-packages\starlette\routing.py", line 297, in handle
+    await self.app(scope, receive, send)
+  File "D:\CaiYan\Image-Generation-feature-v5\backend\venv\lib\site-packages\starlette\routing.py", line 77, in app
+    await wrap_app_handling_exceptions(app, request)(scope, receive, send)
+  File "D:\CaiYan\Image-Generation-feature-v5\backend\venv\lib\site-packages\starlette\_exception_handler.py", line 64, in wrapped_app
+    raise exc
+  File "D:\CaiYan\Image-Generation-feature-v5\backend\venv\lib\site-packages\starlette\_exception_handler.py", line 53, in wrapped_app
+    await app(scope, receive, sender)
+  File "D:\CaiYan\Image-Generation-feature-v5\backend\venv\lib\site-packages\starlette\routing.py", line 72, in app
+    response = await func(request)
+  File "D:\CaiYan\Image-Generation-feature-v5\backend\venv\lib\site-packages\fastapi\routing.py", line 278, in app
+    raw_response = await run_endpoint_function(
+  File "D:\CaiYan\Image-Generation-feature-v5\backend\venv\lib\site-packages\fastapi\routing.py", line 193, in run_endpoint_function
+    return await run_in_threadpool(dependant.call, **values)
+  File "D:\CaiYan\Image-Generation-feature-v5\backend\venv\lib\site-packages\starlette\concurrency.py", line 42, in run_in_threadpool
+    return await anyio.to_thread.run_sync(func, *args)
+  File "D:\CaiYan\Image-Generation-feature-v5\backend\venv\lib\site-packages\anyio\to_thread.py", line 63, in run_sync
+    return await get_async_backend().run_sync_in_worker_thread(
+  File "D:\CaiYan\Image-Generation-feature-v5\backend\venv\lib\site-packages\anyio\_backends\_asyncio.py", line 2518, in run_sync_in_worker_thread
+    return await future
+  File "D:\CaiYan\Image-Generation-feature-v5\backend\venv\lib\site-packages\anyio\_backends\_asyncio.py", line 1002, in run
+    result = context.run(func, *args)
+  File "D:\CaiYan\Image-Generation-feature-v5\backend\app\api\products.py", line 260, in update_product_specs
+    result = product_service.update_product_specs(db, sku, body)
+  File "D:\CaiYan\Image-Generation-feature-v5\backend\app\services\product_service.py", line 908, in update_product_specs
+    db.commit()
+  File "D:\CaiYan\Image-Generation-feature-v5\backend\venv\lib\site-packages\sqlalchemy\orm\session.py", line 2028, in commit
+    trans.commit(_to_root=True)
+  File "<string>", line 2, in commit
+  File "D:\CaiYan\Image-Generation-feature-v5\backend\venv\lib\site-packages\sqlalchemy\orm\state_changes.py", line 139, in _go
+    ret_value = fn(self, *arg, **kw)
+  File "D:\CaiYan\Image-Generation-feature-v5\backend\venv\lib\site-packages\sqlalchemy\orm\session.py", line 1313, in commit
+    self._prepare_impl()
+  File "<string>", line 2, in _prepare_impl
+  File "D:\CaiYan\Image-Generation-feature-v5\backend\venv\lib\site-packages\sqlalchemy\orm\state_changes.py", line 139, in _go
+    ret_value = fn(self, *arg, **kw)
+  File "D:\CaiYan\Image-Generation-feature-v5\backend\venv\lib\site-packages\sqlalchemy\orm\session.py", line 1288, in _prepare_impl
+    self.session.flush()
+  File "D:\CaiYan\Image-Generation-feature-v5\backend\venv\lib\site-packages\sqlalchemy\orm\session.py", line 4352, in flush
+    self._flush(objects)
+  File "D:\CaiYan\Image-Generation-feature-v5\backend\venv\lib\site-packages\sqlalchemy\orm\session.py", line 4487, in _flush
+    with util.safe_reraise():
+  File "D:\CaiYan\Image-Generation-feature-v5\backend\venv\lib\site-packages\sqlalchemy\util\langhelpers.py", line 146, in __exit__
+    raise exc_value.with_traceback(exc_tb)
+  File "D:\CaiYan\Image-Generation-feature-v5\backend\venv\lib\site-packages\sqlalchemy\orm\session.py", line 4448, in _flush
+    flush_context.execute()
+  File "D:\CaiYan\Image-Generation-feature-v5\backend\venv\lib\site-packages\sqlalchemy\orm\unitofwork.py", line 466, in execute
+    rec.execute(self)
+  File "D:\CaiYan\Image-Generation-feature-v5\backend\venv\lib\site-packages\sqlalchemy\orm\unitofwork.py", line 642, in execute
+    util.preloaded.orm_persistence.save_obj(
+  File "D:\CaiYan\Image-Generation-feature-v5\backend\venv\lib\site-packages\sqlalchemy\orm\persistence.py", line 85, in save_obj
+    _emit_update_statements(
+  File "D:\CaiYan\Image-Generation-feature-v5\backend\venv\lib\site-packages\sqlalchemy\orm\persistence.py", line 912, in _emit_update_statements
+    c = connection.execute(
+  File "D:\CaiYan\Image-Generation-feature-v5\backend\venv\lib\site-packages\sqlalchemy\engine\base.py", line 1418, in execute
+    return meth(
+  File "D:\CaiYan\Image-Generation-feature-v5\backend\venv\lib\site-packages\sqlalchemy\sql\elements.py", line 515, in _execute_on_connection
+    return connection._execute_clauseelement(
+  File "D:\CaiYan\Image-Generation-feature-v5\backend\venv\lib\site-packages\sqlalchemy\engine\base.py", line 1640, in _execute_clauseelement
+    ret = self._execute_context(
+  File "D:\CaiYan\Image-Generation-feature-v5\backend\venv\lib\site-packages\sqlalchemy\engine\base.py", line 1846, in _execute_context
+    return self._exec_single_context(
+  File "D:\CaiYan\Image-Generation-feature-v5\backend\venv\lib\site-packages\sqlalchemy\engine\base.py", line 1986, in _exec_single_context
+    self._handle_dbapi_exception(
+  File "D:\CaiYan\Image-Generation-feature-v5\backend\venv\lib\site-packages\sqlalchemy\engine\base.py", line 2355, in _handle_dbapi_exception
+    raise sqlalchemy_exception.with_traceback(exc_info[2]) from e
+  File "D:\CaiYan\Image-Generation-feature-v5\backend\venv\lib\site-packages\sqlalchemy\engine\base.py", line 1967, in _exec_single_context
+    self.dialect.do_execute(
+  File "D:\CaiYan\Image-Generation-feature-v5\backend\venv\lib\site-packages\sqlalchemy\engine\default.py", line 941, in do_execute
+    cursor.execute(statement, parameters)
+sqlalchemy.exc.ProgrammingError: (psycopg2.ProgrammingError) can't adapt type 'dict'
+[SQL: UPDATE product_specs SET capacity=%(capacity)s, gross_weight_g=%(gross_weight_g)s, body_material=%(body_material)s, technical_advantages=%(technical_advantages)s, usage_instruction=%(usage_instruction)s, updated_at=%(updated_at)s WHERE product_specs.id = %(product_specs_id)s]
+[SQL parameters hidden due to hide_parameters=True]
+(Background on this error at: https://sqlalche.me/e/20/f405)
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "C:\Users\wnt\AppData\Local\Programs\Python\Python310\lib\logging\handlers.py", line 74, in emit
+    self.doRollover()
+  File "C:\Users\wnt\AppData\Local\Programs\Python\Python310\lib\logging\handlers.py", line 435, in doRollover
+    self.rotate(self.baseFilename, dfn)
+  File "C:\Users\wnt\AppData\Local\Programs\Python\Python310\lib\logging\handlers.py", line 115, in rotate
+    os.rename(source, dest)
+PermissionError: [WinError 32] 另一个程序正在使用此文件，进程无法访问。: 'D:\\CaiYan\\Image-Generation-feature-v5\\logs\\error.log' -> 'D:\\CaiYan\\Image-Generation-feature-v5\\logs\\error.log.2026-06-19'
+Call stack:
+  File "<string>", line 1, in <module>
+  File "C:\Users\wnt\AppData\Local\Programs\Python\Python310\lib\multiprocessing\spawn.py", line 116, in spawn_main
+    exitcode = _main(fd, parent_sentinel)
+  File "C:\Users\wnt\AppData\Local\Programs\Python\Python310\lib\multiprocessing\spawn.py", line 129, in _main
+    return self._bootstrap(parent_sentinel)
+  File "C:\Users\wnt\AppData\Local\Programs\Python\Python310\lib\multiprocessing\process.py", line 314, in _bootstrap
+    self.run()
+  File "C:\Users\wnt\AppData\Local\Programs\Python\Python310\lib\multiprocessing\process.py", line 108, in run
+    self._target(*self._args, **self._kwargs)
+  File "D:\CaiYan\Image-Generation-feature-v5\backend\venv\lib\site-packages\uvicorn\_subprocess.py", line 80, in subprocess_started
+    target(sockets=sockets)
+  File "D:\CaiYan\Image-Generation-feature-v5\backend\venv\lib\site-packages\uvicorn\supervisors\multiprocess.py", line 63, in target
+    return self.real_target(sockets)
+  File "D:\CaiYan\Image-Generation-feature-v5\backend\venv\lib\site-packages\uvicorn\server.py", line 65, in run
+    return asyncio.run(self.serve(sockets=sockets))
+  File "C:\Users\wnt\AppData\Local\Programs\Python\Python310\lib\asyncio\runners.py", line 44, in run
+    return loop.run_until_complete(main)
+  File "C:\Users\wnt\AppData\Local\Programs\Python\Python310\lib\asyncio\base_events.py", line 633, in run_until_complete
+    self.run_forever()
+  File "C:\Users\wnt\AppData\Local\Programs\Python\Python310\lib\asyncio\base_events.py", line 600, in run_forever
+    self._run_once()
+  File "C:\Users\wnt\AppData\Local\Programs\Python\Python310\lib\asyncio\base_events.py", line 1896, in _run_once
+    handle._run()
+  File "C:\Users\wnt\AppData\Local\Programs\Python\Python310\lib\asyncio\events.py", line 80, in _run
+    self._context.run(self._callback, *self._args)
+  File "D:\CaiYan\Image-Generation-feature-v5\backend\venv\lib\site-packages\uvicorn\protocols\http\httptools_impl.py", line 406, in run_asgi
+    self.logger.error(msg, exc_info=exc)
+Message: 'Exception in ASGI application\n'
+Arguments: ()

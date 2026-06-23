@@ -5,6 +5,7 @@ from fastapi import APIRouter, Depends, UploadFile, File, Form, HTTPException
 from sqlalchemy.orm import Session
 from typing import List, Optional
 from ..core.database import get_db
+from ..core.rate_limit import enforce_rate_limit
 from ..core.security import require_permission
 from ..models.user import User
 from ..schemas.generation import (
@@ -25,6 +26,8 @@ MAX_REFERENCE_IMAGE_BYTES = 10 * 1024 * 1024
 ALLOWED_REFERENCE_IMAGE_MIME_TYPES = {"image/jpeg", "image/png", "image/webp"}
 ALLOWED_REFERENCE_IMAGE_SUFFIXES = {".jpg", ".jpeg", ".png", ".webp"}
 MIME_TO_EXTENSION = {"image/jpeg": "jpg", "image/png": "png", "image/webp": "webp"}
+AI_GENERATION_LIMIT_PER_MINUTE = 15
+FILE_UPLOAD_LIMIT_PER_MINUTE = 45
 
 
 @router.get("/models", response_model=List[ModelInfo])
@@ -41,6 +44,7 @@ async def txt2img(
     current_user: User = Depends(require_permission("ai.generate")),
     db: Session = Depends(get_db),
 ):
+    _enforce_ai_generation_limit(current_user)
     return await generation_service.create_txt2img(db, current_user, req)
 
 
@@ -60,6 +64,7 @@ async def img2img(
     current_user: User = Depends(require_permission("ai.generate")),
     db: Session = Depends(get_db),
 ):
+    _enforce_ai_generation_limit(current_user)
     from ..schemas.generation import Img2ImgRequest, GenerationParams
 
     if len(images) > 4:
@@ -93,6 +98,7 @@ async def img2img_gemini(
     current_user: User = Depends(require_permission("ai.generate")),
     db: Session = Depends(get_db),
 ):
+    _enforce_ai_generation_limit(current_user)
     if len(req.images) > 4:
         raise HTTPException(status_code=400, detail="最多支持 4 张参考图")
     if len(req.images) == 0:
@@ -117,6 +123,7 @@ async def txt2vid(
     current_user: User = Depends(require_permission("ai.generate")),
     db: Session = Depends(get_db),
 ):
+    _enforce_ai_generation_limit(current_user)
     return await generation_service.create_txt2vid(db, current_user, req)
 
 
@@ -125,11 +132,30 @@ async def upload_reference_image(
     file: UploadFile = File(...),
     current_user: User = Depends(require_permission("ai.generate")),
 ):
+    _enforce_file_upload_limit(current_user, "generation.upload")
     from ..utils.file_storage import save_upload
     await _read_reference_upload(file)
     await file.seek(0)
     path = await save_upload(file, "images")
     return {"url": path, "filename": file.filename}
+
+
+def _enforce_ai_generation_limit(current_user: User) -> None:
+    enforce_rate_limit(
+        user_id=str(current_user.id),
+        scope="generation.create",
+        limit=AI_GENERATION_LIMIT_PER_MINUTE,
+        window_seconds=60,
+    )
+
+
+def _enforce_file_upload_limit(current_user: User, scope: str) -> None:
+    enforce_rate_limit(
+        user_id=str(current_user.id),
+        scope=scope,
+        limit=FILE_UPLOAD_LIMIT_PER_MINUTE,
+        window_seconds=60,
+    )
 
 
 async def _read_reference_upload(file: UploadFile) -> bytes:

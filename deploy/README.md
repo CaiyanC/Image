@@ -5,7 +5,7 @@
 ## 推荐结构
 
 - PostgreSQL：独立服务，启用 `pgvector` 扩展。
-- Backend：`uvicorn app.main:app`，建议由 systemd 管理。
+- Backend：通过带明确 env 的进程管理器启动，例如 `python -m uvicorn app.main:app --host 127.0.0.1 --port 8000`，不要使用无 env 的裸 `uvicorn app.main:app`。
 - Frontend：执行 `npm run build` 后，用 Nginx 静态托管 `dist`。
 - Uploads：保留 `backend/uploads`，迁移服务器时必须同步。
 - Backup：每日备份 PostgreSQL，至少保留 7 到 30 天。

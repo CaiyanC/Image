@@ -1,0 +1,128 @@
+D:\CaiYan\Image-Generation-feature-v5\backend\venv\lib\site-packages\pydantic\_internal\_fields.py:161: UserWarning: Field "model_name" has conflict with protected namespace "model_".
+
+You may be able to resolve this warning by setting `model_config['protected_namespaces'] = ()`.
+  warnings.warn(
+INFO:     Started server process [29252]
+INFO:     Waiting for application startup.
+INFO:     Application startup complete.
+--- Logging error ---
+Traceback (most recent call last):
+  File "D:\CaiYan\Image-Generation-feature-v5\backend\venv\lib\site-packages\uvicorn\server.py", line 162, in startup
+    server = await loop.create_server(
+  File "C:\Users\wnt\AppData\Local\Programs\Python\Python310\lib\asyncio\base_events.py", line 1505, in create_server
+    raise OSError(err.errno, 'error while attempting '
+OSError: [Errno 10048] error while attempting to bind on address ('0.0.0.0', 8000): 通常每个套接字地址(协议/网络地址/端口)只允许使用一次。
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "C:\Users\wnt\AppData\Local\Programs\Python\Python310\lib\logging\handlers.py", line 74, in emit
+    self.doRollover()
+  File "C:\Users\wnt\AppData\Local\Programs\Python\Python310\lib\logging\handlers.py", line 435, in doRollover
+    self.rotate(self.baseFilename, dfn)
+  File "C:\Users\wnt\AppData\Local\Programs\Python\Python310\lib\logging\handlers.py", line 115, in rotate
+    os.rename(source, dest)
+PermissionError: [WinError 32] 另一个程序正在使用此文件，进程无法访问。: 'D:\\CaiYan\\Image-Generation-feature-v5\\logs\\error.log' -> 'D:\\CaiYan\\Image-Generation-feature-v5\\logs\\error.log.2026-06-19'
+Call stack:
+  File "C:\Users\wnt\AppData\Local\Programs\Python\Python310\lib\runpy.py", line 196, in _run_module_as_main
+    return _run_code(code, main_globals, None,
+  File "C:\Users\wnt\AppData\Local\Programs\Python\Python310\lib\runpy.py", line 86, in _run_code
+    exec(code, run_globals)
+  File "D:\CaiYan\Image-Generation-feature-v5\backend\venv\lib\site-packages\uvicorn\__main__.py", line 4, in <module>
+    uvicorn.main()
+  File "D:\CaiYan\Image-Generation-feature-v5\backend\venv\lib\site-packages\click\core.py", line 1524, in __call__
+    return self.main(*args, **kwargs)
+  File "D:\CaiYan\Image-Generation-feature-v5\backend\venv\lib\site-packages\click\core.py", line 1445, in main
+    rv = self.invoke(ctx)
+  File "D:\CaiYan\Image-Generation-feature-v5\backend\venv\lib\site-packages\click\core.py", line 1308, in invoke
+    return ctx.invoke(self.callback, **ctx.params)
+  File "D:\CaiYan\Image-Generation-feature-v5\backend\venv\lib\site-packages\click\core.py", line 877, in invoke
+    return callback(*args, **kwargs)
+  File "D:\CaiYan\Image-Generation-feature-v5\backend\venv\lib\site-packages\uvicorn\main.py", line 410, in main
+    run(
+  File "D:\CaiYan\Image-Generation-feature-v5\backend\venv\lib\site-packages\uvicorn\main.py", line 577, in run
+    server.run()
+  File "D:\CaiYan\Image-Generation-feature-v5\backend\venv\lib\site-packages\uvicorn\server.py", line 65, in run
+    return asyncio.run(self.serve(sockets=sockets))
+  File "C:\Users\wnt\AppData\Local\Programs\Python\Python310\lib\asyncio\runners.py", line 44, in run
+    return loop.run_until_complete(main)
+  File "C:\Users\wnt\AppData\Local\Programs\Python\Python310\lib\asyncio\base_events.py", line 633, in run_until_complete
+    self.run_forever()
+  File "C:\Users\wnt\AppData\Local\Programs\Python\Python310\lib\asyncio\windows_events.py", line 321, in run_forever
+    super().run_forever()
+  File "C:\Users\wnt\AppData\Local\Programs\Python\Python310\lib\asyncio\base_events.py", line 600, in run_forever
+    self._run_once()
+  File "C:\Users\wnt\AppData\Local\Programs\Python\Python310\lib\asyncio\base_events.py", line 1896, in _run_once
+    handle._run()
+  File "C:\Users\wnt\AppData\Local\Programs\Python\Python310\lib\asyncio\events.py", line 80, in _run
+    self._context.run(self._callback, *self._args)
+  File "D:\CaiYan\Image-Generation-feature-v5\backend\venv\lib\site-packages\uvicorn\server.py", line 69, in serve
+    await self._serve(sockets)
+  File "D:\CaiYan\Image-Generation-feature-v5\backend\venv\lib\site-packages\uvicorn\server.py", line 84, in _serve
+    await self.startup(sockets=sockets)
+  File "D:\CaiYan\Image-Generation-feature-v5\backend\venv\lib\site-packages\uvicorn\server.py", line 170, in startup
+    logger.error(exc)
+Message: OSError(10048, "error while attempting to bind on address ('0.0.0.0', 8000): 通常每个套接字地址(协议/网络地址/端口)只允许使用一次。")
+Arguments: ()
+ERROR:    [Errno 10048] error while attempting to bind on address ('0.0.0.0', 8000): 通常每个套接字地址(协议/网络地址/端口)只允许使用一次。
+--- Logging error ---
+Traceback (most recent call last):
+  File "D:\CaiYan\Image-Generation-feature-v5\backend\venv\lib\site-packages\uvicorn\server.py", line 162, in startup
+    server = await loop.create_server(
+  File "C:\Users\wnt\AppData\Local\Programs\Python\Python310\lib\asyncio\base_events.py", line 1505, in create_server
+    raise OSError(err.errno, 'error while attempting '
+OSError: [Errno 10048] error while attempting to bind on address ('0.0.0.0', 8000): 通常每个套接字地址(协议/网络地址/端口)只允许使用一次。
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "C:\Users\wnt\AppData\Local\Programs\Python\Python310\lib\logging\handlers.py", line 74, in emit
+    self.doRollover()
+  File "C:\Users\wnt\AppData\Local\Programs\Python\Python310\lib\logging\handlers.py", line 435, in doRollover
+    self.rotate(self.baseFilename, dfn)
+  File "C:\Users\wnt\AppData\Local\Programs\Python\Python310\lib\logging\handlers.py", line 115, in rotate
+    os.rename(source, dest)
+PermissionError: [WinError 32] 另一个程序正在使用此文件，进程无法访问。: 'D:\\CaiYan\\Image-Generation-feature-v5\\logs\\error.log' -> 'D:\\CaiYan\\Image-Generation-feature-v5\\logs\\error.log.2026-06-19'
+Call stack:
+  File "C:\Users\wnt\AppData\Local\Programs\Python\Python310\lib\runpy.py", line 196, in _run_module_as_main
+    return _run_code(code, main_globals, None,
+  File "C:\Users\wnt\AppData\Local\Programs\Python\Python310\lib\runpy.py", line 86, in _run_code
+    exec(code, run_globals)
+  File "D:\CaiYan\Image-Generation-feature-v5\backend\venv\lib\site-packages\uvicorn\__main__.py", line 4, in <module>
+    uvicorn.main()
+  File "D:\CaiYan\Image-Generation-feature-v5\backend\venv\lib\site-packages\click\core.py", line 1524, in __call__
+    return self.main(*args, **kwargs)
+  File "D:\CaiYan\Image-Generation-feature-v5\backend\venv\lib\site-packages\click\core.py", line 1445, in main
+    rv = self.invoke(ctx)
+  File "D:\CaiYan\Image-Generation-feature-v5\backend\venv\lib\site-packages\click\core.py", line 1308, in invoke
+    return ctx.invoke(self.callback, **ctx.params)
+  File "D:\CaiYan\Image-Generation-feature-v5\backend\venv\lib\site-packages\click\core.py", line 877, in invoke
+    return callback(*args, **kwargs)
+  File "D:\CaiYan\Image-Generation-feature-v5\backend\venv\lib\site-packages\uvicorn\main.py", line 410, in main
+    run(
+  File "D:\CaiYan\Image-Generation-feature-v5\backend\venv\lib\site-packages\uvicorn\main.py", line 577, in run
+    server.run()
+  File "D:\CaiYan\Image-Generation-feature-v5\backend\venv\lib\site-packages\uvicorn\server.py", line 65, in run
+    return asyncio.run(self.serve(sockets=sockets))
+  File "C:\Users\wnt\AppData\Local\Programs\Python\Python310\lib\asyncio\runners.py", line 44, in run
+    return loop.run_until_complete(main)
+  File "C:\Users\wnt\AppData\Local\Programs\Python\Python310\lib\asyncio\base_events.py", line 633, in run_until_complete
+    self.run_forever()
+  File "C:\Users\wnt\AppData\Local\Programs\Python\Python310\lib\asyncio\windows_events.py", line 321, in run_forever
+    super().run_forever()
+  File "C:\Users\wnt\AppData\Local\Programs\Python\Python310\lib\asyncio\base_events.py", line 600, in run_forever
+    self._run_once()
+  File "C:\Users\wnt\AppData\Local\Programs\Python\Python310\lib\asyncio\base_events.py", line 1896, in _run_once
+    handle._run()
+  File "C:\Users\wnt\AppData\Local\Programs\Python\Python310\lib\asyncio\events.py", line 80, in _run
+    self._context.run(self._callback, *self._args)
+  File "D:\CaiYan\Image-Generation-feature-v5\backend\venv\lib\site-packages\uvicorn\server.py", line 69, in serve
+    await self._serve(sockets)
+  File "D:\CaiYan\Image-Generation-feature-v5\backend\venv\lib\site-packages\uvicorn\server.py", line 84, in _serve
+    await self.startup(sockets=sockets)
+  File "D:\CaiYan\Image-Generation-feature-v5\backend\venv\lib\site-packages\uvicorn\server.py", line 170, in startup
+    logger.error(exc)
+Message: OSError(10048, "error while attempting to bind on address ('0.0.0.0', 8000): 通常每个套接字地址(协议/网络地址/端口)只允许使用一次。")
+Arguments: ()
+INFO:     Waiting for application shutdown.
+INFO:     Application shutdown complete.

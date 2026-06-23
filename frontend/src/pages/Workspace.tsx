@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback } from 'react'
 import { api } from '../services/api'
 import { ImagePreview } from '../components/ImageUploader/ImageUploader'
 import Lightbox from '../components/Lightbox'
+import { SecureImage, SecureVideo } from '../components/SecureFile'
 
 type GenerationMode = 'txt2img' | 'img2img' | 'txt2vid'
 
@@ -492,7 +493,7 @@ export default function Workspace() {
                       onClick={() => { setLightboxIndex(idx) }}
                       className="relative aspect-square rounded-xl overflow-hidden group cursor-pointer"
                     >
-                      <img src={url} alt={`生成 ${idx + 1}`} className="w-full h-full object-cover" />
+                      <SecureImage src={url} alt={`result ${idx + 1}`} className="w-full h-full object-cover" />
                       <span className="absolute top-1.5 left-1.5 text-[10px] bg-black/60 text-white px-1.5 rounded">#{idx + 1}</span>
                     </button>
                   ))}
@@ -501,7 +502,7 @@ export default function Workspace() {
             </div>
           ) : mode === 'txt2vid' && resultUrls.length === 1 ? (
             <div className="w-full h-full flex items-center justify-center">
-              <video src={resultUrls[0]} controls className="max-w-full max-h-full rounded-xl" />
+              <SecureVideo src={resultUrls[0]} controls className="max-w-full max-h-full rounded-xl" />
             </div>
           ) : (
             <ImagePreview imageUrl={resultUrls[0] || null} onClear={handleClearResult} />

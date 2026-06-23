@@ -37,38 +37,79 @@ interface CustomerServiceDraft {
   savedAt: string
 }
 
+type ConversationKey = string
+
+interface CustomerConversationState {
+  conversationId: string | null
+  question: string
+  messages: ChatMessage[]
+  loading: boolean
+  abortController: AbortController | null
+  error: string
+  title?: string
+}
+
+interface ConversationListItem {
+  key: ConversationKey
+  id: string | null
+  title: string
+  lastMessage: string
+  loading: boolean
+}
+
 const CUSTOMER_SERVICE_DRAFT_VERSION = 1
 
 export default function CustomerService() {
   const { isManagement, user } = useAuthStore()
-  const [question, setQuestion] = useState('')
-  const [conversationId, setConversationId] = useState<string | null>(null)
-  const [messages, setMessages] = useState<ChatMessage[]>([])
+  const initialConversationKey = useMemo(() => createLocalConversationKey(), [])
+  const [activeConversationKey, setActiveConversationKey] = useState<ConversationKey>(initialConversationKey)
+  const [conversationStates, setConversationStates] = useState<Record<ConversationKey, CustomerConversationState>>(() => ({
+    [initialConversationKey]: createConversationState(),
+  }))
   const [conversations, setConversations] = useState<Array<Record<string, unknown>>>([])
   const [knowledgeStatus, setKnowledgeStatus] = useState<Record<string, unknown> | null>(null)
   const [reviewSummary, setReviewSummary] = useState<Record<string, unknown> | null>(null)
-  const [loading, setLoading] = useState(false)
   const [actionLoadingId, setActionLoadingId] = useState<string | null>(null)
   const [debugMode, setDebugMode] = useState(false)
   const [feedbackLoadingId, setFeedbackLoadingId] = useState<string | null>(null)
-  const [error, setError] = useState('')
   const bottomRef = useRef<HTMLDivElement | null>(null)
   const chatContainerRef = useRef<HTMLDivElement | null>(null)
+  const conversationStatesRef = useRef(conversationStates)
+  const deletedConversationKeysRef = useRef<Set<ConversationKey>>(new Set())
   const draftHydratedRef = useRef(false)
   const skipNextDraftPersistRef = useRef(false)
   const draftCacheKey = useMemo(() => customerServiceDraftKey(user?.id || user?.username), [user?.id, user?.username])
+  const activeConversation = conversationStates[activeConversationKey] || createConversationState()
+  const conversationId = activeConversation.conversationId
+  const question = activeConversation.question
+  const messages = activeConversation.messages
+  const loading = activeConversation.loading
+  const error = activeConversation.error
+
+  useEffect(() => {
+    conversationStatesRef.current = conversationStates
+  }, [conversationStates])
 
   useEffect(() => {
     loadSideData()
+    return () => {
+      Object.values(conversationStatesRef.current).forEach((state) => state.abortController?.abort())
+    }
   }, [])
 
   useEffect(() => {
     skipNextDraftPersistRef.current = true
     draftHydratedRef.current = false
     const draft = loadCustomerServiceDraft(draftCacheKey)
-    setConversationId(draft?.conversationId || null)
-    setQuestion(draft?.question || '')
-    setMessages(draft?.messages || [])
+    const draftKey = draft?.conversationId ? conversationKeyForId(draft.conversationId) : createLocalConversationKey()
+    setActiveConversationKey(draftKey)
+    setConversationStates({
+      [draftKey]: createConversationState({
+        conversationId: draft?.conversationId || null,
+        question: draft?.question || '',
+        messages: draft?.messages || [],
+      }),
+    })
     draftHydratedRef.current = true
   }, [draftCacheKey])
 
@@ -102,6 +143,51 @@ export default function CustomerService() {
     return (msg?.sources || []).filter((source) => !['agent_steps', 'agent_meta'].includes(String(source.type || '')))
   }, [messages])
 
+  const conversationListItems = useMemo(() => {
+    const serverIds = new Set(conversations.map((item) => String(item.id)))
+    const serverItems = conversations.map((item): ConversationListItem => {
+      const id = String(item.id)
+      const key = findConversationKeyById(conversationStates, id) || conversationKeyForId(id)
+      const state = conversationStates[key]
+      return {
+        key,
+        id,
+        title: String(item.title || state?.title || titleFromMessages(state?.messages || []) || '客服会话'),
+        lastMessage: String(item.last_message || item.sku || lastMessagePreview(state?.messages || []) || '暂无消息'),
+        loading: Boolean(state?.loading),
+      }
+    })
+    const localItems = Object.entries(conversationStates)
+      .filter(([, state]) => !state.conversationId || !serverIds.has(state.conversationId))
+      .map(([key, state]): ConversationListItem => ({
+        key,
+        id: state.conversationId,
+        title: state.title || titleFromMessages(state.messages) || (state.question.trim() ? state.question.trim().slice(0, 20) : '客服会话'),
+        lastMessage: lastMessagePreview(state.messages) || state.question || '暂无消息',
+        loading: state.loading,
+      }))
+    return [...localItems, ...serverItems]
+  }, [conversationStates, conversations])
+
+  function updateConversationState(
+    key: ConversationKey,
+    updater: (state: CustomerConversationState) => CustomerConversationState,
+  ) {
+    setConversationStates((prev) => {
+      if (deletedConversationKeysRef.current.has(key)) return prev
+      const current = prev[key] || createConversationState()
+      return { ...prev, [key]: updater(current) }
+    })
+  }
+
+  function updateConversationMessages(key: ConversationKey, updater: (messages: ChatMessage[]) => ChatMessage[]) {
+    updateConversationState(key, (state) => ({ ...state, messages: updater(state.messages) }))
+  }
+
+  function updateActiveConversation(updater: (state: CustomerConversationState) => CustomerConversationState) {
+    updateConversationState(activeConversationKey, updater)
+  }
+
   async function loadSideData() {
     try {
       const [conversationResult, status, review] = await Promise.all([
@@ -118,28 +204,37 @@ export default function CustomerService() {
   }
 
   async function ask() {
-    if (!question.trim()) return
-    setLoading(true)
-    setError('')
-    const userText = question.trim()
+    const requestKey = activeConversationKey
+    const requestState = conversationStates[requestKey] || createConversationState()
+    if (requestState.loading || !requestState.question.trim()) return
+    const userText = requestState.question.trim()
+    const requestConversationId = requestState.conversationId
     const assistantId = `assistant-${Date.now()}`
+    const abortController = new AbortController()
     let streamError = ''
-    setQuestion('')
-    setMessages((prev) => [
-      ...prev,
-      { role: 'user', content: userText },
-      { id: assistantId, role: 'assistant', content: '', streaming: true },
-    ])
+    updateConversationState(requestKey, (state) => ({
+      ...state,
+      question: '',
+      loading: true,
+      abortController,
+      error: '',
+      title: state.title || userText.slice(0, 20),
+      messages: [
+        ...state.messages,
+        { role: 'user', content: userText },
+        { id: assistantId, role: 'assistant', content: '', streaming: true },
+      ],
+    }))
 
     try {
       await api.customerService.askStream(
         {
           question: userText,
-          conversation_id: conversationId,
+          conversation_id: requestConversationId,
         },
         (event) => {
           if (event.type === 'status') {
-            setMessages((prev) => prev.map((message) => (
+            updateConversationMessages(requestKey, (prev) => prev.map((message) => (
               message.id === assistantId
                 ? { ...message, status: event.label || event.message || '处理中...' }
                 : message
@@ -148,36 +243,39 @@ export default function CustomerService() {
           }
 
           if (event.type === 'meta') {
-            setConversationId(event.conversation_id)
-            setMessages((prev) => prev.map((message) => (
-              message.id === assistantId
-                ? {
-                  ...message,
-                  message_id: event.message_id,
-                  intent: event.intent,
-                  answer_type: event.answer_type,
-                  confidence: event.confidence,
-                  uncertainty: event.uncertainty,
-                  needs_clarification: event.needs_clarification,
-                  anomalies: event.anomalies || [],
-                  suggested_followups: dedupe(event.suggested_followups || event.followups || []),
-                  followups: dedupe(event.followups || event.suggested_followups || []),
-                  warnings: dedupe(event.warnings || []),
-                  evidence: event.evidence || [],
-                  debug: event.debug || {},
-                  feedback: event.feedback || null,
-                  sources: event.sources,
-                  actions: event.actions || [],
-                  results: event.results || [],
-                  steps: event.steps || [],
-                }
-                : message
-            )))
+            updateConversationState(requestKey, (state) => ({
+              ...state,
+              conversationId: event.conversation_id,
+              messages: state.messages.map((message) => (
+                message.id === assistantId
+                  ? {
+                    ...message,
+                    message_id: event.message_id,
+                    intent: event.intent,
+                    answer_type: event.answer_type,
+                    confidence: event.confidence,
+                    uncertainty: event.uncertainty,
+                    needs_clarification: event.needs_clarification,
+                    anomalies: event.anomalies || [],
+                    suggested_followups: dedupe(event.suggested_followups || event.followups || []),
+                    followups: dedupe(event.followups || event.suggested_followups || []),
+                    warnings: dedupe(event.warnings || []),
+                    evidence: event.evidence || [],
+                    debug: event.debug || {},
+                    feedback: event.feedback || null,
+                    sources: event.sources,
+                    actions: event.actions || [],
+                    results: event.results || [],
+                    steps: event.steps || [],
+                  }
+                  : message
+              )),
+            }))
             return
           }
 
           if (event.type === 'clarification') {
-            setMessages((prev) => prev.map((message) => (
+            updateConversationMessages(requestKey, (prev) => prev.map((message) => (
               message.id === assistantId
                 ? {
                   ...message,
@@ -190,7 +288,7 @@ export default function CustomerService() {
           }
 
           if (event.type === 'warning') {
-            setMessages((prev) => prev.map((message) => (
+            updateConversationMessages(requestKey, (prev) => prev.map((message) => (
               message.id === assistantId
                 ? { ...message, warnings: dedupe([...(message.warnings || []), event.message || '']) }
                 : message
@@ -199,7 +297,7 @@ export default function CustomerService() {
           }
 
           if (event.type === 'recommendation') {
-            setMessages((prev) => prev.map((message) => (
+            updateConversationMessages(requestKey, (prev) => prev.map((message) => (
               message.id === assistantId
                 ? { ...message, suggested_followups: dedupe([...(message.suggested_followups || []), event.message || '']) }
                 : message
@@ -207,8 +305,17 @@ export default function CustomerService() {
             return
           }
 
+          if (event.type === 'content') {
+            updateConversationMessages(requestKey, (prev) => prev.map((message) => (
+              message.id === assistantId
+                ? { ...message, content: `${message.content}${event.content}`, status: '' }
+                : message
+            )))
+            return
+          }
+
           if (event.type === 'answer_delta') {
-            setMessages((prev) => prev.map((message) => (
+            updateConversationMessages(requestKey, (prev) => prev.map((message) => (
               message.id === assistantId
                 ? { ...message, content: `${message.content}${event.text}`, status: '' }
                 : message
@@ -220,88 +327,138 @@ export default function CustomerService() {
             streamError = event.message || '智能客服请求失败'
           }
         },
+        abortController.signal,
       )
       if (streamError) throw new Error(streamError)
-      setMessages((prev) => prev.map((message) => (
+      updateConversationMessages(requestKey, (prev) => prev.map((message) => (
         message.id === assistantId ? { ...message, streaming: false, status: '' } : message
       )))
       loadSideData()
     } catch (err) {
+      if (abortController.signal.aborted || isAbortError(err)) {
+        updateConversationMessages(requestKey, (prev) => prev.map((item) => (
+          item.id === assistantId ? { ...item, streaming: false, status: '' } : item
+        )))
+        return
+      }
       const message = err instanceof Error ? err.message : '智能客服请求失败'
-      setError(message)
-      setMessages((prev) => prev.map((item) => (
-        item.id === assistantId ? { ...item, content: message, streaming: false, status: '' } : item
-      )))
+      updateConversationState(requestKey, (state) => ({
+        ...state,
+        error: message,
+        messages: state.messages.map((item) => (
+          item.id === assistantId ? { ...item, content: message, streaming: false, status: '' } : item
+        )),
+      }))
     } finally {
-      setLoading(false)
+      updateConversationState(requestKey, (state) => ({
+        ...state,
+        loading: false,
+        abortController: state.abortController === abortController ? null : state.abortController,
+      }))
     }
   }
 
-  async function openConversation(id: string) {
-    setError('')
+  function cancelCurrentAnswer() {
+    conversationStates[activeConversationKey]?.abortController?.abort()
+  }
+
+  async function openConversation(id: string, preferredKey?: ConversationKey) {
+    const key = preferredKey || findConversationKeyById(conversationStates, id) || conversationKeyForId(id)
+    setActiveConversationKey(key)
+    updateConversationState(key, (state) => ({ ...state, conversationId: state.conversationId || id, error: '' }))
+    const current = conversationStates[key]
+    if (current?.loading || current?.messages.length) return
     try {
       const data = await api.customerService.conversation(id) as {
         id: string
         messages?: ChatMessage[]
       }
-      setConversationId(data.id)
-      setMessages(orderMessages(data.messages || []))
+      updateConversationState(key, (state) => ({
+        ...state,
+        conversationId: data.id,
+        messages: orderMessages(data.messages || []),
+        error: '',
+      }))
     } catch (err) {
-      setError(err instanceof Error ? err.message : '加载会话失败')
+      updateConversationState(key, (state) => ({
+        ...state,
+        error: err instanceof Error ? err.message : '加载会话失败',
+      }))
     }
   }
 
-  async function deleteConversation(id: string) {
-    setError('')
+  async function deleteConversation(item: ConversationListItem) {
+    conversationStates[item.key]?.abortController?.abort()
+    updateConversationState(item.key, (state) => ({ ...state, error: '' }))
     try {
-      await api.customerService.deleteConversation(id)
-      setConversations((prev) => prev.filter((item) => String(item.id) !== id))
-      if (conversationId === id) {
-        newConversation()
+      if (item.id) {
+        await api.customerService.deleteConversation(item.id)
+        setConversations((prev) => prev.filter((conversation) => String(conversation.id) !== item.id))
+      }
+      deletedConversationKeysRef.current.add(item.key)
+      setConversationStates((prev) => {
+        const next = { ...prev }
+        delete next[item.key]
+        return next
+      })
+      if (activeConversationKey === item.key) {
+        const key = createLocalConversationKey()
+        setConversationStates((prev) => ({ ...prev, [key]: createConversationState() }))
+        setActiveConversationKey(key)
       }
     } catch (err) {
-      setError(err instanceof Error ? err.message : '删除会话失败')
+      updateConversationState(item.key, (state) => ({
+        ...state,
+        error: err instanceof Error ? err.message : '删除会话失败',
+      }))
     }
   }
 
   function newConversation() {
-    setConversationId(null)
-    setMessages([])
-    setQuestion('')
-    setError('')
+    const key = createLocalConversationKey()
+    setConversationStates((prev) => ({ ...prev, [key]: createConversationState() }))
+    setActiveConversationKey(key)
     clearCustomerServiceDraft(draftCacheKey)
   }
 
   async function updateAction(actionId: string, mode: 'confirm' | 'cancel') {
+    const requestKey = activeConversationKey
     setActionLoadingId(actionId)
-    setError('')
+    updateConversationState(requestKey, (state) => ({ ...state, error: '' }))
     try {
       const updated = mode === 'confirm'
         ? await api.customerService.confirmAction(actionId)
         : await api.customerService.cancelAction(actionId)
-      setMessages((prev) => prev.map((message) => ({
+      updateConversationMessages(requestKey, (prev) => prev.map((message) => ({
         ...message,
         actions: message.actions?.map((action) => action.id === actionId ? updated : action),
       })))
     } catch (err) {
-      setError(err instanceof Error ? err.message : '动作处理失败')
+      updateConversationState(requestKey, (state) => ({
+        ...state,
+        error: err instanceof Error ? err.message : '动作处理失败',
+      }))
     } finally {
       setActionLoadingId(null)
     }
   }
 
   async function sendFeedback(message: ChatMessage, rating: 'helpful' | 'incorrect' | 'missing_data') {
+    const requestKey = activeConversationKey
     const messageId = message.message_id || message.id
     if (!messageId) return
     setFeedbackLoadingId(messageId)
-    setError('')
+    updateConversationState(requestKey, (state) => ({ ...state, error: '' }))
     try {
       const result = await api.customerService.feedback(messageId, { rating })
-      setMessages((prev) => prev.map((item) => (
+      updateConversationMessages(requestKey, (prev) => prev.map((item) => (
         (item.message_id || item.id) === messageId ? { ...item, feedback: result.feedback } : item
       )))
     } catch (err) {
-      setError(err instanceof Error ? err.message : '反馈提交失败')
+      updateConversationState(requestKey, (state) => ({
+        ...state,
+        error: err instanceof Error ? err.message : '反馈提交失败',
+      }))
     } finally {
       setFeedbackLoadingId(null)
     }
@@ -318,26 +475,33 @@ export default function CustomerService() {
             <button onClick={newConversation} className="text-sm text-blue-500 hover:text-blue-700 shrink-0 whitespace-nowrap ml-2">新会话</button>
           </div>
           <div className="p-3 overflow-y-auto space-y-2">
-            {conversations.length === 0 ? (
+            {conversationListItems.length === 0 ? (
               <div className="text-sm text-apple-gray-medium px-2 py-8 text-center">暂无会话</div>
-            ) : conversations.map((item) => (
+            ) : conversationListItems.map((item) => (
               <div
-                key={String(item.id)}
+                key={item.key}
                 className={`group flex items-start gap-2 rounded-xl transition-colors ${
-                  conversationId === item.id ? 'bg-blue-50 text-blue-600' : 'hover:bg-black/[0.03] text-apple-text'
+                  activeConversationKey === item.key ? 'bg-blue-50 text-blue-600' : 'hover:bg-black/[0.03] text-apple-text'
                 }`}
               >
                 <button
-                  onClick={() => openConversation(String(item.id))}
+                  onClick={() => item.id ? openConversation(item.id, item.key) : setActiveConversationKey(item.key)}
                   className="min-w-0 flex-1 text-left px-3 py-2"
                 >
-                  <div className="text-sm font-medium truncate">{String(item.title || '客服会话')}</div>
+                  <div className="flex items-center gap-2">
+                    <span className="min-w-0 flex-1 text-sm font-medium truncate">{item.title}</span>
+                    {item.loading && (
+                      <span className="shrink-0 rounded-full bg-emerald-50 px-2 py-0.5 text-[10px] text-emerald-700 border border-emerald-100">
+                        生成中
+                      </span>
+                    )}
+                  </div>
                   <div className="text-xs text-apple-gray-medium mt-1 truncate">
-                    {String(item.last_message || item.sku || '暂无消息')}
+                    {item.lastMessage}
                   </div>
                 </button>
                 <button
-                  onClick={() => deleteConversation(String(item.id))}
+                  onClick={() => deleteConversation(item)}
                   className="mt-2 mr-2 shrink-0 rounded-lg px-2 py-1 text-xs text-red-500 opacity-0 transition-opacity hover:bg-red-50 group-hover:opacity-100"
                   title="删除会话"
                 >
@@ -433,7 +597,10 @@ export default function CustomerService() {
             <div className="flex items-end gap-3">
               <textarea
                 value={question}
-                onChange={(e) => setQuestion(e.target.value)}
+                onChange={(e) => {
+                  const value = e.target.value
+                  updateActiveConversation((state) => ({ ...state, question: value }))
+                }}
                 onKeyDown={(e) => {
                   if (e.key === 'Enter' && !e.shiftKey) {
                     e.preventDefault()
@@ -443,8 +610,13 @@ export default function CustomerService() {
                 placeholder="输入客服问题，Enter 发送，Shift+Enter 换行"
                 className="glass-input flex-1 px-3 py-2 text-sm min-h-[76px] resize-none"
               />
-              <button onClick={ask} disabled={loading || !question.trim()} className="btn-primary px-5 py-2 text-sm disabled:opacity-50">
-                {loading ? '处理中...' : '发送'}
+              <button
+                type="button"
+                onClick={loading ? cancelCurrentAnswer : ask}
+                disabled={!loading && !question.trim()}
+                className={loading ? 'px-5 py-2 text-sm rounded-xl bg-red-500 text-white hover:bg-red-600' : 'btn-primary px-5 py-2 text-sm disabled:opacity-50'}
+              >
+                {loading ? '取消' : '发送'}
               </button>
             </div>
           </div>
@@ -563,6 +735,42 @@ function EvidenceList({ evidence }: { evidence: Array<Record<string, unknown>> }
       </div>
     </div>
   )
+}
+
+function createConversationState(overrides: Partial<CustomerConversationState> = {}): CustomerConversationState {
+  return {
+    conversationId: null,
+    question: '',
+    messages: [],
+    loading: false,
+    abortController: null,
+    error: '',
+    ...overrides,
+  }
+}
+
+function createLocalConversationKey(): ConversationKey {
+  return `local:${Date.now()}:${Math.random().toString(36).slice(2)}`
+}
+
+function conversationKeyForId(id: string): ConversationKey {
+  return `server:${id}`
+}
+
+function findConversationKeyById(
+  states: Record<ConversationKey, CustomerConversationState>,
+  id: string,
+): ConversationKey | null {
+  return Object.entries(states).find(([, state]) => state.conversationId === id)?.[0] || null
+}
+
+function titleFromMessages(messages: ChatMessage[]): string {
+  return messages.find((message) => message.role === 'user')?.content.trim().slice(0, 20) || ''
+}
+
+function lastMessagePreview(messages: ChatMessage[]): string {
+  const message = [...messages].reverse().find((item) => item.content.trim() || item.status?.trim())
+  return (message?.content || message?.status || '').trim().slice(0, 40)
 }
 
 function orderMessages(items: ChatMessage[]): ChatMessage[] {
@@ -878,7 +1086,7 @@ function StatusBadge({ status }: { status: string }) {
     pending: '待确认',
     confirmed: '已执行',
     cancelled: '已取消',
-    stale: '需重确认',
+    stale: '需重新确认',
     failed: '失败',
   }
   return (
@@ -937,4 +1145,8 @@ function deletePreview(value: unknown): string {
 
 function dedupe(items: string[]) {
   return Array.from(new Set(items.filter(Boolean)))
+}
+
+function isAbortError(error: unknown): boolean {
+  return error instanceof DOMException && error.name === 'AbortError'
 }

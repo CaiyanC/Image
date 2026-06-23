@@ -1,7 +1,7 @@
 import logging
 
 from sqlalchemy import create_engine, inspect, text
-from sqlalchemy.orm import sessionmaker, DeclarativeBase
+from sqlalchemy.orm import sessionmaker, DeclarativeBase, Session
 from .config import settings
 from .permission_constants import (
     COMMON_PERMISSION_KEYS,
@@ -16,14 +16,15 @@ engine = create_engine(
     settings.DATABASE_URL,
     echo=settings.DEBUG,
     hide_parameters=True,
-    pool_size=10,
-    max_overflow=20,
+    pool_pre_ping=True,
+    pool_size=5,
+    max_overflow=5,
     pool_timeout=30,
 )
 
 logger = logging.getLogger("uvicorn")
 
-SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine, expire_on_commit=False)
 
 
 class Base(DeclarativeBase):
@@ -36,6 +37,14 @@ def get_db():
         yield db
     finally:
         db.close()
+
+
+def release_session_connection(db: Session) -> None:
+    """Return the current DB connection to the pool while keeping the Session reusable."""
+    try:
+        db.close()
+    except Exception as exc:
+        logger.warning("failed to release database session connection: %s", exc)
 
 
 def init_db():

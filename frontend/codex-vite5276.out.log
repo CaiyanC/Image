@@ -1,0 +1,15 @@
+
+> ai-tool-frontend@1.0.0 dev
+> vite --host 0.0.0.0 --port 5275 --host 0.0.0.0 --port 5276
+
+
+  [32m[1mVITE[22m v5.4.21[39m  [2mready in [0m[1m1185[22m[2m[0m ms[22m
+
+  [32m➜[39m  [1mLocal[22m:   [36mhttp://localhost:[1m5276[22m/[39m
+  [32m➜[39m  [1mNetwork[22m: [36mhttp://192.168.3.216:[1m5276[22m/[39m
+  [32m➜[39m  [1mNetwork[22m: [36mhttp://172.31.240.1:[1m5276[22m/[39m
+  [32m➜[39m  [1mNetwork[22m: [36mhttp://172.22.144.1:[1m5276[22m/[39m
+[2m11:15:58[22m [36m[1m[vite][22m[39m [32mvite.config.ts changed, restarting server...[39m
+[2m11:15:58[22m [36m[1m[vite][22m[39m server restarted.
+[2m16:19:25[22m [36m[1m[vite][22m[39m [32mvite.config.ts changed, restarting server...[39m
+[2m16:19:25[22m [36m[1m[vite][22m[39m server restarted.

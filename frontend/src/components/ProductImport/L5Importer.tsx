@@ -88,8 +88,9 @@ export default function L5Importer({ onImportComplete }: L5ImporterProps) {
           review_items: entry.data.reviewItems,
         })),
       })
+      const skippedDuplicate = result.results.reduce((sum, item) => sum + (item.qa_skipped_duplicate || 0), 0)
       setSummary(
-        `已处理 ${result.total_files} 个文件，导入 ${result.total_qa_created} 条 Q&A，更新 ${result.total_negative_updated} 个差评话术。`
+        `已处理 ${result.total_files} 个文件，导入 ${result.total_qa_created} 条 Q&A，跳过重复 ${skippedDuplicate} 条，更新 ${result.total_negative_updated} 个差评话术。`
       )
       setDone(true)
       onImportComplete()
@@ -104,6 +105,11 @@ export default function L5Importer({ onImportComplete }: L5ImporterProps) {
     setOpen(false)
     setEntries([])
     setDone(false)
+    setSummary('')
+  }
+
+  const removeEntry = (index: number) => {
+    setEntries((prev) => prev.filter((_, i) => i !== index))
     setSummary('')
   }
 
@@ -123,7 +129,7 @@ export default function L5Importer({ onImportComplete }: L5ImporterProps) {
 
       {open && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4">
-          <div className="bg-slate-900 border border-white/10 rounded-2xl w-full max-w-2xl shadow-2xl">
+          <div className="bg-slate-900 border border-white/10 rounded-2xl w-full max-w-2xl max-h-[90vh] shadow-2xl flex flex-col">
             <div className="flex items-center justify-between p-5 border-b border-white/10">
               <h3 className="text-lg font-bold text-white">导入 L5 知识库</h3>
               <button onClick={handleClose} className="text-white/40 hover:text-white/80 text-xl leading-none">
@@ -131,7 +137,7 @@ export default function L5Importer({ onImportComplete }: L5ImporterProps) {
               </button>
             </div>
 
-            <div className="p-5">
+            <div className="p-5 overflow-y-auto">
               {done ? (
                 <div className="text-center py-4">
                   <p className="text-lg font-bold text-white mb-1">L5 导入完成</p>
@@ -162,17 +168,28 @@ export default function L5Importer({ onImportComplete }: L5ImporterProps) {
                     <div className="mt-4 space-y-3">
                       <div className="flex items-center justify-between">
                         <div className="text-sm text-white/60 font-medium">解析结果</div>
-                        <select
-                          value={mode}
-                          onChange={(e) => setMode(e.target.value as 'replace' | 'append')}
-                          className="bg-white/10 border border-white/10 text-white text-xs rounded-lg px-2 py-1"
-                        >
-                          <option value="replace">替换已有 QA</option>
-                          <option value="append">追加到已有 QA</option>
-                        </select>
+                        <div className="flex items-center gap-2">
+                          <button
+                            onClick={() => {
+                              setEntries([])
+                              setSummary('')
+                            }}
+                            className="text-xs text-white/50 hover:text-white"
+                          >
+                            清空
+                          </button>
+                          <select
+                            value={mode}
+                            onChange={(e) => setMode(e.target.value as 'replace' | 'append')}
+                            className="bg-white/10 border border-white/10 text-white text-xs rounded-lg px-2 py-1"
+                          >
+                            <option value="replace">替换已有 QA</option>
+                            <option value="append">追加到已有 QA</option>
+                          </select>
+                        </div>
                       </div>
 
-                      <div className="max-h-80 overflow-y-auto space-y-2 pr-1">
+                      <div className="max-h-72 overflow-y-auto space-y-2 pr-1">
                         {entries.map((entry, i) => (
                           <div
                             key={i}
@@ -189,35 +206,43 @@ export default function L5Importer({ onImportComplete }: L5ImporterProps) {
                               </div>
                             ) : (
                               <div className="flex items-center justify-between gap-3">
-                                <div>
+                                <div className="min-w-0">
                                   <div className="text-white/70 font-medium truncate">{entry.data.fileName}</div>
                                   <div className="text-white/40 mt-0.5">
                                     SKU: {entry.data.sku} · Q&A: {entry.data.qaItems.length} 条 · 差评: {entry.data.reviewItems.length} 条
                                   </div>
                                 </div>
-                                <span className={`shrink-0 ${entry.productStatus === 'exists' ? 'text-emerald-400' : 'text-red-300'}`}>
-                                  {entry.productStatus === 'exists' ? '可导入' : entry.productStatus === 'missing' ? 'SKU 不存在' : '未检查'}
-                                </span>
+                                <div className="shrink-0 flex items-center gap-2">
+                                  <span className={entry.productStatus === 'exists' ? 'text-emerald-400' : 'text-red-300'}>
+                                    {entry.productStatus === 'exists' ? '可导入' : entry.productStatus === 'missing' ? 'SKU 不存在' : '未检查'}
+                                  </span>
+                                  <button onClick={() => removeEntry(i)} className="text-white/40 hover:text-red-300">
+                                    删除
+                                  </button>
+                                </div>
                               </div>
                             )}
                           </div>
                         ))}
                       </div>
 
-                      {summary && <div className="text-sm text-amber-300 bg-amber-500/10 border border-amber-500/20 rounded-lg px-3 py-2">{summary}</div>}
-
-                      <button
-                        onClick={handleImport}
-                        disabled={importing || importableCount === 0}
-                        className="w-full py-2 rounded-lg bg-blue-600 hover:bg-blue-500 disabled:opacity-40 text-white text-sm font-medium transition-colors"
-                      >
-                        {importing ? '导入中...' : `确认导入知识库 (${importableCount})`}
-                      </button>
                     </div>
                   )}
                 </>
               )}
             </div>
+            {!done && entries.length > 0 && (
+              <div className="p-4 border-t border-white/10 bg-slate-900/95 rounded-b-2xl shrink-0">
+                {summary && <div className="mb-3 text-sm text-amber-300 bg-amber-500/10 border border-amber-500/20 rounded-lg px-3 py-2">{summary}</div>}
+                <button
+                  onClick={handleImport}
+                  disabled={importing || importableCount === 0}
+                  className="w-full py-2 rounded-lg bg-blue-600 hover:bg-blue-500 disabled:opacity-40 text-white text-sm font-medium transition-colors"
+                >
+                  {importing ? '导入中...' : `确认导入知识库 (${importableCount})`}
+                </button>
+              </div>
+            )}
           </div>
         </div>
       )}

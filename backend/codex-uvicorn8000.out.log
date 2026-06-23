@@ -1,0 +1,260 @@
+2026-06-20 09:31:58,231 INFO sqlalchemy.engine.Engine select pg_catalog.version()
+2026-06-20 09:31:58,252 INFO sqlalchemy.engine.Engine [raw sql] [SQL parameters hidden due to hide_parameters=True]
+2026-06-20 09:31:58,276 INFO sqlalchemy.engine.Engine select current_schema()
+2026-06-20 09:31:58,302 INFO sqlalchemy.engine.Engine [raw sql] [SQL parameters hidden due to hide_parameters=True]
+2026-06-20 09:31:58,326 INFO sqlalchemy.engine.Engine show standard_conforming_strings
+2026-06-20 09:31:58,352 INFO sqlalchemy.engine.Engine [raw sql] [SQL parameters hidden due to hide_parameters=True]
+2026-06-20 09:31:58,377 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-06-20 09:31:58,402 INFO sqlalchemy.engine.Engine SELECT pg_advisory_lock(2026061301)
+2026-06-20 09:31:58,404 INFO sqlalchemy.engine.Engine [generated in 0.02806s] [SQL parameters hidden due to hide_parameters=True]
+2026-06-20 09:31:58,461 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-06-20 09:31:58,464 INFO sqlalchemy.engine.Engine SELECT pg_catalog.pg_class.relname 
+FROM pg_catalog.pg_class JOIN pg_catalog.pg_namespace ON pg_catalog.pg_namespace.oid = pg_catalog.pg_class.relnamespace 
+WHERE pg_catalog.pg_class.relname = %(table_name)s AND pg_catalog.pg_class.relkind = ANY (ARRAY[%(param_1)s, %(param_2)s, %(param_3)s, %(param_4)s, %(param_5)s]) AND pg_catalog.pg_table_is_visible(pg_catalog.pg_class.oid) AND pg_catalog.pg_namespace.nspname != %(nspname_1)s
+2026-06-20 09:31:58,465 INFO sqlalchemy.engine.Engine [generated in 0.00070s] [SQL parameters hidden due to hide_parameters=True]
+2026-06-20 09:31:58,479 INFO sqlalchemy.engine.Engine SELECT pg_catalog.pg_class.relname 
+FROM pg_catalog.pg_class JOIN pg_catalog.pg_namespace ON pg_catalog.pg_namespace.oid = pg_catalog.pg_class.relnamespace 
+WHERE pg_catalog.pg_class.relname = %(table_name)s AND pg_catalog.pg_class.relkind = ANY (ARRAY[%(param_1)s, %(param_2)s, %(param_3)s, %(param_4)s, %(param_5)s]) AND pg_catalog.pg_table_is_visible(pg_catalog.pg_class.oid) AND pg_catalog.pg_namespace.nspname != %(nspname_1)s
+2026-06-20 09:31:58,479 INFO sqlalchemy.engine.Engine [cached since 0.01508s ago] [SQL parameters hidden due to hide_parameters=True]
+2026-06-20 09:31:58,480 INFO sqlalchemy.engine.Engine SELECT pg_catalog.pg_class.relname 
+FROM pg_catalog.pg_class JOIN pg_catalog.pg_namespace ON pg_catalog.pg_namespace.oid = pg_catalog.pg_class.relnamespace 
+WHERE pg_catalog.pg_class.relname = %(table_name)s AND pg_catalog.pg_class.relkind = ANY (ARRAY[%(param_1)s, %(param_2)s, %(param_3)s, %(param_4)s, %(param_5)s]) AND pg_catalog.pg_table_is_visible(pg_catalog.pg_class.oid) AND pg_catalog.pg_namespace.nspname != %(nspname_1)s
+2026-06-20 09:31:58,481 INFO sqlalchemy.engine.Engine [cached since 0.01677s ago] [SQL parameters hidden due to hide_parameters=True]
+2026-06-20 09:31:58,482 INFO sqlalchemy.engine.Engine SELECT pg_catalog.pg_class.relname 
+FROM pg_catalog.pg_class JOIN pg_catalog.pg_namespace ON pg_catalog.pg_namespace.oid = pg_catalog.pg_class.relnamespace 
+WHERE pg_catalog.pg_class.relname = %(table_name)s AND pg_catalog.pg_class.relkind = ANY (ARRAY[%(param_1)s, %(param_2)s, %(param_3)s, %(param_4)s, %(param_5)s]) AND pg_catalog.pg_table_is_visible(pg_catalog.pg_class.oid) AND pg_catalog.pg_namespace.nspname != %(nspname_1)s
+2026-06-20 09:31:58,483 INFO sqlalchemy.engine.Engine [cached since 0.01815s ago] [SQL parameters hidden due to hide_parameters=True]
+2026-06-20 09:31:58,483 INFO sqlalchemy.engine.Engine SELECT pg_catalog.pg_class.relname 
+FROM pg_catalog.pg_class JOIN pg_catalog.pg_namespace ON pg_catalog.pg_namespace.oid = pg_catalog.pg_class.relnamespace 
+WHERE pg_catalog.pg_class.relname = %(table_name)s AND pg_catalog.pg_class.relkind = ANY (ARRAY[%(param_1)s, %(param_2)s, %(param_3)s, %(param_4)s, %(param_5)s]) AND pg_catalog.pg_table_is_visible(pg_catalog.pg_class.oid) AND pg_catalog.pg_namespace.nspname != %(nspname_1)s
+2026-06-20 09:31:58,484 INFO sqlalchemy.engine.Engine [cached since 0.01945s ago] [SQL parameters hidden due to hide_parameters=True]
+2026-06-20 09:31:58,485 INFO sqlalchemy.engine.Engine SELECT pg_catalog.pg_class.relname 
+FROM pg_catalog.pg_class JOIN pg_catalog.pg_namespace ON pg_catalog.pg_namespace.oid = pg_catalog.pg_class.relnamespace 
+WHERE pg_catalog.pg_class.relname = %(table_name)s AND pg_catalog.pg_class.relkind = ANY (ARRAY[%(param_1)s, %(param_2)s, %(param_3)s, %(param_4)s, %(param_5)s]) AND pg_catalog.pg_table_is_visible(pg_catalog.pg_class.oid) AND pg_catalog.pg_namespace.nspname != %(nspname_1)s
+2026-06-20 09:31:58,486 INFO sqlalchemy.engine.Engine [cached since 0.02113s ago] [SQL parameters hidden due to hide_parameters=True]
+2026-06-20 09:31:58,487 INFO sqlalchemy.engine.Engine SELECT pg_catalog.pg_class.relname 
+FROM pg_catalog.pg_class JOIN pg_catalog.pg_namespace ON pg_catalog.pg_namespace.oid = pg_catalog.pg_class.relnamespace 
+WHERE pg_catalog.pg_class.relname = %(table_name)s AND pg_catalog.pg_class.relkind = ANY (ARRAY[%(param_1)s, %(param_2)s, %(param_3)s, %(param_4)s, %(param_5)s]) AND pg_catalog.pg_table_is_visible(pg_catalog.pg_class.oid) AND pg_catalog.pg_namespace.nspname != %(nspname_1)s
+2026-06-20 09:31:58,487 INFO sqlalchemy.engine.Engine [cached since 0.02258s ago] [SQL parameters hidden due to hide_parameters=True]
+2026-06-20 09:31:58,488 INFO sqlalchemy.engine.Engine SELECT pg_catalog.pg_class.relname 
+FROM pg_catalog.pg_class JOIN pg_catalog.pg_namespace ON pg_catalog.pg_namespace.oid = pg_catalog.pg_class.relnamespace 
+WHERE pg_catalog.pg_class.relname = %(table_name)s AND pg_catalog.pg_class.relkind = ANY (ARRAY[%(param_1)s, %(param_2)s, %(param_3)s, %(param_4)s, %(param_5)s]) AND pg_catalog.pg_table_is_visible(pg_catalog.pg_class.oid) AND pg_catalog.pg_namespace.nspname != %(nspname_1)s
+2026-06-20 09:31:58,489 INFO sqlalchemy.engine.Engine [cached since 0.02401s ago] [SQL parameters hidden due to hide_parameters=True]
+2026-06-20 09:31:58,489 INFO sqlalchemy.engine.Engine SELECT pg_catalog.pg_class.relname 
+FROM pg_catalog.pg_class JOIN pg_catalog.pg_namespace ON pg_catalog.pg_namespace.oid = pg_catalog.pg_class.relnamespace 
+WHERE pg_catalog.pg_class.relname = %(table_name)s AND pg_catalog.pg_class.relkind = ANY (ARRAY[%(param_1)s, %(param_2)s, %(param_3)s, %(param_4)s, %(param_5)s]) AND pg_catalog.pg_table_is_visible(pg_catalog.pg_class.oid) AND pg_catalog.pg_namespace.nspname != %(nspname_1)s
+2026-06-20 09:31:58,490 INFO sqlalchemy.engine.Engine [cached since 0.02513s ago] [SQL parameters hidden due to hide_parameters=True]
+2026-06-20 09:31:58,490 INFO sqlalchemy.engine.Engine SELECT pg_catalog.pg_class.relname 
+FROM pg_catalog.pg_class JOIN pg_catalog.pg_namespace ON pg_catalog.pg_namespace.oid = pg_catalog.pg_class.relnamespace 
+WHERE pg_catalog.pg_class.relname = %(table_name)s AND pg_catalog.pg_class.relkind = ANY (ARRAY[%(param_1)s, %(param_2)s, %(param_3)s, %(param_4)s, %(param_5)s]) AND pg_catalog.pg_table_is_visible(pg_catalog.pg_class.oid) AND pg_catalog.pg_namespace.nspname != %(nspname_1)s
+2026-06-20 09:31:58,491 INFO sqlalchemy.engine.Engine [cached since 0.0261s ago] [SQL parameters hidden due to hide_parameters=True]
+2026-06-20 09:31:58,491 INFO sqlalchemy.engine.Engine SELECT pg_catalog.pg_class.relname 
+FROM pg_catalog.pg_class JOIN pg_catalog.pg_namespace ON pg_catalog.pg_namespace.oid = pg_catalog.pg_class.relnamespace 
+WHERE pg_catalog.pg_class.relname = %(table_name)s AND pg_catalog.pg_class.relkind = ANY (ARRAY[%(param_1)s, %(param_2)s, %(param_3)s, %(param_4)s, %(param_5)s]) AND pg_catalog.pg_table_is_visible(pg_catalog.pg_class.oid) AND pg_catalog.pg_namespace.nspname != %(nspname_1)s
+2026-06-20 09:31:58,492 INFO sqlalchemy.engine.Engine [cached since 0.02749s ago] [SQL parameters hidden due to hide_parameters=True]
+2026-06-20 09:31:58,493 INFO sqlalchemy.engine.Engine SELECT pg_catalog.pg_class.relname 
+FROM pg_catalog.pg_class JOIN pg_catalog.pg_namespace ON pg_catalog.pg_namespace.oid = pg_catalog.pg_class.relnamespace 
+WHERE pg_catalog.pg_class.relname = %(table_name)s AND pg_catalog.pg_class.relkind = ANY (ARRAY[%(param_1)s, %(param_2)s, %(param_3)s, %(param_4)s, %(param_5)s]) AND pg_catalog.pg_table_is_visible(pg_catalog.pg_class.oid) AND pg_catalog.pg_namespace.nspname != %(nspname_1)s
+2026-06-20 09:31:58,493 INFO sqlalchemy.engine.Engine [cached since 0.02853s ago] [SQL parameters hidden due to hide_parameters=True]
+2026-06-20 09:31:58,494 INFO sqlalchemy.engine.Engine SELECT pg_catalog.pg_class.relname 
+FROM pg_catalog.pg_class JOIN pg_catalog.pg_namespace ON pg_catalog.pg_namespace.oid = pg_catalog.pg_class.relnamespace 
+WHERE pg_catalog.pg_class.relname = %(table_name)s AND pg_catalog.pg_class.relkind = ANY (ARRAY[%(param_1)s, %(param_2)s, %(param_3)s, %(param_4)s, %(param_5)s]) AND pg_catalog.pg_table_is_visible(pg_catalog.pg_class.oid) AND pg_catalog.pg_namespace.nspname != %(nspname_1)s
+2026-06-20 09:31:58,494 INFO sqlalchemy.engine.Engine [cached since 0.0294s ago] [SQL parameters hidden due to hide_parameters=True]
+2026-06-20 09:31:58,495 INFO sqlalchemy.engine.Engine SELECT pg_catalog.pg_class.relname 
+FROM pg_catalog.pg_class JOIN pg_catalog.pg_namespace ON pg_catalog.pg_namespace.oid = pg_catalog.pg_class.relnamespace 
+WHERE pg_catalog.pg_class.relname = %(table_name)s AND pg_catalog.pg_class.relkind = ANY (ARRAY[%(param_1)s, %(param_2)s, %(param_3)s, %(param_4)s, %(param_5)s]) AND pg_catalog.pg_table_is_visible(pg_catalog.pg_class.oid) AND pg_catalog.pg_namespace.nspname != %(nspname_1)s
+2026-06-20 09:31:58,495 INFO sqlalchemy.engine.Engine [cached since 0.03029s ago] [SQL parameters hidden due to hide_parameters=True]
+2026-06-20 09:31:58,496 INFO sqlalchemy.engine.Engine SELECT pg_catalog.pg_class.relname 
+FROM pg_catalog.pg_class JOIN pg_catalog.pg_namespace ON pg_catalog.pg_namespace.oid = pg_catalog.pg_class.relnamespace 
+WHERE pg_catalog.pg_class.relname = %(table_name)s AND pg_catalog.pg_class.relkind = ANY (ARRAY[%(param_1)s, %(param_2)s, %(param_3)s, %(param_4)s, %(param_5)s]) AND pg_catalog.pg_table_is_visible(pg_catalog.pg_class.oid) AND pg_catalog.pg_namespace.nspname != %(nspname_1)s
+2026-06-20 09:31:58,496 INFO sqlalchemy.engine.Engine [cached since 0.03125s ago] [SQL parameters hidden due to hide_parameters=True]
+2026-06-20 09:31:58,496 INFO sqlalchemy.engine.Engine SELECT pg_catalog.pg_class.relname 
+FROM pg_catalog.pg_class JOIN pg_catalog.pg_namespace ON pg_catalog.pg_namespace.oid = pg_catalog.pg_class.relnamespace 
+WHERE pg_catalog.pg_class.relname = %(table_name)s AND pg_catalog.pg_class.relkind = ANY (ARRAY[%(param_1)s, %(param_2)s, %(param_3)s, %(param_4)s, %(param_5)s]) AND pg_catalog.pg_table_is_visible(pg_catalog.pg_class.oid) AND pg_catalog.pg_namespace.nspname != %(nspname_1)s
+2026-06-20 09:31:58,497 INFO sqlalchemy.engine.Engine [cached since 0.03214s ago] [SQL parameters hidden due to hide_parameters=True]
+2026-06-20 09:31:58,497 INFO sqlalchemy.engine.Engine SELECT pg_catalog.pg_class.relname 
+FROM pg_catalog.pg_class JOIN pg_catalog.pg_namespace ON pg_catalog.pg_namespace.oid = pg_catalog.pg_class.relnamespace 
+WHERE pg_catalog.pg_class.relname = %(table_name)s AND pg_catalog.pg_class.relkind = ANY (ARRAY[%(param_1)s, %(param_2)s, %(param_3)s, %(param_4)s, %(param_5)s]) AND pg_catalog.pg_table_is_visible(pg_catalog.pg_class.oid) AND pg_catalog.pg_namespace.nspname != %(nspname_1)s
+2026-06-20 09:31:58,498 INFO sqlalchemy.engine.Engine [cached since 0.0331s ago] [SQL parameters hidden due to hide_parameters=True]
+2026-06-20 09:31:58,499 INFO sqlalchemy.engine.Engine SELECT pg_catalog.pg_class.relname 
+FROM pg_catalog.pg_class JOIN pg_catalog.pg_namespace ON pg_catalog.pg_namespace.oid = pg_catalog.pg_class.relnamespace 
+WHERE pg_catalog.pg_class.relname = %(table_name)s AND pg_catalog.pg_class.relkind = ANY (ARRAY[%(param_1)s, %(param_2)s, %(param_3)s, %(param_4)s, %(param_5)s]) AND pg_catalog.pg_table_is_visible(pg_catalog.pg_class.oid) AND pg_catalog.pg_namespace.nspname != %(nspname_1)s
+2026-06-20 09:31:58,499 INFO sqlalchemy.engine.Engine [cached since 0.03431s ago] [SQL parameters hidden due to hide_parameters=True]
+2026-06-20 09:31:58,500 INFO sqlalchemy.engine.Engine SELECT pg_catalog.pg_class.relname 
+FROM pg_catalog.pg_class JOIN pg_catalog.pg_namespace ON pg_catalog.pg_namespace.oid = pg_catalog.pg_class.relnamespace 
+WHERE pg_catalog.pg_class.relname = %(table_name)s AND pg_catalog.pg_class.relkind = ANY (ARRAY[%(param_1)s, %(param_2)s, %(param_3)s, %(param_4)s, %(param_5)s]) AND pg_catalog.pg_table_is_visible(pg_catalog.pg_class.oid) AND pg_catalog.pg_namespace.nspname != %(nspname_1)s
+2026-06-20 09:31:58,500 INFO sqlalchemy.engine.Engine [cached since 0.03545s ago] [SQL parameters hidden due to hide_parameters=True]
+2026-06-20 09:31:58,501 INFO sqlalchemy.engine.Engine SELECT pg_catalog.pg_class.relname 
+FROM pg_catalog.pg_class JOIN pg_catalog.pg_namespace ON pg_catalog.pg_namespace.oid = pg_catalog.pg_class.relnamespace 
+WHERE pg_catalog.pg_class.relname = %(table_name)s AND pg_catalog.pg_class.relkind = ANY (ARRAY[%(param_1)s, %(param_2)s, %(param_3)s, %(param_4)s, %(param_5)s]) AND pg_catalog.pg_table_is_visible(pg_catalog.pg_class.oid) AND pg_catalog.pg_namespace.nspname != %(nspname_1)s
+2026-06-20 09:31:58,501 INFO sqlalchemy.engine.Engine [cached since 0.03647s ago] [SQL parameters hidden due to hide_parameters=True]
+2026-06-20 09:31:58,502 INFO sqlalchemy.engine.Engine SELECT pg_catalog.pg_class.relname 
+FROM pg_catalog.pg_class JOIN pg_catalog.pg_namespace ON pg_catalog.pg_namespace.oid = pg_catalog.pg_class.relnamespace 
+WHERE pg_catalog.pg_class.relname = %(table_name)s AND pg_catalog.pg_class.relkind = ANY (ARRAY[%(param_1)s, %(param_2)s, %(param_3)s, %(param_4)s, %(param_5)s]) AND pg_catalog.pg_table_is_visible(pg_catalog.pg_class.oid) AND pg_catalog.pg_namespace.nspname != %(nspname_1)s
+2026-06-20 09:31:58,502 INFO sqlalchemy.engine.Engine [cached since 0.03743s ago] [SQL parameters hidden due to hide_parameters=True]
+2026-06-20 09:31:58,503 INFO sqlalchemy.engine.Engine SELECT pg_catalog.pg_class.relname 
+FROM pg_catalog.pg_class JOIN pg_catalog.pg_namespace ON pg_catalog.pg_namespace.oid = pg_catalog.pg_class.relnamespace 
+WHERE pg_catalog.pg_class.relname = %(table_name)s AND pg_catalog.pg_class.relkind = ANY (ARRAY[%(param_1)s, %(param_2)s, %(param_3)s, %(param_4)s, %(param_5)s]) AND pg_catalog.pg_table_is_visible(pg_catalog.pg_class.oid) AND pg_catalog.pg_namespace.nspname != %(nspname_1)s
+2026-06-20 09:31:58,503 INFO sqlalchemy.engine.Engine [cached since 0.03869s ago] [SQL parameters hidden due to hide_parameters=True]
+2026-06-20 09:31:58,504 INFO sqlalchemy.engine.Engine SELECT pg_catalog.pg_class.relname 
+FROM pg_catalog.pg_class JOIN pg_catalog.pg_namespace ON pg_catalog.pg_namespace.oid = pg_catalog.pg_class.relnamespace 
+WHERE pg_catalog.pg_class.relname = %(table_name)s AND pg_catalog.pg_class.relkind = ANY (ARRAY[%(param_1)s, %(param_2)s, %(param_3)s, %(param_4)s, %(param_5)s]) AND pg_catalog.pg_table_is_visible(pg_catalog.pg_class.oid) AND pg_catalog.pg_namespace.nspname != %(nspname_1)s
+2026-06-20 09:31:58,504 INFO sqlalchemy.engine.Engine [cached since 0.03986s ago] [SQL parameters hidden due to hide_parameters=True]
+2026-06-20 09:31:58,505 INFO sqlalchemy.engine.Engine SELECT pg_catalog.pg_class.relname 
+FROM pg_catalog.pg_class JOIN pg_catalog.pg_namespace ON pg_catalog.pg_namespace.oid = pg_catalog.pg_class.relnamespace 
+WHERE pg_catalog.pg_class.relname = %(table_name)s AND pg_catalog.pg_class.relkind = ANY (ARRAY[%(param_1)s, %(param_2)s, %(param_3)s, %(param_4)s, %(param_5)s]) AND pg_catalog.pg_table_is_visible(pg_catalog.pg_class.oid) AND pg_catalog.pg_namespace.nspname != %(nspname_1)s
+2026-06-20 09:31:58,505 INFO sqlalchemy.engine.Engine [cached since 0.04087s ago] [SQL parameters hidden due to hide_parameters=True]
+2026-06-20 09:31:58,506 INFO sqlalchemy.engine.Engine SELECT pg_catalog.pg_class.relname 
+FROM pg_catalog.pg_class JOIN pg_catalog.pg_namespace ON pg_catalog.pg_namespace.oid = pg_catalog.pg_class.relnamespace 
+WHERE pg_catalog.pg_class.relname = %(table_name)s AND pg_catalog.pg_class.relkind = ANY (ARRAY[%(param_1)s, %(param_2)s, %(param_3)s, %(param_4)s, %(param_5)s]) AND pg_catalog.pg_table_is_visible(pg_catalog.pg_class.oid) AND pg_catalog.pg_namespace.nspname != %(nspname_1)s
+2026-06-20 09:31:58,507 INFO sqlalchemy.engine.Engine [cached since 0.04193s ago] [SQL parameters hidden due to hide_parameters=True]
+2026-06-20 09:31:58,507 INFO sqlalchemy.engine.Engine SELECT pg_catalog.pg_class.relname 
+FROM pg_catalog.pg_class JOIN pg_catalog.pg_namespace ON pg_catalog.pg_namespace.oid = pg_catalog.pg_class.relnamespace 
+WHERE pg_catalog.pg_class.relname = %(table_name)s AND pg_catalog.pg_class.relkind = ANY (ARRAY[%(param_1)s, %(param_2)s, %(param_3)s, %(param_4)s, %(param_5)s]) AND pg_catalog.pg_table_is_visible(pg_catalog.pg_class.oid) AND pg_catalog.pg_namespace.nspname != %(nspname_1)s
+2026-06-20 09:31:58,507 INFO sqlalchemy.engine.Engine [cached since 0.0428s ago] [SQL parameters hidden due to hide_parameters=True]
+2026-06-20 09:31:58,507 INFO sqlalchemy.engine.Engine SELECT pg_catalog.pg_class.relname 
+FROM pg_catalog.pg_class JOIN pg_catalog.pg_namespace ON pg_catalog.pg_namespace.oid = pg_catalog.pg_class.relnamespace 
+WHERE pg_catalog.pg_class.relname = %(table_name)s AND pg_catalog.pg_class.relkind = ANY (ARRAY[%(param_1)s, %(param_2)s, %(param_3)s, %(param_4)s, %(param_5)s]) AND pg_catalog.pg_table_is_visible(pg_catalog.pg_class.oid) AND pg_catalog.pg_namespace.nspname != %(nspname_1)s
+2026-06-20 09:31:58,508 INFO sqlalchemy.engine.Engine [cached since 0.04365s ago] [SQL parameters hidden due to hide_parameters=True]
+2026-06-20 09:31:58,509 INFO sqlalchemy.engine.Engine SELECT pg_catalog.pg_class.relname 
+FROM pg_catalog.pg_class JOIN pg_catalog.pg_namespace ON pg_catalog.pg_namespace.oid = pg_catalog.pg_class.relnamespace 
+WHERE pg_catalog.pg_class.relname = %(table_name)s AND pg_catalog.pg_class.relkind = ANY (ARRAY[%(param_1)s, %(param_2)s, %(param_3)s, %(param_4)s, %(param_5)s]) AND pg_catalog.pg_table_is_visible(pg_catalog.pg_class.oid) AND pg_catalog.pg_namespace.nspname != %(nspname_1)s
+2026-06-20 09:31:58,509 INFO sqlalchemy.engine.Engine [cached since 0.04456s ago] [SQL parameters hidden due to hide_parameters=True]
+2026-06-20 09:31:58,510 INFO sqlalchemy.engine.Engine SELECT pg_catalog.pg_class.relname 
+FROM pg_catalog.pg_class JOIN pg_catalog.pg_namespace ON pg_catalog.pg_namespace.oid = pg_catalog.pg_class.relnamespace 
+WHERE pg_catalog.pg_class.relname = %(table_name)s AND pg_catalog.pg_class.relkind = ANY (ARRAY[%(param_1)s, %(param_2)s, %(param_3)s, %(param_4)s, %(param_5)s]) AND pg_catalog.pg_table_is_visible(pg_catalog.pg_class.oid) AND pg_catalog.pg_namespace.nspname != %(nspname_1)s
+2026-06-20 09:31:58,510 INFO sqlalchemy.engine.Engine [cached since 0.04539s ago] [SQL parameters hidden due to hide_parameters=True]
+2026-06-20 09:31:58,511 INFO sqlalchemy.engine.Engine SELECT pg_catalog.pg_class.relname 
+FROM pg_catalog.pg_class JOIN pg_catalog.pg_namespace ON pg_catalog.pg_namespace.oid = pg_catalog.pg_class.relnamespace 
+WHERE pg_catalog.pg_class.relname = %(table_name)s AND pg_catalog.pg_class.relkind = ANY (ARRAY[%(param_1)s, %(param_2)s, %(param_3)s, %(param_4)s, %(param_5)s]) AND pg_catalog.pg_table_is_visible(pg_catalog.pg_class.oid) AND pg_catalog.pg_namespace.nspname != %(nspname_1)s
+2026-06-20 09:31:58,511 INFO sqlalchemy.engine.Engine [cached since 0.04625s ago] [SQL parameters hidden due to hide_parameters=True]
+2026-06-20 09:31:58,511 INFO sqlalchemy.engine.Engine SELECT pg_catalog.pg_class.relname 
+FROM pg_catalog.pg_class JOIN pg_catalog.pg_namespace ON pg_catalog.pg_namespace.oid = pg_catalog.pg_class.relnamespace 
+WHERE pg_catalog.pg_class.relname = %(table_name)s AND pg_catalog.pg_class.relkind = ANY (ARRAY[%(param_1)s, %(param_2)s, %(param_3)s, %(param_4)s, %(param_5)s]) AND pg_catalog.pg_table_is_visible(pg_catalog.pg_class.oid) AND pg_catalog.pg_namespace.nspname != %(nspname_1)s
+2026-06-20 09:31:58,511 INFO sqlalchemy.engine.Engine [cached since 0.04709s ago] [SQL parameters hidden due to hide_parameters=True]
+2026-06-20 09:31:58,512 INFO sqlalchemy.engine.Engine SELECT pg_catalog.pg_class.relname 
+FROM pg_catalog.pg_class JOIN pg_catalog.pg_namespace ON pg_catalog.pg_namespace.oid = pg_catalog.pg_class.relnamespace 
+WHERE pg_catalog.pg_class.relname = %(table_name)s AND pg_catalog.pg_class.relkind = ANY (ARRAY[%(param_1)s, %(param_2)s, %(param_3)s, %(param_4)s, %(param_5)s]) AND pg_catalog.pg_table_is_visible(pg_catalog.pg_class.oid) AND pg_catalog.pg_namespace.nspname != %(nspname_1)s
+2026-06-20 09:31:58,512 INFO sqlalchemy.engine.Engine [cached since 0.04793s ago] [SQL parameters hidden due to hide_parameters=True]
+2026-06-20 09:31:58,513 INFO sqlalchemy.engine.Engine SELECT pg_catalog.pg_class.relname 
+FROM pg_catalog.pg_class JOIN pg_catalog.pg_namespace ON pg_catalog.pg_namespace.oid = pg_catalog.pg_class.relnamespace 
+WHERE pg_catalog.pg_class.relname = %(table_name)s AND pg_catalog.pg_class.relkind = ANY (ARRAY[%(param_1)s, %(param_2)s, %(param_3)s, %(param_4)s, %(param_5)s]) AND pg_catalog.pg_table_is_visible(pg_catalog.pg_class.oid) AND pg_catalog.pg_namespace.nspname != %(nspname_1)s
+2026-06-20 09:31:58,513 INFO sqlalchemy.engine.Engine [cached since 0.04879s ago] [SQL parameters hidden due to hide_parameters=True]
+2026-06-20 09:31:58,514 INFO sqlalchemy.engine.Engine SELECT pg_catalog.pg_class.relname 
+FROM pg_catalog.pg_class JOIN pg_catalog.pg_namespace ON pg_catalog.pg_namespace.oid = pg_catalog.pg_class.relnamespace 
+WHERE pg_catalog.pg_class.relname = %(table_name)s AND pg_catalog.pg_class.relkind = ANY (ARRAY[%(param_1)s, %(param_2)s, %(param_3)s, %(param_4)s, %(param_5)s]) AND pg_catalog.pg_table_is_visible(pg_catalog.pg_class.oid) AND pg_catalog.pg_namespace.nspname != %(nspname_1)s
+2026-06-20 09:31:58,515 INFO sqlalchemy.engine.Engine [cached since 0.05043s ago] [SQL parameters hidden due to hide_parameters=True]
+2026-06-20 09:31:58,516 INFO sqlalchemy.engine.Engine SELECT pg_catalog.pg_class.relname 
+FROM pg_catalog.pg_class JOIN pg_catalog.pg_namespace ON pg_catalog.pg_namespace.oid = pg_catalog.pg_class.relnamespace 
+WHERE pg_catalog.pg_class.relname = %(table_name)s AND pg_catalog.pg_class.relkind = ANY (ARRAY[%(param_1)s, %(param_2)s, %(param_3)s, %(param_4)s, %(param_5)s]) AND pg_catalog.pg_table_is_visible(pg_catalog.pg_class.oid) AND pg_catalog.pg_namespace.nspname != %(nspname_1)s
+2026-06-20 09:31:58,516 INFO sqlalchemy.engine.Engine [cached since 0.05161s ago] [SQL parameters hidden due to hide_parameters=True]
+2026-06-20 09:31:58,517 INFO sqlalchemy.engine.Engine SELECT pg_catalog.pg_class.relname 
+FROM pg_catalog.pg_class JOIN pg_catalog.pg_namespace ON pg_catalog.pg_namespace.oid = pg_catalog.pg_class.relnamespace 
+WHERE pg_catalog.pg_class.relname = %(table_name)s AND pg_catalog.pg_class.relkind = ANY (ARRAY[%(param_1)s, %(param_2)s, %(param_3)s, %(param_4)s, %(param_5)s]) AND pg_catalog.pg_table_is_visible(pg_catalog.pg_class.oid) AND pg_catalog.pg_namespace.nspname != %(nspname_1)s
+2026-06-20 09:31:58,517 INFO sqlalchemy.engine.Engine [cached since 0.05276s ago] [SQL parameters hidden due to hide_parameters=True]
+2026-06-20 09:31:58,518 INFO sqlalchemy.engine.Engine SELECT pg_catalog.pg_class.relname 
+FROM pg_catalog.pg_class JOIN pg_catalog.pg_namespace ON pg_catalog.pg_namespace.oid = pg_catalog.pg_class.relnamespace 
+WHERE pg_catalog.pg_class.relname = %(table_name)s AND pg_catalog.pg_class.relkind = ANY (ARRAY[%(param_1)s, %(param_2)s, %(param_3)s, %(param_4)s, %(param_5)s]) AND pg_catalog.pg_table_is_visible(pg_catalog.pg_class.oid) AND pg_catalog.pg_namespace.nspname != %(nspname_1)s
+2026-06-20 09:31:58,519 INFO sqlalchemy.engine.Engine [cached since 0.05389s ago] [SQL parameters hidden due to hide_parameters=True]
+2026-06-20 09:31:58,519 INFO sqlalchemy.engine.Engine SELECT pg_catalog.pg_class.relname 
+FROM pg_catalog.pg_class JOIN pg_catalog.pg_namespace ON pg_catalog.pg_namespace.oid = pg_catalog.pg_class.relnamespace 
+WHERE pg_catalog.pg_class.relname = %(table_name)s AND pg_catalog.pg_class.relkind = ANY (ARRAY[%(param_1)s, %(param_2)s, %(param_3)s, %(param_4)s, %(param_5)s]) AND pg_catalog.pg_table_is_visible(pg_catalog.pg_class.oid) AND pg_catalog.pg_namespace.nspname != %(nspname_1)s
+2026-06-20 09:31:58,519 INFO sqlalchemy.engine.Engine [cached since 0.05512s ago] [SQL parameters hidden due to hide_parameters=True]
+2026-06-20 09:31:58,520 INFO sqlalchemy.engine.Engine SELECT pg_catalog.pg_class.relname 
+FROM pg_catalog.pg_class JOIN pg_catalog.pg_namespace ON pg_catalog.pg_namespace.oid = pg_catalog.pg_class.relnamespace 
+WHERE pg_catalog.pg_class.relname = %(table_name)s AND pg_catalog.pg_class.relkind = ANY (ARRAY[%(param_1)s, %(param_2)s, %(param_3)s, %(param_4)s, %(param_5)s]) AND pg_catalog.pg_table_is_visible(pg_catalog.pg_class.oid) AND pg_catalog.pg_namespace.nspname != %(nspname_1)s
+2026-06-20 09:31:58,521 INFO sqlalchemy.engine.Engine [cached since 0.0564s ago] [SQL parameters hidden due to hide_parameters=True]
+2026-06-20 09:31:58,521 INFO sqlalchemy.engine.Engine SELECT pg_catalog.pg_class.relname 
+FROM pg_catalog.pg_class JOIN pg_catalog.pg_namespace ON pg_catalog.pg_namespace.oid = pg_catalog.pg_class.relnamespace 
+WHERE pg_catalog.pg_class.relname = %(table_name)s AND pg_catalog.pg_class.relkind = ANY (ARRAY[%(param_1)s, %(param_2)s, %(param_3)s, %(param_4)s, %(param_5)s]) AND pg_catalog.pg_table_is_visible(pg_catalog.pg_class.oid) AND pg_catalog.pg_namespace.nspname != %(nspname_1)s
+2026-06-20 09:31:58,522 INFO sqlalchemy.engine.Engine [cached since 0.0574s ago] [SQL parameters hidden due to hide_parameters=True]
+2026-06-20 09:31:58,522 INFO sqlalchemy.engine.Engine SELECT pg_catalog.pg_class.relname 
+FROM pg_catalog.pg_class JOIN pg_catalog.pg_namespace ON pg_catalog.pg_namespace.oid = pg_catalog.pg_class.relnamespace 
+WHERE pg_catalog.pg_class.relname = %(table_name)s AND pg_catalog.pg_class.relkind = ANY (ARRAY[%(param_1)s, %(param_2)s, %(param_3)s, %(param_4)s, %(param_5)s]) AND pg_catalog.pg_table_is_visible(pg_catalog.pg_class.oid) AND pg_catalog.pg_namespace.nspname != %(nspname_1)s
+2026-06-20 09:31:58,523 INFO sqlalchemy.engine.Engine [cached since 0.05835s ago] [SQL parameters hidden due to hide_parameters=True]
+2026-06-20 09:31:58,523 INFO sqlalchemy.engine.Engine SELECT pg_catalog.pg_class.relname 
+FROM pg_catalog.pg_class JOIN pg_catalog.pg_namespace ON pg_catalog.pg_namespace.oid = pg_catalog.pg_class.relnamespace 
+WHERE pg_catalog.pg_class.relname = %(table_name)s AND pg_catalog.pg_class.relkind = ANY (ARRAY[%(param_1)s, %(param_2)s, %(param_3)s, %(param_4)s, %(param_5)s]) AND pg_catalog.pg_table_is_visible(pg_catalog.pg_class.oid) AND pg_catalog.pg_namespace.nspname != %(nspname_1)s
+2026-06-20 09:31:58,523 INFO sqlalchemy.engine.Engine [cached since 0.05928s ago] [SQL parameters hidden due to hide_parameters=True]
+2026-06-20 09:31:58,524 INFO sqlalchemy.engine.Engine COMMIT
+2026-06-20 09:31:58,530 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-06-20 09:31:58,531 INFO sqlalchemy.engine.Engine SELECT pg_catalog.pg_attribute.attname AS name, pg_catalog.format_type(pg_catalog.pg_attribute.atttypid, pg_catalog.pg_attribute.atttypmod) AS format_type, (SELECT pg_catalog.pg_get_expr(pg_catalog.pg_attrdef.adbin, pg_catalog.pg_attrdef.adrelid) AS pg_get_expr_1 
+FROM pg_catalog.pg_attrdef 
+WHERE pg_catalog.pg_attrdef.adrelid = pg_catalog.pg_attribute.attrelid AND pg_catalog.pg_attrdef.adnum = pg_catalog.pg_attribute.attnum AND pg_catalog.pg_attribute.atthasdef) AS "default", pg_catalog.pg_attribute.attnotnull AS not_null, pg_catalog.pg_class.relname AS table_name, pg_catalog.pg_description.description AS comment, pg_catalog.pg_attribute.attgenerated AS generated, (SELECT json_build_object(%(json_build_object_2)s, pg_catalog.pg_attribute.attidentity = %(attidentity_1)s, %(json_build_object_3)s, pg_catalog.pg_sequence.seqstart, %(json_build_object_4)s, pg_catalog.pg_sequence.seqincrement, %(json_build_object_5)s, pg_catalog.pg_sequence.seqmin, %(json_build_object_6)s, pg_catalog.pg_sequence.seqmax, %(json_build_object_7)s, pg_catalog.pg_sequence.seqcache, %(json_build_object_8)s, pg_catalog.pg_sequence.seqcycle) AS json_build_object_1 
+FROM pg_catalog.pg_sequence 
+WHERE pg_catalog.pg_attribute.attidentity != %(attidentity_2)s AND pg_catalog.pg_sequence.seqrelid = CAST(CAST(pg_catalog.pg_get_serial_sequence(CAST(CAST(pg_catalog.pg_attribute.attrelid AS REGCLASS) AS TEXT), pg_catalog.pg_attribute.attname) AS REGCLASS) AS OID)) AS identity_options 
+FROM pg_catalog.pg_class LEFT OUTER JOIN pg_catalog.pg_attribute ON pg_catalog.pg_class.oid = pg_catalog.pg_attribute.attrelid AND pg_catalog.pg_attribute.attnum > %(attnum_1)s AND NOT pg_catalog.pg_attribute.attisdropped LEFT OUTER JOIN pg_catalog.pg_description ON pg_catalog.pg_description.objoid = pg_catalog.pg_attribute.attrelid AND pg_catalog.pg_description.objsubid = pg_catalog.pg_attribute.attnum JOIN pg_catalog.pg_namespace ON pg_catalog.pg_namespace.oid = pg_catalog.pg_class.relnamespace 
+WHERE pg_catalog.pg_class.relkind = ANY (ARRAY[%(param_1)s, %(param_2)s, %(param_3)s, %(param_4)s, %(param_5)s]) AND pg_catalog.pg_table_is_visible(pg_catalog.pg_class.oid) AND pg_catalog.pg_namespace.nspname != %(nspname_1)s AND pg_catalog.pg_class.relname IN (%(filter_names_1)s) ORDER BY pg_catalog.pg_class.relname, pg_catalog.pg_attribute.attnum
+2026-06-20 09:31:58,531 INFO sqlalchemy.engine.Engine [generated in 0.00103s] [SQL parameters hidden due to hide_parameters=True]
+2026-06-20 09:31:58,570 INFO sqlalchemy.engine.Engine SELECT pg_catalog.pg_type.typname AS name, pg_catalog.format_type(pg_catalog.pg_type.typbasetype, pg_catalog.pg_type.typtypmod) AS attype, NOT pg_catalog.pg_type.typnotnull AS nullable, pg_catalog.pg_type.typdefault AS "default", pg_catalog.pg_type_is_visible(pg_catalog.pg_type.oid) AS visible, pg_catalog.pg_namespace.nspname AS schema, domain_constraints.condefs, domain_constraints.connames, pg_catalog.pg_collation.collname 
+FROM pg_catalog.pg_type JOIN pg_catalog.pg_namespace ON pg_catalog.pg_namespace.oid = pg_catalog.pg_type.typnamespace LEFT OUTER JOIN pg_catalog.pg_collation ON pg_catalog.pg_type.typcollation = pg_catalog.pg_collation.oid LEFT OUTER JOIN (SELECT pg_catalog.pg_constraint.contypid AS contypid, array_agg(pg_catalog.pg_get_constraintdef(pg_catalog.pg_constraint.oid, %(pg_get_constraintdef_1)s)) AS condefs, array_agg(CAST(pg_catalog.pg_constraint.conname AS TEXT)) AS connames 
+FROM pg_catalog.pg_constraint 
+WHERE pg_catalog.pg_constraint.contypid != %(contypid_1)s GROUP BY pg_catalog.pg_constraint.contypid) AS domain_constraints ON pg_catalog.pg_type.oid = domain_constraints.contypid 
+WHERE pg_catalog.pg_type.typtype = %(typtype_1)s ORDER BY pg_catalog.pg_namespace.nspname, pg_catalog.pg_type.typname
+2026-06-20 09:31:58,570 INFO sqlalchemy.engine.Engine [generated in 0.00064s] [SQL parameters hidden due to hide_parameters=True]
+2026-06-20 09:31:58,585 INFO sqlalchemy.engine.Engine SELECT pg_catalog.pg_type.typname AS name, pg_catalog.pg_type_is_visible(pg_catalog.pg_type.oid) AS visible, pg_catalog.pg_namespace.nspname AS schema, lbl_agg.labels AS labels 
+FROM pg_catalog.pg_type JOIN pg_catalog.pg_namespace ON pg_catalog.pg_namespace.oid = pg_catalog.pg_type.typnamespace LEFT OUTER JOIN (SELECT pg_catalog.pg_enum.enumtypid AS enumtypid, array_agg(CAST(pg_catalog.pg_enum.enumlabel AS TEXT) ORDER BY pg_catalog.pg_enum.enumsortorder) AS labels 
+FROM pg_catalog.pg_enum GROUP BY pg_catalog.pg_enum.enumtypid) AS lbl_agg ON pg_catalog.pg_type.oid = lbl_agg.enumtypid 
+WHERE pg_catalog.pg_type.typtype = %(typtype_1)s ORDER BY pg_catalog.pg_namespace.nspname, pg_catalog.pg_type.typname
+2026-06-20 09:31:58,589 INFO sqlalchemy.engine.Engine [generated in 0.00418s] [SQL parameters hidden due to hide_parameters=True]
+2026-06-20 09:31:58,593 INFO sqlalchemy.engine.Engine ROLLBACK
+2026-06-20 09:31:58,594 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-06-20 09:31:58,595 INFO sqlalchemy.engine.Engine CREATE EXTENSION IF NOT EXISTS vector
+2026-06-20 09:31:58,595 INFO sqlalchemy.engine.Engine [generated in 0.00042s] [SQL parameters hidden due to hide_parameters=True]
+2026-06-20 09:31:58,612 INFO sqlalchemy.engine.Engine ALTER TABLE knowledge_chunks ADD COLUMN IF NOT EXISTS embedding vector
+2026-06-20 09:31:58,619 INFO sqlalchemy.engine.Engine [generated in 0.00626s] [SQL parameters hidden due to hide_parameters=True]
+2026-06-20 09:31:58,621 INFO sqlalchemy.engine.Engine SELECT vector_dims(embedding) FROM knowledge_chunks WHERE embedding IS NOT NULL LIMIT 1
+2026-06-20 09:31:58,622 INFO sqlalchemy.engine.Engine [generated in 0.00071s] [SQL parameters hidden due to hide_parameters=True]
+2026-06-20 09:31:58,667 INFO sqlalchemy.engine.Engine CREATE INDEX IF NOT EXISTS idx_knowledge_chunks_embedding ON knowledge_chunks USING ivfflat (embedding vector_cosine_ops) WITH (lists = 100)
+2026-06-20 09:31:58,668 INFO sqlalchemy.engine.Engine [generated in 0.00053s] [SQL parameters hidden due to hide_parameters=True]
+2026-06-20 09:31:58,668 INFO sqlalchemy.engine.Engine COMMIT
+2026-06-20 09:31:58,697 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-06-20 09:31:58,708 INFO sqlalchemy.engine.Engine SELECT groups.id AS groups_id, groups.group_name AS groups_group_name, groups.description AS groups_description, groups.created_at AS groups_created_at, groups.updated_at AS groups_updated_at 
+FROM groups
+2026-06-20 09:31:58,708 INFO sqlalchemy.engine.Engine [generated in 0.00045s] [SQL parameters hidden due to hide_parameters=True]
+2026-06-20 09:31:58,711 INFO sqlalchemy.engine.Engine SELECT permissions.id AS permissions_id, permissions.permission_key AS permissions_permission_key, permissions.permission_name AS permissions_permission_name, permissions.permission_type AS permissions_permission_type, permissions.description AS permissions_description, permissions.created_at AS permissions_created_at, permissions.updated_at AS permissions_updated_at 
+FROM permissions
+2026-06-20 09:31:58,712 INFO sqlalchemy.engine.Engine [generated in 0.00047s] [SQL parameters hidden due to hide_parameters=True]
+2026-06-20 09:31:58,715 INFO sqlalchemy.engine.Engine SELECT routes.id AS routes_id, routes.route_path AS routes_route_path, routes.route_name AS routes_route_name, routes.parent_id AS routes_parent_id, routes.route_type AS routes_route_type, routes.component_path AS routes_component_path, routes.description AS routes_description, routes.created_at AS routes_created_at, routes.updated_at AS routes_updated_at 
+FROM routes
+2026-06-20 09:31:58,715 INFO sqlalchemy.engine.Engine [generated in 0.00047s] [SQL parameters hidden due to hide_parameters=True]
+2026-06-20 09:31:58,718 INFO sqlalchemy.engine.Engine SELECT groups.id AS groups_id, groups.group_name AS groups_group_name, groups.description AS groups_description, groups.created_at AS groups_created_at, groups.updated_at AS groups_updated_at 
+FROM groups
+2026-06-20 09:31:58,718 INFO sqlalchemy.engine.Engine [cached since 0.01036s ago] [SQL parameters hidden due to hide_parameters=True]
+2026-06-20 09:31:58,719 INFO sqlalchemy.engine.Engine SELECT permissions.id AS permissions_id, permissions.permission_key AS permissions_permission_key, permissions.permission_name AS permissions_permission_name, permissions.permission_type AS permissions_permission_type, permissions.description AS permissions_description, permissions.created_at AS permissions_created_at, permissions.updated_at AS permissions_updated_at 
+FROM permissions
+2026-06-20 09:31:58,719 INFO sqlalchemy.engine.Engine [cached since 0.007512s ago] [SQL parameters hidden due to hide_parameters=True]
+2026-06-20 09:31:58,720 INFO sqlalchemy.engine.Engine SELECT group_permissions.id AS group_permissions_id, group_permissions.group_id AS group_permissions_group_id, group_permissions.permission_id AS group_permissions_permission_id, group_permissions.created_at AS group_permissions_created_at 
+FROM group_permissions
+2026-06-20 09:31:58,721 INFO sqlalchemy.engine.Engine [generated in 0.00045s] [SQL parameters hidden due to hide_parameters=True]
+2026-06-20 09:31:58,725 INFO sqlalchemy.engine.Engine SELECT routes.id AS routes_id, routes.route_path AS routes_route_path, routes.route_name AS routes_route_name, routes.parent_id AS routes_parent_id, routes.route_type AS routes_route_type, routes.component_path AS routes_component_path, routes.description AS routes_description, routes.created_at AS routes_created_at, routes.updated_at AS routes_updated_at 
+FROM routes
+2026-06-20 09:31:58,745 INFO sqlalchemy.engine.Engine [cached since 0.02922s ago] [SQL parameters hidden due to hide_parameters=True]
+2026-06-20 09:31:58,746 INFO sqlalchemy.engine.Engine SELECT permission_routes.id AS permission_routes_id, permission_routes.permission_id AS permission_routes_permission_id, permission_routes.route_id AS permission_routes_route_id, permission_routes.created_at AS permission_routes_created_at 
+FROM permission_routes
+2026-06-20 09:31:58,748 INFO sqlalchemy.engine.Engine [generated in 0.00058s] [SQL parameters hidden due to hide_parameters=True]
+2026-06-20 09:31:58,751 INFO sqlalchemy.engine.Engine ROLLBACK
+2026-06-20 09:31:58,752 INFO sqlalchemy.engine.Engine SELECT pg_advisory_unlock(2026061301)
+2026-06-20 09:31:58,753 INFO sqlalchemy.engine.Engine [generated in 0.00063s] [SQL parameters hidden due to hide_parameters=True]
+2026-06-20 09:31:58,754 INFO sqlalchemy.engine.Engine ROLLBACK
+2026-06-20 09:31:58,755 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-06-20 09:31:58,756 INFO sqlalchemy.engine.Engine SELECT product_categories.id AS product_categories_id, product_categories.category_name AS product_categories_category_name, product_categories.parent_id AS product_categories_parent_id, product_categories.description AS product_categories_description, product_categories.created_at AS product_categories_created_at 
+FROM product_categories 
+ LIMIT %(param_1)s
+2026-06-20 09:31:58,756 INFO sqlalchemy.engine.Engine [generated in 0.00034s] [SQL parameters hidden due to hide_parameters=True]
+2026-06-20 09:31:58,758 INFO sqlalchemy.engine.Engine ROLLBACK
+2026-06-20 09:31:58,759 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-06-20 09:31:58,760 INFO sqlalchemy.engine.Engine SELECT users.id AS users_id, users.username AS users_username, users.user_type AS users_user_type, users.password_hash AS users_password_hash, users.display_name AS users_display_name, users.email AS users_email, users.is_active AS users_is_active, users.created_at AS users_created_at, users.updated_at AS users_updated_at 
+FROM users 
+WHERE users.username = %(username_1)s 
+ LIMIT %(param_1)s
+2026-06-20 09:31:58,760 INFO sqlalchemy.engine.Engine [generated in 0.00033s] [SQL parameters hidden due to hide_parameters=True]
+2026-06-20 09:31:58,766 INFO sqlalchemy.engine.Engine SELECT user_groups.user_id AS user_groups_user_id, user_groups.id AS user_groups_id, user_groups.group_id AS user_groups_group_id, user_groups.group_role AS user_groups_group_role, user_groups.created_at AS user_groups_created_at, user_groups.updated_at AS user_groups_updated_at 
+FROM user_groups 
+WHERE user_groups.user_id IN (%(primary_keys_1)s)
+2026-06-20 09:31:58,767 INFO sqlalchemy.engine.Engine [generated in 0.00067s] [SQL parameters hidden due to hide_parameters=True]
+2026-06-20 09:31:58,771 INFO sqlalchemy.engine.Engine SELECT groups.id AS groups_id, groups.group_name AS groups_group_name, groups.description AS groups_description, groups.created_at AS groups_created_at, groups.updated_at AS groups_updated_at 
+FROM groups 
+WHERE groups.id IN (%(primary_keys_1)s)
+2026-06-20 09:31:58,772 INFO sqlalchemy.engine.Engine [generated in 0.00053s] [SQL parameters hidden due to hide_parameters=True]
+2026-06-20 09:31:58,774 INFO sqlalchemy.engine.Engine ROLLBACK

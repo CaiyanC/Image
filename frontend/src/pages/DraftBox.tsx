@@ -2,9 +2,12 @@ import { useState, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { api } from '../services/api'
 import type { ProductDraft } from '../types'
+import { useAuthStore } from '../store/authStore'
+import { canUsePermission, showNoPermissionToast } from '../services/permissionFeedback'
 
 export default function DraftBox() {
   const navigate = useNavigate()
+  const { user, isManagement } = useAuthStore()
   const [drafts, setDrafts] = useState<ProductDraft[]>([])
   const [loading, setLoading] = useState(true)
   const [deleteConfirmId, setDeleteConfirmId] = useState<string | null>(null)
@@ -107,6 +110,14 @@ export default function DraftBox() {
     window.setTimeout(() => setNotice(null), 3500)
   }
 
+  function runWithPermission(permissionKey: string, action: () => void) {
+    if (!canUsePermission(user, isManagement, permissionKey)) {
+      showNoPermissionToast()
+      return
+    }
+    action()
+  }
+
   const filteredDrafts = drafts.filter(d => {
     const data = d.draft_data || {}
     return (d.sku?.toLowerCase() || '').includes(searchQuery.toLowerCase()) ||
@@ -138,10 +149,10 @@ export default function DraftBox() {
               <span className="text-sm text-apple-gray-medium">{selectedIds.size} 个已选</span>
               <button onClick={() => { setBatchMode(false); setSelectedIds(new Set()) }}
                 className="px-3 py-1.5 text-sm text-gray-600 hover:bg-gray-100 rounded-lg transition-colors">取消</button>
-              <button onClick={() => selectedIds.size > 0 && setBatchConfirm('publish')}
+              <button onClick={() => selectedIds.size > 0 && runWithPermission('product.create', () => setBatchConfirm('publish'))}
                 className="px-3 py-1.5 text-sm bg-green-500 text-white rounded-lg hover:bg-green-600 transition-colors disabled:opacity-50"
                 disabled={selectedIds.size === 0}>批量发布</button>
-              <button onClick={() => selectedIds.size > 0 && setBatchConfirm('delete')}
+              <button onClick={() => selectedIds.size > 0 && runWithPermission('product.edit', () => setBatchConfirm('delete'))}
                 className="px-3 py-1.5 text-sm bg-red-500 text-white rounded-lg hover:bg-red-600 transition-colors disabled:opacity-50"
                 disabled={selectedIds.size === 0}>批量删除</button>
             </>
@@ -151,7 +162,7 @@ export default function DraftBox() {
                 className="px-4 py-2 bg-gray-100 text-gray-700 rounded-lg text-sm font-medium hover:bg-gray-200 transition-colors">
                 批量操作
               </button>
-              <button onClick={() => navigate('/products/create')}
+              <button onClick={() => runWithPermission('product.create', () => navigate('/products/create'))}
                 className="px-4 py-2 bg-blue-500 text-white rounded-lg text-sm font-medium hover:bg-blue-600 transition-colors">
                 + 新建草稿
               </button>
@@ -229,15 +240,15 @@ export default function DraftBox() {
                 </div>
                 </div>
                 <div className="flex items-center gap-2">
-                  <button onClick={() => navigate(`/products/create/${draft.id}`)}
+                  <button onClick={() => runWithPermission('product.edit', () => navigate(`/products/create/${draft.id}`))}
                     className="px-3 py-1.5 text-sm text-blue-600 hover:bg-blue-50 rounded-lg transition-colors">
                     编辑
                   </button>
-                  <button onClick={() => handlePublish(draft.id)}
+                  <button onClick={() => runWithPermission('product.create', () => handlePublish(draft.id))}
                     className="px-3 py-1.5 text-sm text-green-600 hover:bg-green-50 rounded-lg transition-colors">
                     发布
                   </button>
-                  <button onClick={() => setDeleteConfirmId(draft.id)}
+                  <button onClick={() => runWithPermission('product.edit', () => setDeleteConfirmId(draft.id))}
                     className="px-3 py-1.5 text-sm text-red-500 hover:bg-red-50 rounded-lg transition-colors">
                     删除
                   </button>

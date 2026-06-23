@@ -40,7 +40,7 @@ class CustomerDialogueStateTest(unittest.TestCase):
         self.assertEqual(state.confidence, "high")
 
     def test_previous_result_reference_detection(self):
-        self.assertTrue(customer_dialogue_state.should_use_previous_result_skus("这款容量多少？"))
+        self.assertFalse(customer_dialogue_state.should_use_previous_result_skus("这款容量多少？"))
         self.assertTrue(customer_dialogue_state.needs_previous_context("这些有什么区别？"))
         self.assertFalse(customer_dialogue_state.should_use_previous_result_skus("锅具有哪些产品？"))
         self.assertFalse(customer_dialogue_state.needs_previous_context("还有其他锅推荐吗？"))
@@ -97,6 +97,9 @@ class CustomerDialogueStateTest(unittest.TestCase):
         self.assertEqual(state.confidence, "low")
         self.assertTrue(state.needs_clarification)
         self.assertEqual(state.missing_slots, ["product_scope"])
+
+    def test_product_scope_from_text_uses_existing_slot_extraction(self):
+        self.assertEqual(customer_dialogue_state.product_scope_from_text("推荐一款适合2个人露营做饭的锅"), "锅")
 
 
 if __name__ == "__main__":

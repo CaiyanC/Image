@@ -2,6 +2,7 @@ const BASE_URL = import.meta.env.VITE_API_BASE_URL || '/api'
 const TRACE_CUSTOMER_AGENT = import.meta.env.VITE_TRACE_CUSTOMER_AGENT === 'true'
 
 import type { Product, ProductListResponse, ProductDraft } from '../types'
+import { NO_PERMISSION_MESSAGE, showNoPermissionToast } from './permissionFeedback'
 
 const ERROR_MESSAGES: Record<string, string> = {
   'Incorrect username or password': '账号或密码错误',
@@ -30,7 +31,7 @@ function normalizeErrorMessage(detail: unknown, status?: number) {
   const raw = typeof detail === 'string' ? detail : JSON.stringify(detail || '')
   if (ERROR_MESSAGES[raw]) return ERROR_MESSAGES[raw]
   if (status === 404) return '接口或数据不存在，请刷新页面后重试'
-  if (status === 403) return '没有权限执行该操作'
+  if (status === 403) return NO_PERMISSION_MESSAGE
   if (status === 401) return '账号或密码错误'
   return raw || '请求失败'
 }
@@ -71,6 +72,14 @@ function parseTraceBody(body: BodyInit | null | undefined) {
   } catch {
     return body
   }
+}
+
+function toBackendUrl(path: string) {
+  if (path.startsWith('http')) return path
+  if (BASE_URL.startsWith('http')) {
+    return `${BASE_URL.replace(/\/api\/?$/, '')}${path}`
+  }
+  return path
 }
 
 export interface CategoryItem {
@@ -214,12 +223,53 @@ export interface KnowledgeJob {
   finished_at?: string | null
 }
 
+export interface KnowledgeFileUploadResult {
+  document_id: string
+  task_id?: string | null
+  task_status?: string | null
+  file_name: string
+  file_type: string
+  parse_status: string
+  parse_error?: string | null
+  chunk_count: number
+  related_skus: string[]
+  duplicate: boolean
+  reused_document_id?: string | null
+  message?: string | null
+}
+
+export interface KnowledgeFileUploadResponse {
+  items: KnowledgeFileUploadResult[]
+}
+
+export interface KnowledgeRecoverStuckResponse {
+  recovered_count: number
+  candidates_count: number
+  documents: Array<{
+    id: string
+    file_name?: string | null
+    parse_status: string
+    updated_at?: string | null
+    parse_error?: string | null
+  }>
+}
+
+export interface KnowledgeParseTask {
+  task_id: string
+  document_id: string
+  status: string
+  error_message?: string | null
+  created_at?: string | null
+  finished_at?: string | null
+}
+
 export type CustomerServiceStreamEvent =
   | { type: 'status'; message?: string; label?: string }
   | ({ type: 'meta' } & Omit<CustomerServiceAskResult, 'answer'>)
   | { type: 'clarification'; message?: string; suggested_followups?: string[] }
   | { type: 'warning'; message?: string }
   | { type: 'recommendation'; message?: string }
+  | { type: 'content'; content: string }
   | { type: 'answer_delta'; text: string }
   | { type: 'done'; ok: boolean }
   | { type: 'error'; message: string }
@@ -288,6 +338,7 @@ async function request<T>(url: string, options: RequestInit = {}, timeoutMs = 30
           error,
         })
       }
+      if (response.status === 403) showNoPermissionToast()
       throw new Error(normalizeErrorMessage(error.detail || error, response.status))
     }
 
@@ -322,6 +373,7 @@ async function streamRequest(
   options: RequestInit,
   onEvent: (event: CustomerServiceStreamEvent) => void,
   timeoutMs = 150000,
+  signal?: AbortSignal,
 ): Promise<void> {
   const token = localStorage.getItem('token')
   const headers: Record<string, string> = {}
@@ -339,6 +391,13 @@ async function streamRequest(
 
   const controller = new AbortController()
   const timer = setTimeout(() => controller.abort(), timeoutMs)
+  const abortFromExternalSignal = () => controller.abort()
+
+  if (signal?.aborted) {
+    controller.abort()
+  } else {
+    signal?.addEventListener('abort', abortFromExternalSignal, { once: true })
+  }
 
   try {
     const response = await fetch(`${BASE_URL}${url}`, {
@@ -356,6 +415,7 @@ async function streamRequest(
 
     if (!response.ok || !response.body) {
       const error = await response.json().catch(() => ({ detail: 'Request failed' }))
+      if (response.status === 403) showNoPermissionToast()
       throw new Error(normalizeErrorMessage(error.detail || error, response.status))
     }
 
@@ -379,8 +439,26 @@ async function streamRequest(
     const parsed = parseStreamEvent(buffer)
     if (parsed) onEvent(parsed)
   } finally {
+    signal?.removeEventListener('abort', abortFromExternalSignal)
     clearTimeout(timer)
   }
+}
+
+function uploadKnowledgeFilesRequest(files: File[], relatedSkus: string[] | string = []) {
+  const formData = new FormData()
+  for (const file of files) {
+    formData.append('files', file)
+  }
+  formData.append(
+    'related_skus',
+    Array.isArray(relatedSkus)
+      ? relatedSkus.map((item) => String(item).trim()).filter(Boolean).join(',')
+      : String(relatedSkus || '').trim(),
+  )
+  return request<KnowledgeFileUploadResponse>('/knowledge-base/files/upload', {
+    method: 'POST',
+    body: formData,
+  })
 }
 
 function parseStreamEvent(rawEvent: string): CustomerServiceStreamEvent | null {
@@ -534,7 +612,17 @@ export const api = {
     getModels: () => request<any[]>('/admin/models-config'),
     updateModels: (models: any[]) =>
       request('/admin/models-config', { method: 'PUT', body: JSON.stringify({ models }) }),
-    operationLogs: (params: { skip?: number; limit?: number; search?: string; action_type?: string; target_type?: string; status?: string } = {}) => {
+    operationLogs: (params: {
+      skip?: number
+      limit?: number
+      search?: string
+      action_type?: string
+      target_type?: string
+      status?: string
+      operator_id?: string
+      date_from?: string
+      date_to?: string
+    } = {}) => {
       const query = new URLSearchParams()
       query.set('skip', String(params.skip ?? 0))
       query.set('limit', String(params.limit ?? 50))
@@ -542,8 +630,16 @@ export const api = {
       if (params.action_type) query.set('action_type', params.action_type)
       if (params.target_type) query.set('target_type', params.target_type)
       if (params.status) query.set('status', params.status)
+      if (params.operator_id) query.set('operator_id', params.operator_id)
+      if (params.date_from) query.set('date_from', params.date_from)
+      if (params.date_to) query.set('date_to', params.date_to)
       return request<{ items: any[]; total: number }>(`/admin/operation-logs?${query.toString()}`)
     },
+    restoreProductSnapshot: (snapshotId: string) =>
+      request<{ snapshot_id: string; sku: string; restored_to: string }>(
+        `/products/operation-snapshots/${snapshotId}/restore`,
+        { method: 'POST' },
+      ),
   },
 
   groups: {
@@ -583,6 +679,8 @@ export const api = {
         '/products/advanced-search',
         { method: 'POST', body: JSON.stringify(data) }
       ),
+
+    filterOptions: () => request<Record<string, string[]>>('/products/filter-options'),
 
     get: (sku: string) => request<Product>(`/products/${sku}`),
 
@@ -629,7 +727,7 @@ export const api = {
       total_files: number
       total_qa_created: number
       total_negative_updated: number
-      results: Array<{ sku: string; status: string; qa_created: number; negative_updated: boolean; message?: string }>
+      results: Array<{ sku: string; status: string; qa_created: number; qa_skipped_duplicate?: number; negative_updated: boolean; message?: string }>
     }>('/products/qa/batch-import', { method: 'POST', body: JSON.stringify(data) }),
 
     // QA Negative
@@ -676,7 +774,8 @@ export const api = {
     askStream: (
       data: { question: string; conversation_id?: string | null },
       onEvent: (event: CustomerServiceStreamEvent) => void,
-    ) => streamRequest('/customer-service/ask-stream', { method: 'POST', body: JSON.stringify(data) }, onEvent, 150000),
+      signal?: AbortSignal,
+    ) => streamRequest('/customer-service/ask-stream', { method: 'POST', body: JSON.stringify(data) }, onEvent, 150000, signal),
     feedback: (messageId: string, data: { rating: 'helpful' | 'incorrect' | 'missing_data'; reason?: string; comment?: string }) =>
       request<{ message_id: string; feedback: Record<string, unknown> }>(
         `/customer-service/messages/${messageId}/feedback`,
@@ -700,6 +799,16 @@ export const api = {
   },
 
   knowledgeBase: {
+    uploadFiles: (files: File[], relatedSkus: string[] | string = []) =>
+      uploadKnowledgeFilesRequest(files, relatedSkus),
+    uploadFile: (file: File, relatedSkus: string[] | string = []) =>
+      uploadKnowledgeFilesRequest([file], relatedSkus),
+    recoverStuckFiles: (data: { timeout_minutes?: number; dry_run?: boolean } = {}) =>
+      request<KnowledgeRecoverStuckResponse>(
+        '/knowledge-base/files/recover-stuck',
+        { method: 'POST', body: JSON.stringify(data) },
+      ),
+    task: (id: string) => request<KnowledgeParseTask>(`/knowledge-base/tasks/${id}`),
     status: () => request<{
       available: boolean
       extension: boolean
@@ -734,6 +843,17 @@ export const api = {
     jobs: (limit = 20) =>
       request<{ items: KnowledgeJob[]; total: number }>(`/knowledge-base/jobs?limit=${limit}`),
     job: (id: string) => request<KnowledgeJob>(`/knowledge-base/jobs/${id}`),
+  },
+
+  files: {
+    sign: async (path: string) => {
+      const response = await request<{ url: string; expires_in: number }>(
+        '/files/sign',
+        { method: 'POST', body: JSON.stringify({ path }) },
+      )
+      return { ...response, url: toBackendUrl(response.url) }
+    },
+    knowledgeDownloadUrl: (documentId: string) => toBackendUrl(`/api/knowledge-base/files/${documentId}/download`),
   },
 
   categories: {

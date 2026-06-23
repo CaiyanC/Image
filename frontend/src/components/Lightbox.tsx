@@ -1,4 +1,5 @@
 import { useEffect, useCallback } from 'react'
+import { useSignedFileUrl } from './SecureFile'
 
 interface LightboxProps {
   images: string[]
@@ -9,6 +10,7 @@ interface LightboxProps {
 
 export default function Lightbox({ images, currentIndex, onClose, onNavigate }: LightboxProps) {
   const total = images.length
+  const current = useSignedFileUrl(images[currentIndex])
 
   const goNext = useCallback(() => {
     onNavigate((currentIndex + 1) % total)
@@ -71,7 +73,7 @@ export default function Lightbox({ images, currentIndex, onClose, onNavigate }: 
       </div>
 
       <a
-        href={images[currentIndex]}
+        href={current.url || images[currentIndex]}
         download
         onClick={(e) => e.stopPropagation()}
         className="absolute top-4 left-20 w-10 h-10 rounded-full glass-light flex items-center justify-center text-white hover:text-apple-blue transition-colors z-10"
@@ -83,7 +85,7 @@ export default function Lightbox({ images, currentIndex, onClose, onNavigate }: 
       </a>
 
       <img
-        src={images[currentIndex]}
+        src={current.url || images[currentIndex]}
         alt={`Generated ${currentIndex + 1}`}
         className="max-w-[90vw] max-h-[85vh] object-contain rounded-xl select-none"
         onClick={(e) => e.stopPropagation()}

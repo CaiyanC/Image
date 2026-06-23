@@ -2,6 +2,7 @@ import { Suspense, lazy } from 'react'
 import { Routes, Route, Navigate } from 'react-router-dom'
 import { useAuthStore } from './store/authStore'
 import Layout from './components/layout/Layout'
+import PermissionToast from './components/PermissionToast'
 
 const Login = lazy(() => import('./pages/Login'))
 const Register = lazy(() => import('./pages/Register'))
@@ -14,6 +15,7 @@ const AdminLogs = lazy(() => import('./pages/AdminLogs'))
 const ProductManagement = lazy(() => import('./pages/ProductManagement'))
 const CustomerService = lazy(() => import('./pages/CustomerService'))
 const KnowledgeBase = lazy(() => import('./pages/KnowledgeBase'))
+const FileKnowledgeBase = lazy(() => import('./pages/FileKnowledgeBase'))
 const ProductCreate = lazy(() => import('./pages/ProductCreate'))
 const DraftBox = lazy(() => import('./pages/DraftBox'))
 const Profile = lazy(() => import('./pages/Profile'))
@@ -57,8 +59,10 @@ function PermissionRoute({
 
 export default function App() {
   return (
-    <Suspense fallback={<RouteFallback />}>
-      <Routes>
+    <>
+      <PermissionToast />
+      <Suspense fallback={<RouteFallback />}>
+        <Routes>
         <Route path="/login" element={<Login />} />
         <Route path="/register" element={<Register />} />
         <Route
@@ -124,11 +128,21 @@ export default function App() {
         <Route
           path="/knowledge-base"
           element={
-            <PermissionRoute permissionKey="ai.call">
+            <SuperAdminRoute>
               <Layout>
                 <KnowledgeBase />
               </Layout>
-            </PermissionRoute>
+            </SuperAdminRoute>
+          }
+        />
+        <Route
+          path="/file-knowledge"
+          element={
+            <SuperAdminRoute>
+              <Layout>
+                <FileKnowledgeBase />
+              </Layout>
+            </SuperAdminRoute>
           }
         />
         <Route
@@ -212,8 +226,9 @@ export default function App() {
           }
         />
         <Route path="*" element={<Navigate to="/" replace />} />
-      </Routes>
-    </Suspense>
+        </Routes>
+      </Suspense>
+    </>
   )
 }
 

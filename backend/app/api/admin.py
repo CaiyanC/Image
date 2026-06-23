@@ -1,10 +1,10 @@
+from datetime import datetime
+
 from fastapi import APIRouter, Depends, Request
 from sqlalchemy.orm import Session
-from sqlalchemy import or_
 from pydantic import BaseModel
 from ..core.database import get_db
 from ..core.security import get_current_super_admin
-from ..models.operation_logs import OperationLog
 from ..models.user import User
 from ..services import dmxapi_service, operation_log_service
 
@@ -70,53 +70,21 @@ def list_operation_logs(
     target_type: str | None = None,
     status: str | None = None,
     search: str | None = None,
+    operator_id: str | None = None,
+    date_from: datetime | None = None,
+    date_to: datetime | None = None,
     _: User = Depends(get_current_super_admin),
     db: Session = Depends(get_db),
 ):
-    limit = min(max(limit, 1), 200)
-    query = db.query(OperationLog, User).outerjoin(User, OperationLog.operator_id == User.id)
-
-    if action_type:
-        query = query.filter(OperationLog.action_type == action_type)
-    if target_type:
-        query = query.filter(OperationLog.target_type == target_type)
-    if status:
-        query = query.filter(OperationLog.status == status)
-    if search:
-        like = f"%{search}%"
-        query = query.filter(or_(
-            OperationLog.action_name.ilike(like),
-            OperationLog.target_name.ilike(like),
-            User.username.ilike(like),
-        ))
-
-    total = query.count()
-    rows = (
-        query.order_by(OperationLog.created_at.desc())
-        .offset(skip)
-        .limit(limit)
-        .all()
+    return operation_log_service.list_operation_logs(
+        db,
+        skip=skip,
+        limit=limit,
+        action_type=action_type,
+        target_type=target_type,
+        status=status,
+        search=search,
+        operator_id=operator_id,
+        date_from=date_from,
+        date_to=date_to,
     )
-    return {
-        "items": [
-            {
-                "id": log.id,
-                "operator_id": log.operator_id,
-                "operator_name": user.username if user else "-",
-                "action_type": log.action_type,
-                "action_name": log.action_name,
-                "target_type": log.target_type,
-                "target_id": log.target_id,
-                "target_name": log.target_name,
-                "request_data": log.request_data,
-                "response_data": log.response_data,
-                "status": log.status,
-                "error_message": log.error_message,
-                "ip_address": log.ip_address,
-                "user_agent": log.user_agent,
-                "created_at": log.created_at,
-            }
-            for log, user in rows
-        ],
-        "total": total,
-    }

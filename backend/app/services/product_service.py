@@ -23,7 +23,25 @@ from ..models.product_associations import (
     Certification, ProductCertification,
     Keyword, ProductKeyword,
 )
+from . import customer_cache_service
 
+
+def _product_detail_cache_key(db: Session, sku: str) -> str:
+    bind = db.get_bind()
+    return customer_cache_service.make_key("product_detail", id(bind), str(sku or "").strip().upper())
+
+
+def invalidate_product_detail_cache(db: Session, sku: str) -> None:
+    if sku:
+        customer_cache_service.product_detail_cache.delete(_product_detail_cache_key(db, sku))
+
+
+def _invalidate_product_detail_cache_by_id(db: Session, product_id: str | None) -> None:
+    if not product_id:
+        return
+    product = get_product_by_id(db, product_id)
+    if product:
+        invalidate_product_detail_cache(db, product.sku)
 
 
 def sync_product_to_vector_db(db: Session, sku: str) -> dict:
@@ -47,6 +65,7 @@ def sync_product_to_vector_db(db: Session, sku: str) -> dict:
         if product:
             product.sync_flag = True
         db.commit()
+        invalidate_product_detail_cache(db, sku)
 
         # Try embedding (non-blocking; fails gracefully if API key expired)
         import asyncio
@@ -381,7 +400,12 @@ def _build_detail(product: Product, db: Session) -> dict:
         } if qa_negative else None,
         "channels": [{"id": ch.id, "channel_name": ch.channel_name, "channel_code": ch.channel_code} for ch in channels],
         "regions": [{"id": r.id, "region_name": r.region_name, "region_code": r.region_code} for r in regions],
-        "certifications": [{"id": c.id, "certification_name": c.certification_name, "certification_code": c.certification_code} for c in certifications],
+        "certifications": [{
+            "id": str(c.id),
+            "certification_name": c.certification_name,
+            "certification_code": c.certification_code,
+            "description": c.description,
+        } for c in certifications],
         "keywords": [{"id": k.id, "keyword": k.keyword, "keyword_level": k.keyword_level} for k in keywords],
     }
 
@@ -417,6 +441,34 @@ def get_products(db: Session, skip: int = 0, limit: int = 20, q: str = None):
             "created_at": str(p.created_at) if p.created_at else None,
         })
     return items, total
+
+
+def get_product_filter_options(db: Session) -> dict[str, list[str]]:
+    def distinct_values(column) -> list[str]:
+        values = [
+            str(value).strip()
+            for (value,) in db.query(column).distinct().order_by(column).all()
+            if value is not None and str(value).strip()
+        ]
+        return values
+
+    return {
+        "brand": distinct_values(Product.brand),
+        "series": distinct_values(Product.series),
+        "category": distinct_values(Product.category),
+        "sub_category": distinct_values(Product.sub_category),
+        "product_level": distinct_values(Product.product_level),
+        "lifecycle_status": distinct_values(Product.lifecycle_status),
+        "person_in_charge": distinct_values(Product.person_in_charge),
+        "capacity": distinct_values(ProductSpecs.capacity),
+        "body_material": distinct_values(ProductSpecs.body_material),
+        "color": distinct_values(ProductSpecs.color),
+        "heat_source": distinct_values(ProductSpecs.heat_source),
+        "channel": distinct_values(ListingChannel.channel_name),
+        "region": distinct_values(SalesRegion.region_name),
+        "certification": distinct_values(Certification.certification_name),
+        "search_keyword": distinct_values(Keyword.keyword),
+    }
 
 
 def advanced_search_products(db: Session, filters: dict):
@@ -621,10 +673,19 @@ def get_product_by_id(db: Session, product_id: str) -> Optional[Product]:
 
 
 def get_product_detail(db: Session, sku: str) -> dict:
-    product = get_product_by_sku(db, sku)
+    sku_key = str(sku or "").strip().upper()
+    if not sku_key:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Product not found")
+    cache_key = _product_detail_cache_key(db, sku_key)
+    cached = customer_cache_service.product_detail_cache.get(cache_key)
+    if cached is not None:
+        return cached
+    product = get_product_by_sku(db, sku_key)
     if not product:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Product not found")
-    return _build_detail(product, db)
+    detail = _build_detail(product, db)
+    customer_cache_service.product_detail_cache.set(cache_key, detail)
+    return detail
 
 
 def _validate_product_data(data: dict):
@@ -812,6 +873,7 @@ def create_product(db: Session, data: dict, creator_id: str = None) -> Product:
 
     db.commit()
     db.refresh(product)
+    invalidate_product_detail_cache(db, product.sku)
     return product
 
 
@@ -820,6 +882,7 @@ def update_product(db: Session, sku: str, update_data: dict) -> Product:
     if not product:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Product not found")
 
+    old_sku = product.sku
     field_map = {
         "product_name_cn", "product_name_en", "brand", "series",
         "category", "sub_category", "product_level", "lifecycle_status",
@@ -839,6 +902,8 @@ def update_product(db: Session, sku: str, update_data: dict) -> Product:
 
     db.commit()
     db.refresh(product)
+    invalidate_product_detail_cache(db, old_sku)
+    invalidate_product_detail_cache(db, product.sku)
     return product
 
 
@@ -848,6 +913,7 @@ def delete_product(db: Session, sku: str):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Product not found")
 
     delete_product_from_vector_db(db, sku)
+    invalidate_product_detail_cache(db, sku)
 
     pid = product.id
     for model in [
@@ -881,17 +947,26 @@ def update_product_specs(db: Session, sku: str, data: dict) -> dict:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Product not found")
 
     fields = {}
-    if "size_info" in data:
+    text_fields = {
+        "body_material", "color", "surface_finish", "heat_source",
+        "power", "usage_instruction",
+    }
+
+    if "size_info" in data and data["size_info"] is not None:
         fields["size_info"] = _to_json_str(_normalize_size_info(data["size_info"]))
-    for k in ["capacity", "gross_weight_g", "body_material", "color",
-               "surface_finish", "heat_source", "power", "usage_instruction"]:
+    if "capacity" in data and data["capacity"] is not None:
+        fields["capacity"] = _to_json_str(data["capacity"])
+    if "technical_advantages" in data and data["technical_advantages"] is not None:
+        fields["technical_advantages"] = _to_json_str(data["technical_advantages"])
+    for k in text_fields:
         if k in data and data[k] is not None:
             fields[k] = data[k]
-    if "technical_advantages" in data:
-        fields["technical_advantages"] = _to_json_str(data["technical_advantages"])
+    if "gross_weight_g" in data and data["gross_weight_g"] is not None:
+        fields["gross_weight_g"] = data["gross_weight_g"]
 
     _upsert_sub(db, ProductSpecs, product.id, fields)
     db.commit()
+    invalidate_product_detail_cache(db, sku)
     return get_product_detail(db, sku)
 
 
@@ -913,6 +988,7 @@ def update_product_business(db: Session, sku: str, data: dict) -> dict:
 
     _upsert_sub(db, ProductBusiness, product.id, fields)
     db.commit()
+    invalidate_product_detail_cache(db, sku)
     return get_product_detail(db, sku)
 
 
@@ -938,6 +1014,7 @@ def update_product_content(db: Session, sku: str, data: dict) -> dict:
 
     _upsert_sub(db, ProductContent, product.id, fields)
     db.commit()
+    invalidate_product_detail_cache(db, sku)
     return get_product_detail(db, sku)
 
 
@@ -963,6 +1040,7 @@ def add_qa_item(db: Session, sku: str, data: dict):
     )
     db.add(qa)
     db.commit()
+    invalidate_product_detail_cache(db, sku)
     db.refresh(qa)
     return qa
 
@@ -976,7 +1054,9 @@ def update_qa_item(db: Session, qa_id: str, data: dict):
             setattr(qa, k, data[k])
     if "tags" in data and data["tags"] is not None:
         qa.tags = _to_json_str(data["tags"])
+    product_id = qa.product_id
     db.commit()
+    _invalidate_product_detail_cache_by_id(db, product_id)
     db.refresh(qa)
     return qa
 
@@ -985,8 +1065,14 @@ def delete_qa_item(db: Session, qa_id: str):
     qa = db.query(ProductQa).filter(ProductQa.id == qa_id).first()
     if not qa:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="QA item not found")
+    product_id = qa.product_id
     db.delete(qa)
     db.commit()
+    _invalidate_product_detail_cache_by_id(db, product_id)
+
+
+def _normalize_qa_question(question: str) -> str:
+    return re.sub(r"\s+", "", question or "").lower()
 
 
 def import_qa_batch(db: Session, items: list[dict], mode: str = "replace") -> dict:
@@ -1004,6 +1090,7 @@ def import_qa_batch(db: Session, items: list[dict], mode: str = "replace") -> di
             "file_name": item.get("file_name"),
             "status": "success",
             "qa_created": 0,
+            "qa_skipped_duplicate": 0,
             "negative_updated": False,
             "message": "",
         }
@@ -1024,12 +1111,23 @@ def import_qa_batch(db: Session, items: list[dict], mode: str = "replace") -> di
         if item_mode == "replace":
             db.query(ProductQa).filter(ProductQa.product_id == product.id).delete(synchronize_session=False)
             db.query(ProductQaNegative).filter(ProductQaNegative.product_id == product.id).delete(synchronize_session=False)
+            seen_questions = set()
+        else:
+            seen_questions = {
+                _normalize_qa_question(row.question)
+                for row in db.query(ProductQa.question).filter(ProductQa.product_id == product.id).all()
+            }
 
         for index, qa in enumerate(qa_items, start=1):
             question = (qa.get("question") or qa.get("q") or "").strip()
             answer = (qa.get("answer") or qa.get("a") or "").strip()
             if not question or not answer:
                 continue
+            question_key = _normalize_qa_question(question)
+            if question_key in seen_questions:
+                result["qa_skipped_duplicate"] += 1
+                continue
+            seen_questions.add(question_key)
             priority = qa.get("priority")
             if priority is None:
                 priority = qa.get("no") or index
@@ -1075,6 +1173,9 @@ def import_qa_batch(db: Session, items: list[dict], mode: str = "replace") -> di
         results.append(result)
 
     db.commit()
+    for item in results:
+        if item.get("status") == "success":
+            invalidate_product_detail_cache(db, item.get("sku"))
     return {
         "total_files": len(items),
         "total_qa_created": total_qa_created,
@@ -1109,6 +1210,7 @@ def upsert_qa_negative(db: Session, sku: str, data: dict):
         )
         db.add(obj)
     db.commit()
+    invalidate_product_detail_cache(db, sku)
     db.refresh(obj)
     return obj
 
@@ -1129,6 +1231,7 @@ def add_product_prompt(db: Session, sku: str, data: dict):
     )
     db.add(prompt)
     db.commit()
+    invalidate_product_detail_cache(db, sku)
     db.refresh(prompt)
     return prompt
 
@@ -1136,8 +1239,10 @@ def add_product_prompt(db: Session, sku: str, data: dict):
 def delete_product_prompt(db: Session, prompt_id: str):
     prompt = db.query(ProductPrompts).filter(ProductPrompts.id == prompt_id).first()
     if prompt:
+        product_id = prompt.product_id
         db.delete(prompt)
         db.commit()
+        _invalidate_product_detail_cache_by_id(db, product_id)
 
 
 # ── ProductMedia ──
@@ -1176,6 +1281,7 @@ def add_product_media(db: Session, sku: str, data: dict):
     )
     db.add(media)
     db.commit()
+    invalidate_product_detail_cache(db, sku)
     db.refresh(media)
     return media
 
@@ -1199,7 +1305,9 @@ def update_product_media(db: Session, media_id: str, data: dict):
         elif k in updatable and v is not None:
             setattr(media, k, v)
 
+    product_id = media.product_id
     db.commit()
+    _invalidate_product_detail_cache_by_id(db, product_id)
     db.refresh(media)
     return media
 
@@ -1208,8 +1316,10 @@ def delete_product_media(db: Session, media_id: str):
     media = db.query(ProductMedia).filter(ProductMedia.id == media_id).first()
     if not media:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Media not found")
+    product_id = media.product_id
     db.delete(media)
     db.commit()
+    _invalidate_product_detail_cache_by_id(db, product_id)
 
 
 # ── M2M association helpers ──
@@ -1355,6 +1465,7 @@ def add_product_channel(db: Session, sku: str, channel_id: str):
     plc = ProductListingChannel(product_id=product.id, channel_id=channel_id)
     db.add(plc)
     db.commit()
+    invalidate_product_detail_cache(db, sku)
     db.refresh(plc)
     return plc
 
@@ -1368,6 +1479,7 @@ def remove_product_channel(db: Session, sku: str, channel_id: str):
         ProductListingChannel.channel_id == channel_id,
     ).delete()
     db.commit()
+    invalidate_product_detail_cache(db, sku)
 
 
 def add_product_region(db: Session, sku: str, region_id: str):
@@ -1383,6 +1495,7 @@ def add_product_region(db: Session, sku: str, region_id: str):
     psr = ProductSalesRegion(product_id=product.id, region_id=region_id)
     db.add(psr)
     db.commit()
+    invalidate_product_detail_cache(db, sku)
     db.refresh(psr)
     return psr
 
@@ -1396,6 +1509,7 @@ def remove_product_region(db: Session, sku: str, region_id: str):
         ProductSalesRegion.region_id == region_id,
     ).delete()
     db.commit()
+    invalidate_product_detail_cache(db, sku)
 
 
 def add_product_certification(db: Session, sku: str, certification_id: str, file_path: str = None):
@@ -1415,6 +1529,7 @@ def add_product_certification(db: Session, sku: str, certification_id: str, file
     )
     db.add(pc)
     db.commit()
+    invalidate_product_detail_cache(db, sku)
     db.refresh(pc)
     return pc
 
@@ -1428,6 +1543,7 @@ def remove_product_certification(db: Session, sku: str, certification_id: str):
         ProductCertification.certification_id == certification_id,
     ).delete()
     db.commit()
+    invalidate_product_detail_cache(db, sku)
 
 
 def add_product_keyword(db: Session, sku: str, keyword_id: str):
@@ -1443,6 +1559,7 @@ def add_product_keyword(db: Session, sku: str, keyword_id: str):
     pk = ProductKeyword(product_id=product.id, keyword_id=keyword_id)
     db.add(pk)
     db.commit()
+    invalidate_product_detail_cache(db, sku)
     db.refresh(pk)
     return pk
 
@@ -1456,3 +1573,4 @@ def remove_product_keyword(db: Session, sku: str, keyword_id: str):
         ProductKeyword.keyword_id == keyword_id,
     ).delete()
     db.commit()
+    invalidate_product_detail_cache(db, sku)

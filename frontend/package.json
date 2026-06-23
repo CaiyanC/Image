@@ -4,7 +4,10 @@
   "version": "1.0.0",
   "type": "module",
   "scripts": {
-    "dev": "vite --host 0.0.0.0 --port 5275",
+    "dev": "vite --host 0.0.0.0",
+    "dev:prod": "vite --host 0.0.0.0 --port 5275",
+    "dev:dev": "vite --host 0.0.0.0 --port 5276 --mode dev",
+    "dev:local": "vite --host 0.0.0.0 --port 5276 --mode dev",
     "build": "tsc -b && vite build",
     "preview": "vite preview",
     "lint": "eslint ."

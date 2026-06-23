@@ -1,0 +1,19 @@
+{
+  "generatedAt": "2026-06-13T04:50:22.696Z",
+  "tempUser": "autotest_fix_1781326210116",
+  "results": [
+    {
+      "name": "admin_user_create_cleanup_rerun",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "name": "admin_settings_expand_model_rerun",
+      "ok": true,
+      "detail": ""
+    }
+  ],
+  "failed": [],
+  "consoleErrors": [],
+  "failedResponses": []
+}

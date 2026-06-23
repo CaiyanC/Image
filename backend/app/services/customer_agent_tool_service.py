@@ -1,8 +1,12 @@
+import asyncio
 from typing import Any
+from time import perf_counter
 
 from sqlalchemy.orm import Session
 
-from . import agent_action_service, customer_agent_service, knowledge_service, product_service
+from ..core.database import release_session_connection
+from . import agent_action_service, customer_agent_service, customer_cache_service, knowledge_service, product_service
+from . import customer_perf_service
 
 
 TOOL_SPECS = [
@@ -87,38 +91,66 @@ def list_tool_specs() -> list[dict]:
 
 
 def execute_tool(db: Session, *, user_id: str, name: str, arguments: dict[str, Any]) -> dict:
+    start_time = perf_counter()
     if name == "search_products":
-        return _search_products(db, arguments)
+        result = _search_products(db, arguments)
+        customer_perf_service.log_stage("tool.execute", start_time, tool=name, async_call=False, ok=result.get("ok") if isinstance(result, dict) else None)
+        return result
     if name == "get_product_detail":
-        return _get_product_detail(db, arguments)
+        result = _get_product_detail(db, arguments)
+        customer_perf_service.log_stage("tool.execute", start_time, tool=name, async_call=False, ok=result.get("ok") if isinstance(result, dict) else None)
+        return result
     if name == "hybrid_search_products":
-        return _hybrid_search_products(db, arguments, semantic_rows=[])
+        result = _hybrid_search_products(db, arguments, semantic_rows=[])
+        customer_perf_service.log_stage("tool.execute", start_time, tool=name, async_call=False, ok=result.get("ok") if isinstance(result, dict) else None)
+        return result
     if name == "semantic_search_knowledge":
-        return _semantic_search_knowledge(db, arguments)
+        result = _semantic_search_knowledge(db, arguments)
+        customer_perf_service.log_stage("tool.execute", start_time, tool=name, async_call=False, ok=result.get("ok") if isinstance(result, dict) else None)
+        return result
     if name == "propose_update_product_field":
-        return _propose_update_product_field(db, user_id, arguments)
+        result = _propose_update_product_field(db, user_id, arguments)
+        customer_perf_service.log_stage("tool.execute", start_time, tool=name, async_call=False, ok=result.get("ok") if isinstance(result, dict) else None)
+        return result
     if name == "propose_delete_product_info":
-        return _propose_delete_product_info(db, user_id, arguments)
+        result = _propose_delete_product_info(db, user_id, arguments)
+        customer_perf_service.log_stage("tool.execute", start_time, tool=name, async_call=False, ok=result.get("ok") if isinstance(result, dict) else None)
+        return result
     if name == "propose_delete_product":
-        return _propose_delete_product(db, user_id, arguments)
+        result = _propose_delete_product(db, user_id, arguments)
+        customer_perf_service.log_stage("tool.execute", start_time, tool=name, async_call=False, ok=result.get("ok") if isinstance(result, dict) else None)
+        return result
     return {"ok": False, "error": f"未知工具：{name}"}
 
 
 async def execute_tool_async(db: Session, *, user_id: str, name: str, arguments: dict[str, Any]) -> dict:
-    if name == "semantic_search_knowledge":
-        return await _semantic_search_knowledge_async(db, arguments)
-    if name == "hybrid_search_products":
-        semantic_query = str(arguments.get("semantic_query") or "").strip()
-        semantic_rows = []
-        if semantic_query:
-            semantic_rows = await knowledge_service.semantic_retrieve(
+    start_time = perf_counter()
+    try:
+        if name == "semantic_search_knowledge":
+            result = await _semantic_search_knowledge_async(db, arguments)
+        elif name == "hybrid_search_products":
+            semantic_query = str(arguments.get("semantic_query") or "").strip()
+            semantic_task = None
+            if semantic_query:
+                semantic_task = asyncio.create_task(
+                    _semantic_rows_for_hybrid_search(db, arguments, semantic_query)
+                )
+                await asyncio.sleep(0)
+            sql_rows, sql_filter_ms = _hybrid_search_sql_rows(db, arguments)
+            semantic_rows = await semantic_task if semantic_task else []
+            result = _hybrid_search_products(
                 db,
-                semantic_query,
-                sku=str(arguments.get("sku") or "").strip().upper() or None,
-                limit=int(arguments.get("limit") or 50),
+                arguments,
+                semantic_rows=semantic_rows,
+                sql_rows=sql_rows,
+                sql_filter_ms=sql_filter_ms,
             )
-        return _hybrid_search_products(db, arguments, semantic_rows=semantic_rows)
-    return execute_tool(db, user_id=user_id, name=name, arguments=arguments)
+        else:
+            result = execute_tool(db, user_id=user_id, name=name, arguments=arguments)
+        customer_perf_service.log_stage("tool.execute_async", start_time, tool=name, async_call=True, ok=result.get("ok") if isinstance(result, dict) else None)
+        return result
+    finally:
+        release_session_connection(db)
 
 
 def _search_products(db: Session, arguments: dict[str, Any]) -> dict:
@@ -153,10 +185,44 @@ async def _semantic_search_knowledge_async(db: Session, arguments: dict[str, Any
     return {"ok": True, "tool": "semantic_search_knowledge", "query": query, "sku": sku, "mode": "semantic", "count": len(rows), "results": rows}
 
 
-def _hybrid_search_products(db: Session, arguments: dict[str, Any], semantic_rows: list[dict]) -> dict:
+async def _semantic_rows_for_hybrid_search(db: Session, arguments: dict[str, Any], semantic_query: str) -> list[dict]:
+    semantic_start = perf_counter()
+    semantic_rows = await knowledge_service.semantic_retrieve(
+        db,
+        semantic_query,
+        sku=str(arguments.get("sku") or "").strip().upper() or None,
+        limit=int(arguments.get("limit") or 50),
+    )
+    customer_perf_service.log_stage(
+        "hybrid_search_products.semantic_retrieve",
+        semantic_start,
+        semantic_query=semantic_query,
+        semantic_rows=len(semantic_rows or []),
+    )
+    return semantic_rows
+
+
+def _hybrid_search_sql_rows(db: Session, arguments: dict[str, Any]) -> tuple[list[dict], float]:
+    term = str(arguments.get("term") or "").strip()
+    limit = min(max(int(arguments.get("limit") or 50), 1), 10)
+    filters = arguments.get("filters") or {}
+    if not isinstance(filters, dict):
+        filters = {}
+    sql_start = perf_counter()
+    rows = customer_agent_service.search_products(db, term, limit=limit, filters=filters)
+    return rows, customer_perf_service.perf_ms(sql_start)
+
+
+def _hybrid_search_products(
+    db: Session,
+    arguments: dict[str, Any],
+    semantic_rows: list[dict],
+    sql_rows: list[dict] | None = None,
+    sql_filter_ms: float | None = None,
+) -> dict:
     term = str(arguments.get("term") or "").strip()
     semantic_query = str(arguments.get("semantic_query") or "").strip()
-    limit = int(arguments.get("limit") or 50)
+    limit = min(max(int(arguments.get("limit") or 50), 1), 10)
     filters = arguments.get("filters") or {}
     if not isinstance(filters, dict):
         filters = {}
@@ -164,10 +230,25 @@ def _hybrid_search_products(db: Session, arguments: dict[str, Any], semantic_row
     if isinstance(fields, str):
         fields = [fields]
 
-    sql_rows = customer_agent_service.search_products(db, term, limit=limit, filters=filters)
+    cache_key = customer_cache_service.make_key("hybrid_search_products", id(db), term, semantic_query, filters, limit, fields)
+    cached = customer_cache_service.recommendation_candidate_cache.get(cache_key)
+    if cached is not None:
+        return cached
+
+    sql_start = perf_counter()
+    if sql_rows is None:
+        sql_rows = customer_agent_service.search_products(db, term, limit=limit, filters=filters)
+        sql_filter_ms = customer_perf_service.perf_ms(sql_start)
+    elif sql_filter_ms is None:
+        sql_filter_ms = customer_perf_service.perf_ms(sql_start)
+
+    semantic_ms = 0.0
+    semantic_rows = semantic_rows or []
+
+    detail_start = perf_counter()
     merged: dict[str, dict] = {}
     for index, row in enumerate(sql_rows):
-        enriched = _enrich_fields(db, row, fields)
+        enriched = _enrich_fields(db, row, fields if index < 3 else [])
         enriched["hybrid_score"] = 1000 - index
         enriched["matched_by"] = enriched.get("matched_by") or "SQL精确查询"
         merged[enriched["sku"]] = enriched
@@ -183,16 +264,20 @@ def _hybrid_search_products(db: Session, arguments: dict[str, Any], semantic_row
         sku_filters = {"sku": sku, **filters}
         rows = customer_agent_service.search_products(db, "", limit=1, filters=sku_filters)
         if rows:
-            enriched = _enrich_fields(db, rows[0], fields)
+            enriched = _enrich_fields(db, rows[0], fields if len(merged) < 3 else [])
             enriched["hybrid_score"] = 500 - index
             enriched["matched_by"] = "语义知识库"
             enriched["semantic_match"] = item.get("content")
             merged[sku] = enriched
 
+    merge_start = perf_counter()
     rows = sorted(merged.values(), key=lambda row: row.get("hybrid_score", 0), reverse=True)[:limit]
     for row in rows:
         row.pop("hybrid_score", None)
-    return {
+    merge_rank_ms = customer_perf_service.perf_ms(merge_start)
+    get_detail_ms = max(customer_perf_service.perf_ms(detail_start) - merge_rank_ms, 0.0)
+
+    result = {
         "ok": True,
         "tool": "hybrid_search_products",
         "query": term or semantic_query,
@@ -201,6 +286,19 @@ def _hybrid_search_products(db: Session, arguments: dict[str, Any], semantic_row
         "count": len(rows),
         "results": rows,
     }
+    customer_perf_service.log_stage(
+        "hybrid_search_products.breakdown",
+        sql_start,
+        sql_filter_ms=round(sql_filter_ms, 2),
+        embedding_query_ms=round(semantic_ms, 2),
+        vector_search_ms=round(semantic_ms, 2),
+        merge_rank_ms=round(merge_rank_ms, 2),
+        get_detail_ms=round(get_detail_ms, 2),
+        candidates_count=len(rows),
+        prompt_chars=sum(len(str(item)) for item in rows[:10]),
+    )
+    customer_cache_service.recommendation_candidate_cache.set(cache_key, result)
+    return result
 
 
 def _get_product_detail(db: Session, arguments: dict[str, Any]) -> dict:

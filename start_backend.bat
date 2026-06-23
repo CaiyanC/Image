@@ -1,10 +1,8 @@
-﻿@echo off
+@echo off
 setlocal
-cd /d "%~dp0backend"
-if not exist "venv\Scripts\activate.bat" (
-    python -m venv venv
-)
-call "venv\Scripts\activate.bat"
-python -m pip install -r requirements.txt
-python -m uvicorn app.main:app --host 0.0.0.0 --port 8000 --workers 4 --timeout-keep-alive 120
-pause
+cd /d "%~dp0"
+echo start_backend.bat is deprecated.
+echo Use start-prod.bat for production or start-dev.bat for development.
+echo Redirecting to start-prod.bat...
+call "%~dp0start-prod.bat"
+exit /b %errorlevel%

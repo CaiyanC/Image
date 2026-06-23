@@ -1,0 +1,798 @@
+[
+  {
+    "scenario": "1. ??????",
+    "turns": [
+      {
+        "question": "推荐一款适合2个人露营做饭的锅",
+        "status_code": 200,
+        "answer": "针对2人露营做饭，首选推荐爱路客 CW-C01-37 户外套锅。它专为1-2人“城市出逃”设计，套装包含900ml锅和450ml碗，满足双人简餐烹饪。整组重量仅595g，轻量便携；采用全包围防风底座，搭配燃气或酒精两种燃料系统，火力稳定高效。硬质氧化铝材质耐用易洁，一体叠加收纳也很省空间，性价比定位中端，非常适合初次尝试双人露营做饭的场景。",
+        "conversation_id": "6bf53a56-67bc-4298-9a06-e950014273b8",
+        "client_first_answer_delta_ms": 6046.1,
+        "client_total_ms": 8225.0,
+        "trace": {
+          "trace_id": "7d1d44bea1bd42fc96c89bca241192be",
+          "conversation_id": "6bf53a56-67bc-4298-9a06-e950014273b8",
+          "agent_mode": "agent",
+          "intent": "recommend_products",
+          "result_skus": [
+            "CW-C01-37",
+            "CW-C05-37",
+            "CW-C83-1",
+            "CW-C83",
+            "CW-C83-2"
+          ],
+          "llm_call_count": 1,
+          "prompt_chars": 3735,
+          "total_ms": 6177.03,
+          "first_token_ms": 4001.92,
+          "hit_faq_fast_path": false,
+          "entered_process_agent_request": true,
+          "entered_process_intent_fallback": false,
+          "entered_semantic_retrieve": true,
+          "entered_hybrid_search": true,
+          "recommendation_context_found": true,
+          "previous_recommended_skus_excluded": []
+        },
+        "semantic_retrieve_stages": [],
+        "event_counts": {
+          "status": 2,
+          "content": 111,
+          "meta": 1,
+          "warning": 1,
+          "recommendation": 1,
+          "done": 1,
+          "trace": 1
+        },
+        "error": null
+      },
+      {
+        "question": "为什么推荐这个",
+        "status_code": 200,
+        "answer": "推荐 CW-C01-37 主要是因为它恰好为1‑2人露营做饭设计，且兼顾轻量与功能平衡。该套装包含900ml锅和450ml碗，足以应对双人简餐；整组重量仅595g，比常见的3‑4人套锅（如CW-C05-37的1030g）轻约42%，徒步或骑行携带无负担。底座采用全包围防风设计，搭配燃气和酒精两种燃料系统，户外用火更稳定高效。收纳时可以一体叠加，不占背包空间，定位中端，非常适合初次尝试双人露营做饭的用户。",
+        "conversation_id": "6bf53a56-67bc-4298-9a06-e950014273b8",
+        "client_first_answer_delta_ms": 3932.3,
+        "client_total_ms": 5871.3,
+        "trace": {
+          "trace_id": "8a22141a10804183b86d28f98d18162a",
+          "conversation_id": "6bf53a56-67bc-4298-9a06-e950014273b8",
+          "agent_mode": "agent",
+          "intent": "product_detail",
+          "result_skus": [
+            "CW-C01-37",
+            "CW-C05-37",
+            "CW-C83-1",
+            "CW-C83",
+            "CW-C83-2"
+          ],
+          "llm_call_count": 1,
+          "prompt_chars": 4909,
+          "total_ms": 3733.87,
+          "first_token_ms": 1803.06,
+          "hit_faq_fast_path": false,
+          "entered_process_agent_request": true,
+          "entered_process_intent_fallback": false,
+          "entered_semantic_retrieve": false,
+          "entered_hybrid_search": false,
+          "recommendation_context_found": true,
+          "previous_recommended_skus_excluded": []
+        },
+        "semantic_retrieve_stages": [],
+        "event_counts": {
+          "status": 2,
+          "content": 127,
+          "meta": 1,
+          "recommendation": 1,
+          "done": 1,
+          "trace": 1
+        },
+        "error": null
+      },
+      {
+        "question": "换一个推荐，不要刚才那个",
+        "status_code": 200,
+        "answer": "为您换一款推荐：爱路客CW-C93超轻速沸锅。它仅重220g，容量1000ml，底部配有聚能环结构，配合波纹卡槽设计能稳固适配多种炉头，实测可实现95秒速沸，同时一抹即净易清洗，尤其适合单人徒步或追求效率的轻量化玩家。",
+        "conversation_id": "6bf53a56-67bc-4298-9a06-e950014273b8",
+        "client_first_answer_delta_ms": 9972.9,
+        "client_total_ms": 10535.5,
+        "trace": {
+          "trace_id": "96cf325373ae4003a7ac23e1784e99cf",
+          "conversation_id": "6bf53a56-67bc-4298-9a06-e950014273b8",
+          "agent_mode": "agent",
+          "intent": "recommend_products",
+          "result_skus": [
+            "CS-B14",
+            "CW-C93",
+            "KD23-MFL",
+            "CF-PG19PRO",
+            "CW-K04PRO-37"
+          ],
+          "llm_call_count": 1,
+          "prompt_chars": 3473,
+          "total_ms": 8409.36,
+          "first_token_ms": 7855.3,
+          "hit_faq_fast_path": false,
+          "entered_process_agent_request": true,
+          "entered_process_intent_fallback": false,
+          "entered_semantic_retrieve": true,
+          "entered_hybrid_search": true,
+          "recommendation_context_found": true,
+          "previous_recommended_skus_excluded": [
+            "CW-C01-37",
+            "CW-C05-37",
+            "CW-C83-1",
+            "CW-C83",
+            "CW-C83-2"
+          ]
+        },
+        "semantic_retrieve_stages": [],
+        "event_counts": {
+          "status": 2,
+          "content": 73,
+          "meta": 1,
+          "warning": 1,
+          "recommendation": 1,
+          "done": 1,
+          "trace": 1
+        },
+        "error": null
+      }
+    ]
+  },
+  {
+    "scenario": "2. ??????",
+    "turns": [
+      {
+        "question": "旋焰酒精炉表面处理是什么",
+        "status_code": 200,
+        "answer": "旋焰酒精炉的表面工艺标注为“无”，即没有经过特殊的表面处理，呈现304不锈钢原色。",
+        "conversation_id": "4c84ef20-c5d1-4654-b11c-f7479cbb512a",
+        "client_first_answer_delta_ms": 4631.4,
+        "client_total_ms": 4847.6,
+        "trace": {
+          "trace_id": "2065491882ce49b4bf6f3a1040b8d5e4",
+          "conversation_id": "4c84ef20-c5d1-4654-b11c-f7479cbb512a",
+          "agent_mode": "agent",
+          "intent": "product_detail",
+          "result_skus": [
+            "CS-B14"
+          ],
+          "llm_call_count": 1,
+          "prompt_chars": 5078,
+          "total_ms": 2790.12,
+          "first_token_ms": 2575.65,
+          "hit_faq_fast_path": false,
+          "entered_process_agent_request": true,
+          "entered_process_intent_fallback": false,
+          "entered_semantic_retrieve": true,
+          "entered_hybrid_search": false,
+          "recommendation_context_found": false,
+          "previous_recommended_skus_excluded": []
+        },
+        "semantic_retrieve_stages": [],
+        "event_counts": {
+          "status": 2,
+          "meta": 1,
+          "answer_delta": 14,
+          "done": 1,
+          "trace": 1
+        },
+        "error": null
+      },
+      {
+        "question": "它是什么材质",
+        "status_code": 200,
+        "answer": "查到以下资料：\nCS-B14，旋焰酒精炉，材质：304不锈钢",
+        "conversation_id": "4c84ef20-c5d1-4654-b11c-f7479cbb512a",
+        "client_first_answer_delta_ms": 6093.1,
+        "client_total_ms": 6257.8,
+        "trace": {
+          "trace_id": "f73f493c974f4c3ca22f6fd7dbf42792",
+          "conversation_id": "4c84ef20-c5d1-4654-b11c-f7479cbb512a",
+          "agent_mode": "agent",
+          "intent": "product_detail",
+          "result_skus": [
+            "CS-B14"
+          ],
+          "llm_call_count": 1,
+          "prompt_chars": 2529,
+          "total_ms": 4200.03,
+          "first_token_ms": 4038.98,
+          "hit_faq_fast_path": false,
+          "entered_process_agent_request": true,
+          "entered_process_intent_fallback": false,
+          "entered_semantic_retrieve": false,
+          "entered_hybrid_search": false,
+          "recommendation_context_found": false,
+          "previous_recommended_skus_excluded": []
+        },
+        "semantic_retrieve_stages": [],
+        "event_counts": {
+          "status": 2,
+          "meta": 1,
+          "answer_delta": 10,
+          "done": 1,
+          "trace": 1
+        },
+        "error": null
+      },
+      {
+        "question": "食品级吗？安全吗？",
+        "status_code": 200,
+        "answer": "针对旋焰酒精炉（CS-B14），“食品级”与“安全性”的信息如下：该产品资料中未明确标注“食品级”认证标识，其主体材质为304不锈钢。304不锈钢是国标认可的食品接触用材料，本身稳定、不易析出有害物质，可为日常烹饪提供安全基础。在安全使用方面，产品额定功率2250W，使用液体酒精燃料，随附注意事项要求放置于平整表面、防止倾倒，灭火时不得用水而需用防火布或沙土覆盖，这些措施能有效降低户外用火风险。因此，若正确操作，此款酒精炉可以安全使用，但并无单独标注的食品级证明。",
+        "conversation_id": "4c84ef20-c5d1-4654-b11c-f7479cbb512a",
+        "client_first_answer_delta_ms": 11229.8,
+        "client_total_ms": 13530.6,
+        "trace": {
+          "trace_id": "d5a75a082aa1482baff0b322918a6124",
+          "conversation_id": "4c84ef20-c5d1-4654-b11c-f7479cbb512a",
+          "agent_mode": "agent",
+          "intent": "product_detail",
+          "result_skus": [
+            "CS-B14"
+          ],
+          "llm_call_count": 2,
+          "prompt_chars": 6895,
+          "total_ms": 11462.91,
+          "first_token_ms": 9163.87,
+          "hit_faq_fast_path": false,
+          "entered_process_agent_request": true,
+          "entered_process_intent_fallback": false,
+          "entered_semantic_retrieve": true,
+          "entered_hybrid_search": false,
+          "recommendation_context_found": false,
+          "previous_recommended_skus_excluded": []
+        },
+        "semantic_retrieve_stages": [],
+        "event_counts": {
+          "status": 2,
+          "content": 145,
+          "meta": 1,
+          "done": 1,
+          "trace": 1
+        },
+        "error": null
+      }
+    ]
+  },
+  {
+    "scenario": "3. ????",
+    "turns": [
+      {
+        "question": "旋焰酒精炉表面处理是什么",
+        "status_code": 200,
+        "answer": "旋焰酒精炉（CS-B14）的表面工艺标注为：无。其材质为304不锈钢，颜色为不锈钢原色，没有额外的表面处理。",
+        "conversation_id": "95a560d6-66ba-4fce-8936-60fd7f73ae7e",
+        "client_first_answer_delta_ms": 4367.6,
+        "client_total_ms": 4648.2,
+        "trace": {
+          "trace_id": "d5716527118d499ebdd9b50c0dad74d0",
+          "conversation_id": "95a560d6-66ba-4fce-8936-60fd7f73ae7e",
+          "agent_mode": "agent",
+          "intent": "product_detail",
+          "result_skus": [
+            "CS-B14"
+          ],
+          "llm_call_count": 1,
+          "prompt_chars": 5078,
+          "total_ms": 2596.81,
+          "first_token_ms": 2318.82,
+          "hit_faq_fast_path": false,
+          "entered_process_agent_request": true,
+          "entered_process_intent_fallback": false,
+          "entered_semantic_retrieve": true,
+          "entered_hybrid_search": false,
+          "recommendation_context_found": false,
+          "previous_recommended_skus_excluded": []
+        },
+        "semantic_retrieve_stages": [],
+        "event_counts": {
+          "status": 2,
+          "meta": 1,
+          "answer_delta": 18,
+          "done": 1,
+          "trace": 1
+        },
+        "error": null
+      },
+      {
+        "question": "悦享杯套装有哪些颜色",
+        "status_code": 200,
+        "answer": "悦享杯套装（TW-502）的颜色是不锈钢本色和木色，杯身主体为不锈钢本色，护套为木色。",
+        "conversation_id": "95a560d6-66ba-4fce-8936-60fd7f73ae7e",
+        "client_first_answer_delta_ms": 4135.3,
+        "client_total_ms": 4369.1,
+        "trace": {
+          "trace_id": "caa152feadda469a95e8eb22a197a54a",
+          "conversation_id": "95a560d6-66ba-4fce-8936-60fd7f73ae7e",
+          "agent_mode": "agent",
+          "intent": "product_detail",
+          "result_skus": [
+            "TW-502"
+          ],
+          "llm_call_count": 1,
+          "prompt_chars": 4658,
+          "total_ms": 2312.27,
+          "first_token_ms": 2077.43,
+          "hit_faq_fast_path": false,
+          "entered_process_agent_request": true,
+          "entered_process_intent_fallback": false,
+          "entered_semantic_retrieve": true,
+          "entered_hybrid_search": false,
+          "recommendation_context_found": false,
+          "previous_recommended_skus_excluded": []
+        },
+        "semantic_retrieve_stages": [],
+        "event_counts": {
+          "status": 2,
+          "meta": 1,
+          "answer_delta": 15,
+          "done": 1,
+          "trace": 1
+        },
+        "error": null
+      },
+      {
+        "question": "前面那款酒精炉的认证信息有吗",
+        "status_code": 200,
+        "answer": "旋焰酒精炉（CS-B14）的产品详情与知识库中暂无认证相关数据。",
+        "conversation_id": "95a560d6-66ba-4fce-8936-60fd7f73ae7e",
+        "client_first_answer_delta_ms": 9354.5,
+        "client_total_ms": 9693.5,
+        "trace": {
+          "trace_id": "2862d7ad065546839517c3fa37fb68cf",
+          "conversation_id": "95a560d6-66ba-4fce-8936-60fd7f73ae7e",
+          "agent_mode": "agent",
+          "intent": "product_detail",
+          "result_skus": [
+            "CS-B14"
+          ],
+          "llm_call_count": 2,
+          "prompt_chars": 7022,
+          "total_ms": 7631.75,
+          "first_token_ms": 7294.19,
+          "hit_faq_fast_path": false,
+          "entered_process_agent_request": true,
+          "entered_process_intent_fallback": false,
+          "entered_semantic_retrieve": true,
+          "entered_hybrid_search": false,
+          "recommendation_context_found": false,
+          "previous_recommended_skus_excluded": []
+        },
+        "semantic_retrieve_stages": [],
+        "event_counts": {
+          "status": 2,
+          "content": 20,
+          "meta": 1,
+          "done": 1,
+          "trace": 1
+        },
+        "error": null
+      }
+    ]
+  },
+  {
+    "scenario": "4. ????",
+    "turns": [
+      {
+        "question": "炊墨套锅手柄是什么材质",
+        "status_code": 200,
+        "answer": "炊墨套锅（CW-C83）的手柄材质是白蜡木。产品规格中标注的材质为“硬质氧化铝合金、白蜡木”，其中锅体为硬质氧化铝合金，手柄部分采用白蜡木，搭配快拆设计，便于收纳和切换锅具。",
+        "conversation_id": "c1eca72e-ff04-4fe2-9838-4c179caa2e3d",
+        "client_first_answer_delta_ms": 5549.8,
+        "client_total_ms": 6003.8,
+        "trace": {
+          "trace_id": "eebd3e35213044d2bc25484535be2215",
+          "conversation_id": "c1eca72e-ff04-4fe2-9838-4c179caa2e3d",
+          "agent_mode": "agent",
+          "intent": "product_detail",
+          "result_skus": [
+            "CW-C83"
+          ],
+          "llm_call_count": 1,
+          "prompt_chars": 5320,
+          "total_ms": 3953.8,
+          "first_token_ms": 3501.84,
+          "hit_faq_fast_path": false,
+          "entered_process_agent_request": true,
+          "entered_process_intent_fallback": false,
+          "entered_semantic_retrieve": true,
+          "entered_hybrid_search": false,
+          "recommendation_context_found": false,
+          "previous_recommended_skus_excluded": []
+        },
+        "semantic_retrieve_stages": [],
+        "event_counts": {
+          "status": 2,
+          "meta": 1,
+          "answer_delta": 29,
+          "done": 1,
+          "trace": 1
+        },
+        "error": null
+      }
+    ]
+  },
+  {
+    "scenario": "5. ????",
+    "turns": [
+      {
+        "question": "1－2人野营锅7件套有哪些颜色",
+        "status_code": 200,
+        "answer": "这款1－2人野营锅7件套（CW-C01-37）有两种颜色：氧化铝本色和不锈钢原色。",
+        "conversation_id": "4723648f-7c86-400b-a56d-d0e055d362fd",
+        "client_first_answer_delta_ms": 4639.6,
+        "client_total_ms": 4870.2,
+        "trace": {
+          "trace_id": "c700d81945814dde93d1dfc14deea916",
+          "conversation_id": "4723648f-7c86-400b-a56d-d0e055d362fd",
+          "agent_mode": "agent",
+          "intent": "product_detail",
+          "result_skus": [
+            "CW-C01-37"
+          ],
+          "llm_call_count": 1,
+          "prompt_chars": 6057,
+          "total_ms": 2816.8,
+          "first_token_ms": 2589.7,
+          "hit_faq_fast_path": false,
+          "entered_process_agent_request": true,
+          "entered_process_intent_fallback": false,
+          "entered_semantic_retrieve": true,
+          "entered_hybrid_search": false,
+          "recommendation_context_found": false,
+          "previous_recommended_skus_excluded": []
+        },
+        "semantic_retrieve_stages": [],
+        "event_counts": {
+          "status": 2,
+          "meta": 1,
+          "answer_delta": 14,
+          "done": 1,
+          "trace": 1
+        },
+        "error": null
+      }
+    ]
+  },
+  {
+    "scenario": "6. ????FAQ",
+    "turns": [
+      {
+        "question": "你们产品在哪里可以买到",
+        "status_code": 200,
+        "answer": "系统里记录的销售渠道包括：淘宝（taobao）、京东（jd）、拼多多（pdd）、独立站（d2c）、Amazon（amazon）、eBay（ebay）、阿里国际站（alibaba）、速卖通（aliexpress）。",
+        "conversation_id": "6aa88c75-cb83-4c17-8688-c5f3776bc8e1",
+        "client_first_answer_delta_ms": 2178.0,
+        "client_total_ms": 2744.9,
+        "trace": {
+          "trace_id": "4c925ac1f7be466eba889715431a675a",
+          "conversation_id": "6aa88c75-cb83-4c17-8688-c5f3776bc8e1",
+          "agent_mode": "faq_fast",
+          "intent": "purchase_channel",
+          "result_skus": [],
+          "llm_call_count": 0,
+          "prompt_chars": 0,
+          "total_ms": 668.99,
+          "first_token_ms": 104.8,
+          "hit_faq_fast_path": true,
+          "entered_process_agent_request": false,
+          "entered_process_intent_fallback": false,
+          "entered_semantic_retrieve": false,
+          "entered_hybrid_search": false,
+          "recommendation_context_found": false,
+          "previous_recommended_skus_excluded": []
+        },
+        "semantic_retrieve_stages": [],
+        "event_counts": {
+          "status": 2,
+          "meta": 1,
+          "answer_delta": 36,
+          "done": 1,
+          "trace": 1
+        },
+        "error": null
+      }
+    ]
+  },
+  {
+    "scenario": "7. QA???",
+    "turns": [
+      {
+        "question": "旋焰酒精炉可以用医用酒精吗",
+        "status_code": 200,
+        "answer": "可以用，但建议使用95%浓度的医用酒精。旋焰酒精炉支持液体酒精，95%浓度的医用酒精燃烧效率更好，75%浓度的也可以使用，只是燃烧速度较慢。",
+        "conversation_id": "7764eed0-369c-496b-85d4-02c9ecfcf73f",
+        "client_first_answer_delta_ms": 5198.7,
+        "client_total_ms": 5581.4,
+        "trace": {
+          "trace_id": "579a8f5ace514a71bd70ea21f136efc5",
+          "conversation_id": "7764eed0-369c-496b-85d4-02c9ecfcf73f",
+          "agent_mode": "agent",
+          "intent": "product_detail",
+          "result_skus": [
+            "CS-B14"
+          ],
+          "llm_call_count": 1,
+          "prompt_chars": 4104,
+          "total_ms": 3434.8,
+          "first_token_ms": 3054.87,
+          "hit_faq_fast_path": false,
+          "entered_process_agent_request": true,
+          "entered_process_intent_fallback": false,
+          "entered_semantic_retrieve": true,
+          "entered_hybrid_search": false,
+          "recommendation_context_found": false,
+          "previous_recommended_skus_excluded": []
+        },
+        "semantic_retrieve_stages": [],
+        "event_counts": {
+          "status": 2,
+          "meta": 1,
+          "answer_delta": 24,
+          "done": 1,
+          "trace": 1
+        },
+        "error": null
+      },
+      {
+        "question": "旋焰酒精炉倒满能烧多久",
+        "status_code": 200,
+        "answer": "旋焰酒精炉倒满（200ml酒精）后，燃烧时间根据火力大小不同：全程大火约可使用40分钟，全程中小火约可使用120分钟。",
+        "conversation_id": "a6a4f5d7-d657-48a2-a95e-8fb6e2a2eb35",
+        "client_first_answer_delta_ms": 4755.1,
+        "client_total_ms": 5071.3,
+        "trace": {
+          "trace_id": "18eb02fc468940958b8efdbfd9f760ba",
+          "conversation_id": "a6a4f5d7-d657-48a2-a95e-8fb6e2a2eb35",
+          "agent_mode": "agent",
+          "intent": "product_detail",
+          "result_skus": [
+            "CS-B14"
+          ],
+          "llm_call_count": 1,
+          "prompt_chars": 6231,
+          "total_ms": 3019.15,
+          "first_token_ms": 2704.91,
+          "hit_faq_fast_path": false,
+          "entered_process_agent_request": true,
+          "entered_process_intent_fallback": false,
+          "entered_semantic_retrieve": true,
+          "entered_hybrid_search": false,
+          "recommendation_context_found": false,
+          "previous_recommended_skus_excluded": []
+        },
+        "semantic_retrieve_stages": [],
+        "event_counts": {
+          "status": 2,
+          "meta": 1,
+          "answer_delta": 20,
+          "done": 1,
+          "trace": 1
+        },
+        "error": null
+      },
+      {
+        "question": "旋焰酒精炉是钛的吗",
+        "status_code": 200,
+        "answer": "旋焰酒精炉不是钛的，它的材质是304不锈钢。在官方产品问答中已明确：“旋焰酒精炉材质是304不锈钢，不是钛的哦”，产品规格表中材质也标注为304不锈钢。",
+        "conversation_id": "8077b676-3006-44f5-ab49-2e41a9b40de2",
+        "client_first_answer_delta_ms": 5274.5,
+        "client_total_ms": 5686.1,
+        "trace": {
+          "trace_id": "cb66680b0cf945a882600da3d33127d2",
+          "conversation_id": "8077b676-3006-44f5-ab49-2e41a9b40de2",
+          "agent_mode": "agent",
+          "intent": "product_detail",
+          "result_skus": [
+            "CS-B14"
+          ],
+          "llm_call_count": 1,
+          "prompt_chars": 4814,
+          "total_ms": 3605.47,
+          "first_token_ms": 3196.59,
+          "hit_faq_fast_path": false,
+          "entered_process_agent_request": true,
+          "entered_process_intent_fallback": false,
+          "entered_semantic_retrieve": true,
+          "entered_hybrid_search": false,
+          "recommendation_context_found": false,
+          "previous_recommended_skus_excluded": []
+        },
+        "semantic_retrieve_stages": [],
+        "event_counts": {
+          "status": 2,
+          "meta": 1,
+          "answer_delta": 26,
+          "done": 1,
+          "trace": 1
+        },
+        "error": null
+      },
+      {
+        "question": "行山单锅聚能环是做什么的",
+        "status_code": 200,
+        "answer": "行山单锅的聚能环是锅底的聚能结构，用来提升燃烧效率。简单说就是同样烧1升水，可以节约大约33%的时间和用气量，这也是它实现95秒速沸的关键技术之一。",
+        "conversation_id": "d65d7d77-de7f-4f2a-beb5-e14335c6150b",
+        "client_first_answer_delta_ms": 5317.6,
+        "client_total_ms": 5709.6,
+        "trace": {
+          "trace_id": "8c3d1db2a5e941bcb5503cb143430cfa",
+          "conversation_id": "d65d7d77-de7f-4f2a-beb5-e14335c6150b",
+          "agent_mode": "agent",
+          "intent": "product_detail",
+          "result_skus": [
+            "CW-C93"
+          ],
+          "llm_call_count": 1,
+          "prompt_chars": 4677,
+          "total_ms": 3567.17,
+          "first_token_ms": 3178.12,
+          "hit_faq_fast_path": false,
+          "entered_process_agent_request": true,
+          "entered_process_intent_fallback": false,
+          "entered_semantic_retrieve": true,
+          "entered_hybrid_search": false,
+          "recommendation_context_found": false,
+          "previous_recommended_skus_excluded": []
+        },
+        "semantic_retrieve_stages": [],
+        "event_counts": {
+          "status": 2,
+          "meta": 1,
+          "answer_delta": 25,
+          "done": 1,
+          "trace": 1
+        },
+        "error": null
+      },
+      {
+        "question": "行山单锅有涂层吗",
+        "status_code": 200,
+        "answer": "行山单锅有涂层，内壁采用水性不粘涂层，兼具陶瓷不沾工艺。",
+        "conversation_id": "43239a11-9898-4057-b0d0-1f271e0f91cd",
+        "client_first_answer_delta_ms": 4695.3,
+        "client_total_ms": 4858.3,
+        "trace": {
+          "trace_id": "2d424304185347de8090b5edcad1f9aa",
+          "conversation_id": "43239a11-9898-4057-b0d0-1f271e0f91cd",
+          "agent_mode": "agent",
+          "intent": "product_detail",
+          "result_skus": [
+            "CW-C93"
+          ],
+          "llm_call_count": 1,
+          "prompt_chars": 5899,
+          "total_ms": 2791.43,
+          "first_token_ms": 2630.07,
+          "hit_faq_fast_path": false,
+          "entered_process_agent_request": true,
+          "entered_process_intent_fallback": false,
+          "entered_semantic_retrieve": true,
+          "entered_hybrid_search": false,
+          "recommendation_context_found": false,
+          "previous_recommended_skus_excluded": []
+        },
+        "semantic_retrieve_stages": [],
+        "event_counts": {
+          "status": 2,
+          "meta": 1,
+          "answer_delta": 10,
+          "done": 1,
+          "trace": 1
+        },
+        "error": null
+      }
+    ]
+  },
+  {
+    "scenario": "8. ??????",
+    "turns": [
+      {
+        "question": "旋焰酒精炉多少钱",
+        "status_code": 200,
+        "answer": "旋焰酒精炉（型号 CS-B14）的当前价格信息暂未提供，暂无此数据。您可以关注爱路客官方店铺或授权渠道查看最新售价。",
+        "conversation_id": "06af5255-8336-4423-af51-07f766254c3f",
+        "client_first_answer_delta_ms": 4564.7,
+        "client_total_ms": 4877.0,
+        "trace": {
+          "trace_id": "954e8ccec493418bbd997ae438076597",
+          "conversation_id": "06af5255-8336-4423-af51-07f766254c3f",
+          "agent_mode": "agent",
+          "intent": "product_detail",
+          "result_skus": [
+            "CS-B14"
+          ],
+          "llm_call_count": 1,
+          "prompt_chars": 6032,
+          "total_ms": 2817.66,
+          "first_token_ms": 2505.43,
+          "hit_faq_fast_path": false,
+          "entered_process_agent_request": true,
+          "entered_process_intent_fallback": false,
+          "entered_semantic_retrieve": true,
+          "entered_hybrid_search": false,
+          "recommendation_context_found": false,
+          "previous_recommended_skus_excluded": []
+        },
+        "semantic_retrieve_stages": [],
+        "event_counts": {
+          "status": 2,
+          "meta": 1,
+          "answer_delta": 20,
+          "done": 1,
+          "trace": 1
+        },
+        "error": null
+      },
+      {
+        "question": "在哪里可以买到给我链接",
+        "status_code": 200,
+        "answer": "系统里记录的销售渠道包括：淘宝（taobao）、京东（jd）、拼多多（pdd）、独立站（d2c）、Amazon（amazon）、eBay（ebay）、阿里国际站（alibaba）、速卖通（aliexpress）。",
+        "conversation_id": "608a96a7-62c0-4176-b7c0-1f3786109217",
+        "client_first_answer_delta_ms": 2181.1,
+        "client_total_ms": 2754.7,
+        "trace": {
+          "trace_id": "eba2ea7c96f3442ca681c7575c40ede8",
+          "conversation_id": "608a96a7-62c0-4176-b7c0-1f3786109217",
+          "agent_mode": "faq_fast",
+          "intent": "purchase_channel",
+          "result_skus": [],
+          "llm_call_count": 0,
+          "prompt_chars": 0,
+          "total_ms": 690.06,
+          "first_token_ms": 120.93,
+          "hit_faq_fast_path": true,
+          "entered_process_agent_request": false,
+          "entered_process_intent_fallback": false,
+          "entered_semantic_retrieve": false,
+          "entered_hybrid_search": false,
+          "recommendation_context_found": false,
+          "previous_recommended_skus_excluded": []
+        },
+        "semantic_retrieve_stages": [],
+        "event_counts": {
+          "status": 2,
+          "meta": 1,
+          "answer_delta": 36,
+          "done": 1,
+          "trace": 1
+        },
+        "error": null
+      },
+      {
+        "question": "售后电话是多少",
+        "status_code": 200,
+        "answer": "ERROR: 智能客服暂时不可用，请稍后重试",
+        "conversation_id": null,
+        "client_first_answer_delta_ms": null,
+        "client_total_ms": 2237.1,
+        "trace": {},
+        "semantic_retrieve_stages": [],
+        "event_counts": {
+          "status": 1,
+          "error": 1
+        },
+        "error": {
+          "message": "智能客服暂时不可用，请稍后重试"
+        }
+      },
+      {
+        "question": "小青炉有哪些颜色",
+        "status_code": 200,
+        "answer": "ERROR: 智能客服暂时不可用，请稍后重试",
+        "conversation_id": null,
+        "client_first_answer_delta_ms": null,
+        "client_total_ms": 14634.8,
+        "trace": {},
+        "semantic_retrieve_stages": [],
+        "event_counts": {
+          "status": 1,
+          "error": 1
+        },
+        "error": {
+          "message": "智能客服暂时不可用，请稍后重试"
+        }
+      }
+    ]
+  }
+]

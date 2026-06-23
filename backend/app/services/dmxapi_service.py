@@ -2,11 +2,13 @@ import asyncio
 import httpx
 import json
 import logging
+from time import perf_counter
 from urllib.parse import urljoin, urlparse
 from sqlalchemy.orm import Session
 from ..models.system_config import SystemConfig
 from ..core.config import settings
-from . import agent_trace_service
+from ..core.database import release_session_connection
+from . import agent_trace_service, customer_perf_service
 
 logger = logging.getLogger("uvicorn")
 
@@ -22,6 +24,21 @@ DEFAULT_MODELS = [
 ]
 
 _AI_SEMAPHORE = asyncio.Semaphore(max(1, settings.AI_MAX_CONCURRENT_REQUESTS))
+_HTTP_CLIENTS: dict[tuple[int, str, bool], httpx.AsyncClient] = {}
+
+
+def _timeout_key(timeout: object) -> str:
+    return repr(timeout)
+
+
+async def _get_http_client(timeout: object, *, trust_env: bool = False) -> httpx.AsyncClient:
+    loop_id = id(asyncio.get_running_loop())
+    key = (loop_id, _timeout_key(timeout), trust_env)
+    client = _HTTP_CLIENTS.get(key)
+    if client is None or client.is_closed:
+        client = httpx.AsyncClient(timeout=timeout, trust_env=trust_env)
+        _HTTP_CLIENTS[key] = client
+    return client
 
 
 async def _run_ai_request(factory, *, timeout: float | None = None):
@@ -41,6 +58,43 @@ def _make_url(base: str, path: str) -> str:
     parsed = urlparse(base)
     clean_base = f"{parsed.scheme}://{parsed.netloc}/"
     return urljoin(clean_base, path)
+
+
+async def _run_ai_request(factory, *, timeout: float | None = None):
+    queue_timeout = max(0.0, float(settings.AI_REQUEST_QUEUE_TIMEOUT_SECONDS))
+    wait_start = perf_counter()
+    acquired = False
+    try:
+        await asyncio.wait_for(_AI_SEMAPHORE.acquire(), timeout=queue_timeout)
+        acquired = True
+    except asyncio.TimeoutError as exc:
+        wait_ms = (perf_counter() - wait_start) * 1000.0
+        _record_ai_semaphore_wait(wait_ms, acquired=False, queue_timeout=queue_timeout)
+        raise RuntimeError("当前请求较多，请稍后再试") from exc
+
+    wait_ms = (perf_counter() - wait_start) * 1000.0
+    _record_ai_semaphore_wait(wait_ms, acquired=True, queue_timeout=queue_timeout)
+    try:
+        return await asyncio.wait_for(
+            factory(),
+            timeout=timeout or float(settings.AI_REQUEST_TIMEOUT_SECONDS),
+        )
+    except asyncio.TimeoutError as exc:
+        raise TimeoutError("AI 响应超时，请稍后重试") from exc
+    finally:
+        if acquired:
+            _AI_SEMAPHORE.release()
+
+
+def _record_ai_semaphore_wait(wait_ms: float, *, acquired: bool, queue_timeout: float) -> None:
+    payload = {
+        "ai_semaphore_wait_ms": round(wait_ms, 2),
+        "acquired": acquired,
+        "queue_timeout_seconds": queue_timeout,
+        "max_concurrent_requests": settings.AI_MAX_CONCURRENT_REQUESTS,
+    }
+    customer_perf_service.log_event("ai_semaphore_wait", **payload)
+    agent_trace_service.trace("AI_SEMAPHORE_WAIT", payload)
 
 
 def _get_model_config(db: Session, model_id: str) -> dict | None:
@@ -141,7 +195,7 @@ async def txt2img(
     body["n"] = 1
 
     async def _do_request():
-        async with httpx.AsyncClient(timeout=float(settings.DMXAPI_TXT2IMG_TIMEOUT)) as client:
+        async with httpx.AsyncClient(timeout=float(settings.DMXAPI_TXT2IMG_TIMEOUT), trust_env=False) as client:
             response = await client.post(url, headers=headers, json=body)
             if response.status_code >= 400:
                 raise httpx.HTTPStatusError(
@@ -225,7 +279,7 @@ async def img2img(
 
     async def _do_request():
         req_files = [("image", (filename, content, mime_type)) for filename, content, mime_type in image_files]
-        async with httpx.AsyncClient(timeout=timeout) as client:
+        async with httpx.AsyncClient(timeout=timeout, trust_env=False) as client:
             response = await client.post(url, headers=headers, data=data, files=req_files)
             if response.status_code >= 400:
                 logger.warning(f"dmxapi img2img error: {response.status_code} - {response.text[:300]}")
@@ -277,7 +331,7 @@ async def _gemini_single_request(
         "Content-Type": "application/json",
     }
     url = _make_url(base_url, f"v1beta/models/{model_id}:generateContent")
-    async with httpx.AsyncClient(timeout=httpx.Timeout(600.0, connect=30.0)) as client:
+    async with httpx.AsyncClient(timeout=httpx.Timeout(600.0, connect=30.0), trust_env=False) as client:
         response = await client.post(url, headers=headers, json=body)
         if response.status_code >= 400:
             raise httpx.HTTPStatusError(
@@ -547,10 +601,11 @@ async def chat_completion(
     }
     url = cfg.get("chat_url") or _make_url(cfg.get("api_base_url") or DEFAULT_BASE_URL, "v1/chat/completions")
     agent_trace_service.trace("AI_REQUEST", {"url": url, "body": body})
+    release_session_connection(db)
 
     async def _request():
-        async with httpx.AsyncClient(timeout=float(settings.AI_REQUEST_TIMEOUT_SECONDS)) as client:
-            return await client.post(url, headers=headers, json=body)
+        client = await _get_http_client(float(settings.AI_REQUEST_TIMEOUT_SECONDS), trust_env=False)
+        return await client.post(url, headers=headers, json=body)
 
     response = await _run_ai_request(_request)
     if response.status_code >= 400:
@@ -567,33 +622,100 @@ async def chat_completion(
         raise RuntimeError("聊天模型返回格式异常") from exc
 
 
+async def chat_completion_stream(
+    db: Session,
+    messages: list[dict],
+    model: str | None = None,
+    temperature: float = 0.2,
+    max_tokens: int = 1200,
+):
+    cfg = _resolve_model_config(db, model) if model else get_default_model_by_type(db, "chat")
+    if not cfg:
+        raise ValueError("chat model is not configured")
+    if cfg.get("api_format") != "openai":
+        raise ValueError("chat model must use OpenAI-compatible API format")
+
+    api_key = cfg.get("api_key", "").strip()
+    if not api_key:
+        raise ValueError(f"chat model '{cfg['id']}' has no API key")
+
+    body = {
+        "model": cfg.get("api_model") or cfg["id"],
+        "messages": messages,
+        "temperature": temperature,
+        "max_tokens": max_tokens,
+        "stream": True,
+    }
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json",
+    }
+    url = cfg.get("chat_url") or _make_url(cfg.get("api_base_url") or DEFAULT_BASE_URL, "v1/chat/completions")
+    agent_trace_service.trace("AI_STREAM_REQUEST", {"url": url, "body": body})
+    release_session_connection(db)
+
+    client = await _get_http_client(float(settings.AI_REQUEST_TIMEOUT_SECONDS), trust_env=False)
+    async with client.stream("POST", url, headers=headers, json=body) as response:
+        if response.status_code >= 400:
+            text = await response.aread()
+            raise httpx.HTTPStatusError(
+                f"chat model request failed: {response.status_code} - {text[:500]!r}",
+                request=response.request,
+                response=response,
+            )
+        async for line in response.aiter_lines():
+            line = line.strip()
+            if not line or not line.startswith("data:"):
+                continue
+            data_text = line.removeprefix("data:").strip()
+            if data_text == "[DONE]":
+                break
+            try:
+                data = json.loads(data_text)
+            except json.JSONDecodeError:
+                continue
+            try:
+                content = data["choices"][0].get("delta", {}).get("content") or ""
+            except (KeyError, IndexError, TypeError):
+                content = ""
+            if content:
+                yield content
+
+
 async def create_embedding(
     db: Session,
     text: str,
     model: str | None = None,
 ) -> tuple[list[float], str]:
-    cfg = _resolve_model_config(db, model) if model else get_default_model_by_type(db, "embedding")
-    if not cfg:
-        raise ValueError("未配置 Embedding 模型，请先在管理设置中添加 type=embedding 的模型")
-    if cfg.get("api_format") != "openai":
-        raise ValueError("知识库当前仅支持 OpenAI 格式的 Embedding 模型")
-
-    api_key = cfg.get("api_key", "").strip()
+    api_key = settings.DASHSCOPE_API_KEY.strip()
     if not api_key:
-        raise ValueError(f"Embedding 模型 '{cfg['id']}' 未配置 API Key")
+        raise ValueError("DASHSCOPE_API_KEY is not configured")
 
-    body = {"model": cfg.get("api_model") or cfg["id"], "input": text}
+    model_name = "text-embedding-v4"
+    body = {
+        "model": model_name,
+        "input": text,
+        "dimensions": 1024,
+    }
     headers = {
         "Authorization": f"Bearer {api_key}",
         "Content-Type": "application/json",
     }
-    url = cfg.get("embedding_url") or _make_url(cfg.get("api_base_url") or DEFAULT_BASE_URL, "v1/embeddings")
+    url = "https://dashscope.aliyuncs.com/compatible-mode/v1/embeddings"
+    release_session_connection(db)
 
-    async def _request():
-        async with httpx.AsyncClient(timeout=float(settings.AI_REQUEST_TIMEOUT_SECONDS)) as client:
-            return await client.post(url, headers=headers, json=body)
+    def _request_sync():
+        timeout = float(settings.EMBEDDING_REQUEST_TIMEOUT_SECONDS)
+        with httpx.Client(timeout=timeout, trust_env=False) as client:
+            return client.post(url, headers=headers, json=body)
 
-    response = await _run_ai_request(_request)
+    if _AI_SEMAPHORE.locked():
+        raise RuntimeError("褰撳墠璇锋眰杈冨锛岃绋嶅悗鍐嶈瘯")
+    async with _AI_SEMAPHORE:
+        response = await asyncio.wait_for(
+            asyncio.to_thread(_request_sync),
+            timeout=float(settings.EMBEDDING_REQUEST_TIMEOUT_SECONDS) + 1.0,
+        )
     if response.status_code >= 400:
         raise httpx.HTTPStatusError(
             f"Embedding 模型请求失败: {response.status_code} - {response.text[:500]}",
@@ -602,6 +724,6 @@ async def create_embedding(
         )
     data = response.json()
     try:
-        return data["data"][0]["embedding"], cfg["id"]
+        return data["data"][0]["embedding"], model_name
     except (KeyError, IndexError, TypeError) as exc:
         raise RuntimeError("Embedding 模型返回格式异常") from exc

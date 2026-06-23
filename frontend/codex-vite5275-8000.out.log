@@ -1,0 +1,24 @@
+
+> ai-tool-frontend@1.0.0 dev
+> vite --host 0.0.0.0 --port 5275 --host 0.0.0.0 --port 5275
+
+
+  [32m[1mVITE[22m v5.4.21[39m  [2mready in [0m[1m667[22m[2m[0m ms[22m
+
+  [32m➜[39m  [1mLocal[22m:   [36mhttp://localhost:[1m5275[22m/[39m
+  [32m➜[39m  [1mNetwork[22m: [36mhttp://192.168.3.216:[1m5275[22m/[39m
+  [32m➜[39m  [1mNetwork[22m: [36mhttp://172.25.128.1:[1m5275[22m/[39m
+  [32m➜[39m  [1mNetwork[22m: [36mhttp://172.22.144.1:[1m5275[22m/[39m
+[2m21:47:51[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/styles/index.css, /src/pages/Login.tsx, /src/pages/Workspace.tsx, /src/components/SecureFile.tsx, /src/pages/CustomerService.tsx[22m
+[2m21:48:38[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/pages/CustomerService.tsx, /src/styles/index.css[22m
+[2m21:48:46[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/pages/CustomerService.tsx, /src/styles/index.css[22m
+[2m21:49:04[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/pages/CustomerService.tsx, /src/styles/index.css[22m
+[2m21:49:37[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/pages/CustomerService.tsx, /src/styles/index.css[22m
+[2m21:49:48[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/pages/CustomerService.tsx, /src/styles/index.css[22m
+[2m21:50:06[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/pages/CustomerService.tsx, /src/styles/index.css[22m
+[2m21:50:13[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/pages/CustomerService.tsx, /src/styles/index.css[22m
+[2m21:52:10[22m [36m[1m[vite][22m[39m [32mhmr update [39m[2m/src/pages/CustomerService.tsx, /src/styles/index.css[22m
+[2m21:55:06[22m [36m[1m[vite][22m[39m [32m.env changed, restarting server...[39m
+[2m21:55:06[22m [36m[1m[vite][22m[39m server restarted.
+[2m22:11:02[22m [36m[1m[vite][22m[39m [32mvite.config.ts changed, restarting server...[39m
+[2m22:11:02[22m [36m[1m[vite][22m[39m server restarted.

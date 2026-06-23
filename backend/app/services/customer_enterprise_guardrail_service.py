@@ -63,6 +63,13 @@ TRAVEL_SAFETY_TERMS = ("飞机", "航班", "安检", "托运", "随身", "高铁
 FLAMMABLE_PRODUCT_TERMS = ("酒精炉", "酒精", "燃料", "炉具", "气罐", "燃气", "CS-B14", "CS-B02")
 REALTIME_WEATHER_TERMS = ("天气", "下雨", "降雨", "气温", "风力", "台风", "今天", "明天", "现在")
 INTERNAL_BUSINESS_TERMS = ("成本价", "成本", "进价", "利润", "毛利", "底价", "采购价")
+BUSINESS_SUPPORT_TERMS = ("退换货", "退货", "换货", "退换", "瑕疵", "破损", "坏了", "物流", "快递", "发货", "支付", "售后政策", "售后")
+CREATIVE_REQUEST_TERMS = ("写游记", "露营游记", "写文章", "写一篇", "作文", "文案")
+CASUAL_WEATHER_TERMS = ("天气真好", "今天天气真好", "适合出去玩吗", "出去玩吗")
+PRODUCT_CONSULTATION_TERMS = (
+    "推荐", "哪款", "哪种", "产品", "装备", "锅", "炉", "杯", "壶", "套装", "预算", "人数",
+    "三个人", "四个人", "3人", "4人", "做饭", "煮咖啡", "泡咖啡", "露营装备", "轻便", "容量", "材质", "热源",
+)
 
 
 def evaluate_question(question: str) -> dict[str, Any] | None:
@@ -89,6 +96,48 @@ def evaluate_question(question: str) -> dict[str, Any] | None:
             warnings=["internal_business_data_blocked"],
         )
 
+    if _contains_any(text, lowered, BUSINESS_SUPPORT_TERMS):
+        return _build_guardrail_result(
+            question=text,
+            category="business_support",
+            intent="business_consultation",
+            answer_type="business_policy",
+            confidence="high",
+            uncertainty="policy_or_order_required",
+            answer=(
+                "这属于售后/订单类业务咨询，不需要查询产品库。"
+                "请根据店铺退换货政策、订单状态和实际凭证处理；如涉及瑕疵或破损，建议先收集照片、订单号和问题描述，再转人工或售后流程确认。"
+            ),
+            followups=["请补充订单号、购买渠道、问题照片和客户诉求，方便售后确认。"],
+            warnings=["business_support_no_product_search"],
+        )
+
+    if _contains_any(text, lowered, CREATIVE_REQUEST_TERMS):
+        return _build_guardrail_result(
+            question=text,
+            category="creative_or_chat",
+            intent="chitchat",
+            answer_type="out_of_scope",
+            confidence="high",
+            uncertainty="non_product_request",
+            answer="这是写作/闲聊类请求，不需要调用产品检索。当前客服系统主要用于产品资料查询、推荐、对比和售后分流。",
+            followups=["如果你要写具体产品的露营内容，请提供 SKU 或产品名，我可以基于产品资料整理卖点。"],
+            warnings=["non_product_request_no_search"],
+        )
+
+    if _contains_any(text, lowered, CASUAL_WEATHER_TERMS) and _is_weather_only_question(text):
+        return _build_guardrail_result(
+            question=text,
+            category="casual_weather_chat",
+            intent="chitchat",
+            answer_type="out_of_scope",
+            confidence="high",
+            uncertainty="external_realtime_data_required",
+            answer="天气相关闲聊不需要调用产品检索；我当前也没有实时天气数据。是否适合出行请以天气 App 和当地预警为准。",
+            followups=["如果你已经确认要出行，我可以按人数、场景和预算推荐露营装备。"],
+            warnings=["casual_weather_no_product_search"],
+        )
+
     if _contains_any(text, lowered, TRAVEL_SAFETY_TERMS) and _contains_any(text, lowered, FLAMMABLE_PRODUCT_TERMS):
         sku = _first_sku(text)
         prefix = f"{sku} " if sku else ""
@@ -108,7 +157,7 @@ def evaluate_question(question: str) -> dict[str, Any] | None:
             warnings=["external_travel_safety_policy_required"],
         )
 
-    if _contains_any(text, lowered, REALTIME_WEATHER_TERMS) and "露营" in text:
+    if _contains_any(text, lowered, REALTIME_WEATHER_TERMS) and not _has_product_consultation_intent(text):
         return _build_guardrail_result(
             question=text,
             category="realtime_weather",
@@ -230,6 +279,23 @@ def _build_guardrail_result(
 
 def _contains_any(text: str, lowered: str, terms: tuple[str, ...]) -> bool:
     return any((term.lower() in lowered) if term.isascii() else (term in text) for term in terms)
+
+
+def _has_product_consultation_intent(text: str) -> bool:
+    value = str(text or "")
+    if not value:
+        return False
+    if any(term in value for term in PRODUCT_CONSULTATION_TERMS):
+        return True
+    return bool(SKU_RE.search(value))
+
+
+def _is_weather_only_question(text: str) -> bool:
+    value = str(text or "")
+    lowered = value.lower()
+    if not _contains_any(value, lowered, REALTIME_WEATHER_TERMS + CASUAL_WEATHER_TERMS):
+        return False
+    return not _has_product_consultation_intent(value)
 
 
 def _first_sku(text: str) -> str | None:

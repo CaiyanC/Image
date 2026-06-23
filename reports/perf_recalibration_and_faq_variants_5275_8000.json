@@ -1,0 +1,1079 @@
+{
+  "generated_at": "2026-06-20T05:09:00.452Z",
+  "baseUrl": "http://localhost:5275",
+  "performance": [
+    {
+      "name": "explicit_product_detail",
+      "runs": [
+        {
+          "index": 1,
+          "conversation_id": "e7489d6f-ea1e-4c56-ae2d-4b1ad6a082c9",
+          "measured": {
+            "question": "旋焰酒精炉表面处理是什么",
+            "trace_id": "a31143aec21c4a31ba6a67ebc0576004",
+            "total_ms": 2633.44,
+            "first_token_ms": 2631.67,
+            "prompt_chars": 5301,
+            "llm_call_count": 1,
+            "intent": "product_detail",
+            "agent_mode": "agent",
+            "result_skus": [
+              "CS-B14"
+            ],
+            "entered_semantic_retrieve": true,
+            "entered_hybrid_search": false,
+            "hit_faq_fast_path": false,
+            "http_status": 200,
+            "wall_ms": 2744,
+            "error": null,
+            "answer": "旋焰酒精炉（CS-B14）的表面处理为“无”，即该产品没有进行额外的表面工艺处理，呈现的是304不锈钢原色。其规格信息中明确标注表面工艺为无。"
+          }
+        },
+        {
+          "index": 2,
+          "conversation_id": "cce28ef9-d76f-4474-b920-63af9d8c17c4",
+          "measured": {
+            "question": "旋焰酒精炉表面处理是什么",
+            "trace_id": "b36621de80ee48be97aaa7d34e9775f5",
+            "total_ms": 3048.65,
+            "first_token_ms": 3047.32,
+            "prompt_chars": 5301,
+            "llm_call_count": 1,
+            "intent": "product_detail",
+            "agent_mode": "agent",
+            "result_skus": [
+              "CS-B14"
+            ],
+            "entered_semantic_retrieve": true,
+            "entered_hybrid_search": false,
+            "hit_faq_fast_path": false,
+            "http_status": 200,
+            "wall_ms": 3064,
+            "error": null,
+            "answer": "旋焰酒精炉（CS-B14）的表面工艺显示为“无”，即没有进行特殊的表面处理，呈现的是304不锈钢原色。"
+          }
+        },
+        {
+          "index": 3,
+          "conversation_id": "2208f2e7-57d2-4ebe-b645-4171801acf2e",
+          "measured": {
+            "question": "旋焰酒精炉表面处理是什么",
+            "trace_id": "12b078ffbc4f472c9611b09783c5c5e5",
+            "total_ms": 2387.69,
+            "first_token_ms": 2386.39,
+            "prompt_chars": 5301,
+            "llm_call_count": 1,
+            "intent": "product_detail",
+            "agent_mode": "agent",
+            "result_skus": [
+              "CS-B14"
+            ],
+            "entered_semantic_retrieve": true,
+            "entered_hybrid_search": false,
+            "hit_faq_fast_path": false,
+            "http_status": 200,
+            "wall_ms": 2461,
+            "error": null,
+            "answer": "旋焰酒精炉（CS-B14）的表面处理为“无”，即未做额外表面工艺处理，直接呈现304不锈钢原色。"
+          }
+        },
+        {
+          "index": 4,
+          "conversation_id": "89b726b9-6728-49af-9d2f-449626d35cfb",
+          "measured": {
+            "question": "旋焰酒精炉表面处理是什么",
+            "trace_id": "b71d18d217ec46689db16b9868092197",
+            "total_ms": 2229.06,
+            "first_token_ms": 2227.77,
+            "prompt_chars": 5301,
+            "llm_call_count": 1,
+            "intent": "product_detail",
+            "agent_mode": "agent",
+            "result_skus": [
+              "CS-B14"
+            ],
+            "entered_semantic_retrieve": true,
+            "entered_hybrid_search": false,
+            "hit_faq_fast_path": false,
+            "http_status": 200,
+            "wall_ms": 2305,
+            "error": null,
+            "answer": "旋焰酒精炉的表面工艺为“无”，也就是没有额外的表面处理，保持304不锈钢原色。"
+          }
+        },
+        {
+          "index": 5,
+          "conversation_id": "4a007ce3-74a5-4614-a6e0-318c7c8b3e17",
+          "measured": {
+            "question": "旋焰酒精炉表面处理是什么",
+            "trace_id": "f09de96f2278458b9fe905b5caded45f",
+            "total_ms": 2060.71,
+            "first_token_ms": 2059.45,
+            "prompt_chars": 5301,
+            "llm_call_count": 1,
+            "intent": "product_detail",
+            "agent_mode": "agent",
+            "result_skus": [
+              "CS-B14"
+            ],
+            "entered_semantic_retrieve": true,
+            "entered_hybrid_search": false,
+            "hit_faq_fast_path": false,
+            "http_status": 200,
+            "wall_ms": 2075,
+            "error": null,
+            "answer": "旋焰酒精炉（CS-B14）的表面工艺标注为“无”，没有进行额外的表面处理，呈现的是304不锈钢的原色。"
+          }
+        },
+        {
+          "index": 6,
+          "conversation_id": "7233e7e9-23c1-4c6b-ae7e-bbbac753e25c",
+          "measured": {
+            "question": "旋焰酒精炉表面处理是什么",
+            "trace_id": "8756f22545e34fa5a5780bec934b6171",
+            "total_ms": 3054.52,
+            "first_token_ms": 3053.44,
+            "prompt_chars": 5301,
+            "llm_call_count": 1,
+            "intent": "product_detail",
+            "agent_mode": "agent",
+            "result_skus": [
+              "CS-B14"
+            ],
+            "entered_semantic_retrieve": true,
+            "entered_hybrid_search": false,
+            "hit_faq_fast_path": false,
+            "http_status": 200,
+            "wall_ms": 3069,
+            "error": null,
+            "answer": "旋焰酒精炉的表面工艺为无，即未做额外的表面处理，呈现的是304不锈钢原色。"
+          }
+        },
+        {
+          "index": 7,
+          "conversation_id": "e53d718e-6312-4445-89ff-3773606f9d03",
+          "measured": {
+            "question": "旋焰酒精炉表面处理是什么",
+            "trace_id": "aa6b4ee4427b4bea900d27b115c38df4",
+            "total_ms": 2365.61,
+            "first_token_ms": 2363.57,
+            "prompt_chars": 5301,
+            "llm_call_count": 1,
+            "intent": "product_detail",
+            "agent_mode": "agent",
+            "result_skus": [
+              "CS-B14"
+            ],
+            "entered_semantic_retrieve": true,
+            "entered_hybrid_search": false,
+            "hit_faq_fast_path": false,
+            "http_status": 200,
+            "wall_ms": 2380,
+            "error": null,
+            "answer": "旋焰酒精炉（CS-B14）没有经过额外的表面处理工艺，产品规格中“表面工艺”标注为“无”，整体呈现不锈钢原色。其材质为304不锈钢，颜色即为不锈钢本色。"
+          }
+        },
+        {
+          "index": 8,
+          "conversation_id": "5a3693b0-deee-4f8f-bb3d-6075e1bd9818",
+          "measured": {
+            "question": "旋焰酒精炉表面处理是什么",
+            "trace_id": "5b9dcb69f67145269ce2a9be33d260ce",
+            "total_ms": 3217.46,
+            "first_token_ms": 3215.24,
+            "prompt_chars": 5301,
+            "llm_call_count": 1,
+            "intent": "product_detail",
+            "agent_mode": "agent",
+            "result_skus": [
+              "CS-B14"
+            ],
+            "entered_semantic_retrieve": true,
+            "entered_hybrid_search": false,
+            "hit_faq_fast_path": false,
+            "http_status": 200,
+            "wall_ms": 3236,
+            "error": null,
+            "answer": "旋焰酒精炉（CS-B14）的表面处理为：无。依据产品规格信息，其表面工艺字段明确标注为“无”，且材质为304不锈钢，颜色为不锈钢原色，表明该产品未做额外的表面处理。"
+          }
+        },
+        {
+          "index": 9,
+          "conversation_id": "de12b3f3-b14b-4785-9443-a3f14272dc39",
+          "measured": {
+            "question": "旋焰酒精炉表面处理是什么",
+            "trace_id": "e6dd325d1ddd4aad9772dfcf0288a55f",
+            "total_ms": 2529.46,
+            "first_token_ms": 2528.19,
+            "prompt_chars": 5301,
+            "llm_call_count": 1,
+            "intent": "product_detail",
+            "agent_mode": "agent",
+            "result_skus": [
+              "CS-B14"
+            ],
+            "entered_semantic_retrieve": true,
+            "entered_hybrid_search": false,
+            "hit_faq_fast_path": false,
+            "http_status": 200,
+            "wall_ms": 2609,
+            "error": null,
+            "answer": "旋焰酒精炉（CS-B14）没有进行额外的表面处理，表面工艺标注为“无”，呈304不锈钢原色。"
+          }
+        },
+        {
+          "index": 10,
+          "conversation_id": "d0627bf9-d28f-4f15-b103-6262980c52f0",
+          "measured": {
+            "question": "旋焰酒精炉表面处理是什么",
+            "trace_id": "279e0bd5d4a84329ac334151dfa4f773",
+            "total_ms": 2195.32,
+            "first_token_ms": 2192.81,
+            "prompt_chars": 5301,
+            "llm_call_count": 1,
+            "intent": "product_detail",
+            "agent_mode": "agent",
+            "result_skus": [
+              "CS-B14"
+            ],
+            "entered_semantic_retrieve": true,
+            "entered_hybrid_search": false,
+            "hit_faq_fast_path": false,
+            "http_status": 200,
+            "wall_ms": 2393,
+            "error": null,
+            "answer": "旋焰酒精炉（CS-B14）的表面工艺为“无”，即没有做额外的特殊表面处理，呈现304不锈钢的原色。"
+          }
+        }
+      ],
+      "metrics": {
+        "n": 10,
+        "mean_ms": 2572.19,
+        "min_ms": 2060.71,
+        "max_ms": 3217.46,
+        "stddev_ms": 384.67
+      }
+    },
+    {
+      "name": "recommendation_first_turn",
+      "runs": [
+        {
+          "index": 1,
+          "conversation_id": "22c6226f-e91a-4760-980f-f62a023072da",
+          "measured": {
+            "question": "推荐一款适合2个人露营做饭的锅",
+            "trace_id": "d503b4a817334d07924990bdcfc003d4",
+            "total_ms": 7175.58,
+            "first_token_ms": 4628.21,
+            "prompt_chars": 3930,
+            "llm_call_count": 1,
+            "intent": "recommend_products",
+            "agent_mode": "agent",
+            "result_skus": [
+              "CW-C01-37",
+              "CW-C05-37",
+              "CW-C83-1",
+              "CW-C83",
+              "CW-C83-2"
+            ],
+            "entered_semantic_retrieve": true,
+            "entered_hybrid_search": true,
+            "hit_faq_fast_path": false,
+            "http_status": 200,
+            "wall_ms": 7252,
+            "error": null,
+            "answer": "推荐CW-C01-37露营套锅，它专为1-2人轻量化露营设计，最契合你们的需求。\n\n这款套锅采用硬质氧化铝合金材质，总重仅595g，收纳时锅碗可一体叠加，打包和携带都很方便。它的锅体容量为900ml，另配一个450ml碗，刚好满足两人份的简单烹饪和用餐。核心优势在于底座的全包围防风设计，能提升火力稳定性，并且支持燃气和酒精双燃料系统，户外做饭更从容。价格定位中端，整体性价比不错。\n\n如果你希望烹饪花样更多，也可以考虑CW-C05-37十件套，但它容量较大（1.7L锅+1.4L浅锅），更适合3-4人家庭出行，对两个人来说可能有些富余。当前品类下CW-C01-37是两人场景的最优选。"
+          }
+        },
+        {
+          "index": 2,
+          "conversation_id": "b96b081f-16e1-4228-83aa-61ec75a48702",
+          "measured": {
+            "question": "推荐一款适合2个人露营做饭的锅",
+            "trace_id": "29a441adc0844f63838c540b14f45a60",
+            "total_ms": 7360.45,
+            "first_token_ms": 5222.1,
+            "prompt_chars": 3930,
+            "llm_call_count": 1,
+            "intent": "recommend_products",
+            "agent_mode": "agent",
+            "result_skus": [
+              "CW-C01-37",
+              "CW-C05-37",
+              "CW-C83-1",
+              "CW-C83",
+              "CW-C83-2"
+            ],
+            "entered_semantic_retrieve": true,
+            "entered_hybrid_search": true,
+            "hit_faq_fast_path": false,
+            "http_status": 200,
+            "wall_ms": 7376,
+            "error": null,
+            "answer": "推荐你选择爱路客 CW-C01-37 露营套锅。它专为 1-2 人设计，锅体 900 毫升、碗 450 毫升的容量刚好适合两个人简单煮面、热食；整组仅重 595 克，收纳时能一体叠放，徒步携带也很轻松。底座全包围防风设计配合 900-3200W 双燃料支持（燃气/酒精），户外做饭火力稳定，不怕风吹。价格定位中端，性价比高。\n\n其他几款容量都在 1.7L 以上，偏向 3-4 人家庭或营地大餐，人多时再考虑即可。"
+          }
+        },
+        {
+          "index": 3,
+          "conversation_id": "2d4a8b89-5d7e-4187-a914-8cddc0f89108",
+          "measured": {
+            "question": "推荐一款适合2个人露营做饭的锅",
+            "trace_id": "39c9b73778d3476d96fd0e828f3cf1ea",
+            "total_ms": 8661.75,
+            "first_token_ms": 7237.2,
+            "prompt_chars": 3930,
+            "llm_call_count": 1,
+            "intent": "recommend_products",
+            "agent_mode": "agent",
+            "result_skus": [
+              "CW-C01-37",
+              "CW-C05-37",
+              "CW-C83-1",
+              "CW-C83",
+              "CW-C83-2"
+            ],
+            "entered_semantic_retrieve": true,
+            "entered_hybrid_search": true,
+            "hit_faq_fast_path": false,
+            "http_status": 200,
+            "wall_ms": 8735,
+            "error": null,
+            "answer": "推荐 CW-C01-37 露营套锅。它是一款专为1-2人设计的轻量化锅具，锅容量900毫升、碗容量450毫升，刚好满足两人份的简单烹饪和用餐需求。整体仅重595克，收纳时采用套娃式设计，非常便携。同时它带全包围防风底座、支持燃气和酒精双燃料，火力稳定，很适合两人露营做饭的场景，价格定位也相对适中。"
+          }
+        },
+        {
+          "index": 4,
+          "conversation_id": "47042bf5-17bc-45a0-a4f1-00fe55dce80d",
+          "measured": {
+            "question": "推荐一款适合2个人露营做饭的锅",
+            "trace_id": "2e33a16229f14e818a2c979ac8cd525d",
+            "total_ms": 4789.62,
+            "first_token_ms": 3628.79,
+            "prompt_chars": 3930,
+            "llm_call_count": 1,
+            "intent": "recommend_products",
+            "agent_mode": "agent",
+            "result_skus": [
+              "CW-C01-37",
+              "CW-C05-37",
+              "CW-C83-1",
+              "CW-C83",
+              "CW-C83-2"
+            ],
+            "entered_semantic_retrieve": true,
+            "entered_hybrid_search": true,
+            "hit_faq_fast_path": false,
+            "http_status": 200,
+            "wall_ms": 4865,
+            "error": null,
+            "answer": "推荐 CW-C01-37 露营套锅。它专为1-2人出行设计，锅体容量900mL配合450mL碗，刚好满足2人简餐烹饪；整体轻量化（595g），并采用套娃式一体收纳，携带方便。还支持全包围防风底座和燃气/酒精双燃料，火力稳定且不挑炉具，定位中端，性价比不错。"
+          }
+        },
+        {
+          "index": 5,
+          "conversation_id": "dbe5a3a0-899f-4d18-ab7a-d3aa6cef4d06",
+          "measured": {
+            "question": "推荐一款适合2个人露营做饭的锅",
+            "trace_id": "958bd0ffd5f44724840dc7892695c25d",
+            "total_ms": 7884.83,
+            "first_token_ms": 6514.22,
+            "prompt_chars": 3930,
+            "llm_call_count": 1,
+            "intent": "recommend_products",
+            "agent_mode": "agent",
+            "result_skus": [
+              "CW-C01-37",
+              "CW-C05-37",
+              "CW-C83-1",
+              "CW-C83",
+              "CW-C83-2"
+            ],
+            "entered_semantic_retrieve": true,
+            "entered_hybrid_search": true,
+            "hit_faq_fast_path": false,
+            "http_status": 200,
+            "wall_ms": 7958,
+            "error": null,
+            "answer": "推荐爱路客CW-C01-37露营套锅，它专为1-2人轻量露营设计，非常适合两口子户外做饭。锅体容量900ml、碗450ml，一套收纳仅重595g，携带无负担。底座全包围防风结构，搭配双燃料（气罐/酒精）系统，火力稳定高效，帮你轻松搞定热汤、简餐。价格定位中端，性价比不错。"
+          }
+        },
+        {
+          "index": 6,
+          "conversation_id": "4727c46f-ad55-4190-959f-f3572042f4d2",
+          "measured": {
+            "question": "推荐一款适合2个人露营做饭的锅",
+            "trace_id": "8893a8c2128d48dfbb6b0ccd0c4323e9",
+            "total_ms": 7435.54,
+            "first_token_ms": 6283.06,
+            "prompt_chars": 3930,
+            "llm_call_count": 1,
+            "intent": "recommend_products",
+            "agent_mode": "agent",
+            "result_skus": [
+              "CW-C01-37",
+              "CW-C05-37",
+              "CW-C83-1",
+              "CW-C83",
+              "CW-C83-2"
+            ],
+            "entered_semantic_retrieve": true,
+            "entered_hybrid_search": true,
+            "hit_faq_fast_path": false,
+            "http_status": 200,
+            "wall_ms": 7509,
+            "error": null,
+            "answer": "推荐CW-C01-37露营套锅，它是专为1-2人轻量露营设计的，锅容量900ml配450ml碗，整体仅595g，收纳小巧。底座全包围防风设计让户外火力更稳定，支持燃气和酒精两种燃料，煮个面、热个汤都很方便，价格定位中端，适合预算有限的二人出行。"
+          }
+        },
+        {
+          "index": 7,
+          "conversation_id": "c8177434-cdc3-41cb-a92d-9317b6987ea6",
+          "measured": {
+            "question": "推荐一款适合2个人露营做饭的锅",
+            "trace_id": "b63dbd06197744539d8e518c6149e87b",
+            "total_ms": 5971.55,
+            "first_token_ms": 3555.52,
+            "prompt_chars": 3930,
+            "llm_call_count": 1,
+            "intent": "recommend_products",
+            "agent_mode": "agent",
+            "result_skus": [
+              "CW-C01-37",
+              "CW-C05-37",
+              "CW-C83-1",
+              "CW-C83",
+              "CW-C83-2"
+            ],
+            "entered_semantic_retrieve": true,
+            "entered_hybrid_search": true,
+            "hit_faq_fast_path": false,
+            "http_status": 200,
+            "wall_ms": 6170,
+            "error": null,
+            "answer": "推荐你查看爱路客的cw-c01-37露营套锅，它专门为1-2人轻量出行设计，锅身仅595g，收纳紧凑，中端定价不贵，很适合2人露营做饭。这款套锅配900ml锅和450ml碗，底座全包围防风，支持燃气/酒精双燃料，能满足2人简单炊煮需求。你提到的其他几款比如cw-c05-37容量在1.7L/1.4L，定位3-4人且价格高端，对2人可能偏大且预算更高；cw-c83系列容量3700ml，同样高端定位，更偏向精致露营或家庭使用。如果你倾向轻便、够用的2人锅，cw-c01-37更匹配。"
+          }
+        },
+        {
+          "index": 8,
+          "conversation_id": "73c762ba-4e40-4603-89f4-b9a11728af1a",
+          "measured": {
+            "question": "推荐一款适合2个人露营做饭的锅",
+            "trace_id": "a454fbf89f8448bf8c9f0459a9d29d22",
+            "total_ms": 8708.77,
+            "first_token_ms": 7367.62,
+            "prompt_chars": 3930,
+            "llm_call_count": 1,
+            "intent": "recommend_products",
+            "agent_mode": "agent",
+            "result_skus": [
+              "CW-C01-37",
+              "CW-C05-37",
+              "CW-C83-1",
+              "CW-C83",
+              "CW-C83-2"
+            ],
+            "entered_semantic_retrieve": true,
+            "entered_hybrid_search": true,
+            "hit_faq_fast_path": false,
+            "http_status": 200,
+            "wall_ms": 8790,
+            "error": null,
+            "answer": "推荐爱路客CW-C01-37露营套锅。这套锅专为1-2人轻量露营设计，重量仅595克，收纳采用一体叠加套娃式，携带不占空间。烹饪时底座全包围防风，火力稳定，支持燃气与酒精两种燃料，灵活方便。套装包含900ml锅与450ml碗，能满足两人简单煮食、泡面、热汤等需求，价格定位中端，是双人露营做饭高性价比的选择。"
+          }
+        },
+        {
+          "index": 9,
+          "conversation_id": "1fab5df2-2b9b-45e7-ae3f-5574265a6b6b",
+          "measured": {
+            "question": "推荐一款适合2个人露营做饭的锅",
+            "trace_id": "f8bd8cfbcd4047bd9be5de22c855f348",
+            "total_ms": 8332.03,
+            "first_token_ms": 6897.65,
+            "prompt_chars": 3930,
+            "llm_call_count": 1,
+            "intent": "recommend_products",
+            "agent_mode": "agent",
+            "result_skus": [
+              "CW-C01-37",
+              "CW-C05-37",
+              "CW-C83-1",
+              "CW-C83",
+              "CW-C83-2"
+            ],
+            "entered_semantic_retrieve": true,
+            "entered_hybrid_search": true,
+            "hit_faq_fast_path": false,
+            "http_status": 200,
+            "wall_ms": 8416,
+            "error": null,
+            "answer": "推荐 CW-C01-37 露营套锅，它专为 1-2 人轻量露营设计，包含 900ML 锅和 450ML 碗，整体仅 595g，收纳后可一体套娃，携带方便。底座全包围防风，火力稳定，且支持燃气与酒精两种燃料，很适合两人户外做饭场景，价格定位中端，性价比不错。如果你需要更大容量，也可以考虑 CW-C05-37 十件套锅具，但它更适合 3-4 人使用，对两人来说可能偏大偏重。"
+          }
+        },
+        {
+          "index": 10,
+          "conversation_id": "4929d82b-2cc3-4504-b560-cc09a5bdba2e",
+          "measured": {
+            "question": "推荐一款适合2个人露营做饭的锅",
+            "trace_id": "0758c6245d094d0f8ee9e0af975beb04",
+            "total_ms": 5172.91,
+            "first_token_ms": 3707.5,
+            "prompt_chars": 3930,
+            "llm_call_count": 1,
+            "intent": "recommend_products",
+            "agent_mode": "agent",
+            "result_skus": [
+              "CW-C01-37",
+              "CW-C05-37",
+              "CW-C83-1",
+              "CW-C83",
+              "CW-C83-2"
+            ],
+            "entered_semantic_retrieve": true,
+            "entered_hybrid_search": true,
+            "hit_faq_fast_path": false,
+            "http_status": 200,
+            "wall_ms": 5187,
+            "error": null,
+            "answer": "推荐爱路客 CW-C01-37 露营锅具套装。这是一款专为1-2人轻量化露营打造的套锅，锅体容量900ml，碗450ml，总重仅595g，收纳时可一体叠加，非常便携。底座全包围防风设计让火力更稳定，支持燃气和酒精两种燃料，简单轻巧就满足两人煮面、热汤、烧水等基本烹饪需求。价格定位中端，很适合双人露营使用。"
+          }
+        }
+      ],
+      "metrics": {
+        "n": 10,
+        "mean_ms": 7149.3,
+        "min_ms": 4789.62,
+        "max_ms": 8708.77,
+        "stddev_ms": 1328.45
+      }
+    },
+    {
+      "name": "entity_stack_energy_ring_fastpath",
+      "runs": [
+        {
+          "index": 1,
+          "conversation_id": "ee56aae3-cd3f-4787-8dc4-87e6aab33644",
+          "setup": {
+            "question": "行山单锅容量是多少",
+            "trace_id": "0865b6d71f104d4385c613a40d33cfd1",
+            "total_ms": 1984.53,
+            "first_token_ms": 1982.83,
+            "prompt_chars": 5829,
+            "llm_call_count": 1,
+            "intent": "product_detail",
+            "agent_mode": "agent",
+            "result_skus": [
+              "CW-C93"
+            ],
+            "entered_semantic_retrieve": true,
+            "entered_hybrid_search": false,
+            "hit_faq_fast_path": false,
+            "http_status": 200,
+            "wall_ms": 2060,
+            "error": null,
+            "answer": "行山单锅的容量是1000ML（约1L）。"
+          },
+          "measured": {
+            "question": "这个聚能环是做什么的",
+            "trace_id": "18dc14f68ae6423f898af0b11969350c",
+            "total_ms": 4927.15,
+            "first_token_ms": 4067.97,
+            "prompt_chars": 4046,
+            "llm_call_count": 1,
+            "intent": "product_detail",
+            "agent_mode": "agent",
+            "result_skus": [
+              "CW-C93"
+            ],
+            "entered_semantic_retrieve": true,
+            "entered_hybrid_search": false,
+            "hit_faq_fast_path": false,
+            "http_status": 200,
+            "wall_ms": 5151,
+            "error": null,
+            "answer": "聚能环是这款行山单锅（CW-C93）底部搭载的结构，主要作用是提升燃烧效率。简单来说，就是烧同样1升水，它可以节约约33%的时间和用气量。这也让这款锅实现了卖点中提到的“95秒速沸”效果。"
+          }
+        },
+        {
+          "index": 2,
+          "conversation_id": "b72da122-1ed2-4df1-84bf-61fbd457b955",
+          "setup": {
+            "question": "行山单锅容量是多少",
+            "trace_id": "a57bdfa4236e4e5ead23aefe2d9833c0",
+            "total_ms": 2532.2,
+            "first_token_ms": 2531.27,
+            "prompt_chars": 5829,
+            "llm_call_count": 1,
+            "intent": "product_detail",
+            "agent_mode": "agent",
+            "result_skus": [
+              "CW-C93"
+            ],
+            "entered_semantic_retrieve": true,
+            "entered_hybrid_search": false,
+            "hit_faq_fast_path": false,
+            "http_status": 200,
+            "wall_ms": 2558,
+            "error": null,
+            "answer": "行山单锅（CW-C93）容量为1000ML，约1L。"
+          },
+          "measured": {
+            "question": "这个聚能环是做什么的",
+            "trace_id": "0fa0335dbb8649969206f42c819da8e4",
+            "total_ms": 4296.42,
+            "first_token_ms": 3937.33,
+            "prompt_chars": 4052,
+            "llm_call_count": 1,
+            "intent": "product_detail",
+            "agent_mode": "agent",
+            "result_skus": [
+              "CW-C93"
+            ],
+            "entered_semantic_retrieve": true,
+            "entered_hybrid_search": false,
+            "hit_faq_fast_path": false,
+            "http_status": 200,
+            "wall_ms": 4370,
+            "error": null,
+            "answer": "聚能环可以提升燃烧效率，通俗点说就是同样烧1L水，能节约33%的时间与用气量。行山单锅正是凭借底部的聚能结构实现了95秒速沸。"
+          }
+        },
+        {
+          "index": 3,
+          "conversation_id": "38bd0983-4ec0-44c6-b81b-b449c64e51f5",
+          "setup": {
+            "question": "行山单锅容量是多少",
+            "trace_id": "37ee59d59efc4cddb479a2276e02d4f6",
+            "total_ms": 3829.81,
+            "first_token_ms": 3828.81,
+            "prompt_chars": 5829,
+            "llm_call_count": 1,
+            "intent": "product_detail",
+            "agent_mode": "agent",
+            "result_skus": [
+              "CW-C93"
+            ],
+            "entered_semantic_retrieve": true,
+            "entered_hybrid_search": false,
+            "hit_faq_fast_path": false,
+            "http_status": 200,
+            "wall_ms": 3844,
+            "error": null,
+            "answer": "行山单锅的容量约为1L（即1000ML）。"
+          },
+          "measured": {
+            "question": "这个聚能环是做什么的",
+            "trace_id": "0ffe4e0df3274e69869955ed70ac8e9e",
+            "total_ms": 4750.68,
+            "first_token_ms": 3945.44,
+            "prompt_chars": 4047,
+            "llm_call_count": 1,
+            "intent": "product_detail",
+            "agent_mode": "agent",
+            "result_skus": [
+              "CW-C93"
+            ],
+            "entered_semantic_retrieve": true,
+            "entered_hybrid_search": false,
+            "hit_faq_fast_path": false,
+            "http_status": 200,
+            "wall_ms": 4825,
+            "error": null,
+            "answer": "聚能环是行山单锅底部的一个结构，主要作用是提升燃烧效率。用它烧1升水，可以比普通锅节约大约33%的加热时间和用气量，从而实现95秒左右快速烧开，即宣传中的“95秒速沸”。"
+          }
+        },
+        {
+          "index": 4,
+          "conversation_id": "99619f3d-d30b-46a5-8359-167c16c12adc",
+          "setup": {
+            "question": "行山单锅容量是多少",
+            "trace_id": "802861311ccf44119d3bdd59d7a1acf5",
+            "total_ms": 2492.83,
+            "first_token_ms": 2491.99,
+            "prompt_chars": 5829,
+            "llm_call_count": 1,
+            "intent": "product_detail",
+            "agent_mode": "agent",
+            "result_skus": [
+              "CW-C93"
+            ],
+            "entered_semantic_retrieve": true,
+            "entered_hybrid_search": false,
+            "hit_faq_fast_path": false,
+            "http_status": 200,
+            "wall_ms": 2568,
+            "error": null,
+            "answer": "行山单锅的容量是1000ml（约1L）。"
+          },
+          "measured": {
+            "question": "这个聚能环是做什么的",
+            "trace_id": "7d059ce13c434a00bb77733c0fc338cd",
+            "total_ms": 2684.31,
+            "first_token_ms": 2057.98,
+            "prompt_chars": 4046,
+            "llm_call_count": 1,
+            "intent": "product_detail",
+            "agent_mode": "agent",
+            "result_skus": [
+              "CW-C93"
+            ],
+            "entered_semantic_retrieve": true,
+            "entered_hybrid_search": false,
+            "hit_faq_fast_path": false,
+            "http_status": 200,
+            "wall_ms": 2699,
+            "error": null,
+            "answer": "聚能环的作用是提升燃烧效率，通俗来说就是同样烧1升水，可以节约大约33%的时间和用气量。这个设计来自行山单锅（CW-C93）底部的聚能结构，配合锅底实现95秒速沸效果。"
+          }
+        },
+        {
+          "index": 5,
+          "conversation_id": "cbcd214c-5f4c-4999-be00-e73eaf559562",
+          "setup": {
+            "question": "行山单锅容量是多少",
+            "trace_id": "8ac55877bc6944de963c78791fad0db6",
+            "total_ms": 2732.86,
+            "first_token_ms": 2731.02,
+            "prompt_chars": 5829,
+            "llm_call_count": 1,
+            "intent": "product_detail",
+            "agent_mode": "agent",
+            "result_skus": [
+              "CW-C93"
+            ],
+            "entered_semantic_retrieve": true,
+            "entered_hybrid_search": false,
+            "hit_faq_fast_path": false,
+            "http_status": 200,
+            "wall_ms": 2744,
+            "error": null,
+            "answer": "行山单锅的容量约为1L（即1000ML）。相关产品为爱路客行山户外单锅（SKU: CW-C93），规格显示容量为1000ML，产品问答中也说明容量约1L。"
+          },
+          "measured": {
+            "question": "这个聚能环是做什么的",
+            "trace_id": "faac93ae1a2248cf817346ce39ca7e65",
+            "total_ms": 2928.55,
+            "first_token_ms": 2303.46,
+            "prompt_chars": 4103,
+            "llm_call_count": 1,
+            "intent": "product_detail",
+            "agent_mode": "agent",
+            "result_skus": [
+              "CW-C93"
+            ],
+            "entered_semantic_retrieve": true,
+            "entered_hybrid_search": false,
+            "hit_faq_fast_path": false,
+            "http_status": 200,
+            "wall_ms": 3018,
+            "error": null,
+            "answer": "聚能环的作用是提升燃烧效率，相当于同样烧开1升水，可以帮您节省约33%的时间和燃气用量。这款行山单锅（CW-C93）底部搭载了聚能结构，配合该设计可实现95秒速沸的效果。"
+          }
+        },
+        {
+          "index": 6,
+          "conversation_id": "cc368122-a6ac-4764-99df-d3f7a0a8c155",
+          "setup": {
+            "question": "行山单锅容量是多少",
+            "trace_id": "550ade92fe5148e8b88b5b77c5bd3969",
+            "total_ms": 1942.26,
+            "first_token_ms": 1941.4,
+            "prompt_chars": 5829,
+            "llm_call_count": 1,
+            "intent": "product_detail",
+            "agent_mode": "agent",
+            "result_skus": [
+              "CW-C93"
+            ],
+            "entered_semantic_retrieve": true,
+            "entered_hybrid_search": false,
+            "hit_faq_fast_path": false,
+            "http_status": 200,
+            "wall_ms": 1955,
+            "error": null,
+            "answer": "行山单锅（CW-C93）的容量是1000ML，约1L。"
+          },
+          "measured": {
+            "question": "这个聚能环是做什么的",
+            "trace_id": "cc2472992fa74db3a7bfe36efa980438",
+            "total_ms": 4732.34,
+            "first_token_ms": 4126.69,
+            "prompt_chars": 4053,
+            "llm_call_count": 1,
+            "intent": "product_detail",
+            "agent_mode": "agent",
+            "result_skus": [
+              "CW-C93"
+            ],
+            "entered_semantic_retrieve": true,
+            "entered_hybrid_search": false,
+            "hit_faq_fast_path": false,
+            "http_status": 200,
+            "wall_ms": 4747,
+            "error": null,
+            "answer": "聚能环的作用是提升燃烧效率。根据产品说明，行山单锅（CW-C93）的聚能结构可以在同样烧1L水的情况下，节约约33%的时间和用气量，从而实现95秒速沸的效果。"
+          }
+        },
+        {
+          "index": 7,
+          "conversation_id": "23673389-bb81-4273-8bfc-cefcc3eb544d",
+          "setup": {
+            "question": "行山单锅容量是多少",
+            "trace_id": "70f69be01de64e498986f30181626f4f",
+            "total_ms": 2088.88,
+            "first_token_ms": 2088.05,
+            "prompt_chars": 5829,
+            "llm_call_count": 1,
+            "intent": "product_detail",
+            "agent_mode": "agent",
+            "result_skus": [
+              "CW-C93"
+            ],
+            "entered_semantic_retrieve": true,
+            "entered_hybrid_search": false,
+            "hit_faq_fast_path": false,
+            "http_status": 200,
+            "wall_ms": 2167,
+            "error": null,
+            "answer": "行山单锅的容量是1000毫升（约1升）。"
+          },
+          "measured": {
+            "question": "这个聚能环是做什么的",
+            "trace_id": "830870acefcb4e568ba48c661038e4a5",
+            "total_ms": 3315.81,
+            "first_token_ms": 2856.17,
+            "prompt_chars": 4046,
+            "llm_call_count": 1,
+            "intent": "product_detail",
+            "agent_mode": "agent",
+            "result_skus": [
+              "CW-C93"
+            ],
+            "entered_semantic_retrieve": true,
+            "entered_hybrid_search": false,
+            "hit_faq_fast_path": false,
+            "http_status": 200,
+            "wall_ms": 3395,
+            "error": null,
+            "answer": "聚能环是行山单锅底部的聚能结构，主要作用是提升燃烧效率——同样烧开1升水，大约能节省33%的时间和用气量，实现95秒速沸。"
+          }
+        },
+        {
+          "index": 8,
+          "conversation_id": "a5878db5-5f8f-4cb8-99cf-d0b0268a3fb2",
+          "setup": {
+            "question": "行山单锅容量是多少",
+            "trace_id": "c9a0fc1e3d854eeda2006d54f590d8a9",
+            "total_ms": 2613.1,
+            "first_token_ms": 2611.83,
+            "prompt_chars": 5829,
+            "llm_call_count": 1,
+            "intent": "product_detail",
+            "agent_mode": "agent",
+            "result_skus": [
+              "CW-C93"
+            ],
+            "entered_semantic_retrieve": true,
+            "entered_hybrid_search": false,
+            "hit_faq_fast_path": false,
+            "http_status": 200,
+            "wall_ms": 2626,
+            "error": null,
+            "answer": "行山单锅（CW-C93）的容量为1000毫升，约1升。依据产品规格信息，锅体标注容量为1000ML。"
+          },
+          "measured": {
+            "question": "这个聚能环是做什么的",
+            "trace_id": "e320900b120b45859b0bb4b5b1fefd9a",
+            "total_ms": 3037.48,
+            "first_token_ms": 2562.01,
+            "prompt_chars": 4076,
+            "llm_call_count": 1,
+            "intent": "product_detail",
+            "agent_mode": "agent",
+            "result_skus": [
+              "CW-C93"
+            ],
+            "entered_semantic_retrieve": true,
+            "entered_hybrid_search": false,
+            "hit_faq_fast_path": false,
+            "http_status": 200,
+            "wall_ms": 3051,
+            "error": null,
+            "answer": "聚能环是行山单锅底部的一个聚能结构，主要作用是提升燃烧效率。通俗讲，同样烧1升水，可以节约约33%的烧水时间和用气量，实现95秒速沸。"
+          }
+        },
+        {
+          "index": 9,
+          "conversation_id": "0b479398-154e-4dee-9de6-405ba53b6461",
+          "setup": {
+            "question": "行山单锅容量是多少",
+            "trace_id": "367ad15e9c6f41a78be7d291a6c19170",
+            "total_ms": 3047.22,
+            "first_token_ms": 3045.79,
+            "prompt_chars": 5829,
+            "llm_call_count": 1,
+            "intent": "product_detail",
+            "agent_mode": "agent",
+            "result_skus": [
+              "CW-C93"
+            ],
+            "entered_semantic_retrieve": true,
+            "entered_hybrid_search": false,
+            "hit_faq_fast_path": false,
+            "http_status": 200,
+            "wall_ms": 3060,
+            "error": null,
+            "answer": "行山单锅的容量约为1升（1000毫升）。根据产品规格和官方问答，锅体容量标注为1000ML，约1L，适合单人使用。"
+          },
+          "measured": {
+            "question": "这个聚能环是做什么的",
+            "trace_id": "8f3062646ee94ceea54b0a790e026744",
+            "total_ms": 2762.65,
+            "first_token_ms": 2185.32,
+            "prompt_chars": 4083,
+            "llm_call_count": 1,
+            "intent": "product_detail",
+            "agent_mode": "agent",
+            "result_skus": [
+              "CW-C93"
+            ],
+            "entered_semantic_retrieve": true,
+            "entered_hybrid_search": false,
+            "hit_faq_fast_path": false,
+            "http_status": 200,
+            "wall_ms": 2848,
+            "error": null,
+            "answer": "聚能环的作用是提升燃烧效率，相当于烧1升水可以节省约33%的时间与用气量。在行山单锅上，这个聚能结构配合锅底设计，能实现95秒快速沸腾。"
+          }
+        },
+        {
+          "index": 10,
+          "conversation_id": "26a5572f-6910-49b9-9935-297f0ab894a8",
+          "setup": {
+            "question": "行山单锅容量是多少",
+            "trace_id": "e1c9648ef50a4b57828b66b5c3c721f2",
+            "total_ms": 2281.87,
+            "first_token_ms": 2280.27,
+            "prompt_chars": 5829,
+            "llm_call_count": 1,
+            "intent": "product_detail",
+            "agent_mode": "agent",
+            "result_skus": [
+              "CW-C93"
+            ],
+            "entered_semantic_retrieve": true,
+            "entered_hybrid_search": false,
+            "hit_faq_fast_path": false,
+            "http_status": 200,
+            "wall_ms": 2312,
+            "error": null,
+            "answer": "行山单锅的容量为约1升（1000毫升）。"
+          },
+          "measured": {
+            "question": "这个聚能环是做什么的",
+            "trace_id": "3782d359cba848acbb451252a799ecae",
+            "total_ms": 3408.85,
+            "first_token_ms": 2759.01,
+            "prompt_chars": 4046,
+            "llm_call_count": 1,
+            "intent": "product_detail",
+            "agent_mode": "agent",
+            "result_skus": [
+              "CW-C93"
+            ],
+            "entered_semantic_retrieve": true,
+            "entered_hybrid_search": false,
+            "hit_faq_fast_path": false,
+            "http_status": 200,
+            "wall_ms": 3441,
+            "error": null,
+            "answer": "行山单锅底部的聚能环主要用于提升燃烧效率，它能在烧水时更快将热量聚集到锅底，实现95秒速沸。简单来说，同样烧1升水，可以有效节省约33%的时间和用气量。"
+          }
+        }
+      ],
+      "metrics": {
+        "n": 10,
+        "mean_ms": 3684.42,
+        "min_ms": 2684.31,
+        "max_ms": 4927.15,
+        "stddev_ms": 848.85
+      }
+    }
+  ],
+  "faq_variants": [
+    {
+      "question": "怎么联系售后",
+      "conversation_id": "edb0d70f-680f-4401-ac1f-215c966c44fe",
+      "http_status": 200,
+      "error": null,
+      "trace_id": "81d5722093b647a19b919f616f0984e9",
+      "total_ms": 114.74,
+      "first_token_ms": 111.01,
+      "llm_call_count": 0,
+      "intent": "aftersales",
+      "agent_mode": "faq_fast",
+      "hit_faq_fast_path": true,
+      "answer": "目前系统里暂未配置可直接公开的售后电话。建议通过购买渠道的店铺客服或官方客服入口联系人工售后确认，我也可以继续帮你查询产品材质、规格和使用说明。",
+      "exposes_phone_like": false
+    },
+    {
+      "question": "售后客服电话",
+      "conversation_id": "68894724-8c17-4b78-92fb-6d1e37682d82",
+      "http_status": 200,
+      "error": null,
+      "trace_id": "887cef80bc7c4f3aa7c488ce6ad1832d",
+      "total_ms": 123.02,
+      "first_token_ms": 119.52,
+      "llm_call_count": 0,
+      "intent": "aftersales",
+      "agent_mode": "faq_fast",
+      "hit_faq_fast_path": true,
+      "answer": "目前系统里暂未配置可直接公开的售后电话。建议通过购买渠道的店铺客服或官方客服入口联系人工售后确认，我也可以继续帮你查询产品材质、规格和使用说明。",
+      "exposes_phone_like": false
+    },
+    {
+      "question": "出了问题找谁",
+      "conversation_id": "3bd82119-b6f8-44b6-b22a-cf9c4c1cf5ce",
+      "http_status": 200,
+      "error": null,
+      "trace_id": "e6f19ed1c371491ca04860fdc4ddb1c4",
+      "total_ms": 6003.51,
+      "first_token_ms": 6001.28,
+      "llm_call_count": 2,
+      "intent": "chat",
+      "agent_mode": "agent",
+      "hit_faq_fast_path": false,
+      "answer": "请问您是指哪个产品出了问题呢？请提供产品名称、SKU 或相关线索，我帮您查询对应的负责人。",
+      "exposes_phone_like": false
+    },
+    {
+      "question": "有质量问题怎么办",
+      "conversation_id": "35278200-b4af-4fdb-a304-634e17e68321",
+      "http_status": 200,
+      "error": null,
+      "trace_id": "73c4ba58d1384b8ea28ba53c60916e74",
+      "total_ms": 2907.71,
+      "first_token_ms": 2903.68,
+      "llm_call_count": 1,
+      "intent": "chat",
+      "agent_mode": "agent",
+      "hit_faq_fast_path": false,
+      "answer": "您提到的“有质量问题”是指哪款产品，还是某个类目？请提供具体的 SKU、条形码、产品名称、类目或负责人，我才能帮您查询相关产品的详细信息并提出处理建议。",
+      "exposes_phone_like": false
+    },
+    {
+      "question": "退换货怎么联系你们",
+      "conversation_id": "a5fbf5dc-d4c9-442d-8fa4-8317586d9112",
+      "http_status": 200,
+      "error": null,
+      "trace_id": "586e3fd4a9f64c7f9f8a5b359d2415a6",
+      "total_ms": 128.22,
+      "first_token_ms": 124.82,
+      "llm_call_count": 0,
+      "intent": "aftersales",
+      "agent_mode": "faq_fast",
+      "hit_faq_fast_path": true,
+      "answer": "目前系统里暂未配置可直接公开的售后电话。建议通过购买渠道的店铺客服或官方客服入口联系人工售后确认，我也可以继续帮你查询产品材质、规格和使用说明。",
+      "exposes_phone_like": false
+    }
+  ]
+}

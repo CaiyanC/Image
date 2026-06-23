@@ -100,6 +100,48 @@ class KnowledgeServiceTest(unittest.TestCase):
         self.assertEqual(result["count"], 1)
         self.assertEqual(result["results"][0]["metadata"]["owner"], "qa")
 
+    def test_keyword_retrieve_keeps_keyword_or_conditions_inside_sku_scope(self):
+        docs = [
+            KnowledgeDocument(id="doc-c95", source_type="product", sku="CW-C95", title="CW-C95 QA", content="CW-C95 QA"),
+            KnowledgeDocument(id="doc-ws", source_type="product", sku="WS-B20", title="WS-B20 QA", content="WS-B20 QA"),
+            KnowledgeDocument(id="doc-tx", source_type="product", sku="TX-38", title="TX-38 QA", content="TX-38 QA"),
+        ]
+        self.db.add_all(docs)
+        self.db.add_all([
+            KnowledgeChunk(
+                id="chunk-c95",
+                document_id="doc-c95",
+                sku="CW-C95",
+                source_type="product",
+                chunk_index=0,
+                content="Q: 风暴炉pro-汽炉版如何清洗保养？\nA: 使用后趁热用温水+软刷清洗。",
+                embedding_status="pending",
+            ),
+            KnowledgeChunk(
+                id="chunk-ws",
+                document_id="doc-ws",
+                sku="WS-B20",
+                source_type="product",
+                chunk_index=0,
+                content="Q: 畅享水杯如何清洗保养？\nA: 使用后趁热用温水+软刷清洗。",
+                embedding_status="pending",
+            ),
+            KnowledgeChunk(
+                id="chunk-tx",
+                document_id="doc-tx",
+                sku="TX-38",
+                source_type="product",
+                chunk_index=0,
+                content="Q: 坐忘泡茶套装如何清洗保养？\nA: 使用后趁热用温水+软刷清洗。",
+                embedding_status="pending",
+            ),
+        ])
+        self.db.commit()
+
+        rows = knowledge_service.keyword_retrieve(self.db, "他该如何清洗保养", sku="CW-C95", limit=5)
+
+        self.assertEqual({row["sku"] for row in rows}, {"CW-C95"})
+
 
 if __name__ == "__main__":
     unittest.main()

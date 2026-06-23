@@ -3,10 +3,8 @@ from __future__ import annotations
 import re
 from typing import Any
 
+from . import customer_price_signal
 
-LOW_BUDGET_TERMS = ("预算不高", "预算低", "低预算", "便宜", "实惠", "性价比", "入门", "省钱", "不要太贵")
-HIGH_PRICE_TERMS = ("高端", "高价", "高预算", "旗舰", "专业级", "premium")
-VALUE_PRICE_TERMS = ("入门", "亲民", "经济", "实惠", "低价", "基础", "性价比", "常规", "中端")
 
 NEGATION_TERMS = ("不要", "别要", "不想要", "排除", "去掉", "剔除", "不是")
 
@@ -26,25 +24,16 @@ PRODUCT_TYPE_ROW_TERMS = {
     "bag": ("收纳包", "包具", "背包", "包"),
 }
 
-ONE_OR_TWO_PERSON_TERMS = ("1-2", "一到两", "一至两", "一两", "两个人", "双人", "单人", "1人", "2人")
+ONE_OR_TWO_PERSON_TERMS = ("1-2", "一到两", "一至两", "一两", "两个人", "两人", "双人", "单人", "1人", "2人")
+TWO_PERSON_TERMS = ("两个人", "两人", "双人", "2人", "1-2", "一到两", "一至两", "一两")
 LIGHTWEIGHT_TERMS = ("轻量", "轻便", "便携", "徒步", "背包", "极简", "速穿")
 FAMILY_OR_LARGE_TERMS = ("家庭", "多人", "房车", "自驾", "营地大餐", "大容量", "聚餐")
-THREE_FOUR_PERSON_TERMS = ("三人", "三个人", "3人", "3-4", "四人", "四个人", "4人", "多人", "家庭")
+THREE_FOUR_PERSON_TERMS = ("三人", "三个人", "3人", "2-4", "3-4", "四人", "四个人", "4人", "多人", "家庭")
+COOKING_METHOD_TERMS = ("煎炒煮", "煎", "炒", "煮", "煎炒", "炒菜", "做饭")
 
 
 def budget_score(query: str, row: dict[str, Any]) -> int:
-    if not _contains_any(str(query or ""), LOW_BUDGET_TERMS):
-        return 0
-    price_text = " ".join(
-        str(row.get(key) or "")
-        for key in ("price_positioning", "positioning", "product_level", "features", "semantic_match")
-    )
-    lower = price_text.lower()
-    if _contains_any(lower, HIGH_PRICE_TERMS):
-        return -100
-    if _contains_any(lower, VALUE_PRICE_TERMS):
-        return 45
-    return -15
+    return customer_price_signal.price_score(query, row)
 
 
 def recommendation_score(query: str, row: dict[str, Any]) -> float:
@@ -55,6 +44,7 @@ def recommendation_score(query: str, row: dict[str, Any]) -> float:
     desired_type = desired_product_type(query_text)
 
     score = 0.0
+    score += _raw_product_hint_score(query_text, text)
     if desired_type:
         score += 85 if _row_matches_type(row, desired_type) else -160
     elif is_obvious_product_type_mismatch(query_text, row):
@@ -89,6 +79,25 @@ def recommendation_score(query: str, row: dict[str, Any]) -> float:
         if _contains_any(text, FAMILY_OR_LARGE_TERMS):
             score -= 35
 
+    if _contains_any(query_text, TWO_PERSON_TERMS):
+        if _contains_any(text, ("1-2", "两人", "双人", "2人", "满足双人")):
+            score += 45
+        if _contains_any(text, ("单人", "极限轻量", "速穿", "单人野宿")):
+            score -= 45
+        if _contains_any(text, ("2-4", "3-4", "多人", "家庭", "营地大餐")):
+            score -= 35
+        if capacity_ml:
+            if 1200 <= capacity_ml <= 1800:
+                score += 25
+            elif capacity_ml < 1100:
+                score -= 25
+
+    if _contains_any(query_text, COOKING_METHOD_TERMS):
+        if _contains_any(text, ("煎", "炒", "煮", "不粘", "不沾", "烹饪", "做饭", "一锅")):
+            score += 35
+        if _contains_any(text, ("速沸", "烧水", "单人野宿", "极限轻量")):
+            score -= 20
+
     if _contains_any(query_text, ("咖啡", "泡咖啡", "煮茶", "小锅")):
         if _contains_any(text, ("咖啡", "煮茶", "烧水", "速沸", "水壶", "单锅")):
             score += 28
@@ -118,9 +127,13 @@ def is_obvious_product_type_mismatch(query: str, row: dict[str, Any]) -> bool:
 
 
 def desired_product_type(query: str) -> str | None:
-    text = _positive_query_text(str(query or ""))
+    raw_text = str(query or "")
+    text = _positive_query_text(raw_text)
     for product_type, terms in PRODUCT_TYPE_QUERY_TERMS.items():
         if _contains_any(text, terms):
+            return product_type
+    for product_type, terms in PRODUCT_TYPE_QUERY_TERMS.items():
+        if _contains_any(raw_text, terms) and not _has_explicit_type_exclusion(raw_text, terms):
             return product_type
     return None
 
@@ -161,7 +174,15 @@ def fallback_rank(rows: list[dict[str, Any]], query: str) -> list[dict[str, Any]
             reasons.append("价格定位更符合低预算/性价比需求")
         elif price_score < -10:
             reasons.append("价格定位偏高，不适合低预算首选")
-        ranked.append({"row": row, "score": score, "reasons": list(dict.fromkeys(reasons))})
+        explanation = explain_match(query, row, score, reasons)
+        ranked.append({
+            "row": row,
+            "score": score,
+            "reasons": explanation["matched"],
+            "matched": explanation["matched"],
+            "missing_or_uncertain": explanation["missing_or_uncertain"],
+            "score_reason": explanation["score_reason"],
+        })
     ranked.sort(
         key=lambda item: (
             item["score"],
@@ -187,7 +208,16 @@ def rank_from_llm_order(rows: list[dict[str, Any]], ranking: list[dict[str, Any]
         reason = ranking_map.get(index, "")
         llm_score = 10 - ordered_indexes.index(index) if index in ordered_indexes else 0
         score = llm_score + recommendation_score(query, row)
-        ranked.append({"row": row, "score": score, "reasons": [reason] if reason else []})
+        seed_reasons = [reason] if reason else []
+        explanation = explain_match(query, row, score, seed_reasons)
+        ranked.append({
+            "row": row,
+            "score": score,
+            "reasons": explanation["matched"],
+            "matched": explanation["matched"],
+            "missing_or_uncertain": explanation["missing_or_uncertain"],
+            "score_reason": explanation["score_reason"],
+        })
     ranked.sort(key=lambda item: item["score"], reverse=True)
     return ranked if ranked else fallback_rank(rows, query)
 
@@ -200,11 +230,118 @@ def _row_matches_type(row: dict[str, Any], product_type: str) -> bool:
     return _contains_any(text, PRODUCT_TYPE_ROW_TERMS.get(product_type, ()))
 
 
+def explain_match(query: str, row: dict[str, Any], score: float | None = None, seed_reasons: list[str] | None = None) -> dict[str, Any]:
+    query_text = str(query or "")
+    text = _row_text(row)
+    matched: list[str] = list(seed_reasons or [])
+    missing: list[str] = []
+    capacity_ml = _capacity_ml(row.get("capacity"))
+    desired_type = desired_product_type(query_text)
+
+    if desired_type and _row_matches_type(row, desired_type):
+        matched.append(f"类目匹配{_product_type_label(desired_type)}")
+
+    if _contains_any(query_text, THREE_FOUR_PERSON_TERMS):
+        if capacity_ml and 1600 <= capacity_ml <= 4500:
+            matched.append("容量适合3-4人或多人露营")
+        elif capacity_ml:
+            missing.append("容量与3-4人需求不完全匹配")
+        else:
+            missing.append("未标注可判断人数的容量信息")
+        if _contains_any(text, FAMILY_OR_LARGE_TERMS + ("2-4", "3-4")):
+            matched.append("资料包含多人/家庭/2-4人场景")
+        else:
+            missing.append("未明确标注多人或家庭出行场景")
+
+    if _contains_any(query_text, COOKING_METHOD_TERMS):
+        if _contains_any(text, ("煎", "炒", "煮", "不粘", "不沾", "烹饪", "做饭", "一锅")):
+            matched.append("资料支持煎炒煮/做饭相关需求")
+        else:
+            missing.append("未明确标注煎炒煮能力")
+
+    if _contains_any(query_text, ("咖啡", "泡咖啡", "煮咖啡", "煮茶")):
+        if _contains_any(text, ("咖啡", "煮茶", "烧水", "速沸", "水壶", "单锅")):
+            matched.append("资料包含咖啡/煮茶/烧水相关场景")
+        else:
+            missing.append("未明确标注咖啡或煮茶场景")
+
+    if _contains_any(query_text, LIGHTWEIGHT_TERMS):
+        if _contains_any(text, LIGHTWEIGHT_TERMS + ("轻",)):
+            matched.append("资料包含轻量/便携信息")
+        else:
+            missing.append("未明确标注轻量便携优势")
+
+    if "硬质氧化铝合金" in query_text:
+        if "硬质氧化铝合金" in text:
+            matched.append("材质为硬质氧化铝合金")
+        else:
+            missing.append("材质未标注为硬质氧化铝合金")
+
+    price_score = budget_score(query_text, row)
+    if price_score > 0:
+        matched.append("价格定位更符合预算诉求")
+    elif price_score < -10:
+        missing.append("价格定位偏高，需提醒不一定符合预算")
+
+    if row.get("features"):
+        matched.append("有卖点/场景资料可引用")
+    else:
+        missing.append("卖点/场景资料不足")
+    if not row.get("capacity"):
+        missing.append("容量资料未标注")
+
+    return {
+        "matched": list(dict.fromkeys(item for item in matched if item and item != "与本轮需求匹配")),
+        "missing_or_uncertain": list(dict.fromkeys(missing)),
+        "score_reason": f"排序分数 {score:.1f}" if isinstance(score, (int, float)) else "",
+    }
+
+
+def _product_type_label(product_type: str) -> str:
+    return {
+        "water": "水具",
+        "stove": "炉具",
+        "pot": "锅具",
+        "cutlery": "餐具",
+        "bag": "收纳包",
+    }.get(product_type, product_type)
+
+
+def _raw_product_hint_score(query_text: str, row_text: str) -> int:
+    hints = (
+        ("锅", ("锅", "套锅", "单锅", "炒锅", "煎锅", "烤盘")),
+        ("炉", ("炉", "酒精炉", "气炉", "卡式炉")),
+        ("勺", ("勺", "铲", "刀", "叉", "餐具")),
+        ("杯", ("杯", "壶", "水壶", "水杯", "水瓶")),
+        ("包", ("包", "收纳", "背包")),
+    )
+    query_text = str(query_text or "")
+    row_text = str(row_text or "")
+    score = 0
+    for _, terms in hints:
+        if any(term in query_text for term in terms):
+            if any(term in row_text for term in terms):
+                score += 40
+            else:
+                score -= 40
+    return score
+
+
 def _positive_query_text(query: str) -> str:
     text = str(query or "")
     for term in NEGATION_TERMS:
         text = re.sub(rf"{re.escape(term)}\s*[\u4e00-\u9fffA-Za-z0-9_\-]+", " ", text)
     return text
+
+
+def _has_explicit_type_exclusion(text: str, terms: tuple[str, ...]) -> bool:
+    compact = re.sub(r"\s+", "", str(text or ""))
+    exclusion_terms = ("不要", "别要", "不想要", "排除", "去掉", "剔除", "不要买", "别买")
+    return any(
+        re.search(rf"{re.escape(prefix)}[^，。？！]{{0,8}}{re.escape(term)}", compact)
+        for prefix in exclusion_terms
+        for term in terms
+    )
 
 
 def _contains_any(text: str, terms: tuple[str, ...]) -> bool:

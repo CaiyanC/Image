@@ -157,14 +157,16 @@ export function parseSearchKeywords(raw: string): { keyword: string; priority: s
     .map((s) => s.trim())
     .filter(Boolean)
     .forEach((line) => {
-      const match = line.match(/^([ABC])级[：:]\s*(.+)$/)
-      if (match) {
-        const priority = match[1]
-        const keywords = match[2].split(/[,，]+/).map((s) => s.trim()).filter(Boolean)
-        keywords.forEach((kw) => {
-          result.push({ keyword: kw, priority })
-        })
-      }
+      const normalized = line.replace(/^级[：:]\s*/, '').trim()
+      const suffixMatch = normalized.match(/^(.+?)\s*[\[【(（]([ABC])[\]】)）]\s*$/i)
+      const prefixMatch = normalized.match(/^([ABC])级[：:]\s*(.+)$/i)
+      const priority = (suffixMatch?.[2] || prefixMatch?.[1] || '').toUpperCase()
+      const keywordText = suffixMatch?.[1] || prefixMatch?.[2] || ''
+      if (!priority || !keywordText) return
+      const keywords = keywordText.split(/[,，]+/).map((s) => s.replace(/^级[：:]\s*/, '').trim()).filter(Boolean)
+      keywords.forEach((kw) => {
+        result.push({ keyword: kw, priority })
+      })
     })
   return result
 }

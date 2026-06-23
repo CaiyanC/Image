@@ -15,6 +15,7 @@ from .product_draft import ProductDraft
 from .product_category import ProductCategory
 from .product_prompts import ProductPrompts
 from .product import Product
+from .product_operation_snapshot import ProductOperationSnapshot
 from .product_specs import ProductSpecs
 from .product_business import ProductBusiness
 from .product_content import ProductContent
@@ -30,7 +31,7 @@ from .product_associations import (
     Keyword, ProductKeyword,
 )
 from .knowledge_base import (
-    KnowledgeDocument, KnowledgeChunk,
+    KnowledgeDocument, KnowledgeChunk, KnowledgeParseTask,
     CustomerServiceConversation, CustomerServiceMessage,
 )
 
@@ -40,13 +41,13 @@ __all__ = [
     "Route", "PermissionRoute",
     "OperationLog", "AgentAction", "AgentTrace", "FieldConfig", "EntityFieldValue", "AiTask",
     "ProductDraft", "ProductCategory", "ProductPrompts",
-    "Product", "ProductSpecs", "ProductBusiness", "ProductContent", "ProductMedia",
+    "Product", "ProductOperationSnapshot", "ProductSpecs", "ProductBusiness", "ProductContent", "ProductMedia",
     "ProductQa", "ProductQaNegative", "ProductQaAnswer",
     "QaTag", "QaTagRelation", "AiGeneratedAsset",
     "ListingChannel", "ProductListingChannel",
     "SalesRegion", "ProductSalesRegion",
     "Certification", "ProductCertification",
     "Keyword", "ProductKeyword",
-    "KnowledgeDocument", "KnowledgeChunk",
+    "KnowledgeDocument", "KnowledgeChunk", "KnowledgeParseTask",
     "CustomerServiceConversation", "CustomerServiceMessage",
 ]

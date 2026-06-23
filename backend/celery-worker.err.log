@@ -1,0 +1,476 @@
+
+[notice] A new release of pip is available: 26.1.1 -> 26.1.2
+[notice] To update, run: python.exe -m pip install --upgrade pip
+[2026-06-21 09:41:32,188: WARNING/MainProcess] D:\CaiYan\Image-Generation-feature-v5\backend\venv\lib\site-packages\celery\worker\consumer\consumer.py:508: CPendingDeprecationWarning: The broker_connection_retry configuration setting will no longer determine
+whether broker connection retries are made during startup in Celery 6.0 and above.
+If you wish to retain the existing behavior for retrying connections on startup,
+you should set broker_connection_retry_on_startup to True.
+  warnings.warn(
+
+[2026-06-21 09:41:32,215: INFO/MainProcess] Connected to redis://localhost:6379/0
+[2026-06-21 09:41:32,221: WARNING/MainProcess] D:\CaiYan\Image-Generation-feature-v5\backend\venv\lib\site-packages\celery\worker\consumer\consumer.py:508: CPendingDeprecationWarning: The broker_connection_retry configuration setting will no longer determine
+whether broker connection retries are made during startup in Celery 6.0 and above.
+If you wish to retain the existing behavior for retrying connections on startup,
+you should set broker_connection_retry_on_startup to True.
+  warnings.warn(
+
+[2026-06-21 09:41:32,230: INFO/MainProcess] mingle: searching for neighbors
+[2026-06-21 09:41:33,286: INFO/MainProcess] mingle: all alone
+[2026-06-21 09:41:33,337: INFO/MainProcess] celery@WNT-20230914PYO ready.
+[2026-06-21 18:53:29,363: INFO/MainProcess] Task parse_document[f9c02de9-6a53-4dad-a106-b16bff931bc2] received
+[2026-06-21 18:53:29,535: INFO/MainProcess] select pg_catalog.version()
+[2026-06-21 18:53:29,536: INFO/MainProcess] [raw sql] [SQL parameters hidden due to hide_parameters=True]
+[2026-06-21 18:53:29,537: INFO/MainProcess] select current_schema()
+[2026-06-21 18:53:29,538: INFO/MainProcess] [raw sql] [SQL parameters hidden due to hide_parameters=True]
+[2026-06-21 18:53:29,538: INFO/MainProcess] show standard_conforming_strings
+[2026-06-21 18:53:29,539: INFO/MainProcess] [raw sql] [SQL parameters hidden due to hide_parameters=True]
+[2026-06-21 18:53:29,540: INFO/MainProcess] BEGIN (implicit)
+[2026-06-21 18:53:29,542: INFO/MainProcess] SELECT knowledge_parse_tasks.id AS knowledge_parse_tasks_id, knowledge_parse_tasks.document_id AS knowledge_parse_tasks_document_id, knowledge_parse_tasks.status AS knowledge_parse_tasks_status, knowledge_parse_tasks.created_at AS knowledge_parse_tasks_created_at, knowledge_parse_tasks.started_at AS knowledge_parse_tasks_started_at, knowledge_parse_tasks.finished_at AS knowledge_parse_tasks_finished_at, knowledge_parse_tasks.error_message AS knowledge_parse_tasks_error_message 
+FROM knowledge_parse_tasks 
+WHERE knowledge_parse_tasks.id = %(id_1)s 
+ LIMIT %(param_1)s
+[2026-06-21 18:53:29,542: INFO/MainProcess] [generated in 0.00056s] [SQL parameters hidden due to hide_parameters=True]
+[2026-06-21 18:53:29,549: INFO/MainProcess] SELECT knowledge_documents.id AS knowledge_documents_id, knowledge_documents.source_type AS knowledge_documents_source_type, knowledge_documents.source_id AS knowledge_documents_source_id, knowledge_documents.sku AS knowledge_documents_sku, knowledge_documents.title AS knowledge_documents_title, knowledge_documents.content AS knowledge_documents_content, knowledge_documents.metadata_json AS knowledge_documents_metadata_json, knowledge_documents.file_name AS knowledge_documents_file_name, knowledge_documents.file_path AS knowledge_documents_file_path, knowledge_documents.file_type AS knowledge_documents_file_type, knowledge_documents.file_hash AS knowledge_documents_file_hash, knowledge_documents.page_count AS knowledge_documents_page_count, knowledge_documents.parse_status AS knowledge_documents_parse_status, knowledge_documents.parse_error AS knowledge_documents_parse_error, knowledge_documents.related_skus_json AS knowledge_documents_related_skus_json, knowledge_documents.is_active AS knowledge_documents_is_active, knowledge_documents.created_by AS knowledge_documents_created_by, knowledge_documents.created_at AS knowledge_documents_created_at, knowledge_documents.updated_at AS knowledge_documents_updated_at 
+FROM knowledge_documents 
+WHERE knowledge_documents.id = %(id_1)s 
+ LIMIT %(param_1)s
+[2026-06-21 18:53:29,556: INFO/MainProcess] [generated in 0.00707s] [SQL parameters hidden due to hide_parameters=True]
+[2026-06-21 18:53:29,560: INFO/MainProcess] UPDATE knowledge_parse_tasks SET status=%(status)s, started_at=%(started_at)s WHERE knowledge_parse_tasks.id = %(knowledge_parse_tasks_id)s
+[2026-06-21 18:53:29,561: INFO/MainProcess] [generated in 0.00093s] [SQL parameters hidden due to hide_parameters=True]
+[2026-06-21 18:53:29,564: INFO/MainProcess] COMMIT
+[2026-06-21 18:53:29,575: INFO/MainProcess] BEGIN (implicit)
+[2026-06-21 18:53:29,576: INFO/MainProcess] SELECT knowledge_documents.id AS knowledge_documents_id, knowledge_documents.source_type AS knowledge_documents_source_type, knowledge_documents.source_id AS knowledge_documents_source_id, knowledge_documents.sku AS knowledge_documents_sku, knowledge_documents.title AS knowledge_documents_title, knowledge_documents.content AS knowledge_documents_content, knowledge_documents.metadata_json AS knowledge_documents_metadata_json, knowledge_documents.file_name AS knowledge_documents_file_name, knowledge_documents.file_path AS knowledge_documents_file_path, knowledge_documents.file_type AS knowledge_documents_file_type, knowledge_documents.file_hash AS knowledge_documents_file_hash, knowledge_documents.page_count AS knowledge_documents_page_count, knowledge_documents.parse_status AS knowledge_documents_parse_status, knowledge_documents.parse_error AS knowledge_documents_parse_error, knowledge_documents.related_skus_json AS knowledge_documents_related_skus_json, knowledge_documents.is_active AS knowledge_documents_is_active, knowledge_documents.created_by AS knowledge_documents_created_by, knowledge_documents.created_at AS knowledge_documents_created_at, knowledge_documents.updated_at AS knowledge_documents_updated_at 
+FROM knowledge_documents 
+WHERE knowledge_documents.id = %(pk_1)s
+[2026-06-21 18:53:29,577: INFO/MainProcess] [generated in 0.00068s] [SQL parameters hidden due to hide_parameters=True]
+[2026-06-21 18:53:29,583: INFO/MainProcess] DELETE FROM knowledge_chunks WHERE knowledge_chunks.document_id = %(document_id_1)s
+[2026-06-21 18:53:29,584: INFO/MainProcess] [generated in 0.00076s] [SQL parameters hidden due to hide_parameters=True]
+[2026-06-21 18:53:29,622: INFO/MainProcess] INSERT INTO knowledge_chunks (id, document_id, sku, source_type, chunk_index, content, metadata_json, embedding_model, embedding_status, embedding_error, created_at, updated_at) VALUES (%(id)s, %(document_id)s, %(sku)s, %(source_type)s, %(chunk_index)s, %(content)s, %(metadata_json)s, %(embedding_model)s, %(embedding_status)s, %(embedding_error)s, %(created_at)s, %(updated_at)s)
+[2026-06-21 18:53:29,623: INFO/MainProcess] [generated in 0.00108s] [SQL parameters hidden due to hide_parameters=True]
+[2026-06-21 18:53:29,639: INFO/MainProcess] UPDATE knowledge_documents SET content=%(content)s, metadata_json=%(metadata_json)s, page_count=%(page_count)s, parse_status=%(parse_status)s, updated_at=%(updated_at)s WHERE knowledge_documents.id = %(knowledge_documents_id)s
+[2026-06-21 18:53:29,656: INFO/MainProcess] [generated in 0.01639s] [SQL parameters hidden due to hide_parameters=True]
+[2026-06-21 18:53:29,659: INFO/MainProcess] COMMIT
+[2026-06-21 18:53:29,660: INFO/MainProcess] BEGIN (implicit)
+[2026-06-21 18:53:29,661: INFO/MainProcess] SELECT knowledge_documents.id, knowledge_documents.source_type, knowledge_documents.source_id, knowledge_documents.sku, knowledge_documents.title, knowledge_documents.content, knowledge_documents.metadata_json, knowledge_documents.file_name, knowledge_documents.file_path, knowledge_documents.file_type, knowledge_documents.file_hash, knowledge_documents.page_count, knowledge_documents.parse_status, knowledge_documents.parse_error, knowledge_documents.related_skus_json, knowledge_documents.is_active, knowledge_documents.created_by, knowledge_documents.created_at, knowledge_documents.updated_at 
+FROM knowledge_documents 
+WHERE knowledge_documents.id = %(pk_1)s
+[2026-06-21 18:53:29,662: INFO/MainProcess] [generated in 0.00055s] [SQL parameters hidden due to hide_parameters=True]
+[2026-06-21 18:53:29,664: INFO/MainProcess] SELECT knowledge_parse_tasks.id AS knowledge_parse_tasks_id, knowledge_parse_tasks.document_id AS knowledge_parse_tasks_document_id, knowledge_parse_tasks.status AS knowledge_parse_tasks_status, knowledge_parse_tasks.created_at AS knowledge_parse_tasks_created_at, knowledge_parse_tasks.started_at AS knowledge_parse_tasks_started_at, knowledge_parse_tasks.finished_at AS knowledge_parse_tasks_finished_at, knowledge_parse_tasks.error_message AS knowledge_parse_tasks_error_message 
+FROM knowledge_parse_tasks 
+WHERE knowledge_parse_tasks.id = %(id_1)s 
+ LIMIT %(param_1)s
+[2026-06-21 18:53:29,664: INFO/MainProcess] [cached since 0.122s ago] [SQL parameters hidden due to hide_parameters=True]
+[2026-06-21 18:53:29,666: INFO/MainProcess] UPDATE knowledge_parse_tasks SET status=%(status)s, finished_at=%(finished_at)s WHERE knowledge_parse_tasks.id = %(knowledge_parse_tasks_id)s
+[2026-06-21 18:53:29,666: INFO/MainProcess] [generated in 0.00062s] [SQL parameters hidden due to hide_parameters=True]
+[2026-06-21 18:53:29,667: INFO/MainProcess] COMMIT
+[2026-06-21 18:53:29,670: INFO/MainProcess] Task parse_document[f9c02de9-6a53-4dad-a106-b16bff931bc2] succeeded in 0.3130000000237487s: {'ok': True, 'status': 'done', 'document_id': '63e8bbb4-d7db-4927-9100-43b280d2e779', 'task_id': 'b2778542-ad3d-438c-81df-83eeac1be554'}
+[2026-06-21 18:53:29,672: INFO/MainProcess] Task parse_document[b4354058-086e-4c48-a06f-e16d5be581d7] received
+[2026-06-21 18:53:29,675: INFO/MainProcess] BEGIN (implicit)
+[2026-06-21 18:53:29,680: INFO/MainProcess] SELECT knowledge_parse_tasks.id AS knowledge_parse_tasks_id, knowledge_parse_tasks.document_id AS knowledge_parse_tasks_document_id, knowledge_parse_tasks.status AS knowledge_parse_tasks_status, knowledge_parse_tasks.created_at AS knowledge_parse_tasks_created_at, knowledge_parse_tasks.started_at AS knowledge_parse_tasks_started_at, knowledge_parse_tasks.finished_at AS knowledge_parse_tasks_finished_at, knowledge_parse_tasks.error_message AS knowledge_parse_tasks_error_message 
+FROM knowledge_parse_tasks 
+WHERE knowledge_parse_tasks.id = %(id_1)s 
+ LIMIT %(param_1)s
+[2026-06-21 18:53:29,681: INFO/MainProcess] [cached since 0.1395s ago] [SQL parameters hidden due to hide_parameters=True]
+[2026-06-21 18:53:29,683: INFO/MainProcess] SELECT knowledge_documents.id AS knowledge_documents_id, knowledge_documents.source_type AS knowledge_documents_source_type, knowledge_documents.source_id AS knowledge_documents_source_id, knowledge_documents.sku AS knowledge_documents_sku, knowledge_documents.title AS knowledge_documents_title, knowledge_documents.content AS knowledge_documents_content, knowledge_documents.metadata_json AS knowledge_documents_metadata_json, knowledge_documents.file_name AS knowledge_documents_file_name, knowledge_documents.file_path AS knowledge_documents_file_path, knowledge_documents.file_type AS knowledge_documents_file_type, knowledge_documents.file_hash AS knowledge_documents_file_hash, knowledge_documents.page_count AS knowledge_documents_page_count, knowledge_documents.parse_status AS knowledge_documents_parse_status, knowledge_documents.parse_error AS knowledge_documents_parse_error, knowledge_documents.related_skus_json AS knowledge_documents_related_skus_json, knowledge_documents.is_active AS knowledge_documents_is_active, knowledge_documents.created_by AS knowledge_documents_created_by, knowledge_documents.created_at AS knowledge_documents_created_at, knowledge_documents.updated_at AS knowledge_documents_updated_at 
+FROM knowledge_documents 
+WHERE knowledge_documents.id = %(id_1)s 
+ LIMIT %(param_1)s
+[2026-06-21 18:53:29,683: INFO/MainProcess] [cached since 0.1347s ago] [SQL parameters hidden due to hide_parameters=True]
+[2026-06-21 18:53:29,685: INFO/MainProcess] UPDATE knowledge_parse_tasks SET status=%(status)s, started_at=%(started_at)s WHERE knowledge_parse_tasks.id = %(knowledge_parse_tasks_id)s
+[2026-06-21 18:53:29,685: INFO/MainProcess] [cached since 0.1251s ago] [SQL parameters hidden due to hide_parameters=True]
+[2026-06-21 18:53:29,687: INFO/MainProcess] COMMIT
+[2026-06-21 18:53:29,689: INFO/MainProcess] BEGIN (implicit)
+[2026-06-21 18:53:29,689: INFO/MainProcess] SELECT knowledge_documents.id AS knowledge_documents_id, knowledge_documents.source_type AS knowledge_documents_source_type, knowledge_documents.source_id AS knowledge_documents_source_id, knowledge_documents.sku AS knowledge_documents_sku, knowledge_documents.title AS knowledge_documents_title, knowledge_documents.content AS knowledge_documents_content, knowledge_documents.metadata_json AS knowledge_documents_metadata_json, knowledge_documents.file_name AS knowledge_documents_file_name, knowledge_documents.file_path AS knowledge_documents_file_path, knowledge_documents.file_type AS knowledge_documents_file_type, knowledge_documents.file_hash AS knowledge_documents_file_hash, knowledge_documents.page_count AS knowledge_documents_page_count, knowledge_documents.parse_status AS knowledge_documents_parse_status, knowledge_documents.parse_error AS knowledge_documents_parse_error, knowledge_documents.related_skus_json AS knowledge_documents_related_skus_json, knowledge_documents.is_active AS knowledge_documents_is_active, knowledge_documents.created_by AS knowledge_documents_created_by, knowledge_documents.created_at AS knowledge_documents_created_at, knowledge_documents.updated_at AS knowledge_documents_updated_at 
+FROM knowledge_documents 
+WHERE knowledge_documents.id = %(pk_1)s
+[2026-06-21 18:53:29,690: INFO/MainProcess] [cached since 0.1137s ago] [SQL parameters hidden due to hide_parameters=True]
+[2026-06-21 18:53:29,806: INFO/MainProcess] DELETE FROM knowledge_chunks WHERE knowledge_chunks.document_id = %(document_id_1)s
+[2026-06-21 18:53:29,807: INFO/MainProcess] [cached since 0.2236s ago] [SQL parameters hidden due to hide_parameters=True]
+[2026-06-21 18:53:29,808: INFO/MainProcess] INSERT INTO knowledge_chunks (id, document_id, sku, source_type, chunk_index, content, metadata_json, embedding_model, embedding_status, embedding_error, created_at, updated_at) VALUES (%(id)s, %(document_id)s, %(sku)s, %(source_type)s, %(chunk_index)s, %(content)s, %(metadata_json)s, %(embedding_model)s, %(embedding_status)s, %(embedding_error)s, %(created_at)s, %(updated_at)s)
+[2026-06-21 18:53:29,809: INFO/MainProcess] [cached since 0.1867s ago] [SQL parameters hidden due to hide_parameters=True]
+[2026-06-21 18:53:29,810: INFO/MainProcess] UPDATE knowledge_documents SET content=%(content)s, metadata_json=%(metadata_json)s, page_count=%(page_count)s, parse_status=%(parse_status)s, updated_at=%(updated_at)s WHERE knowledge_documents.id = %(knowledge_documents_id)s
+[2026-06-21 18:53:29,812: INFO/MainProcess] [cached since 0.1725s ago] [SQL parameters hidden due to hide_parameters=True]
+[2026-06-21 18:53:29,813: INFO/MainProcess] COMMIT
+[2026-06-21 18:53:29,814: INFO/MainProcess] BEGIN (implicit)
+[2026-06-21 18:53:29,815: INFO/MainProcess] SELECT knowledge_documents.id, knowledge_documents.source_type, knowledge_documents.source_id, knowledge_documents.sku, knowledge_documents.title, knowledge_documents.content, knowledge_documents.metadata_json, knowledge_documents.file_name, knowledge_documents.file_path, knowledge_documents.file_type, knowledge_documents.file_hash, knowledge_documents.page_count, knowledge_documents.parse_status, knowledge_documents.parse_error, knowledge_documents.related_skus_json, knowledge_documents.is_active, knowledge_documents.created_by, knowledge_documents.created_at, knowledge_documents.updated_at 
+FROM knowledge_documents 
+WHERE knowledge_documents.id = %(pk_1)s
+[2026-06-21 18:53:29,815: INFO/MainProcess] [cached since 0.1549s ago] [SQL parameters hidden due to hide_parameters=True]
+[2026-06-21 18:53:29,817: INFO/MainProcess] SELECT knowledge_parse_tasks.id AS knowledge_parse_tasks_id, knowledge_parse_tasks.document_id AS knowledge_parse_tasks_document_id, knowledge_parse_tasks.status AS knowledge_parse_tasks_status, knowledge_parse_tasks.created_at AS knowledge_parse_tasks_created_at, knowledge_parse_tasks.started_at AS knowledge_parse_tasks_started_at, knowledge_parse_tasks.finished_at AS knowledge_parse_tasks_finished_at, knowledge_parse_tasks.error_message AS knowledge_parse_tasks_error_message 
+FROM knowledge_parse_tasks 
+WHERE knowledge_parse_tasks.id = %(id_1)s 
+ LIMIT %(param_1)s
+[2026-06-21 18:53:29,818: INFO/MainProcess] [cached since 0.2762s ago] [SQL parameters hidden due to hide_parameters=True]
+[2026-06-21 18:53:29,819: INFO/MainProcess] UPDATE knowledge_parse_tasks SET status=%(status)s, finished_at=%(finished_at)s WHERE knowledge_parse_tasks.id = %(knowledge_parse_tasks_id)s
+[2026-06-21 18:53:29,820: INFO/MainProcess] [cached since 0.1548s ago] [SQL parameters hidden due to hide_parameters=True]
+[2026-06-21 18:53:29,821: INFO/MainProcess] COMMIT
+[2026-06-21 18:53:29,823: INFO/MainProcess] Task parse_document[b4354058-086e-4c48-a06f-e16d5be581d7] succeeded in 0.1559999999590218s: {'ok': True, 'status': 'done', 'document_id': '1960597f-60f6-41a6-995d-974d47b63b55', 'task_id': '3aaa9489-2018-434d-b769-d2420312d6a5'}
+[2026-06-21 18:53:29,826: INFO/MainProcess] Task parse_document[d2dba934-b1a4-45c2-9a87-44a8d4e6ff95] received
+[2026-06-21 18:53:29,828: INFO/MainProcess] BEGIN (implicit)
+[2026-06-21 18:53:29,829: INFO/MainProcess] SELECT knowledge_parse_tasks.id AS knowledge_parse_tasks_id, knowledge_parse_tasks.document_id AS knowledge_parse_tasks_document_id, knowledge_parse_tasks.status AS knowledge_parse_tasks_status, knowledge_parse_tasks.created_at AS knowledge_parse_tasks_created_at, knowledge_parse_tasks.started_at AS knowledge_parse_tasks_started_at, knowledge_parse_tasks.finished_at AS knowledge_parse_tasks_finished_at, knowledge_parse_tasks.error_message AS knowledge_parse_tasks_error_message 
+FROM knowledge_parse_tasks 
+WHERE knowledge_parse_tasks.id = %(id_1)s 
+ LIMIT %(param_1)s
+[2026-06-21 18:53:29,830: INFO/MainProcess] [cached since 0.2881s ago] [SQL parameters hidden due to hide_parameters=True]
+[2026-06-21 18:53:29,832: INFO/MainProcess] SELECT knowledge_documents.id AS knowledge_documents_id, knowledge_documents.source_type AS knowledge_documents_source_type, knowledge_documents.source_id AS knowledge_documents_source_id, knowledge_documents.sku AS knowledge_documents_sku, knowledge_documents.title AS knowledge_documents_title, knowledge_documents.content AS knowledge_documents_content, knowledge_documents.metadata_json AS knowledge_documents_metadata_json, knowledge_documents.file_name AS knowledge_documents_file_name, knowledge_documents.file_path AS knowledge_documents_file_path, knowledge_documents.file_type AS knowledge_documents_file_type, knowledge_documents.file_hash AS knowledge_documents_file_hash, knowledge_documents.page_count AS knowledge_documents_page_count, knowledge_documents.parse_status AS knowledge_documents_parse_status, knowledge_documents.parse_error AS knowledge_documents_parse_error, knowledge_documents.related_skus_json AS knowledge_documents_related_skus_json, knowledge_documents.is_active AS knowledge_documents_is_active, knowledge_documents.created_by AS knowledge_documents_created_by, knowledge_documents.created_at AS knowledge_documents_created_at, knowledge_documents.updated_at AS knowledge_documents_updated_at 
+FROM knowledge_documents 
+WHERE knowledge_documents.id = %(id_1)s 
+ LIMIT %(param_1)s
+[2026-06-21 18:53:29,832: INFO/MainProcess] [cached since 0.283s ago] [SQL parameters hidden due to hide_parameters=True]
+[2026-06-21 18:53:29,833: INFO/MainProcess] UPDATE knowledge_parse_tasks SET status=%(status)s, started_at=%(started_at)s WHERE knowledge_parse_tasks.id = %(knowledge_parse_tasks_id)s
+[2026-06-21 18:53:29,834: INFO/MainProcess] [cached since 0.2729s ago] [SQL parameters hidden due to hide_parameters=True]
+[2026-06-21 18:53:29,835: INFO/MainProcess] COMMIT
+[2026-06-21 18:53:29,836: INFO/MainProcess] BEGIN (implicit)
+[2026-06-21 18:53:29,836: INFO/MainProcess] SELECT knowledge_documents.id AS knowledge_documents_id, knowledge_documents.source_type AS knowledge_documents_source_type, knowledge_documents.source_id AS knowledge_documents_source_id, knowledge_documents.sku AS knowledge_documents_sku, knowledge_documents.title AS knowledge_documents_title, knowledge_documents.content AS knowledge_documents_content, knowledge_documents.metadata_json AS knowledge_documents_metadata_json, knowledge_documents.file_name AS knowledge_documents_file_name, knowledge_documents.file_path AS knowledge_documents_file_path, knowledge_documents.file_type AS knowledge_documents_file_type, knowledge_documents.file_hash AS knowledge_documents_file_hash, knowledge_documents.page_count AS knowledge_documents_page_count, knowledge_documents.parse_status AS knowledge_documents_parse_status, knowledge_documents.parse_error AS knowledge_documents_parse_error, knowledge_documents.related_skus_json AS knowledge_documents_related_skus_json, knowledge_documents.is_active AS knowledge_documents_is_active, knowledge_documents.created_by AS knowledge_documents_created_by, knowledge_documents.created_at AS knowledge_documents_created_at, knowledge_documents.updated_at AS knowledge_documents_updated_at 
+FROM knowledge_documents 
+WHERE knowledge_documents.id = %(pk_1)s
+[2026-06-21 18:53:29,837: INFO/MainProcess] [cached since 0.2607s ago] [SQL parameters hidden due to hide_parameters=True]
+[2026-06-21 18:53:29,933: INFO/MainProcess] DELETE FROM knowledge_chunks WHERE knowledge_chunks.document_id = %(document_id_1)s
+[2026-06-21 18:53:29,955: INFO/MainProcess] [cached since 0.3716s ago] [SQL parameters hidden due to hide_parameters=True]
+[2026-06-21 18:53:29,956: INFO/MainProcess] INSERT INTO knowledge_chunks (id, document_id, sku, source_type, chunk_index, content, metadata_json, embedding_model, embedding_status, embedding_error, created_at, updated_at) VALUES (%(id)s, %(document_id)s, %(sku)s, %(source_type)s, %(chunk_index)s, %(content)s, %(metadata_json)s, %(embedding_model)s, %(embedding_status)s, %(embedding_error)s, %(created_at)s, %(updated_at)s)
+[2026-06-21 18:53:29,957: INFO/MainProcess] [cached since 0.3345s ago] [SQL parameters hidden due to hide_parameters=True]
+[2026-06-21 18:53:29,958: INFO/MainProcess] UPDATE knowledge_documents SET content=%(content)s, metadata_json=%(metadata_json)s, page_count=%(page_count)s, parse_status=%(parse_status)s, updated_at=%(updated_at)s WHERE knowledge_documents.id = %(knowledge_documents_id)s
+[2026-06-21 18:53:29,959: INFO/MainProcess] [cached since 0.3195s ago] [SQL parameters hidden due to hide_parameters=True]
+[2026-06-21 18:53:29,960: INFO/MainProcess] COMMIT
+[2026-06-21 18:53:29,970: INFO/MainProcess] BEGIN (implicit)
+[2026-06-21 18:53:29,979: INFO/MainProcess] SELECT knowledge_documents.id, knowledge_documents.source_type, knowledge_documents.source_id, knowledge_documents.sku, knowledge_documents.title, knowledge_documents.content, knowledge_documents.metadata_json, knowledge_documents.file_name, knowledge_documents.file_path, knowledge_documents.file_type, knowledge_documents.file_hash, knowledge_documents.page_count, knowledge_documents.parse_status, knowledge_documents.parse_error, knowledge_documents.related_skus_json, knowledge_documents.is_active, knowledge_documents.created_by, knowledge_documents.created_at, knowledge_documents.updated_at 
+FROM knowledge_documents 
+WHERE knowledge_documents.id = %(pk_1)s
+[2026-06-21 18:53:29,981: INFO/MainProcess] [cached since 0.3196s ago] [SQL parameters hidden due to hide_parameters=True]
+[2026-06-21 18:53:29,984: INFO/MainProcess] SELECT knowledge_parse_tasks.id AS knowledge_parse_tasks_id, knowledge_parse_tasks.document_id AS knowledge_parse_tasks_document_id, knowledge_parse_tasks.status AS knowledge_parse_tasks_status, knowledge_parse_tasks.created_at AS knowledge_parse_tasks_created_at, knowledge_parse_tasks.started_at AS knowledge_parse_tasks_started_at, knowledge_parse_tasks.finished_at AS knowledge_parse_tasks_finished_at, knowledge_parse_tasks.error_message AS knowledge_parse_tasks_error_message 
+FROM knowledge_parse_tasks 
+WHERE knowledge_parse_tasks.id = %(id_1)s 
+ LIMIT %(param_1)s
+[2026-06-21 18:53:29,985: INFO/MainProcess] [cached since 0.4432s ago] [SQL parameters hidden due to hide_parameters=True]
+[2026-06-21 18:53:29,986: INFO/MainProcess] UPDATE knowledge_parse_tasks SET status=%(status)s, finished_at=%(finished_at)s WHERE knowledge_parse_tasks.id = %(knowledge_parse_tasks_id)s
+[2026-06-21 18:53:29,987: INFO/MainProcess] [cached since 0.3216s ago] [SQL parameters hidden due to hide_parameters=True]
+[2026-06-21 18:53:29,988: INFO/MainProcess] COMMIT
+[2026-06-21 18:53:29,990: INFO/MainProcess] Task parse_document[d2dba934-b1a4-45c2-9a87-44a8d4e6ff95] succeeded in 0.15600000001722947s: {'ok': True, 'status': 'done', 'document_id': '92004618-dbc9-4775-bf20-fcb9bf03dd93', 'task_id': 'd988c2ce-9bb1-4194-b648-3a045475ad3f'}
+[2026-06-21 18:53:29,993: INFO/MainProcess] Task parse_document[1807d62e-615e-4101-b10c-8d610f6a3f33] received
+[2026-06-21 18:53:29,995: INFO/MainProcess] BEGIN (implicit)
+[2026-06-21 18:53:29,996: INFO/MainProcess] SELECT knowledge_parse_tasks.id AS knowledge_parse_tasks_id, knowledge_parse_tasks.document_id AS knowledge_parse_tasks_document_id, knowledge_parse_tasks.status AS knowledge_parse_tasks_status, knowledge_parse_tasks.created_at AS knowledge_parse_tasks_created_at, knowledge_parse_tasks.started_at AS knowledge_parse_tasks_started_at, knowledge_parse_tasks.finished_at AS knowledge_parse_tasks_finished_at, knowledge_parse_tasks.error_message AS knowledge_parse_tasks_error_message 
+FROM knowledge_parse_tasks 
+WHERE knowledge_parse_tasks.id = %(id_1)s 
+ LIMIT %(param_1)s
+[2026-06-21 18:53:29,997: INFO/MainProcess] [cached since 0.4548s ago] [SQL parameters hidden due to hide_parameters=True]
+[2026-06-21 18:53:29,998: INFO/MainProcess] SELECT knowledge_documents.id AS knowledge_documents_id, knowledge_documents.source_type AS knowledge_documents_source_type, knowledge_documents.source_id AS knowledge_documents_source_id, knowledge_documents.sku AS knowledge_documents_sku, knowledge_documents.title AS knowledge_documents_title, knowledge_documents.content AS knowledge_documents_content, knowledge_documents.metadata_json AS knowledge_documents_metadata_json, knowledge_documents.file_name AS knowledge_documents_file_name, knowledge_documents.file_path AS knowledge_documents_file_path, knowledge_documents.file_type AS knowledge_documents_file_type, knowledge_documents.file_hash AS knowledge_documents_file_hash, knowledge_documents.page_count AS knowledge_documents_page_count, knowledge_documents.parse_status AS knowledge_documents_parse_status, knowledge_documents.parse_error AS knowledge_documents_parse_error, knowledge_documents.related_skus_json AS knowledge_documents_related_skus_json, knowledge_documents.is_active AS knowledge_documents_is_active, knowledge_documents.created_by AS knowledge_documents_created_by, knowledge_documents.created_at AS knowledge_documents_created_at, knowledge_documents.updated_at AS knowledge_documents_updated_at 
+FROM knowledge_documents 
+WHERE knowledge_documents.id = %(id_1)s 
+ LIMIT %(param_1)s
+[2026-06-21 18:53:29,999: INFO/MainProcess] [cached since 0.4497s ago] [SQL parameters hidden due to hide_parameters=True]
+[2026-06-21 18:53:30,000: INFO/MainProcess] UPDATE knowledge_parse_tasks SET status=%(status)s, started_at=%(started_at)s WHERE knowledge_parse_tasks.id = %(knowledge_parse_tasks_id)s
+[2026-06-21 18:53:30,001: INFO/MainProcess] [cached since 0.44s ago] [SQL parameters hidden due to hide_parameters=True]
+[2026-06-21 18:53:30,002: INFO/MainProcess] COMMIT
+[2026-06-21 18:53:30,003: INFO/MainProcess] BEGIN (implicit)
+[2026-06-21 18:53:30,004: INFO/MainProcess] SELECT knowledge_documents.id AS knowledge_documents_id, knowledge_documents.source_type AS knowledge_documents_source_type, knowledge_documents.source_id AS knowledge_documents_source_id, knowledge_documents.sku AS knowledge_documents_sku, knowledge_documents.title AS knowledge_documents_title, knowledge_documents.content AS knowledge_documents_content, knowledge_documents.metadata_json AS knowledge_documents_metadata_json, knowledge_documents.file_name AS knowledge_documents_file_name, knowledge_documents.file_path AS knowledge_documents_file_path, knowledge_documents.file_type AS knowledge_documents_file_type, knowledge_documents.file_hash AS knowledge_documents_file_hash, knowledge_documents.page_count AS knowledge_documents_page_count, knowledge_documents.parse_status AS knowledge_documents_parse_status, knowledge_documents.parse_error AS knowledge_documents_parse_error, knowledge_documents.related_skus_json AS knowledge_documents_related_skus_json, knowledge_documents.is_active AS knowledge_documents_is_active, knowledge_documents.created_by AS knowledge_documents_created_by, knowledge_documents.created_at AS knowledge_documents_created_at, knowledge_documents.updated_at AS knowledge_documents_updated_at 
+FROM knowledge_documents 
+WHERE knowledge_documents.id = %(pk_1)s
+[2026-06-21 18:53:30,004: INFO/MainProcess] [cached since 0.4281s ago] [SQL parameters hidden due to hide_parameters=True]
+[2026-06-21 18:53:30,267: INFO/MainProcess] DELETE FROM knowledge_chunks WHERE knowledge_chunks.document_id = %(document_id_1)s
+[2026-06-21 18:53:30,269: INFO/MainProcess] [cached since 0.6851s ago] [SQL parameters hidden due to hide_parameters=True]
+[2026-06-21 18:53:30,270: INFO/MainProcess] INSERT INTO knowledge_chunks (id, document_id, sku, source_type, chunk_index, content, metadata_json, embedding_model, embedding_status, embedding_error, created_at, updated_at) VALUES (%(id)s, %(document_id)s, %(sku)s, %(source_type)s, %(chunk_index)s, %(content)s, %(metadata_json)s, %(embedding_model)s, %(embedding_status)s, %(embedding_error)s, %(created_at)s, %(updated_at)s)
+[2026-06-21 18:53:30,271: INFO/MainProcess] [cached since 0.6489s ago] [SQL parameters hidden due to hide_parameters=True]
+[2026-06-21 18:53:30,274: INFO/MainProcess] UPDATE knowledge_documents SET content=%(content)s, metadata_json=%(metadata_json)s, page_count=%(page_count)s, parse_status=%(parse_status)s, updated_at=%(updated_at)s WHERE knowledge_documents.id = %(knowledge_documents_id)s
+[2026-06-21 18:53:30,275: INFO/MainProcess] [cached since 0.636s ago] [SQL parameters hidden due to hide_parameters=True]
+[2026-06-21 18:53:30,277: INFO/MainProcess] COMMIT
+[2026-06-21 18:53:30,288: INFO/MainProcess] BEGIN (implicit)
+[2026-06-21 18:53:30,315: INFO/MainProcess] SELECT knowledge_documents.id, knowledge_documents.source_type, knowledge_documents.source_id, knowledge_documents.sku, knowledge_documents.title, knowledge_documents.content, knowledge_documents.metadata_json, knowledge_documents.file_name, knowledge_documents.file_path, knowledge_documents.file_type, knowledge_documents.file_hash, knowledge_documents.page_count, knowledge_documents.parse_status, knowledge_documents.parse_error, knowledge_documents.related_skus_json, knowledge_documents.is_active, knowledge_documents.created_by, knowledge_documents.created_at, knowledge_documents.updated_at 
+FROM knowledge_documents 
+WHERE knowledge_documents.id = %(pk_1)s
+[2026-06-21 18:53:30,315: INFO/MainProcess] [cached since 0.6541s ago] [SQL parameters hidden due to hide_parameters=True]
+[2026-06-21 18:53:30,317: INFO/MainProcess] SELECT knowledge_parse_tasks.id AS knowledge_parse_tasks_id, knowledge_parse_tasks.document_id AS knowledge_parse_tasks_document_id, knowledge_parse_tasks.status AS knowledge_parse_tasks_status, knowledge_parse_tasks.created_at AS knowledge_parse_tasks_created_at, knowledge_parse_tasks.started_at AS knowledge_parse_tasks_started_at, knowledge_parse_tasks.finished_at AS knowledge_parse_tasks_finished_at, knowledge_parse_tasks.error_message AS knowledge_parse_tasks_error_message 
+FROM knowledge_parse_tasks 
+WHERE knowledge_parse_tasks.id = %(id_1)s 
+ LIMIT %(param_1)s
+[2026-06-21 18:53:30,318: INFO/MainProcess] [cached since 0.7759s ago] [SQL parameters hidden due to hide_parameters=True]
+[2026-06-21 18:53:30,320: INFO/MainProcess] UPDATE knowledge_parse_tasks SET status=%(status)s, finished_at=%(finished_at)s WHERE knowledge_parse_tasks.id = %(knowledge_parse_tasks_id)s
+[2026-06-21 18:53:30,320: INFO/MainProcess] [cached since 0.655s ago] [SQL parameters hidden due to hide_parameters=True]
+[2026-06-21 18:53:30,322: INFO/MainProcess] COMMIT
+[2026-06-21 18:53:30,324: INFO/MainProcess] Task parse_document[1807d62e-615e-4101-b10c-8d610f6a3f33] succeeded in 0.3279999999795109s: {'ok': True, 'status': 'done', 'document_id': '2562dc8c-d053-4536-8b0e-cafcce8335c7', 'task_id': '571b640d-cea5-401e-9d65-b779fd4d99a0'}
+[2026-06-21 18:55:03,101: INFO/MainProcess] Task parse_document[dc2a185a-ba33-4c29-ba9a-c752da2c649b] received
+[2026-06-21 18:55:03,103: INFO/MainProcess] BEGIN (implicit)
+[2026-06-21 18:55:03,104: INFO/MainProcess] SELECT knowledge_parse_tasks.id AS knowledge_parse_tasks_id, knowledge_parse_tasks.document_id AS knowledge_parse_tasks_document_id, knowledge_parse_tasks.status AS knowledge_parse_tasks_status, knowledge_parse_tasks.created_at AS knowledge_parse_tasks_created_at, knowledge_parse_tasks.started_at AS knowledge_parse_tasks_started_at, knowledge_parse_tasks.finished_at AS knowledge_parse_tasks_finished_at, knowledge_parse_tasks.error_message AS knowledge_parse_tasks_error_message 
+FROM knowledge_parse_tasks 
+WHERE knowledge_parse_tasks.id = %(id_1)s 
+ LIMIT %(param_1)s
+[2026-06-21 18:55:03,104: INFO/MainProcess] [cached since 93.56s ago] [SQL parameters hidden due to hide_parameters=True]
+[2026-06-21 18:55:03,106: INFO/MainProcess] SELECT knowledge_documents.id AS knowledge_documents_id, knowledge_documents.source_type AS knowledge_documents_source_type, knowledge_documents.source_id AS knowledge_documents_source_id, knowledge_documents.sku AS knowledge_documents_sku, knowledge_documents.title AS knowledge_documents_title, knowledge_documents.content AS knowledge_documents_content, knowledge_documents.metadata_json AS knowledge_documents_metadata_json, knowledge_documents.file_name AS knowledge_documents_file_name, knowledge_documents.file_path AS knowledge_documents_file_path, knowledge_documents.file_type AS knowledge_documents_file_type, knowledge_documents.file_hash AS knowledge_documents_file_hash, knowledge_documents.page_count AS knowledge_documents_page_count, knowledge_documents.parse_status AS knowledge_documents_parse_status, knowledge_documents.parse_error AS knowledge_documents_parse_error, knowledge_documents.related_skus_json AS knowledge_documents_related_skus_json, knowledge_documents.is_active AS knowledge_documents_is_active, knowledge_documents.created_by AS knowledge_documents_created_by, knowledge_documents.created_at AS knowledge_documents_created_at, knowledge_documents.updated_at AS knowledge_documents_updated_at 
+FROM knowledge_documents 
+WHERE knowledge_documents.id = %(id_1)s 
+ LIMIT %(param_1)s
+[2026-06-21 18:55:03,106: INFO/MainProcess] [cached since 93.56s ago] [SQL parameters hidden due to hide_parameters=True]
+[2026-06-21 18:55:03,109: INFO/MainProcess] UPDATE knowledge_parse_tasks SET status=%(status)s, started_at=%(started_at)s WHERE knowledge_parse_tasks.id = %(knowledge_parse_tasks_id)s
+[2026-06-21 18:55:03,110: INFO/MainProcess] [cached since 93.55s ago] [SQL parameters hidden due to hide_parameters=True]
+[2026-06-21 18:55:03,111: INFO/MainProcess] COMMIT
+[2026-06-21 18:55:03,112: INFO/MainProcess] BEGIN (implicit)
+[2026-06-21 18:55:03,113: INFO/MainProcess] SELECT knowledge_documents.id AS knowledge_documents_id, knowledge_documents.source_type AS knowledge_documents_source_type, knowledge_documents.source_id AS knowledge_documents_source_id, knowledge_documents.sku AS knowledge_documents_sku, knowledge_documents.title AS knowledge_documents_title, knowledge_documents.content AS knowledge_documents_content, knowledge_documents.metadata_json AS knowledge_documents_metadata_json, knowledge_documents.file_name AS knowledge_documents_file_name, knowledge_documents.file_path AS knowledge_documents_file_path, knowledge_documents.file_type AS knowledge_documents_file_type, knowledge_documents.file_hash AS knowledge_documents_file_hash, knowledge_documents.page_count AS knowledge_documents_page_count, knowledge_documents.parse_status AS knowledge_documents_parse_status, knowledge_documents.parse_error AS knowledge_documents_parse_error, knowledge_documents.related_skus_json AS knowledge_documents_related_skus_json, knowledge_documents.is_active AS knowledge_documents_is_active, knowledge_documents.created_by AS knowledge_documents_created_by, knowledge_documents.created_at AS knowledge_documents_created_at, knowledge_documents.updated_at AS knowledge_documents_updated_at 
+FROM knowledge_documents 
+WHERE knowledge_documents.id = %(pk_1)s
+[2026-06-21 18:55:03,114: INFO/MainProcess] [cached since 93.54s ago] [SQL parameters hidden due to hide_parameters=True]
+[2026-06-21 18:55:03,118: INFO/MainProcess] DELETE FROM knowledge_chunks WHERE knowledge_chunks.document_id = %(document_id_1)s
+[2026-06-21 18:55:03,119: INFO/MainProcess] [cached since 93.54s ago] [SQL parameters hidden due to hide_parameters=True]
+[2026-06-21 18:55:03,120: INFO/MainProcess] INSERT INTO knowledge_chunks (id, document_id, sku, source_type, chunk_index, content, metadata_json, embedding_model, embedding_status, embedding_error, created_at, updated_at) VALUES (%(id)s, %(document_id)s, %(sku)s, %(source_type)s, %(chunk_index)s, %(content)s, %(metadata_json)s, %(embedding_model)s, %(embedding_status)s, %(embedding_error)s, %(created_at)s, %(updated_at)s)
+[2026-06-21 18:55:03,121: INFO/MainProcess] [cached since 93.5s ago] [SQL parameters hidden due to hide_parameters=True]
+[2026-06-21 18:55:03,122: INFO/MainProcess] UPDATE knowledge_documents SET content=%(content)s, metadata_json=%(metadata_json)s, page_count=%(page_count)s, parse_status=%(parse_status)s, updated_at=%(updated_at)s WHERE knowledge_documents.id = %(knowledge_documents_id)s
+[2026-06-21 18:55:03,123: INFO/MainProcess] [cached since 93.48s ago] [SQL parameters hidden due to hide_parameters=True]
+[2026-06-21 18:55:03,124: INFO/MainProcess] COMMIT
+[2026-06-21 18:55:03,126: INFO/MainProcess] BEGIN (implicit)
+[2026-06-21 18:55:03,127: INFO/MainProcess] SELECT knowledge_documents.id, knowledge_documents.source_type, knowledge_documents.source_id, knowledge_documents.sku, knowledge_documents.title, knowledge_documents.content, knowledge_documents.metadata_json, knowledge_documents.file_name, knowledge_documents.file_path, knowledge_documents.file_type, knowledge_documents.file_hash, knowledge_documents.page_count, knowledge_documents.parse_status, knowledge_documents.parse_error, knowledge_documents.related_skus_json, knowledge_documents.is_active, knowledge_documents.created_by, knowledge_documents.created_at, knowledge_documents.updated_at 
+FROM knowledge_documents 
+WHERE knowledge_documents.id = %(pk_1)s
+[2026-06-21 18:55:03,128: INFO/MainProcess] [cached since 93.47s ago] [SQL parameters hidden due to hide_parameters=True]
+[2026-06-21 18:55:03,129: INFO/MainProcess] SELECT knowledge_parse_tasks.id AS knowledge_parse_tasks_id, knowledge_parse_tasks.document_id AS knowledge_parse_tasks_document_id, knowledge_parse_tasks.status AS knowledge_parse_tasks_status, knowledge_parse_tasks.created_at AS knowledge_parse_tasks_created_at, knowledge_parse_tasks.started_at AS knowledge_parse_tasks_started_at, knowledge_parse_tasks.finished_at AS knowledge_parse_tasks_finished_at, knowledge_parse_tasks.error_message AS knowledge_parse_tasks_error_message 
+FROM knowledge_parse_tasks 
+WHERE knowledge_parse_tasks.id = %(id_1)s 
+ LIMIT %(param_1)s
+[2026-06-21 18:55:03,130: INFO/MainProcess] [cached since 93.59s ago] [SQL parameters hidden due to hide_parameters=True]
+[2026-06-21 18:55:03,131: INFO/MainProcess] UPDATE knowledge_parse_tasks SET status=%(status)s, finished_at=%(finished_at)s WHERE knowledge_parse_tasks.id = %(knowledge_parse_tasks_id)s
+[2026-06-21 18:55:03,132: INFO/MainProcess] [cached since 93.47s ago] [SQL parameters hidden due to hide_parameters=True]
+[2026-06-21 18:55:03,133: INFO/MainProcess] COMMIT
+[2026-06-21 18:55:03,135: INFO/MainProcess] Task parse_document[dc2a185a-ba33-4c29-ba9a-c752da2c649b] succeeded in 0.0470000000204891s: {'ok': True, 'status': 'done', 'document_id': 'd2edf949-6307-4480-bc9a-6854a0d73b01', 'task_id': '45529ca8-2e88-45c1-9641-6718642afc8d'}
+[2026-06-21 18:55:03,138: INFO/MainProcess] Task parse_document[2a797ae6-5e91-4147-acfb-a2fe0ccc2bc7] received
+[2026-06-21 18:55:03,142: INFO/MainProcess] BEGIN (implicit)
+[2026-06-21 18:55:03,149: INFO/MainProcess] SELECT knowledge_parse_tasks.id AS knowledge_parse_tasks_id, knowledge_parse_tasks.document_id AS knowledge_parse_tasks_document_id, knowledge_parse_tasks.status AS knowledge_parse_tasks_status, knowledge_parse_tasks.created_at AS knowledge_parse_tasks_created_at, knowledge_parse_tasks.started_at AS knowledge_parse_tasks_started_at, knowledge_parse_tasks.finished_at AS knowledge_parse_tasks_finished_at, knowledge_parse_tasks.error_message AS knowledge_parse_tasks_error_message 
+FROM knowledge_parse_tasks 
+WHERE knowledge_parse_tasks.id = %(id_1)s 
+ LIMIT %(param_1)s
+[2026-06-21 18:55:03,150: INFO/MainProcess] [cached since 93.61s ago] [SQL parameters hidden due to hide_parameters=True]
+[2026-06-21 18:55:03,151: INFO/MainProcess] SELECT knowledge_documents.id AS knowledge_documents_id, knowledge_documents.source_type AS knowledge_documents_source_type, knowledge_documents.source_id AS knowledge_documents_source_id, knowledge_documents.sku AS knowledge_documents_sku, knowledge_documents.title AS knowledge_documents_title, knowledge_documents.content AS knowledge_documents_content, knowledge_documents.metadata_json AS knowledge_documents_metadata_json, knowledge_documents.file_name AS knowledge_documents_file_name, knowledge_documents.file_path AS knowledge_documents_file_path, knowledge_documents.file_type AS knowledge_documents_file_type, knowledge_documents.file_hash AS knowledge_documents_file_hash, knowledge_documents.page_count AS knowledge_documents_page_count, knowledge_documents.parse_status AS knowledge_documents_parse_status, knowledge_documents.parse_error AS knowledge_documents_parse_error, knowledge_documents.related_skus_json AS knowledge_documents_related_skus_json, knowledge_documents.is_active AS knowledge_documents_is_active, knowledge_documents.created_by AS knowledge_documents_created_by, knowledge_documents.created_at AS knowledge_documents_created_at, knowledge_documents.updated_at AS knowledge_documents_updated_at 
+FROM knowledge_documents 
+WHERE knowledge_documents.id = %(id_1)s 
+ LIMIT %(param_1)s
+[2026-06-21 18:55:03,152: INFO/MainProcess] [cached since 93.6s ago] [SQL parameters hidden due to hide_parameters=True]
+[2026-06-21 18:55:03,153: INFO/MainProcess] UPDATE knowledge_parse_tasks SET status=%(status)s, started_at=%(started_at)s WHERE knowledge_parse_tasks.id = %(knowledge_parse_tasks_id)s
+[2026-06-21 18:55:03,154: INFO/MainProcess] [cached since 93.59s ago] [SQL parameters hidden due to hide_parameters=True]
+[2026-06-21 18:55:03,155: INFO/MainProcess] COMMIT
+[2026-06-21 18:55:03,156: INFO/MainProcess] BEGIN (implicit)
+[2026-06-21 18:55:03,157: INFO/MainProcess] SELECT knowledge_documents.id AS knowledge_documents_id, knowledge_documents.source_type AS knowledge_documents_source_type, knowledge_documents.source_id AS knowledge_documents_source_id, knowledge_documents.sku AS knowledge_documents_sku, knowledge_documents.title AS knowledge_documents_title, knowledge_documents.content AS knowledge_documents_content, knowledge_documents.metadata_json AS knowledge_documents_metadata_json, knowledge_documents.file_name AS knowledge_documents_file_name, knowledge_documents.file_path AS knowledge_documents_file_path, knowledge_documents.file_type AS knowledge_documents_file_type, knowledge_documents.file_hash AS knowledge_documents_file_hash, knowledge_documents.page_count AS knowledge_documents_page_count, knowledge_documents.parse_status AS knowledge_documents_parse_status, knowledge_documents.parse_error AS knowledge_documents_parse_error, knowledge_documents.related_skus_json AS knowledge_documents_related_skus_json, knowledge_documents.is_active AS knowledge_documents_is_active, knowledge_documents.created_by AS knowledge_documents_created_by, knowledge_documents.created_at AS knowledge_documents_created_at, knowledge_documents.updated_at AS knowledge_documents_updated_at 
+FROM knowledge_documents 
+WHERE knowledge_documents.id = %(pk_1)s
+[2026-06-21 18:55:03,158: INFO/MainProcess] [cached since 93.58s ago] [SQL parameters hidden due to hide_parameters=True]
+[2026-06-21 18:55:03,164: INFO/MainProcess] DELETE FROM knowledge_chunks WHERE knowledge_chunks.document_id = %(document_id_1)s
+[2026-06-21 18:55:03,171: INFO/MainProcess] [cached since 93.59s ago] [SQL parameters hidden due to hide_parameters=True]
+[2026-06-21 18:55:03,172: INFO/MainProcess] INSERT INTO knowledge_chunks (id, document_id, sku, source_type, chunk_index, content, metadata_json, embedding_model, embedding_status, embedding_error, created_at, updated_at) VALUES (%(id)s, %(document_id)s, %(sku)s, %(source_type)s, %(chunk_index)s, %(content)s, %(metadata_json)s, %(embedding_model)s, %(embedding_status)s, %(embedding_error)s, %(created_at)s, %(updated_at)s)
+[2026-06-21 18:55:03,173: INFO/MainProcess] [cached since 93.55s ago] [SQL parameters hidden due to hide_parameters=True]
+[2026-06-21 18:55:03,174: INFO/MainProcess] UPDATE knowledge_documents SET content=%(content)s, metadata_json=%(metadata_json)s, page_count=%(page_count)s, parse_status=%(parse_status)s, updated_at=%(updated_at)s WHERE knowledge_documents.id = %(knowledge_documents_id)s
+[2026-06-21 18:55:03,174: INFO/MainProcess] [cached since 93.53s ago] [SQL parameters hidden due to hide_parameters=True]
+[2026-06-21 18:55:03,175: INFO/MainProcess] COMMIT
+[2026-06-21 18:55:03,177: INFO/MainProcess] BEGIN (implicit)
+[2026-06-21 18:55:03,178: INFO/MainProcess] SELECT knowledge_documents.id, knowledge_documents.source_type, knowledge_documents.source_id, knowledge_documents.sku, knowledge_documents.title, knowledge_documents.content, knowledge_documents.metadata_json, knowledge_documents.file_name, knowledge_documents.file_path, knowledge_documents.file_type, knowledge_documents.file_hash, knowledge_documents.page_count, knowledge_documents.parse_status, knowledge_documents.parse_error, knowledge_documents.related_skus_json, knowledge_documents.is_active, knowledge_documents.created_by, knowledge_documents.created_at, knowledge_documents.updated_at 
+FROM knowledge_documents 
+WHERE knowledge_documents.id = %(pk_1)s
+[2026-06-21 18:55:03,179: INFO/MainProcess] [cached since 93.52s ago] [SQL parameters hidden due to hide_parameters=True]
+[2026-06-21 18:55:03,180: INFO/MainProcess] SELECT knowledge_parse_tasks.id AS knowledge_parse_tasks_id, knowledge_parse_tasks.document_id AS knowledge_parse_tasks_document_id, knowledge_parse_tasks.status AS knowledge_parse_tasks_status, knowledge_parse_tasks.created_at AS knowledge_parse_tasks_created_at, knowledge_parse_tasks.started_at AS knowledge_parse_tasks_started_at, knowledge_parse_tasks.finished_at AS knowledge_parse_tasks_finished_at, knowledge_parse_tasks.error_message AS knowledge_parse_tasks_error_message 
+FROM knowledge_parse_tasks 
+WHERE knowledge_parse_tasks.id = %(id_1)s 
+ LIMIT %(param_1)s
+[2026-06-21 18:55:03,181: INFO/MainProcess] [cached since 93.64s ago] [SQL parameters hidden due to hide_parameters=True]
+[2026-06-21 18:55:03,182: INFO/MainProcess] UPDATE knowledge_parse_tasks SET status=%(status)s, finished_at=%(finished_at)s WHERE knowledge_parse_tasks.id = %(knowledge_parse_tasks_id)s
+[2026-06-21 18:55:03,183: INFO/MainProcess] [cached since 93.52s ago] [SQL parameters hidden due to hide_parameters=True]
+[2026-06-21 18:55:03,184: INFO/MainProcess] COMMIT
+[2026-06-21 18:55:03,187: INFO/MainProcess] Task parse_document[2a797ae6-5e91-4147-acfb-a2fe0ccc2bc7] succeeded in 0.045999999972991645s: {'ok': True, 'status': 'done', 'document_id': 'c991108e-4e0b-478e-acf1-707e36e2fe98', 'task_id': 'acb5b9c4-2aa2-484b-84d6-e69720edbbf2'}
+[2026-06-21 18:55:03,190: INFO/MainProcess] Task parse_document[aebee8e8-fd90-49c4-8bec-0e0fa3436198] received
+[2026-06-21 18:55:03,193: INFO/MainProcess] BEGIN (implicit)
+[2026-06-21 18:55:03,199: INFO/MainProcess] SELECT knowledge_parse_tasks.id AS knowledge_parse_tasks_id, knowledge_parse_tasks.document_id AS knowledge_parse_tasks_document_id, knowledge_parse_tasks.status AS knowledge_parse_tasks_status, knowledge_parse_tasks.created_at AS knowledge_parse_tasks_created_at, knowledge_parse_tasks.started_at AS knowledge_parse_tasks_started_at, knowledge_parse_tasks.finished_at AS knowledge_parse_tasks_finished_at, knowledge_parse_tasks.error_message AS knowledge_parse_tasks_error_message 
+FROM knowledge_parse_tasks 
+WHERE knowledge_parse_tasks.id = %(id_1)s 
+ LIMIT %(param_1)s
+[2026-06-21 18:55:03,200: INFO/MainProcess] [cached since 93.66s ago] [SQL parameters hidden due to hide_parameters=True]
+[2026-06-21 18:55:03,201: INFO/MainProcess] SELECT knowledge_documents.id AS knowledge_documents_id, knowledge_documents.source_type AS knowledge_documents_source_type, knowledge_documents.source_id AS knowledge_documents_source_id, knowledge_documents.sku AS knowledge_documents_sku, knowledge_documents.title AS knowledge_documents_title, knowledge_documents.content AS knowledge_documents_content, knowledge_documents.metadata_json AS knowledge_documents_metadata_json, knowledge_documents.file_name AS knowledge_documents_file_name, knowledge_documents.file_path AS knowledge_documents_file_path, knowledge_documents.file_type AS knowledge_documents_file_type, knowledge_documents.file_hash AS knowledge_documents_file_hash, knowledge_documents.page_count AS knowledge_documents_page_count, knowledge_documents.parse_status AS knowledge_documents_parse_status, knowledge_documents.parse_error AS knowledge_documents_parse_error, knowledge_documents.related_skus_json AS knowledge_documents_related_skus_json, knowledge_documents.is_active AS knowledge_documents_is_active, knowledge_documents.created_by AS knowledge_documents_created_by, knowledge_documents.created_at AS knowledge_documents_created_at, knowledge_documents.updated_at AS knowledge_documents_updated_at 
+FROM knowledge_documents 
+WHERE knowledge_documents.id = %(id_1)s 
+ LIMIT %(param_1)s
+[2026-06-21 18:55:03,202: INFO/MainProcess] [cached since 93.65s ago] [SQL parameters hidden due to hide_parameters=True]
+[2026-06-21 18:55:03,204: INFO/MainProcess] UPDATE knowledge_parse_tasks SET status=%(status)s, started_at=%(started_at)s WHERE knowledge_parse_tasks.id = %(knowledge_parse_tasks_id)s
+[2026-06-21 18:55:03,205: INFO/MainProcess] [cached since 93.64s ago] [SQL parameters hidden due to hide_parameters=True]
+[2026-06-21 18:55:03,206: INFO/MainProcess] COMMIT
+[2026-06-21 18:55:03,207: INFO/MainProcess] BEGIN (implicit)
+[2026-06-21 18:55:03,208: INFO/MainProcess] SELECT knowledge_documents.id AS knowledge_documents_id, knowledge_documents.source_type AS knowledge_documents_source_type, knowledge_documents.source_id AS knowledge_documents_source_id, knowledge_documents.sku AS knowledge_documents_sku, knowledge_documents.title AS knowledge_documents_title, knowledge_documents.content AS knowledge_documents_content, knowledge_documents.metadata_json AS knowledge_documents_metadata_json, knowledge_documents.file_name AS knowledge_documents_file_name, knowledge_documents.file_path AS knowledge_documents_file_path, knowledge_documents.file_type AS knowledge_documents_file_type, knowledge_documents.file_hash AS knowledge_documents_file_hash, knowledge_documents.page_count AS knowledge_documents_page_count, knowledge_documents.parse_status AS knowledge_documents_parse_status, knowledge_documents.parse_error AS knowledge_documents_parse_error, knowledge_documents.related_skus_json AS knowledge_documents_related_skus_json, knowledge_documents.is_active AS knowledge_documents_is_active, knowledge_documents.created_by AS knowledge_documents_created_by, knowledge_documents.created_at AS knowledge_documents_created_at, knowledge_documents.updated_at AS knowledge_documents_updated_at 
+FROM knowledge_documents 
+WHERE knowledge_documents.id = %(pk_1)s
+[2026-06-21 18:55:03,208: INFO/MainProcess] [cached since 93.63s ago] [SQL parameters hidden due to hide_parameters=True]
+[2026-06-21 18:55:03,229: INFO/MainProcess] DELETE FROM knowledge_chunks WHERE knowledge_chunks.document_id = %(document_id_1)s
+[2026-06-21 18:55:03,235: INFO/MainProcess] [cached since 93.65s ago] [SQL parameters hidden due to hide_parameters=True]
+[2026-06-21 18:55:03,237: INFO/MainProcess] INSERT INTO knowledge_chunks (id, document_id, sku, source_type, chunk_index, content, metadata_json, embedding_model, embedding_status, embedding_error, created_at, updated_at) VALUES (%(id)s, %(document_id)s, %(sku)s, %(source_type)s, %(chunk_index)s, %(content)s, %(metadata_json)s, %(embedding_model)s, %(embedding_status)s, %(embedding_error)s, %(created_at)s, %(updated_at)s)
+[2026-06-21 18:55:03,237: INFO/MainProcess] [cached since 93.61s ago] [SQL parameters hidden due to hide_parameters=True]
+[2026-06-21 18:55:03,239: INFO/MainProcess] UPDATE knowledge_documents SET content=%(content)s, metadata_json=%(metadata_json)s, page_count=%(page_count)s, parse_status=%(parse_status)s, updated_at=%(updated_at)s WHERE knowledge_documents.id = %(knowledge_documents_id)s
+[2026-06-21 18:55:03,239: INFO/MainProcess] [cached since 93.6s ago] [SQL parameters hidden due to hide_parameters=True]
+[2026-06-21 18:55:03,240: INFO/MainProcess] COMMIT
+[2026-06-21 18:55:03,241: INFO/MainProcess] BEGIN (implicit)
+[2026-06-21 18:55:03,242: INFO/MainProcess] SELECT knowledge_documents.id, knowledge_documents.source_type, knowledge_documents.source_id, knowledge_documents.sku, knowledge_documents.title, knowledge_documents.content, knowledge_documents.metadata_json, knowledge_documents.file_name, knowledge_documents.file_path, knowledge_documents.file_type, knowledge_documents.file_hash, knowledge_documents.page_count, knowledge_documents.parse_status, knowledge_documents.parse_error, knowledge_documents.related_skus_json, knowledge_documents.is_active, knowledge_documents.created_by, knowledge_documents.created_at, knowledge_documents.updated_at 
+FROM knowledge_documents 
+WHERE knowledge_documents.id = %(pk_1)s
+[2026-06-21 18:55:03,243: INFO/MainProcess] [cached since 93.58s ago] [SQL parameters hidden due to hide_parameters=True]
+[2026-06-21 18:55:03,244: INFO/MainProcess] SELECT knowledge_parse_tasks.id AS knowledge_parse_tasks_id, knowledge_parse_tasks.document_id AS knowledge_parse_tasks_document_id, knowledge_parse_tasks.status AS knowledge_parse_tasks_status, knowledge_parse_tasks.created_at AS knowledge_parse_tasks_created_at, knowledge_parse_tasks.started_at AS knowledge_parse_tasks_started_at, knowledge_parse_tasks.finished_at AS knowledge_parse_tasks_finished_at, knowledge_parse_tasks.error_message AS knowledge_parse_tasks_error_message 
+FROM knowledge_parse_tasks 
+WHERE knowledge_parse_tasks.id = %(id_1)s 
+ LIMIT %(param_1)s
+[2026-06-21 18:55:03,245: INFO/MainProcess] [cached since 93.7s ago] [SQL parameters hidden due to hide_parameters=True]
+[2026-06-21 18:55:03,246: INFO/MainProcess] UPDATE knowledge_parse_tasks SET status=%(status)s, finished_at=%(finished_at)s WHERE knowledge_parse_tasks.id = %(knowledge_parse_tasks_id)s
+[2026-06-21 18:55:03,247: INFO/MainProcess] [cached since 93.58s ago] [SQL parameters hidden due to hide_parameters=True]
+[2026-06-21 18:55:03,247: INFO/MainProcess] COMMIT
+[2026-06-21 18:55:03,251: INFO/MainProcess] Task parse_document[aebee8e8-fd90-49c4-8bec-0e0fa3436198] succeeded in 0.06300000002374873s: {'ok': True, 'status': 'done', 'document_id': '07a95ed5-6071-4986-9c2c-05c7a6d3a238', 'task_id': 'f5c3358a-8d3c-4884-8b5a-1321ddef7189'}
+[2026-06-21 18:55:03,253: INFO/MainProcess] Task parse_document[e2a4d42f-4811-48d3-be2f-4a76f4a17a62] received
+[2026-06-21 18:55:03,255: INFO/MainProcess] BEGIN (implicit)
+[2026-06-21 18:55:03,274: INFO/MainProcess] SELECT knowledge_parse_tasks.id AS knowledge_parse_tasks_id, knowledge_parse_tasks.document_id AS knowledge_parse_tasks_document_id, knowledge_parse_tasks.status AS knowledge_parse_tasks_status, knowledge_parse_tasks.created_at AS knowledge_parse_tasks_created_at, knowledge_parse_tasks.started_at AS knowledge_parse_tasks_started_at, knowledge_parse_tasks.finished_at AS knowledge_parse_tasks_finished_at, knowledge_parse_tasks.error_message AS knowledge_parse_tasks_error_message 
+FROM knowledge_parse_tasks 
+WHERE knowledge_parse_tasks.id = %(id_1)s 
+ LIMIT %(param_1)s
+[2026-06-21 18:55:03,275: INFO/MainProcess] [cached since 93.73s ago] [SQL parameters hidden due to hide_parameters=True]
+[2026-06-21 18:55:03,277: INFO/MainProcess] SELECT knowledge_documents.id AS knowledge_documents_id, knowledge_documents.source_type AS knowledge_documents_source_type, knowledge_documents.source_id AS knowledge_documents_source_id, knowledge_documents.sku AS knowledge_documents_sku, knowledge_documents.title AS knowledge_documents_title, knowledge_documents.content AS knowledge_documents_content, knowledge_documents.metadata_json AS knowledge_documents_metadata_json, knowledge_documents.file_name AS knowledge_documents_file_name, knowledge_documents.file_path AS knowledge_documents_file_path, knowledge_documents.file_type AS knowledge_documents_file_type, knowledge_documents.file_hash AS knowledge_documents_file_hash, knowledge_documents.page_count AS knowledge_documents_page_count, knowledge_documents.parse_status AS knowledge_documents_parse_status, knowledge_documents.parse_error AS knowledge_documents_parse_error, knowledge_documents.related_skus_json AS knowledge_documents_related_skus_json, knowledge_documents.is_active AS knowledge_documents_is_active, knowledge_documents.created_by AS knowledge_documents_created_by, knowledge_documents.created_at AS knowledge_documents_created_at, knowledge_documents.updated_at AS knowledge_documents_updated_at 
+FROM knowledge_documents 
+WHERE knowledge_documents.id = %(id_1)s 
+ LIMIT %(param_1)s
+[2026-06-21 18:55:03,277: INFO/MainProcess] [cached since 93.73s ago] [SQL parameters hidden due to hide_parameters=True]
+[2026-06-21 18:55:03,279: INFO/MainProcess] UPDATE knowledge_parse_tasks SET status=%(status)s, started_at=%(started_at)s WHERE knowledge_parse_tasks.id = %(knowledge_parse_tasks_id)s
+[2026-06-21 18:55:03,279: INFO/MainProcess] [cached since 93.72s ago] [SQL parameters hidden due to hide_parameters=True]
+[2026-06-21 18:55:03,280: INFO/MainProcess] COMMIT
+[2026-06-21 18:55:03,282: INFO/MainProcess] BEGIN (implicit)
+[2026-06-21 18:55:03,282: INFO/MainProcess] SELECT knowledge_documents.id AS knowledge_documents_id, knowledge_documents.source_type AS knowledge_documents_source_type, knowledge_documents.source_id AS knowledge_documents_source_id, knowledge_documents.sku AS knowledge_documents_sku, knowledge_documents.title AS knowledge_documents_title, knowledge_documents.content AS knowledge_documents_content, knowledge_documents.metadata_json AS knowledge_documents_metadata_json, knowledge_documents.file_name AS knowledge_documents_file_name, knowledge_documents.file_path AS knowledge_documents_file_path, knowledge_documents.file_type AS knowledge_documents_file_type, knowledge_documents.file_hash AS knowledge_documents_file_hash, knowledge_documents.page_count AS knowledge_documents_page_count, knowledge_documents.parse_status AS knowledge_documents_parse_status, knowledge_documents.parse_error AS knowledge_documents_parse_error, knowledge_documents.related_skus_json AS knowledge_documents_related_skus_json, knowledge_documents.is_active AS knowledge_documents_is_active, knowledge_documents.created_by AS knowledge_documents_created_by, knowledge_documents.created_at AS knowledge_documents_created_at, knowledge_documents.updated_at AS knowledge_documents_updated_at 
+FROM knowledge_documents 
+WHERE knowledge_documents.id = %(pk_1)s
+[2026-06-21 18:55:03,283: INFO/MainProcess] [cached since 93.71s ago] [SQL parameters hidden due to hide_parameters=True]
+[2026-06-21 18:55:03,294: INFO/MainProcess] DELETE FROM knowledge_chunks WHERE knowledge_chunks.document_id = %(document_id_1)s
+[2026-06-21 18:55:03,296: INFO/MainProcess] [cached since 93.71s ago] [SQL parameters hidden due to hide_parameters=True]
+[2026-06-21 18:55:03,298: INFO/MainProcess] INSERT INTO knowledge_chunks (id, document_id, sku, source_type, chunk_index, content, metadata_json, embedding_model, embedding_status, embedding_error, created_at, updated_at) VALUES (%(id)s, %(document_id)s, %(sku)s, %(source_type)s, %(chunk_index)s, %(content)s, %(metadata_json)s, %(embedding_model)s, %(embedding_status)s, %(embedding_error)s, %(created_at)s, %(updated_at)s)
+[2026-06-21 18:55:03,299: INFO/MainProcess] [cached since 93.68s ago] [SQL parameters hidden due to hide_parameters=True]
+[2026-06-21 18:55:03,300: INFO/MainProcess] UPDATE knowledge_documents SET content=%(content)s, metadata_json=%(metadata_json)s, page_count=%(page_count)s, parse_status=%(parse_status)s, updated_at=%(updated_at)s WHERE knowledge_documents.id = %(knowledge_documents_id)s
+[2026-06-21 18:55:03,301: INFO/MainProcess] [cached since 93.66s ago] [SQL parameters hidden due to hide_parameters=True]
+[2026-06-21 18:55:03,301: INFO/MainProcess] COMMIT
+[2026-06-21 18:55:03,302: INFO/MainProcess] BEGIN (implicit)
+[2026-06-21 18:55:03,303: INFO/MainProcess] SELECT knowledge_documents.id, knowledge_documents.source_type, knowledge_documents.source_id, knowledge_documents.sku, knowledge_documents.title, knowledge_documents.content, knowledge_documents.metadata_json, knowledge_documents.file_name, knowledge_documents.file_path, knowledge_documents.file_type, knowledge_documents.file_hash, knowledge_documents.page_count, knowledge_documents.parse_status, knowledge_documents.parse_error, knowledge_documents.related_skus_json, knowledge_documents.is_active, knowledge_documents.created_by, knowledge_documents.created_at, knowledge_documents.updated_at 
+FROM knowledge_documents 
+WHERE knowledge_documents.id = %(pk_1)s
+[2026-06-21 18:55:03,303: INFO/MainProcess] [cached since 93.64s ago] [SQL parameters hidden due to hide_parameters=True]
+[2026-06-21 18:55:03,305: INFO/MainProcess] SELECT knowledge_parse_tasks.id AS knowledge_parse_tasks_id, knowledge_parse_tasks.document_id AS knowledge_parse_tasks_document_id, knowledge_parse_tasks.status AS knowledge_parse_tasks_status, knowledge_parse_tasks.created_at AS knowledge_parse_tasks_created_at, knowledge_parse_tasks.started_at AS knowledge_parse_tasks_started_at, knowledge_parse_tasks.finished_at AS knowledge_parse_tasks_finished_at, knowledge_parse_tasks.error_message AS knowledge_parse_tasks_error_message 
+FROM knowledge_parse_tasks 
+WHERE knowledge_parse_tasks.id = %(id_1)s 
+ LIMIT %(param_1)s
+[2026-06-21 18:55:03,306: INFO/MainProcess] [cached since 93.76s ago] [SQL parameters hidden due to hide_parameters=True]
+[2026-06-21 18:55:03,307: INFO/MainProcess] UPDATE knowledge_parse_tasks SET status=%(status)s, finished_at=%(finished_at)s WHERE knowledge_parse_tasks.id = %(knowledge_parse_tasks_id)s
+[2026-06-21 18:55:03,307: INFO/MainProcess] [cached since 93.64s ago] [SQL parameters hidden due to hide_parameters=True]
+[2026-06-21 18:55:03,309: INFO/MainProcess] COMMIT
+[2026-06-21 18:55:03,311: INFO/MainProcess] Task parse_document[e2a4d42f-4811-48d3-be2f-4a76f4a17a62] succeeded in 0.061999999976251274s: {'ok': True, 'status': 'done', 'document_id': '00059662-72c4-42b9-a804-5e50b0a63321', 'task_id': '135eb88d-052a-4043-8715-5c3da9491f47'}
+[2026-06-21 19:16:54,991: INFO/MainProcess] Task parse_document[7f8516f5-3836-431e-b45b-d77663a4c06e] received
+[2026-06-21 19:16:54,994: INFO/MainProcess] BEGIN (implicit)
+[2026-06-21 19:16:54,995: INFO/MainProcess] SELECT knowledge_parse_tasks.id AS knowledge_parse_tasks_id, knowledge_parse_tasks.document_id AS knowledge_parse_tasks_document_id, knowledge_parse_tasks.status AS knowledge_parse_tasks_status, knowledge_parse_tasks.created_at AS knowledge_parse_tasks_created_at, knowledge_parse_tasks.started_at AS knowledge_parse_tasks_started_at, knowledge_parse_tasks.finished_at AS knowledge_parse_tasks_finished_at, knowledge_parse_tasks.error_message AS knowledge_parse_tasks_error_message 
+FROM knowledge_parse_tasks 
+WHERE knowledge_parse_tasks.id = %(id_1)s 
+ LIMIT %(param_1)s
+[2026-06-21 19:16:54,996: INFO/MainProcess] [cached since 1405s ago] [SQL parameters hidden due to hide_parameters=True]
+[2026-06-21 19:16:54,997: INFO/MainProcess] SELECT knowledge_documents.id AS knowledge_documents_id, knowledge_documents.source_type AS knowledge_documents_source_type, knowledge_documents.source_id AS knowledge_documents_source_id, knowledge_documents.sku AS knowledge_documents_sku, knowledge_documents.title AS knowledge_documents_title, knowledge_documents.content AS knowledge_documents_content, knowledge_documents.metadata_json AS knowledge_documents_metadata_json, knowledge_documents.file_name AS knowledge_documents_file_name, knowledge_documents.file_path AS knowledge_documents_file_path, knowledge_documents.file_type AS knowledge_documents_file_type, knowledge_documents.file_hash AS knowledge_documents_file_hash, knowledge_documents.page_count AS knowledge_documents_page_count, knowledge_documents.parse_status AS knowledge_documents_parse_status, knowledge_documents.parse_error AS knowledge_documents_parse_error, knowledge_documents.related_skus_json AS knowledge_documents_related_skus_json, knowledge_documents.is_active AS knowledge_documents_is_active, knowledge_documents.created_by AS knowledge_documents_created_by, knowledge_documents.created_at AS knowledge_documents_created_at, knowledge_documents.updated_at AS knowledge_documents_updated_at 
+FROM knowledge_documents 
+WHERE knowledge_documents.id = %(id_1)s 
+ LIMIT %(param_1)s
+[2026-06-21 19:16:54,998: INFO/MainProcess] [cached since 1405s ago] [SQL parameters hidden due to hide_parameters=True]
+[2026-06-21 19:16:54,999: INFO/MainProcess] UPDATE knowledge_parse_tasks SET status=%(status)s, started_at=%(started_at)s WHERE knowledge_parse_tasks.id = %(knowledge_parse_tasks_id)s
+[2026-06-21 19:16:55,000: INFO/MainProcess] [cached since 1405s ago] [SQL parameters hidden due to hide_parameters=True]
+[2026-06-21 19:16:55,001: INFO/MainProcess] COMMIT
+[2026-06-21 19:16:55,004: INFO/MainProcess] BEGIN (implicit)
+[2026-06-21 19:16:55,006: INFO/MainProcess] SELECT knowledge_documents.id AS knowledge_documents_id, knowledge_documents.source_type AS knowledge_documents_source_type, knowledge_documents.source_id AS knowledge_documents_source_id, knowledge_documents.sku AS knowledge_documents_sku, knowledge_documents.title AS knowledge_documents_title, knowledge_documents.content AS knowledge_documents_content, knowledge_documents.metadata_json AS knowledge_documents_metadata_json, knowledge_documents.file_name AS knowledge_documents_file_name, knowledge_documents.file_path AS knowledge_documents_file_path, knowledge_documents.file_type AS knowledge_documents_file_type, knowledge_documents.file_hash AS knowledge_documents_file_hash, knowledge_documents.page_count AS knowledge_documents_page_count, knowledge_documents.parse_status AS knowledge_documents_parse_status, knowledge_documents.parse_error AS knowledge_documents_parse_error, knowledge_documents.related_skus_json AS knowledge_documents_related_skus_json, knowledge_documents.is_active AS knowledge_documents_is_active, knowledge_documents.created_by AS knowledge_documents_created_by, knowledge_documents.created_at AS knowledge_documents_created_at, knowledge_documents.updated_at AS knowledge_documents_updated_at 
+FROM knowledge_documents 
+WHERE knowledge_documents.id = %(pk_1)s
+[2026-06-21 19:16:55,007: INFO/MainProcess] [cached since 1405s ago] [SQL parameters hidden due to hide_parameters=True]
+[2026-06-21 19:16:55,017: INFO/MainProcess] DELETE FROM knowledge_chunks WHERE knowledge_chunks.document_id = %(document_id_1)s
+[2026-06-21 19:16:55,038: INFO/MainProcess] [cached since 1405s ago] [SQL parameters hidden due to hide_parameters=True]
+[2026-06-21 19:16:55,041: INFO/MainProcess] INSERT INTO knowledge_chunks (id, document_id, sku, source_type, chunk_index, content, metadata_json, embedding_model, embedding_status, embedding_error, created_at, updated_at) VALUES (%(id)s, %(document_id)s, %(sku)s, %(source_type)s, %(chunk_index)s, %(content)s, %(metadata_json)s, %(embedding_model)s, %(embedding_status)s, %(embedding_error)s, %(created_at)s, %(updated_at)s)
+[2026-06-21 19:16:55,042: INFO/MainProcess] [cached since 1405s ago] [SQL parameters hidden due to hide_parameters=True]
+[2026-06-21 19:16:55,043: INFO/MainProcess] UPDATE knowledge_documents SET content=%(content)s, metadata_json=%(metadata_json)s, page_count=%(page_count)s, parse_status=%(parse_status)s, updated_at=%(updated_at)s WHERE knowledge_documents.id = %(knowledge_documents_id)s
+[2026-06-21 19:16:55,044: INFO/MainProcess] [cached since 1405s ago] [SQL parameters hidden due to hide_parameters=True]
+[2026-06-21 19:16:55,046: INFO/MainProcess] COMMIT
+[2026-06-21 19:16:55,047: INFO/MainProcess] BEGIN (implicit)
+[2026-06-21 19:16:55,048: INFO/MainProcess] SELECT knowledge_documents.id, knowledge_documents.source_type, knowledge_documents.source_id, knowledge_documents.sku, knowledge_documents.title, knowledge_documents.content, knowledge_documents.metadata_json, knowledge_documents.file_name, knowledge_documents.file_path, knowledge_documents.file_type, knowledge_documents.file_hash, knowledge_documents.page_count, knowledge_documents.parse_status, knowledge_documents.parse_error, knowledge_documents.related_skus_json, knowledge_documents.is_active, knowledge_documents.created_by, knowledge_documents.created_at, knowledge_documents.updated_at 
+FROM knowledge_documents 
+WHERE knowledge_documents.id = %(pk_1)s
+[2026-06-21 19:16:55,049: INFO/MainProcess] [cached since 1405s ago] [SQL parameters hidden due to hide_parameters=True]
+[2026-06-21 19:16:55,051: INFO/MainProcess] SELECT knowledge_parse_tasks.id AS knowledge_parse_tasks_id, knowledge_parse_tasks.document_id AS knowledge_parse_tasks_document_id, knowledge_parse_tasks.status AS knowledge_parse_tasks_status, knowledge_parse_tasks.created_at AS knowledge_parse_tasks_created_at, knowledge_parse_tasks.started_at AS knowledge_parse_tasks_started_at, knowledge_parse_tasks.finished_at AS knowledge_parse_tasks_finished_at, knowledge_parse_tasks.error_message AS knowledge_parse_tasks_error_message 
+FROM knowledge_parse_tasks 
+WHERE knowledge_parse_tasks.id = %(id_1)s 
+ LIMIT %(param_1)s
+[2026-06-21 19:16:55,052: INFO/MainProcess] [cached since 1406s ago] [SQL parameters hidden due to hide_parameters=True]
+[2026-06-21 19:16:55,054: INFO/MainProcess] UPDATE knowledge_parse_tasks SET status=%(status)s, finished_at=%(finished_at)s WHERE knowledge_parse_tasks.id = %(knowledge_parse_tasks_id)s
+[2026-06-21 19:16:55,054: INFO/MainProcess] [cached since 1405s ago] [SQL parameters hidden due to hide_parameters=True]
+[2026-06-21 19:16:55,055: INFO/MainProcess] COMMIT
+[2026-06-21 19:16:55,058: INFO/MainProcess] Task parse_document[7f8516f5-3836-431e-b45b-d77663a4c06e] succeeded in 0.0779999999795109s: {'ok': True, 'status': 'done', 'document_id': 'ca15847b-e8a5-4d9c-bb2e-7ad707b1b6f5', 'task_id': '4dcc9b45-a089-42b1-90f9-899a4b335c7e'}
+[2026-06-22 08:30:28,194: WARNING/MainProcess] consumer: Connection to broker lost. Trying to re-establish the connection...
+Traceback (most recent call last):
+  File "D:\CaiYan\Image-Generation-feature-v5\backend\venv\lib\site-packages\redis\connection.py", line 512, in read_response
+    response = self._parser.read_response(disable_decoding=disable_decoding)
+  File "D:\CaiYan\Image-Generation-feature-v5\backend\venv\lib\site-packages\redis\_parsers\resp2.py", line 15, in read_response
+    result = self._read_response(disable_decoding=disable_decoding)
+  File "D:\CaiYan\Image-Generation-feature-v5\backend\venv\lib\site-packages\redis\_parsers\resp2.py", line 25, in _read_response
+    raw = self._buffer.readline()
+  File "D:\CaiYan\Image-Generation-feature-v5\backend\venv\lib\site-packages\redis\_parsers\socket.py", line 115, in readline
+    self._read_from_socket()
+  File "D:\CaiYan\Image-Generation-feature-v5\backend\venv\lib\site-packages\redis\_parsers\socket.py", line 65, in _read_from_socket
+    data = self._sock.recv(socket_read_size)
+ConnectionResetError: [WinError 10054] 远程主机强迫关闭了一个现有的连接。
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "D:\CaiYan\Image-Generation-feature-v5\backend\venv\lib\site-packages\celery\worker\consumer\consumer.py", line 340, in start
+    blueprint.start(self)
+  File "D:\CaiYan\Image-Generation-feature-v5\backend\venv\lib\site-packages\celery\bootsteps.py", line 116, in start
+    step.start(parent)
+  File "D:\CaiYan\Image-Generation-feature-v5\backend\venv\lib\site-packages\celery\worker\consumer\consumer.py", line 746, in start
+    c.loop(*c.loop_args())
+  File "D:\CaiYan\Image-Generation-feature-v5\backend\venv\lib\site-packages\celery\worker\loops.py", line 130, in synloop
+    connection.drain_events(timeout=2.0)
+  File "D:\CaiYan\Image-Generation-feature-v5\backend\venv\lib\site-packages\kombu\connection.py", line 343, in drain_events
+    return self.transport.drain_events(self.connection, **kwargs)
+  File "D:\CaiYan\Image-Generation-feature-v5\backend\venv\lib\site-packages\kombu\transport\virtual\base.py", line 997, in drain_events
+    get(self._deliver, timeout=timeout)
+  File "D:\CaiYan\Image-Generation-feature-v5\backend\venv\lib\site-packages\kombu\transport\redis.py", line 601, in get
+    ret = self.handle_event(fileno, event)
+  File "D:\CaiYan\Image-Generation-feature-v5\backend\venv\lib\site-packages\kombu\transport\redis.py", line 583, in handle_event
+    return self.on_readable(fileno), self
+  File "D:\CaiYan\Image-Generation-feature-v5\backend\venv\lib\site-packages\kombu\transport\redis.py", line 579, in on_readable
+    chan.handlers[type]()
+  File "D:\CaiYan\Image-Generation-feature-v5\backend\venv\lib\site-packages\kombu\transport\redis.py", line 931, in _receive
+    ret.append(self._receive_one(c))
+  File "D:\CaiYan\Image-Generation-feature-v5\backend\venv\lib\site-packages\kombu\transport\redis.py", line 941, in _receive_one
+    response = c.parse_response()
+  File "D:\CaiYan\Image-Generation-feature-v5\backend\venv\lib\site-packages\redis\client.py", line 840, in parse_response
+    response = self._execute(conn, try_read)
+  File "D:\CaiYan\Image-Generation-feature-v5\backend\venv\lib\site-packages\redis\client.py", line 816, in _execute
+    return conn.retry.call_with_retry(
+  File "D:\CaiYan\Image-Generation-feature-v5\backend\venv\lib\site-packages\redis\retry.py", line 65, in call_with_retry
+    fail(error)
+  File "D:\CaiYan\Image-Generation-feature-v5\backend\venv\lib\site-packages\redis\client.py", line 818, in <lambda>
+    lambda error: self._disconnect_raise_connect(conn, error),
+  File "D:\CaiYan\Image-Generation-feature-v5\backend\venv\lib\site-packages\redis\client.py", line 805, in _disconnect_raise_connect
+    raise error
+  File "D:\CaiYan\Image-Generation-feature-v5\backend\venv\lib\site-packages\redis\retry.py", line 62, in call_with_retry
+    return do()
+  File "D:\CaiYan\Image-Generation-feature-v5\backend\venv\lib\site-packages\redis\client.py", line 817, in <lambda>
+    lambda: command(*args, **kwargs),
+  File "D:\CaiYan\Image-Generation-feature-v5\backend\venv\lib\site-packages\redis\client.py", line 838, in try_read
+    return conn.read_response(disconnect_on_error=False, push_request=True)
+  File "D:\CaiYan\Image-Generation-feature-v5\backend\venv\lib\site-packages\redis\connection.py", line 520, in read_response
+    raise ConnectionError(
+redis.exceptions.ConnectionError: Error while reading from localhost:6379 : (10054, '远程主机强迫关闭了一个现有的连接。', None, 10054, None)
+[2026-06-22 08:30:30,175: WARNING/MainProcess] D:\CaiYan\Image-Generation-feature-v5\backend\venv\lib\site-packages\celery\worker\consumer\consumer.py:391: CPendingDeprecationWarning: 
+In Celery 5.1 we introduced an optional breaking change which
+on connection loss cancels all currently executed tasks with late acknowledgement enabled.
+These tasks cannot be acknowledged as the connection is gone, and the tasks are automatically redelivered
+back to the queue. You can enable this behavior using the worker_cancel_long_running_tasks_on_connection_loss
+setting. In Celery 5.1 it is set to False by default. The setting will be set to True by default in Celery 6.0.
+
+  warnings.warn(CANCEL_TASKS_BY_DEFAULT, CPendingDeprecationWarning)
+
+[2026-06-22 08:30:30,181: WARNING/MainProcess] D:\CaiYan\Image-Generation-feature-v5\backend\venv\lib\site-packages\celery\worker\consumer\consumer.py:508: CPendingDeprecationWarning: The broker_connection_retry configuration setting will no longer determine
+whether broker connection retries are made during startup in Celery 6.0 and above.
+If you wish to retain the existing behavior for retrying connections on startup,
+you should set broker_connection_retry_on_startup to True.
+  warnings.warn(
+
+[2026-06-22 08:30:30,193: INFO/MainProcess] Connected to redis://localhost:6379/0
+[2026-06-22 08:30:30,198: WARNING/MainProcess] D:\CaiYan\Image-Generation-feature-v5\backend\venv\lib\site-packages\celery\worker\consumer\consumer.py:508: CPendingDeprecationWarning: The broker_connection_retry configuration setting will no longer determine
+whether broker connection retries are made during startup in Celery 6.0 and above.
+If you wish to retain the existing behavior for retrying connections on startup,
+you should set broker_connection_retry_on_startup to True.
+  warnings.warn(
+
+[2026-06-22 08:30:30,204: INFO/MainProcess] mingle: searching for neighbors
+[2026-06-22 08:30:31,234: INFO/MainProcess] mingle: all alone

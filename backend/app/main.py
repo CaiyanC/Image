@@ -5,18 +5,17 @@ from logging.handlers import TimedRotatingFileHandler
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
-from fastapi.staticfiles import StaticFiles
 from sqlalchemy import text
-from .core.config import settings
+from .core.config import resolve_project_path, runtime_summary, settings, validate_runtime_isolation
 from .core.database import init_db, SessionLocal
 from .core.permission_constants import MANAGEMENT_GROUP_NAME
 from .core.security import get_password_hash
 from .models.user import User
-from .api import auth, users, generation, history, admin, products, groups, categories, drafts, customer_service, knowledge_base
+from .api import auth, users, generation, history, admin, products, groups, categories, drafts, customer_service, knowledge_base, files
 from .services import knowledge_service
 
 def _configure_error_logging() -> None:
-    logs_dir = os.path.abspath(os.path.join(os.path.dirname(os.path.dirname(__file__)), "..", "logs"))
+    logs_dir = resolve_project_path(settings.LOG_DIR)
     os.makedirs(logs_dir, exist_ok=True)
     handler = TimedRotatingFileHandler(
         os.path.join(logs_dir, "error.log"),
@@ -48,8 +47,6 @@ app.add_middleware(
 os.makedirs(settings.IMAGE_UPLOAD_DIR, exist_ok=True)
 os.makedirs(settings.GENERATED_DIR, exist_ok=True)
 
-app.mount("/uploads", StaticFiles(directory=settings.UPLOAD_DIR), name="uploads")
-
 app.include_router(auth.router)
 app.include_router(users.router)
 app.include_router(generation.router)
@@ -61,6 +58,7 @@ app.include_router(groups.router)
 app.include_router(categories.router)
 app.include_router(customer_service.router)
 app.include_router(knowledge_base.router)
+app.include_router(files.router)
 
 
 @app.exception_handler(Exception)
@@ -126,6 +124,21 @@ def seed_default_admin():
 def startup():
     if not settings.SECRET_KEY:
         raise RuntimeError("SECRET_KEY is not set. Please configure it in backend/.env")
+    validate_runtime_isolation(settings)
+    summary = runtime_summary(settings)
+    runtime_message = (
+        "Runtime config: "
+        f"APP_ENV={summary['app_env']} "
+        f"database={summary['database']} "
+        f"UPLOAD_DIR={summary['upload_dir']} "
+        f"BACKEND_PORT={summary['backend_port']} "
+        f"REDIS_URL={summary['redis_url']} "
+        f"CELERY_QUEUE={summary['celery_queue']} "
+        f"CELERY_WORKER_NAME={summary['celery_worker_name']} "
+        f"LOG_DIR={summary['log_dir']}"
+    )
+    print(runtime_message, flush=True)
+    logging.getLogger("app").info(runtime_message)
     init_db()
     seed_default_categories()
     seed_default_admin()

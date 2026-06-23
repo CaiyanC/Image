@@ -4,14 +4,14 @@ import re
 from dataclasses import dataclass, asdict
 from typing import Any
 
+from . import customer_price_signal
 
-CONTEXT_REFERENCES = ("这些", "刚才那些", "上面这些", "刚才的", "上一轮", "前面", "这几个", "这几款", "这款", "这个", "那个", "他", "他的", "她", "她的", "它", "它的", "他们", "它们", "其中")
+
+CONTEXT_REFERENCES = ("这些", "刚才那些", "上面这些", "刚才的", "上一轮", "前面", "这几个", "这几款", "这款", "那款", "这个", "那个", "他", "他的", "她", "她的", "它", "它的", "他们", "它们", "其中")
 PRONOUN_CONTEXT_REFERENCES = ("他", "他的", "她", "她的", "它", "它的", "他们", "她们", "它们")
 NON_CONTEXT_REFERENCE_TERMS = ("其他", "其它", "其他的", "其它的")
-LOW_BUDGET_TERMS = ("预算不高", "预算低", "便宜", "实惠", "性价比", "入门", "低预算", "省钱", "不要太贵")
-HIGH_PRICE_TERMS = ("高端", "高价", "高预算", "旗舰", "专业级", "premium", "Premium")
-VALUE_PRICE_TERMS = ("入门", "亲民", "经济", "实惠", "低价", "基础", "性价比", "常规")
 FOLLOWUP_PREFIXES = ("那", "如果", "那么", "还有", "另外", "继续", "改成", "换成", "再", "那如果")
+NUMBERED_CONTEXT_PATTERN = re.compile(r"这(?:几|一|二|三|四|五|六|七|八|九|十|两|\d+)\s*款")
 AUDIENCE_TERMS = (
     "单人", "双人", "两人", "三人", "四人", "几人", "年轻人", "家庭", "朋友", "情侣", "送礼", "徒步", "露营",
     "野餐", "自驾", "房车", "背包客", "轻量", "速穿", "户外", "宝宝", "新手", "办公室", "家用",
@@ -68,7 +68,7 @@ def build_dialogue_state(question: str, conversation_history: list[dict] | None 
     history = conversation_history or []
     previous_user_need = _latest_contextual_user_need(text, history)
     has_explicit_sku = bool(SKU_RE.search(text))
-    requires_previous_result_skus = _should_use_previous_result_skus(text)
+    requires_previous_result_skus = False
     is_budget_followup = _is_budget_followup(text)
     is_context_followup = _should_inherit_user_need(text)
     is_complete_new_need = _looks_like_complete_new_need(text)
@@ -133,8 +133,16 @@ def build_conversation_context(question: str, conversation_history: list[dict] |
     }
 
 
+def product_scope_from_text(text: str) -> str:
+    normalized = _normalize(text)
+    for term in ("套锅", "单锅", "煎锅", "炒锅", "烤盘", "锅具", "水壶", "炉具", "锅", "壶", "杯"):
+        if term in normalized:
+            return term
+    return _extract_product_scope(normalized)
+
+
 def should_use_previous_result_skus(question: str) -> bool:
-    return _should_use_previous_result_skus(question)
+    return False
 
 
 def needs_previous_context(question: str) -> bool:
@@ -146,13 +154,12 @@ def is_budget_followup(question: str) -> bool:
 
 
 def is_low_budget_query(question: str) -> bool:
-    text = _normalize(question)
-    return any(term in text for term in LOW_BUDGET_TERMS)
+    return customer_price_signal.is_low_price_query(question)
 
 
 def recommendation_question_with_context(question: str, conversation_history: list[dict] | None = None) -> str:
     text = _normalize(question)
-    should_merge = is_budget_followup(text) or _is_alternative_recommendation_followup(text)
+    should_merge = is_budget_followup(text) or customer_price_signal.is_high_price_query(text) or _is_alternative_recommendation_followup(text)
     if not should_merge:
         return text
     history = conversation_history or []
@@ -164,7 +171,10 @@ def recommendation_question_with_context(question: str, conversation_history: li
     for previous in reversed(previous_user_turns[-4:]):
         if previous == text:
             continue
-        if any(word in previous for word in RECOMMENDATION_TERMS + SCENE_TERMS):
+        if _looks_like_user_need(previous) and not _looks_like_short_fact_followup(previous):
+            previous_context = _strip_price_terms(previous)
+            if previous_context:
+                return f"{previous_context}；追加条件：{text}"
             return f"{previous}；追加条件：{text}"
     return text
 
@@ -174,21 +184,19 @@ def _is_alternative_recommendation_followup(text: str) -> bool:
     return any(term in normalized for term in ("还有别的", "还有其他", "换一个", "换一款", "换个", "换别的", "再推荐", "其他推荐"))
 
 
+def _looks_like_short_fact_followup(text: str) -> bool:
+    normalized = _normalize(text)
+    return len(normalized) <= 24 and any(term in normalized for term in (
+        "容量", "材质", "卖点", "负责人", "英文名", "适合几个人", "几个人用",
+        "能不能", "还能", "可以", "支持", "防水", "煎炒煮",
+    ))
+
+
 def _normalize(text: str) -> str:
     return re.sub(r"\s+", " ", str(text or "").strip())
 
 
 def _should_use_previous_result_skus(question: str) -> bool:
-    text = _normalize(question)
-    if text.strip(" ，。！？?") in CONFIRMATION_TERMS:
-        return True
-    has_reference = _has_context_reference(text)
-    if _looks_like_complete_new_need(text) and not has_reference:
-        return False
-    if has_reference:
-        return True
-    if len(text) <= 16 and any(item in text for item in FIELD_FOLLOWUP_TERMS):
-        return True
     return False
 
 
@@ -196,7 +204,7 @@ def _should_inherit_user_need(question: str) -> bool:
     text = _normalize(question)
     if not text or _looks_like_complete_new_need(text):
         return False
-    if _is_budget_followup(text) or _should_use_previous_result_skus(text):
+    if _is_budget_followup(text) or customer_price_signal.is_high_price_query(text):
         return True
     if text.startswith(FOLLOWUP_PREFIXES) and len(text) <= 36:
         return True
@@ -215,8 +223,14 @@ def _is_budget_followup(question: str) -> bool:
 
 
 def _is_low_budget_query(question: str) -> bool:
-    text = _normalize(question)
-    return any(term in text for term in LOW_BUDGET_TERMS)
+    return customer_price_signal.is_low_price_query(question)
+
+
+def _strip_price_terms(text: str) -> str:
+    cleaned = _normalize(text)
+    for term in customer_price_signal.LOW_PRICE_TERMS + customer_price_signal.HIGH_PRICE_TERMS + customer_price_signal.VALUE_PRICE_TERMS:
+        cleaned = cleaned.replace(term, "")
+    return re.sub(r"\s+", " ", cleaned).strip()
 
 
 def _looks_like_complete_new_need(text: str) -> bool:
@@ -270,7 +284,11 @@ def _has_context_reference(text: str, *, include_broad_terms: bool = False) -> b
         cleaned = cleaned.replace(term, "")
     references = EXPLICIT_REF_TERMS if include_broad_terms else CONTEXT_REFERENCES
     phrase_references = tuple(ref for ref in references if ref not in PRONOUN_CONTEXT_REFERENCES)
-    return any(ref in cleaned for ref in phrase_references) or any(ref in cleaned for ref in PRONOUN_CONTEXT_REFERENCES)
+    return (
+        any(ref in cleaned for ref in phrase_references)
+        or any(ref in cleaned for ref in PRONOUN_CONTEXT_REFERENCES)
+        or bool(NUMBERED_CONTEXT_PATTERN.search(cleaned))
+    )
 
 
 def _extract_quantity(text: str) -> str:
@@ -283,14 +301,7 @@ def _extract_quantity(text: str) -> str:
 
 
 def _extract_budget(text: str) -> str:
-    lowered = text.lower()
-    if any(term in text for term in LOW_BUDGET_TERMS):
-        return "low"
-    if any(term.lower() in lowered for term in HIGH_PRICE_TERMS):
-        return "high"
-    if any(term in text for term in VALUE_PRICE_TERMS):
-        return "value"
-    return ""
+    return customer_price_signal.price_preference(text)
 
 
 def _extract_scene(text: str) -> str:
@@ -396,6 +407,6 @@ def _assess_clarity(
     )
     if has_product_or_context:
         return "high", False, "", []
-    if any(word in text for word in RECOMMENDATION_TERMS + FIELD_FOLLOWUP_TERMS + LOW_BUDGET_TERMS):
+    if any(word in text for word in RECOMMENDATION_TERMS + FIELD_FOLLOWUP_TERMS) or customer_price_signal.is_low_price_query(text):
         return "low", True, "missing_product_scope", ["product_scope"]
     return "medium", False, "", []

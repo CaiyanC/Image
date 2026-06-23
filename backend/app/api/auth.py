@@ -2,6 +2,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request, status
 from sqlalchemy.orm import Session
 from ..core.database import get_db
 from ..core.config import settings
+from ..core.rate_limit import enforce_rate_limit, get_request_identifier
 from ..core.security import verify_password, create_access_token, get_current_user, require_permission
 from ..core.security import get_user_groups, get_user_permissions
 from ..models.user import User
@@ -20,7 +21,13 @@ router = APIRouter(prefix="/api/auth", tags=["auth"])
 
 
 @router.post("/register", response_model=UserResponse)
-def register(user_data: UserCreate, db: Session = Depends(get_db)):
+def register(user_data: UserCreate, request: Request = None, db: Session = Depends(get_db)):
+    enforce_rate_limit(
+        user_id=f"{get_request_identifier(request)}:{user_data.username.strip().lower()}",
+        scope="auth.register",
+        limit=8,
+        window_seconds=60,
+    )
     if not settings.ENABLE_PUBLIC_REGISTRATION:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
@@ -32,8 +39,15 @@ def register(user_data: UserCreate, db: Session = Depends(get_db)):
 @router.post("/login")
 def login(
     req: LoginRequest,
+    request: Request = None,
     db: Session = Depends(get_db),
 ):
+    enforce_rate_limit(
+        user_id=f"{get_request_identifier(request)}:{req.username.strip().lower()}",
+        scope="auth.login",
+        limit=8,
+        window_seconds=60,
+    )
     user = user_service.get_user_by_username(db, req.username)
     if not user or not verify_password(req.password, user.password_hash):
         raise HTTPException(

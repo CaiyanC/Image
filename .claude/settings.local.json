@@ -21,7 +21,24 @@
       "Bash(cmd *)",
       "Bash(curl -s -o /dev/null -w \"Frontend: %{http_code}\" http://localhost:5174)",
       "Bash(curl -s -X POST http://localhost:8000/api/auth/login -H 'Content-Type: application/json' -d '{\"username\":\"admin\",\"password\":\"admin123\"}')",
-      "Bash(curl -s -H \"Authorization: Bearer $\\(curl -s -X POST http://localhost:8000/api/auth/login -H 'Content-Type: application/json' -d '{\"username\":\"admin\",\"password\":\"admin123\"}')"
+      "Bash(curl -s -H \"Authorization: Bearer $\\(curl -s -X POST http://localhost:8000/api/auth/login -H 'Content-Type: application/json' -d '{\"username\":\"admin\",\"password\":\"admin123\"}')",
+      "Bash(curl -s -o /dev/null -w \"%{http_code}\" http://localhost:8000/api/health)",
+      "Bash(curl -s -X POST http://localhost:8000/api/auth/login -H \"Content-Type: application/json\" -d \"{\\\\\"username\\\\\":\\\\\"admin\\\\\",\\\\\"password\\\\\":\\\\\"admin123\\\\\"}\")",
+      "Bash(curl -s -w \"\\\\nHTTP_STATUS: %{http_code}\" \"http://localhost:8000/api/users?skip=0&limit=10\" -H \"Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJhMTRhYmQzZi1mMDYyLTQ4YjMtYjc2Mi04MjQ1ZjQ0Yjg4MWUiLCJleHAiOjE3ODEzMzQ5MjV9.VnN22GeZMvfOO_8qIcdn7NHSLiag8qdgqjb3uLskN_U\")",
+      "Bash(tail -f backend/uvicorn8000.log)",
+      "Bash(curl -s \"http://localhost:8000/api/users?skip=0&limit=5\" -H \"Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJhMTRhYmQzZi1mMDYyLTQ4YjMtYjc2Mi04MjQ1ZjQ0Yjg4MWUiLCJleHAiOjE3ODEzMzQ5MjV9.VnN22GeZMvfOO_8qIcdn7NHSLiag8qdgqjb3uLskN_U\")",
+      "Bash(kill %1)",
+      "Bash(wait)",
+      "Bash(curl -s \"http://localhost:8000/api/users?skip=0&limit=2\" -H \"Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJhMTRhYmQzZi1mMDYyLTQ4YjMtYjc2Mi04MjQ1ZjQ0Yjg4MWUiLCJleHAiOjE3ODEzMzQ5MjV9.VnN22GeZMvfOO_8qIcdn7NHSLiag8qdgqjb3uLskN_U\")",
+      "Bash(curl -s -w \"\\\\nHTTP_STATUS: %{http_code}\" \"http://localhost:8000/api/users/a14abd3f-f062-48b3-b762-8245f44b881e\" -H \"Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJhMTRhYmQzZi1mMDYyLTQ4YjMtYjc2Mi04MjQ1ZjQ0Yjg4MWUiLCJleHAiOjE3ODEzMzQ5MjV9.VnN22GeZMvfOO_8qIcdn7NHSLiag8qdgqjb3uLskN_U\")",
+      "Bash(curl -s -w \"\\\\nHTTP_STATUS: %{http_code}\" \"http://localhost:8000/api/users?skip=0&limit=1\" -H \"Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJhMTRhYmQzZi1mMDYyLTQ4YjMtYjc2Mi04MjQ1ZjQ0Yjg4MWUiLCJleHAiOjE3ODEzMzQ5MjV9.VnN22GeZMvfOO_8qIcdn7NHSLiag8qdgqjb3uLskN_U\")",
+      "Bash(curl -s -w \"\\\\nHTTP_STATUS: %{http_code}\" \"http://localhost:8000/api/users?skip=1&limit=1\" -H \"Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJhMTRhYmQzZi1mMDYyLTQ4YjMtYjc2Mi04MjQ1ZjQ0Yjg4MWUiLCJleHAiOjE3ODEzMzQ5MjV9.VnN22GeZMvfOO_8qIcdn7NHSLiag8qdgqjb3uLskN_U\")",
+      "Bash(python3 -c ' *)",
+      "Bash(backend/venv/Scripts/python.exe -c ' *)",
+      "Bash(curl -s -w \"\\\\nHTTP_STATUS: %{http_code}\" \"http://localhost:8000/api/admin/groups\" -H \"Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJhMTRhYmQzZi1mMDYyLTQ4YjMtYjc2Mi04MjQ1ZjQ0Yjg4MWUiLCJleHAiOjE3ODEzMzQ5MjV9.VnN22GeZMvfOO_8qIcdn7NHSLiag8qdgqjb3uLskN_U\")",
+      "Bash(curl -s -w \"\\\\nHTTP_STATUS: %{http_code}\" -X POST \"http://localhost:8000/api/admin/groups\" -H \"Content-Type: application/json\" -H \"Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJhMTRhYmQzZi1mMDYyLTQ4YjMtYjc2Mi04MjQ1ZjQ0Yjg4MWUiLCJleHAiOjE3ODEzMzQ5MjV9.VnN22GeZMvfOO_8qIcdn7NHSLiag8qdgqjb3uLskN_U\" -d \"{\\\\\"group_name\\\\\":\\\\\"测试团队\\\\\",\\\\\"description\\\\\":\\\\\"测试创建和删除\\\\\"}\")",
+      "Bash(curl -s -w \"\\\\nHTTP_STATUS: %{http_code}\" -X POST \"http://localhost:8000/api/admin/groups\" -H \"Content-Type: application/json\" -H \"Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJhMTRhYmQzZi1mMDYyLTQ4YjMtYjc2Mi04MjQ1ZjQ0Yjg4MWUiLCJleHAiOjE3ODEzMzQ5MjV9.VnN22GeZMvfOO_8qIcdn7NHSLiag8qdgqjb3uLskN_U\" -d '{\"group_name\":\"test_group\",\"description\":\"test create\"}')",
+      "Bash(curl -s -w \"\\\\nHTTP_STATUS: %{http_code}\" -X DELETE \"http://localhost:8000/api/admin/groups/51788a1a-a5fc-4182-9ec6-39bcdd7accb4\" -H \"Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJhMTRhYmQzZi1mMDYyLTQ4YjMtYjc2Mi04MjQ1ZjQ0Yjg4MWUiLCJleHAiOjE3ODEzMzQ5MjV9.VnN22GeZMvfOO_8qIcdn7NHSLiag8qdgqjb3uLskN_U\")"
     ]
   }
 }

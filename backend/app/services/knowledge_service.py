@@ -2,12 +2,13 @@ import json
 import re
 from typing import Any
 
-from sqlalchemy import distinct, func, text
+from sqlalchemy import distinct, func, or_, text
 from sqlalchemy.orm import Session
 
 from ..models.knowledge_base import KnowledgeChunk, KnowledgeDocument
 from ..models.product import Product
 from . import dmxapi_service
+from . import customer_cache_service
 
 
 def vector_status(db: Session) -> dict:
@@ -188,9 +189,7 @@ def keyword_retrieve(db: Session, query: str, sku: str | None = None, limit: int
         db_query = db_query.filter((KnowledgeChunk.sku == sku) | (KnowledgeChunk.sku.is_(None)))
     if tokens:
         conditions = [KnowledgeChunk.content.ilike(f"%{token}%") for token in tokens[:8]]
-        db_query = db_query.filter(text(" OR ".join([f"content LIKE :token_{index}" for index, _ in enumerate(conditions)]))).params(
-            **{f"token_{index}": f"%{token}%" for index, token in enumerate(tokens[:8])}
-        )
+        db_query = db_query.filter(or_(*conditions))
     else:
         db_query = db_query.filter(KnowledgeChunk.content.ilike(f"%{query_text}%"))
     chunks = db_query.order_by(KnowledgeChunk.updated_at.desc()).limit(max(limit * 4, limit)).all()
@@ -214,11 +213,22 @@ def keyword_retrieve(db: Session, query: str, sku: str | None = None, limit: int
 async def semantic_retrieve(db: Session, query: str, sku: str | None = None, limit: int = 5) -> list[dict]:
     if not query.strip():
         return []
+    query_key = customer_cache_service.normalize_text(query)
+    cache_key = customer_cache_service.make_key("semantic_retrieve", id(db), query_key, sku, limit)
+    cached = customer_cache_service.recommendation_candidate_cache.get(cache_key)
+    if cached is not None:
+        return cached
     try:
         status = vector_status(db)
         if not status.get("available"):
-            return keyword_retrieve(db, query, sku=sku, limit=limit)
-        embedding, _model_id = await dmxapi_service.create_embedding(db, query)
+            rows = keyword_retrieve(db, query, sku=sku, limit=limit)
+            customer_cache_service.recommendation_candidate_cache.set(cache_key, rows)
+            return rows
+        embedding_key = customer_cache_service.make_key("embedding", id(db), query_key)
+        embedding = customer_cache_service.embedding_cache.get(embedding_key)
+        if embedding is None:
+            embedding, _model_id = await dmxapi_service.create_embedding(db, query)
+            customer_cache_service.embedding_cache.set(embedding_key, embedding)
         where = "embedding_status = 'synced' AND embedding IS NOT NULL"
         params = {"embedding": _vector_literal(embedding), "limit": limit}
         if sku:
@@ -233,8 +243,10 @@ async def semantic_retrieve(db: Session, query: str, sku: str | None = None, lim
             "LIMIT :limit"
         ), params).mappings().all()
         if not rows:
-            return keyword_retrieve(db, query, sku=sku, limit=limit)
-        return [
+            rows = keyword_retrieve(db, query, sku=sku, limit=limit)
+            customer_cache_service.recommendation_candidate_cache.set(cache_key, rows)
+            return rows
+        result = [
             {
                 "source_type": row["source_type"],
                 "sku": row["sku"],
@@ -244,8 +256,12 @@ async def semantic_retrieve(db: Session, query: str, sku: str | None = None, lim
             }
             for row in rows
         ]
+        customer_cache_service.recommendation_candidate_cache.set(cache_key, result)
+        return result
     except Exception:
-        return keyword_retrieve(db, query, sku=sku, limit=limit)
+        rows = keyword_retrieve(db, query, sku=sku, limit=limit)
+        customer_cache_service.recommendation_candidate_cache.set(cache_key, rows)
+        return rows
 
 
 def _safe_json(value: str | None) -> dict:

@@ -1,0 +1,918 @@
+2026-06-20 16:15:13,021 INFO sqlalchemy.engine.Engine select pg_catalog.version()
+2026-06-20 16:15:13,042 INFO sqlalchemy.engine.Engine [raw sql] [SQL parameters hidden due to hide_parameters=True]
+2026-06-20 16:15:13,070 INFO sqlalchemy.engine.Engine select current_schema()
+2026-06-20 16:15:13,092 INFO sqlalchemy.engine.Engine [raw sql] [SQL parameters hidden due to hide_parameters=True]
+2026-06-20 16:15:13,120 INFO sqlalchemy.engine.Engine show standard_conforming_strings
+2026-06-20 16:15:13,142 INFO sqlalchemy.engine.Engine [raw sql] [SQL parameters hidden due to hide_parameters=True]
+2026-06-20 16:15:13,170 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-06-20 16:15:13,172 INFO sqlalchemy.engine.Engine SELECT pg_advisory_lock(2026061301)
+2026-06-20 16:15:13,172 INFO sqlalchemy.engine.Engine [generated in 0.00150s] [SQL parameters hidden due to hide_parameters=True]
+2026-06-20 16:15:13,225 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-06-20 16:15:13,229 INFO sqlalchemy.engine.Engine SELECT pg_catalog.pg_class.relname 
+FROM pg_catalog.pg_class JOIN pg_catalog.pg_namespace ON pg_catalog.pg_namespace.oid = pg_catalog.pg_class.relnamespace 
+WHERE pg_catalog.pg_class.relname = %(table_name)s AND pg_catalog.pg_class.relkind = ANY (ARRAY[%(param_1)s, %(param_2)s, %(param_3)s, %(param_4)s, %(param_5)s]) AND pg_catalog.pg_table_is_visible(pg_catalog.pg_class.oid) AND pg_catalog.pg_namespace.nspname != %(nspname_1)s
+2026-06-20 16:15:13,230 INFO sqlalchemy.engine.Engine [generated in 0.00075s] [SQL parameters hidden due to hide_parameters=True]
+2026-06-20 16:15:13,235 INFO sqlalchemy.engine.Engine SELECT pg_catalog.pg_class.relname 
+FROM pg_catalog.pg_class JOIN pg_catalog.pg_namespace ON pg_catalog.pg_namespace.oid = pg_catalog.pg_class.relnamespace 
+WHERE pg_catalog.pg_class.relname = %(table_name)s AND pg_catalog.pg_class.relkind = ANY (ARRAY[%(param_1)s, %(param_2)s, %(param_3)s, %(param_4)s, %(param_5)s]) AND pg_catalog.pg_table_is_visible(pg_catalog.pg_class.oid) AND pg_catalog.pg_namespace.nspname != %(nspname_1)s
+2026-06-20 16:15:13,236 INFO sqlalchemy.engine.Engine [cached since 0.006839s ago] [SQL parameters hidden due to hide_parameters=True]
+2026-06-20 16:15:13,237 INFO sqlalchemy.engine.Engine SELECT pg_catalog.pg_class.relname 
+FROM pg_catalog.pg_class JOIN pg_catalog.pg_namespace ON pg_catalog.pg_namespace.oid = pg_catalog.pg_class.relnamespace 
+WHERE pg_catalog.pg_class.relname = %(table_name)s AND pg_catalog.pg_class.relkind = ANY (ARRAY[%(param_1)s, %(param_2)s, %(param_3)s, %(param_4)s, %(param_5)s]) AND pg_catalog.pg_table_is_visible(pg_catalog.pg_class.oid) AND pg_catalog.pg_namespace.nspname != %(nspname_1)s
+2026-06-20 16:15:13,237 INFO sqlalchemy.engine.Engine [cached since 0.007996s ago] [SQL parameters hidden due to hide_parameters=True]
+2026-06-20 16:15:13,238 INFO sqlalchemy.engine.Engine SELECT pg_catalog.pg_class.relname 
+FROM pg_catalog.pg_class JOIN pg_catalog.pg_namespace ON pg_catalog.pg_namespace.oid = pg_catalog.pg_class.relnamespace 
+WHERE pg_catalog.pg_class.relname = %(table_name)s AND pg_catalog.pg_class.relkind = ANY (ARRAY[%(param_1)s, %(param_2)s, %(param_3)s, %(param_4)s, %(param_5)s]) AND pg_catalog.pg_table_is_visible(pg_catalog.pg_class.oid) AND pg_catalog.pg_namespace.nspname != %(nspname_1)s
+2026-06-20 16:15:13,238 INFO sqlalchemy.engine.Engine [cached since 0.008943s ago] [SQL parameters hidden due to hide_parameters=True]
+2026-06-20 16:15:13,238 INFO sqlalchemy.engine.Engine SELECT pg_catalog.pg_class.relname 
+FROM pg_catalog.pg_class JOIN pg_catalog.pg_namespace ON pg_catalog.pg_namespace.oid = pg_catalog.pg_class.relnamespace 
+WHERE pg_catalog.pg_class.relname = %(table_name)s AND pg_catalog.pg_class.relkind = ANY (ARRAY[%(param_1)s, %(param_2)s, %(param_3)s, %(param_4)s, %(param_5)s]) AND pg_catalog.pg_table_is_visible(pg_catalog.pg_class.oid) AND pg_catalog.pg_namespace.nspname != %(nspname_1)s
+2026-06-20 16:15:13,239 INFO sqlalchemy.engine.Engine [cached since 0.009816s ago] [SQL parameters hidden due to hide_parameters=True]
+2026-06-20 16:15:13,239 INFO sqlalchemy.engine.Engine SELECT pg_catalog.pg_class.relname 
+FROM pg_catalog.pg_class JOIN pg_catalog.pg_namespace ON pg_catalog.pg_namespace.oid = pg_catalog.pg_class.relnamespace 
+WHERE pg_catalog.pg_class.relname = %(table_name)s AND pg_catalog.pg_class.relkind = ANY (ARRAY[%(param_1)s, %(param_2)s, %(param_3)s, %(param_4)s, %(param_5)s]) AND pg_catalog.pg_table_is_visible(pg_catalog.pg_class.oid) AND pg_catalog.pg_namespace.nspname != %(nspname_1)s
+2026-06-20 16:15:13,240 INFO sqlalchemy.engine.Engine [cached since 0.01084s ago] [SQL parameters hidden due to hide_parameters=True]
+2026-06-20 16:15:13,240 INFO sqlalchemy.engine.Engine SELECT pg_catalog.pg_class.relname 
+FROM pg_catalog.pg_class JOIN pg_catalog.pg_namespace ON pg_catalog.pg_namespace.oid = pg_catalog.pg_class.relnamespace 
+WHERE pg_catalog.pg_class.relname = %(table_name)s AND pg_catalog.pg_class.relkind = ANY (ARRAY[%(param_1)s, %(param_2)s, %(param_3)s, %(param_4)s, %(param_5)s]) AND pg_catalog.pg_table_is_visible(pg_catalog.pg_class.oid) AND pg_catalog.pg_namespace.nspname != %(nspname_1)s
+2026-06-20 16:15:13,241 INFO sqlalchemy.engine.Engine [cached since 0.01169s ago] [SQL parameters hidden due to hide_parameters=True]
+2026-06-20 16:15:13,241 INFO sqlalchemy.engine.Engine SELECT pg_catalog.pg_class.relname 
+FROM pg_catalog.pg_class JOIN pg_catalog.pg_namespace ON pg_catalog.pg_namespace.oid = pg_catalog.pg_class.relnamespace 
+WHERE pg_catalog.pg_class.relname = %(table_name)s AND pg_catalog.pg_class.relkind = ANY (ARRAY[%(param_1)s, %(param_2)s, %(param_3)s, %(param_4)s, %(param_5)s]) AND pg_catalog.pg_table_is_visible(pg_catalog.pg_class.oid) AND pg_catalog.pg_namespace.nspname != %(nspname_1)s
+2026-06-20 16:15:13,242 INFO sqlalchemy.engine.Engine [cached since 0.01278s ago] [SQL parameters hidden due to hide_parameters=True]
+2026-06-20 16:15:13,242 INFO sqlalchemy.engine.Engine SELECT pg_catalog.pg_class.relname 
+FROM pg_catalog.pg_class JOIN pg_catalog.pg_namespace ON pg_catalog.pg_namespace.oid = pg_catalog.pg_class.relnamespace 
+WHERE pg_catalog.pg_class.relname = %(table_name)s AND pg_catalog.pg_class.relkind = ANY (ARRAY[%(param_1)s, %(param_2)s, %(param_3)s, %(param_4)s, %(param_5)s]) AND pg_catalog.pg_table_is_visible(pg_catalog.pg_class.oid) AND pg_catalog.pg_namespace.nspname != %(nspname_1)s
+2026-06-20 16:15:13,243 INFO sqlalchemy.engine.Engine [cached since 0.01383s ago] [SQL parameters hidden due to hide_parameters=True]
+2026-06-20 16:15:13,243 INFO sqlalchemy.engine.Engine SELECT pg_catalog.pg_class.relname 
+FROM pg_catalog.pg_class JOIN pg_catalog.pg_namespace ON pg_catalog.pg_namespace.oid = pg_catalog.pg_class.relnamespace 
+WHERE pg_catalog.pg_class.relname = %(table_name)s AND pg_catalog.pg_class.relkind = ANY (ARRAY[%(param_1)s, %(param_2)s, %(param_3)s, %(param_4)s, %(param_5)s]) AND pg_catalog.pg_table_is_visible(pg_catalog.pg_class.oid) AND pg_catalog.pg_namespace.nspname != %(nspname_1)s
+2026-06-20 16:15:13,244 INFO sqlalchemy.engine.Engine [cached since 0.01477s ago] [SQL parameters hidden due to hide_parameters=True]
+2026-06-20 16:15:13,244 INFO sqlalchemy.engine.Engine SELECT pg_catalog.pg_class.relname 
+FROM pg_catalog.pg_class JOIN pg_catalog.pg_namespace ON pg_catalog.pg_namespace.oid = pg_catalog.pg_class.relnamespace 
+WHERE pg_catalog.pg_class.relname = %(table_name)s AND pg_catalog.pg_class.relkind = ANY (ARRAY[%(param_1)s, %(param_2)s, %(param_3)s, %(param_4)s, %(param_5)s]) AND pg_catalog.pg_table_is_visible(pg_catalog.pg_class.oid) AND pg_catalog.pg_namespace.nspname != %(nspname_1)s
+2026-06-20 16:15:13,245 INFO sqlalchemy.engine.Engine [cached since 0.01564s ago] [SQL parameters hidden due to hide_parameters=True]
+2026-06-20 16:15:13,245 INFO sqlalchemy.engine.Engine SELECT pg_catalog.pg_class.relname 
+FROM pg_catalog.pg_class JOIN pg_catalog.pg_namespace ON pg_catalog.pg_namespace.oid = pg_catalog.pg_class.relnamespace 
+WHERE pg_catalog.pg_class.relname = %(table_name)s AND pg_catalog.pg_class.relkind = ANY (ARRAY[%(param_1)s, %(param_2)s, %(param_3)s, %(param_4)s, %(param_5)s]) AND pg_catalog.pg_table_is_visible(pg_catalog.pg_class.oid) AND pg_catalog.pg_namespace.nspname != %(nspname_1)s
+2026-06-20 16:15:13,246 INFO sqlalchemy.engine.Engine [cached since 0.0167s ago] [SQL parameters hidden due to hide_parameters=True]
+2026-06-20 16:15:13,246 INFO sqlalchemy.engine.Engine SELECT pg_catalog.pg_class.relname 
+FROM pg_catalog.pg_class JOIN pg_catalog.pg_namespace ON pg_catalog.pg_namespace.oid = pg_catalog.pg_class.relnamespace 
+WHERE pg_catalog.pg_class.relname = %(table_name)s AND pg_catalog.pg_class.relkind = ANY (ARRAY[%(param_1)s, %(param_2)s, %(param_3)s, %(param_4)s, %(param_5)s]) AND pg_catalog.pg_table_is_visible(pg_catalog.pg_class.oid) AND pg_catalog.pg_namespace.nspname != %(nspname_1)s
+2026-06-20 16:15:13,246 INFO sqlalchemy.engine.Engine [cached since 0.01756s ago] [SQL parameters hidden due to hide_parameters=True]
+2026-06-20 16:15:13,247 INFO sqlalchemy.engine.Engine SELECT pg_catalog.pg_class.relname 
+FROM pg_catalog.pg_class JOIN pg_catalog.pg_namespace ON pg_catalog.pg_namespace.oid = pg_catalog.pg_class.relnamespace 
+WHERE pg_catalog.pg_class.relname = %(table_name)s AND pg_catalog.pg_class.relkind = ANY (ARRAY[%(param_1)s, %(param_2)s, %(param_3)s, %(param_4)s, %(param_5)s]) AND pg_catalog.pg_table_is_visible(pg_catalog.pg_class.oid) AND pg_catalog.pg_namespace.nspname != %(nspname_1)s
+2026-06-20 16:15:13,247 INFO sqlalchemy.engine.Engine [cached since 0.0184s ago] [SQL parameters hidden due to hide_parameters=True]
+2026-06-20 16:15:13,248 INFO sqlalchemy.engine.Engine SELECT pg_catalog.pg_class.relname 
+FROM pg_catalog.pg_class JOIN pg_catalog.pg_namespace ON pg_catalog.pg_namespace.oid = pg_catalog.pg_class.relnamespace 
+WHERE pg_catalog.pg_class.relname = %(table_name)s AND pg_catalog.pg_class.relkind = ANY (ARRAY[%(param_1)s, %(param_2)s, %(param_3)s, %(param_4)s, %(param_5)s]) AND pg_catalog.pg_table_is_visible(pg_catalog.pg_class.oid) AND pg_catalog.pg_namespace.nspname != %(nspname_1)s
+2026-06-20 16:15:13,248 INFO sqlalchemy.engine.Engine [cached since 0.01924s ago] [SQL parameters hidden due to hide_parameters=True]
+2026-06-20 16:15:13,248 INFO sqlalchemy.engine.Engine SELECT pg_catalog.pg_class.relname 
+FROM pg_catalog.pg_class JOIN pg_catalog.pg_namespace ON pg_catalog.pg_namespace.oid = pg_catalog.pg_class.relnamespace 
+WHERE pg_catalog.pg_class.relname = %(table_name)s AND pg_catalog.pg_class.relkind = ANY (ARRAY[%(param_1)s, %(param_2)s, %(param_3)s, %(param_4)s, %(param_5)s]) AND pg_catalog.pg_table_is_visible(pg_catalog.pg_class.oid) AND pg_catalog.pg_namespace.nspname != %(nspname_1)s
+2026-06-20 16:15:13,249 INFO sqlalchemy.engine.Engine [cached since 0.02026s ago] [SQL parameters hidden due to hide_parameters=True]
+2026-06-20 16:15:13,250 INFO sqlalchemy.engine.Engine SELECT pg_catalog.pg_class.relname 
+FROM pg_catalog.pg_class JOIN pg_catalog.pg_namespace ON pg_catalog.pg_namespace.oid = pg_catalog.pg_class.relnamespace 
+WHERE pg_catalog.pg_class.relname = %(table_name)s AND pg_catalog.pg_class.relkind = ANY (ARRAY[%(param_1)s, %(param_2)s, %(param_3)s, %(param_4)s, %(param_5)s]) AND pg_catalog.pg_table_is_visible(pg_catalog.pg_class.oid) AND pg_catalog.pg_namespace.nspname != %(nspname_1)s
+2026-06-20 16:15:13,251 INFO sqlalchemy.engine.Engine [cached since 0.02235s ago] [SQL parameters hidden due to hide_parameters=True]
+2026-06-20 16:15:13,252 INFO sqlalchemy.engine.Engine SELECT pg_catalog.pg_class.relname 
+FROM pg_catalog.pg_class JOIN pg_catalog.pg_namespace ON pg_catalog.pg_namespace.oid = pg_catalog.pg_class.relnamespace 
+WHERE pg_catalog.pg_class.relname = %(table_name)s AND pg_catalog.pg_class.relkind = ANY (ARRAY[%(param_1)s, %(param_2)s, %(param_3)s, %(param_4)s, %(param_5)s]) AND pg_catalog.pg_table_is_visible(pg_catalog.pg_class.oid) AND pg_catalog.pg_namespace.nspname != %(nspname_1)s
+2026-06-20 16:15:13,253 INFO sqlalchemy.engine.Engine [cached since 0.02417s ago] [SQL parameters hidden due to hide_parameters=True]
+2026-06-20 16:15:13,254 INFO sqlalchemy.engine.Engine SELECT pg_catalog.pg_class.relname 
+FROM pg_catalog.pg_class JOIN pg_catalog.pg_namespace ON pg_catalog.pg_namespace.oid = pg_catalog.pg_class.relnamespace 
+WHERE pg_catalog.pg_class.relname = %(table_name)s AND pg_catalog.pg_class.relkind = ANY (ARRAY[%(param_1)s, %(param_2)s, %(param_3)s, %(param_4)s, %(param_5)s]) AND pg_catalog.pg_table_is_visible(pg_catalog.pg_class.oid) AND pg_catalog.pg_namespace.nspname != %(nspname_1)s
+2026-06-20 16:15:13,254 INFO sqlalchemy.engine.Engine [cached since 0.02551s ago] [SQL parameters hidden due to hide_parameters=True]
+2026-06-20 16:15:13,255 INFO sqlalchemy.engine.Engine SELECT pg_catalog.pg_class.relname 
+FROM pg_catalog.pg_class JOIN pg_catalog.pg_namespace ON pg_catalog.pg_namespace.oid = pg_catalog.pg_class.relnamespace 
+WHERE pg_catalog.pg_class.relname = %(table_name)s AND pg_catalog.pg_class.relkind = ANY (ARRAY[%(param_1)s, %(param_2)s, %(param_3)s, %(param_4)s, %(param_5)s]) AND pg_catalog.pg_table_is_visible(pg_catalog.pg_class.oid) AND pg_catalog.pg_namespace.nspname != %(nspname_1)s
+2026-06-20 16:15:13,255 INFO sqlalchemy.engine.Engine [cached since 0.02672s ago] [SQL parameters hidden due to hide_parameters=True]
+2026-06-20 16:15:13,256 INFO sqlalchemy.engine.Engine SELECT pg_catalog.pg_class.relname 
+FROM pg_catalog.pg_class JOIN pg_catalog.pg_namespace ON pg_catalog.pg_namespace.oid = pg_catalog.pg_class.relnamespace 
+WHERE pg_catalog.pg_class.relname = %(table_name)s AND pg_catalog.pg_class.relkind = ANY (ARRAY[%(param_1)s, %(param_2)s, %(param_3)s, %(param_4)s, %(param_5)s]) AND pg_catalog.pg_table_is_visible(pg_catalog.pg_class.oid) AND pg_catalog.pg_namespace.nspname != %(nspname_1)s
+2026-06-20 16:15:13,257 INFO sqlalchemy.engine.Engine [cached since 0.02795s ago] [SQL parameters hidden due to hide_parameters=True]
+2026-06-20 16:15:13,257 INFO sqlalchemy.engine.Engine SELECT pg_catalog.pg_class.relname 
+FROM pg_catalog.pg_class JOIN pg_catalog.pg_namespace ON pg_catalog.pg_namespace.oid = pg_catalog.pg_class.relnamespace 
+WHERE pg_catalog.pg_class.relname = %(table_name)s AND pg_catalog.pg_class.relkind = ANY (ARRAY[%(param_1)s, %(param_2)s, %(param_3)s, %(param_4)s, %(param_5)s]) AND pg_catalog.pg_table_is_visible(pg_catalog.pg_class.oid) AND pg_catalog.pg_namespace.nspname != %(nspname_1)s
+2026-06-20 16:15:13,258 INFO sqlalchemy.engine.Engine [cached since 0.02923s ago] [SQL parameters hidden due to hide_parameters=True]
+2026-06-20 16:15:13,260 INFO sqlalchemy.engine.Engine SELECT pg_catalog.pg_class.relname 
+FROM pg_catalog.pg_class JOIN pg_catalog.pg_namespace ON pg_catalog.pg_namespace.oid = pg_catalog.pg_class.relnamespace 
+WHERE pg_catalog.pg_class.relname = %(table_name)s AND pg_catalog.pg_class.relkind = ANY (ARRAY[%(param_1)s, %(param_2)s, %(param_3)s, %(param_4)s, %(param_5)s]) AND pg_catalog.pg_table_is_visible(pg_catalog.pg_class.oid) AND pg_catalog.pg_namespace.nspname != %(nspname_1)s
+2026-06-20 16:15:13,261 INFO sqlalchemy.engine.Engine [cached since 0.03153s ago] [SQL parameters hidden due to hide_parameters=True]
+2026-06-20 16:15:13,262 INFO sqlalchemy.engine.Engine SELECT pg_catalog.pg_class.relname 
+FROM pg_catalog.pg_class JOIN pg_catalog.pg_namespace ON pg_catalog.pg_namespace.oid = pg_catalog.pg_class.relnamespace 
+WHERE pg_catalog.pg_class.relname = %(table_name)s AND pg_catalog.pg_class.relkind = ANY (ARRAY[%(param_1)s, %(param_2)s, %(param_3)s, %(param_4)s, %(param_5)s]) AND pg_catalog.pg_table_is_visible(pg_catalog.pg_class.oid) AND pg_catalog.pg_namespace.nspname != %(nspname_1)s
+2026-06-20 16:15:13,262 INFO sqlalchemy.engine.Engine [cached since 0.03285s ago] [SQL parameters hidden due to hide_parameters=True]
+2026-06-20 16:15:13,263 INFO sqlalchemy.engine.Engine SELECT pg_catalog.pg_class.relname 
+FROM pg_catalog.pg_class JOIN pg_catalog.pg_namespace ON pg_catalog.pg_namespace.oid = pg_catalog.pg_class.relnamespace 
+WHERE pg_catalog.pg_class.relname = %(table_name)s AND pg_catalog.pg_class.relkind = ANY (ARRAY[%(param_1)s, %(param_2)s, %(param_3)s, %(param_4)s, %(param_5)s]) AND pg_catalog.pg_table_is_visible(pg_catalog.pg_class.oid) AND pg_catalog.pg_namespace.nspname != %(nspname_1)s
+2026-06-20 16:15:13,263 INFO sqlalchemy.engine.Engine [cached since 0.03423s ago] [SQL parameters hidden due to hide_parameters=True]
+2026-06-20 16:15:13,264 INFO sqlalchemy.engine.Engine SELECT pg_catalog.pg_class.relname 
+FROM pg_catalog.pg_class JOIN pg_catalog.pg_namespace ON pg_catalog.pg_namespace.oid = pg_catalog.pg_class.relnamespace 
+WHERE pg_catalog.pg_class.relname = %(table_name)s AND pg_catalog.pg_class.relkind = ANY (ARRAY[%(param_1)s, %(param_2)s, %(param_3)s, %(param_4)s, %(param_5)s]) AND pg_catalog.pg_table_is_visible(pg_catalog.pg_class.oid) AND pg_catalog.pg_namespace.nspname != %(nspname_1)s
+2026-06-20 16:15:13,265 INFO sqlalchemy.engine.Engine [cached since 0.03558s ago] [SQL parameters hidden due to hide_parameters=True]
+2026-06-20 16:15:13,266 INFO sqlalchemy.engine.Engine SELECT pg_catalog.pg_class.relname 
+FROM pg_catalog.pg_class JOIN pg_catalog.pg_namespace ON pg_catalog.pg_namespace.oid = pg_catalog.pg_class.relnamespace 
+WHERE pg_catalog.pg_class.relname = %(table_name)s AND pg_catalog.pg_class.relkind = ANY (ARRAY[%(param_1)s, %(param_2)s, %(param_3)s, %(param_4)s, %(param_5)s]) AND pg_catalog.pg_table_is_visible(pg_catalog.pg_class.oid) AND pg_catalog.pg_namespace.nspname != %(nspname_1)s
+2026-06-20 16:15:13,267 INFO sqlalchemy.engine.Engine [cached since 0.03755s ago] [SQL parameters hidden due to hide_parameters=True]
+2026-06-20 16:15:13,268 INFO sqlalchemy.engine.Engine SELECT pg_catalog.pg_class.relname 
+FROM pg_catalog.pg_class JOIN pg_catalog.pg_namespace ON pg_catalog.pg_namespace.oid = pg_catalog.pg_class.relnamespace 
+WHERE pg_catalog.pg_class.relname = %(table_name)s AND pg_catalog.pg_class.relkind = ANY (ARRAY[%(param_1)s, %(param_2)s, %(param_3)s, %(param_4)s, %(param_5)s]) AND pg_catalog.pg_table_is_visible(pg_catalog.pg_class.oid) AND pg_catalog.pg_namespace.nspname != %(nspname_1)s
+2026-06-20 16:15:13,268 INFO sqlalchemy.engine.Engine [cached since 0.0391s ago] [SQL parameters hidden due to hide_parameters=True]
+2026-06-20 16:15:13,269 INFO sqlalchemy.engine.Engine SELECT pg_catalog.pg_class.relname 
+FROM pg_catalog.pg_class JOIN pg_catalog.pg_namespace ON pg_catalog.pg_namespace.oid = pg_catalog.pg_class.relnamespace 
+WHERE pg_catalog.pg_class.relname = %(table_name)s AND pg_catalog.pg_class.relkind = ANY (ARRAY[%(param_1)s, %(param_2)s, %(param_3)s, %(param_4)s, %(param_5)s]) AND pg_catalog.pg_table_is_visible(pg_catalog.pg_class.oid) AND pg_catalog.pg_namespace.nspname != %(nspname_1)s
+2026-06-20 16:15:13,271 INFO sqlalchemy.engine.Engine [cached since 0.04151s ago] [SQL parameters hidden due to hide_parameters=True]
+2026-06-20 16:15:13,272 INFO sqlalchemy.engine.Engine SELECT pg_catalog.pg_class.relname 
+FROM pg_catalog.pg_class JOIN pg_catalog.pg_namespace ON pg_catalog.pg_namespace.oid = pg_catalog.pg_class.relnamespace 
+WHERE pg_catalog.pg_class.relname = %(table_name)s AND pg_catalog.pg_class.relkind = ANY (ARRAY[%(param_1)s, %(param_2)s, %(param_3)s, %(param_4)s, %(param_5)s]) AND pg_catalog.pg_table_is_visible(pg_catalog.pg_class.oid) AND pg_catalog.pg_namespace.nspname != %(nspname_1)s
+2026-06-20 16:15:13,272 INFO sqlalchemy.engine.Engine [cached since 0.04327s ago] [SQL parameters hidden due to hide_parameters=True]
+2026-06-20 16:15:13,273 INFO sqlalchemy.engine.Engine SELECT pg_catalog.pg_class.relname 
+FROM pg_catalog.pg_class JOIN pg_catalog.pg_namespace ON pg_catalog.pg_namespace.oid = pg_catalog.pg_class.relnamespace 
+WHERE pg_catalog.pg_class.relname = %(table_name)s AND pg_catalog.pg_class.relkind = ANY (ARRAY[%(param_1)s, %(param_2)s, %(param_3)s, %(param_4)s, %(param_5)s]) AND pg_catalog.pg_table_is_visible(pg_catalog.pg_class.oid) AND pg_catalog.pg_namespace.nspname != %(nspname_1)s
+2026-06-20 16:15:13,274 INFO sqlalchemy.engine.Engine [cached since 0.04464s ago] [SQL parameters hidden due to hide_parameters=True]
+2026-06-20 16:15:13,275 INFO sqlalchemy.engine.Engine SELECT pg_catalog.pg_class.relname 
+FROM pg_catalog.pg_class JOIN pg_catalog.pg_namespace ON pg_catalog.pg_namespace.oid = pg_catalog.pg_class.relnamespace 
+WHERE pg_catalog.pg_class.relname = %(table_name)s AND pg_catalog.pg_class.relkind = ANY (ARRAY[%(param_1)s, %(param_2)s, %(param_3)s, %(param_4)s, %(param_5)s]) AND pg_catalog.pg_table_is_visible(pg_catalog.pg_class.oid) AND pg_catalog.pg_namespace.nspname != %(nspname_1)s
+2026-06-20 16:15:13,275 INFO sqlalchemy.engine.Engine [cached since 0.04621s ago] [SQL parameters hidden due to hide_parameters=True]
+2026-06-20 16:15:13,276 INFO sqlalchemy.engine.Engine SELECT pg_catalog.pg_class.relname 
+FROM pg_catalog.pg_class JOIN pg_catalog.pg_namespace ON pg_catalog.pg_namespace.oid = pg_catalog.pg_class.relnamespace 
+WHERE pg_catalog.pg_class.relname = %(table_name)s AND pg_catalog.pg_class.relkind = ANY (ARRAY[%(param_1)s, %(param_2)s, %(param_3)s, %(param_4)s, %(param_5)s]) AND pg_catalog.pg_table_is_visible(pg_catalog.pg_class.oid) AND pg_catalog.pg_namespace.nspname != %(nspname_1)s
+2026-06-20 16:15:13,277 INFO sqlalchemy.engine.Engine [cached since 0.04777s ago] [SQL parameters hidden due to hide_parameters=True]
+2026-06-20 16:15:13,278 INFO sqlalchemy.engine.Engine SELECT pg_catalog.pg_class.relname 
+FROM pg_catalog.pg_class JOIN pg_catalog.pg_namespace ON pg_catalog.pg_namespace.oid = pg_catalog.pg_class.relnamespace 
+WHERE pg_catalog.pg_class.relname = %(table_name)s AND pg_catalog.pg_class.relkind = ANY (ARRAY[%(param_1)s, %(param_2)s, %(param_3)s, %(param_4)s, %(param_5)s]) AND pg_catalog.pg_table_is_visible(pg_catalog.pg_class.oid) AND pg_catalog.pg_namespace.nspname != %(nspname_1)s
+2026-06-20 16:15:13,279 INFO sqlalchemy.engine.Engine [cached since 0.05013s ago] [SQL parameters hidden due to hide_parameters=True]
+2026-06-20 16:15:13,281 INFO sqlalchemy.engine.Engine SELECT pg_catalog.pg_class.relname 
+FROM pg_catalog.pg_class JOIN pg_catalog.pg_namespace ON pg_catalog.pg_namespace.oid = pg_catalog.pg_class.relnamespace 
+WHERE pg_catalog.pg_class.relname = %(table_name)s AND pg_catalog.pg_class.relkind = ANY (ARRAY[%(param_1)s, %(param_2)s, %(param_3)s, %(param_4)s, %(param_5)s]) AND pg_catalog.pg_table_is_visible(pg_catalog.pg_class.oid) AND pg_catalog.pg_namespace.nspname != %(nspname_1)s
+2026-06-20 16:15:13,281 INFO sqlalchemy.engine.Engine [cached since 0.05244s ago] [SQL parameters hidden due to hide_parameters=True]
+2026-06-20 16:15:13,282 INFO sqlalchemy.engine.Engine SELECT pg_catalog.pg_class.relname 
+FROM pg_catalog.pg_class JOIN pg_catalog.pg_namespace ON pg_catalog.pg_namespace.oid = pg_catalog.pg_class.relnamespace 
+WHERE pg_catalog.pg_class.relname = %(table_name)s AND pg_catalog.pg_class.relkind = ANY (ARRAY[%(param_1)s, %(param_2)s, %(param_3)s, %(param_4)s, %(param_5)s]) AND pg_catalog.pg_table_is_visible(pg_catalog.pg_class.oid) AND pg_catalog.pg_namespace.nspname != %(nspname_1)s
+2026-06-20 16:15:13,283 INFO sqlalchemy.engine.Engine [cached since 0.054s ago] [SQL parameters hidden due to hide_parameters=True]
+2026-06-20 16:15:13,284 INFO sqlalchemy.engine.Engine SELECT pg_catalog.pg_class.relname 
+FROM pg_catalog.pg_class JOIN pg_catalog.pg_namespace ON pg_catalog.pg_namespace.oid = pg_catalog.pg_class.relnamespace 
+WHERE pg_catalog.pg_class.relname = %(table_name)s AND pg_catalog.pg_class.relkind = ANY (ARRAY[%(param_1)s, %(param_2)s, %(param_3)s, %(param_4)s, %(param_5)s]) AND pg_catalog.pg_table_is_visible(pg_catalog.pg_class.oid) AND pg_catalog.pg_namespace.nspname != %(nspname_1)s
+2026-06-20 16:15:13,284 INFO sqlalchemy.engine.Engine [cached since 0.05541s ago] [SQL parameters hidden due to hide_parameters=True]
+2026-06-20 16:15:13,285 INFO sqlalchemy.engine.Engine SELECT pg_catalog.pg_class.relname 
+FROM pg_catalog.pg_class JOIN pg_catalog.pg_namespace ON pg_catalog.pg_namespace.oid = pg_catalog.pg_class.relnamespace 
+WHERE pg_catalog.pg_class.relname = %(table_name)s AND pg_catalog.pg_class.relkind = ANY (ARRAY[%(param_1)s, %(param_2)s, %(param_3)s, %(param_4)s, %(param_5)s]) AND pg_catalog.pg_table_is_visible(pg_catalog.pg_class.oid) AND pg_catalog.pg_namespace.nspname != %(nspname_1)s
+2026-06-20 16:15:13,286 INFO sqlalchemy.engine.Engine [cached since 0.05681s ago] [SQL parameters hidden due to hide_parameters=True]
+2026-06-20 16:15:13,287 INFO sqlalchemy.engine.Engine SELECT pg_catalog.pg_class.relname 
+FROM pg_catalog.pg_class JOIN pg_catalog.pg_namespace ON pg_catalog.pg_namespace.oid = pg_catalog.pg_class.relnamespace 
+WHERE pg_catalog.pg_class.relname = %(table_name)s AND pg_catalog.pg_class.relkind = ANY (ARRAY[%(param_1)s, %(param_2)s, %(param_3)s, %(param_4)s, %(param_5)s]) AND pg_catalog.pg_table_is_visible(pg_catalog.pg_class.oid) AND pg_catalog.pg_namespace.nspname != %(nspname_1)s
+2026-06-20 16:15:13,287 INFO sqlalchemy.engine.Engine [cached since 0.0581s ago] [SQL parameters hidden due to hide_parameters=True]
+2026-06-20 16:15:13,288 INFO sqlalchemy.engine.Engine SELECT pg_catalog.pg_class.relname 
+FROM pg_catalog.pg_class JOIN pg_catalog.pg_namespace ON pg_catalog.pg_namespace.oid = pg_catalog.pg_class.relnamespace 
+WHERE pg_catalog.pg_class.relname = %(table_name)s AND pg_catalog.pg_class.relkind = ANY (ARRAY[%(param_1)s, %(param_2)s, %(param_3)s, %(param_4)s, %(param_5)s]) AND pg_catalog.pg_table_is_visible(pg_catalog.pg_class.oid) AND pg_catalog.pg_namespace.nspname != %(nspname_1)s
+2026-06-20 16:15:13,288 INFO sqlalchemy.engine.Engine [cached since 0.05943s ago] [SQL parameters hidden due to hide_parameters=True]
+2026-06-20 16:15:13,289 INFO sqlalchemy.engine.Engine SELECT pg_catalog.pg_class.relname 
+FROM pg_catalog.pg_class JOIN pg_catalog.pg_namespace ON pg_catalog.pg_namespace.oid = pg_catalog.pg_class.relnamespace 
+WHERE pg_catalog.pg_class.relname = %(table_name)s AND pg_catalog.pg_class.relkind = ANY (ARRAY[%(param_1)s, %(param_2)s, %(param_3)s, %(param_4)s, %(param_5)s]) AND pg_catalog.pg_table_is_visible(pg_catalog.pg_class.oid) AND pg_catalog.pg_namespace.nspname != %(nspname_1)s
+2026-06-20 16:15:13,290 INFO sqlalchemy.engine.Engine [cached since 0.06069s ago] [SQL parameters hidden due to hide_parameters=True]
+2026-06-20 16:15:13,290 INFO sqlalchemy.engine.Engine SELECT pg_catalog.pg_class.relname 
+FROM pg_catalog.pg_class JOIN pg_catalog.pg_namespace ON pg_catalog.pg_namespace.oid = pg_catalog.pg_class.relnamespace 
+WHERE pg_catalog.pg_class.relname = %(table_name)s AND pg_catalog.pg_class.relkind = ANY (ARRAY[%(param_1)s, %(param_2)s, %(param_3)s, %(param_4)s, %(param_5)s]) AND pg_catalog.pg_table_is_visible(pg_catalog.pg_class.oid) AND pg_catalog.pg_namespace.nspname != %(nspname_1)s
+2026-06-20 16:15:13,291 INFO sqlalchemy.engine.Engine [cached since 0.06193s ago] [SQL parameters hidden due to hide_parameters=True]
+2026-06-20 16:15:13,292 INFO sqlalchemy.engine.Engine COMMIT
+2026-06-20 16:15:13,298 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-06-20 16:15:13,306 INFO sqlalchemy.engine.Engine SELECT pg_catalog.pg_attribute.attname AS name, pg_catalog.format_type(pg_catalog.pg_attribute.atttypid, pg_catalog.pg_attribute.atttypmod) AS format_type, (SELECT pg_catalog.pg_get_expr(pg_catalog.pg_attrdef.adbin, pg_catalog.pg_attrdef.adrelid) AS pg_get_expr_1 
+FROM pg_catalog.pg_attrdef 
+WHERE pg_catalog.pg_attrdef.adrelid = pg_catalog.pg_attribute.attrelid AND pg_catalog.pg_attrdef.adnum = pg_catalog.pg_attribute.attnum AND pg_catalog.pg_attribute.atthasdef) AS "default", pg_catalog.pg_attribute.attnotnull AS not_null, pg_catalog.pg_class.relname AS table_name, pg_catalog.pg_description.description AS comment, pg_catalog.pg_attribute.attgenerated AS generated, (SELECT json_build_object(%(json_build_object_2)s, pg_catalog.pg_attribute.attidentity = %(attidentity_1)s, %(json_build_object_3)s, pg_catalog.pg_sequence.seqstart, %(json_build_object_4)s, pg_catalog.pg_sequence.seqincrement, %(json_build_object_5)s, pg_catalog.pg_sequence.seqmin, %(json_build_object_6)s, pg_catalog.pg_sequence.seqmax, %(json_build_object_7)s, pg_catalog.pg_sequence.seqcache, %(json_build_object_8)s, pg_catalog.pg_sequence.seqcycle) AS json_build_object_1 
+FROM pg_catalog.pg_sequence 
+WHERE pg_catalog.pg_attribute.attidentity != %(attidentity_2)s AND pg_catalog.pg_sequence.seqrelid = CAST(CAST(pg_catalog.pg_get_serial_sequence(CAST(CAST(pg_catalog.pg_attribute.attrelid AS REGCLASS) AS TEXT), pg_catalog.pg_attribute.attname) AS REGCLASS) AS OID)) AS identity_options 
+FROM pg_catalog.pg_class LEFT OUTER JOIN pg_catalog.pg_attribute ON pg_catalog.pg_class.oid = pg_catalog.pg_attribute.attrelid AND pg_catalog.pg_attribute.attnum > %(attnum_1)s AND NOT pg_catalog.pg_attribute.attisdropped LEFT OUTER JOIN pg_catalog.pg_description ON pg_catalog.pg_description.objoid = pg_catalog.pg_attribute.attrelid AND pg_catalog.pg_description.objsubid = pg_catalog.pg_attribute.attnum JOIN pg_catalog.pg_namespace ON pg_catalog.pg_namespace.oid = pg_catalog.pg_class.relnamespace 
+WHERE pg_catalog.pg_class.relkind = ANY (ARRAY[%(param_1)s, %(param_2)s, %(param_3)s, %(param_4)s, %(param_5)s]) AND pg_catalog.pg_table_is_visible(pg_catalog.pg_class.oid) AND pg_catalog.pg_namespace.nspname != %(nspname_1)s AND pg_catalog.pg_class.relname IN (%(filter_names_1)s) ORDER BY pg_catalog.pg_class.relname, pg_catalog.pg_attribute.attnum
+2026-06-20 16:15:13,306 INFO sqlalchemy.engine.Engine [generated in 0.00750s] [SQL parameters hidden due to hide_parameters=True]
+2026-06-20 16:15:13,317 INFO sqlalchemy.engine.Engine SELECT pg_catalog.pg_type.typname AS name, pg_catalog.format_type(pg_catalog.pg_type.typbasetype, pg_catalog.pg_type.typtypmod) AS attype, NOT pg_catalog.pg_type.typnotnull AS nullable, pg_catalog.pg_type.typdefault AS "default", pg_catalog.pg_type_is_visible(pg_catalog.pg_type.oid) AS visible, pg_catalog.pg_namespace.nspname AS schema, domain_constraints.condefs, domain_constraints.connames, pg_catalog.pg_collation.collname 
+FROM pg_catalog.pg_type JOIN pg_catalog.pg_namespace ON pg_catalog.pg_namespace.oid = pg_catalog.pg_type.typnamespace LEFT OUTER JOIN pg_catalog.pg_collation ON pg_catalog.pg_type.typcollation = pg_catalog.pg_collation.oid LEFT OUTER JOIN (SELECT pg_catalog.pg_constraint.contypid AS contypid, array_agg(pg_catalog.pg_get_constraintdef(pg_catalog.pg_constraint.oid, %(pg_get_constraintdef_1)s)) AS condefs, array_agg(CAST(pg_catalog.pg_constraint.conname AS TEXT)) AS connames 
+FROM pg_catalog.pg_constraint 
+WHERE pg_catalog.pg_constraint.contypid != %(contypid_1)s GROUP BY pg_catalog.pg_constraint.contypid) AS domain_constraints ON pg_catalog.pg_type.oid = domain_constraints.contypid 
+WHERE pg_catalog.pg_type.typtype = %(typtype_1)s ORDER BY pg_catalog.pg_namespace.nspname, pg_catalog.pg_type.typname
+2026-06-20 16:15:13,342 INFO sqlalchemy.engine.Engine [generated in 0.02533s] [SQL parameters hidden due to hide_parameters=True]
+2026-06-20 16:15:13,355 INFO sqlalchemy.engine.Engine SELECT pg_catalog.pg_type.typname AS name, pg_catalog.pg_type_is_visible(pg_catalog.pg_type.oid) AS visible, pg_catalog.pg_namespace.nspname AS schema, lbl_agg.labels AS labels 
+FROM pg_catalog.pg_type JOIN pg_catalog.pg_namespace ON pg_catalog.pg_namespace.oid = pg_catalog.pg_type.typnamespace LEFT OUTER JOIN (SELECT pg_catalog.pg_enum.enumtypid AS enumtypid, array_agg(CAST(pg_catalog.pg_enum.enumlabel AS TEXT) ORDER BY pg_catalog.pg_enum.enumsortorder) AS labels 
+FROM pg_catalog.pg_enum GROUP BY pg_catalog.pg_enum.enumtypid) AS lbl_agg ON pg_catalog.pg_type.oid = lbl_agg.enumtypid 
+WHERE pg_catalog.pg_type.typtype = %(typtype_1)s ORDER BY pg_catalog.pg_namespace.nspname, pg_catalog.pg_type.typname
+2026-06-20 16:15:13,356 INFO sqlalchemy.engine.Engine [generated in 0.00066s] [SQL parameters hidden due to hide_parameters=True]
+2026-06-20 16:15:13,360 INFO sqlalchemy.engine.Engine ROLLBACK
+2026-06-20 16:15:13,361 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-06-20 16:15:13,361 INFO sqlalchemy.engine.Engine CREATE EXTENSION IF NOT EXISTS vector
+2026-06-20 16:15:13,361 INFO sqlalchemy.engine.Engine [generated in 0.00035s] [SQL parameters hidden due to hide_parameters=True]
+2026-06-20 16:15:13,363 INFO sqlalchemy.engine.Engine ALTER TABLE knowledge_chunks ADD COLUMN IF NOT EXISTS embedding vector
+2026-06-20 16:15:13,363 INFO sqlalchemy.engine.Engine [generated in 0.00035s] [SQL parameters hidden due to hide_parameters=True]
+2026-06-20 16:15:13,364 INFO sqlalchemy.engine.Engine SELECT vector_dims(embedding) FROM knowledge_chunks WHERE embedding IS NOT NULL LIMIT 1
+2026-06-20 16:15:13,365 INFO sqlalchemy.engine.Engine [generated in 0.00040s] [SQL parameters hidden due to hide_parameters=True]
+2026-06-20 16:15:13,369 INFO sqlalchemy.engine.Engine CREATE INDEX IF NOT EXISTS idx_knowledge_chunks_embedding ON knowledge_chunks USING ivfflat (embedding vector_cosine_ops) WITH (lists = 100)
+2026-06-20 16:15:13,370 INFO sqlalchemy.engine.Engine [generated in 0.00044s] [SQL parameters hidden due to hide_parameters=True]
+2026-06-20 16:15:13,370 INFO sqlalchemy.engine.Engine COMMIT
+2026-06-20 16:15:13,401 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-06-20 16:15:13,403 INFO sqlalchemy.engine.Engine SELECT groups.id AS groups_id, groups.group_name AS groups_group_name, groups.description AS groups_description, groups.created_at AS groups_created_at, groups.updated_at AS groups_updated_at 
+FROM groups
+2026-06-20 16:15:13,404 INFO sqlalchemy.engine.Engine [generated in 0.00059s] [SQL parameters hidden due to hide_parameters=True]
+2026-06-20 16:15:13,408 INFO sqlalchemy.engine.Engine SELECT permissions.id AS permissions_id, permissions.permission_key AS permissions_permission_key, permissions.permission_name AS permissions_permission_name, permissions.permission_type AS permissions_permission_type, permissions.description AS permissions_description, permissions.created_at AS permissions_created_at, permissions.updated_at AS permissions_updated_at 
+FROM permissions
+2026-06-20 16:15:13,408 INFO sqlalchemy.engine.Engine [generated in 0.00055s] [SQL parameters hidden due to hide_parameters=True]
+2026-06-20 16:15:13,412 INFO sqlalchemy.engine.Engine SELECT routes.id AS routes_id, routes.route_path AS routes_route_path, routes.route_name AS routes_route_name, routes.parent_id AS routes_parent_id, routes.route_type AS routes_route_type, routes.component_path AS routes_component_path, routes.description AS routes_description, routes.created_at AS routes_created_at, routes.updated_at AS routes_updated_at 
+FROM routes
+2026-06-20 16:15:13,412 INFO sqlalchemy.engine.Engine [generated in 0.00047s] [SQL parameters hidden due to hide_parameters=True]
+2026-06-20 16:15:13,414 INFO sqlalchemy.engine.Engine SELECT groups.id AS groups_id, groups.group_name AS groups_group_name, groups.description AS groups_description, groups.created_at AS groups_created_at, groups.updated_at AS groups_updated_at 
+FROM groups
+2026-06-20 16:15:13,415 INFO sqlalchemy.engine.Engine [cached since 0.01194s ago] [SQL parameters hidden due to hide_parameters=True]
+2026-06-20 16:15:13,416 INFO sqlalchemy.engine.Engine SELECT permissions.id AS permissions_id, permissions.permission_key AS permissions_permission_key, permissions.permission_name AS permissions_permission_name, permissions.permission_type AS permissions_permission_type, permissions.description AS permissions_description, permissions.created_at AS permissions_created_at, permissions.updated_at AS permissions_updated_at 
+FROM permissions
+2026-06-20 16:15:13,416 INFO sqlalchemy.engine.Engine [cached since 0.008217s ago] [SQL parameters hidden due to hide_parameters=True]
+2026-06-20 16:15:13,418 INFO sqlalchemy.engine.Engine SELECT group_permissions.id AS group_permissions_id, group_permissions.group_id AS group_permissions_group_id, group_permissions.permission_id AS group_permissions_permission_id, group_permissions.created_at AS group_permissions_created_at 
+FROM group_permissions
+2026-06-20 16:15:13,419 INFO sqlalchemy.engine.Engine [generated in 0.00045s] [SQL parameters hidden due to hide_parameters=True]
+2026-06-20 16:15:13,424 INFO sqlalchemy.engine.Engine SELECT routes.id AS routes_id, routes.route_path AS routes_route_path, routes.route_name AS routes_route_name, routes.parent_id AS routes_parent_id, routes.route_type AS routes_route_type, routes.component_path AS routes_component_path, routes.description AS routes_description, routes.created_at AS routes_created_at, routes.updated_at AS routes_updated_at 
+FROM routes
+2026-06-20 16:15:13,424 INFO sqlalchemy.engine.Engine [cached since 0.01258s ago] [SQL parameters hidden due to hide_parameters=True]
+2026-06-20 16:15:13,426 INFO sqlalchemy.engine.Engine SELECT permission_routes.id AS permission_routes_id, permission_routes.permission_id AS permission_routes_permission_id, permission_routes.route_id AS permission_routes_route_id, permission_routes.created_at AS permission_routes_created_at 
+FROM permission_routes
+2026-06-20 16:15:13,426 INFO sqlalchemy.engine.Engine [generated in 0.00045s] [SQL parameters hidden due to hide_parameters=True]
+2026-06-20 16:15:13,429 INFO sqlalchemy.engine.Engine ROLLBACK
+2026-06-20 16:15:13,430 INFO sqlalchemy.engine.Engine SELECT pg_advisory_unlock(2026061301)
+2026-06-20 16:15:13,430 INFO sqlalchemy.engine.Engine [generated in 0.00042s] [SQL parameters hidden due to hide_parameters=True]
+2026-06-20 16:15:13,431 INFO sqlalchemy.engine.Engine ROLLBACK
+2026-06-20 16:15:13,433 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-06-20 16:15:13,434 INFO sqlalchemy.engine.Engine SELECT product_categories.id AS product_categories_id, product_categories.category_name AS product_categories_category_name, product_categories.parent_id AS product_categories_parent_id, product_categories.description AS product_categories_description, product_categories.created_at AS product_categories_created_at 
+FROM product_categories 
+ LIMIT %(param_1)s
+2026-06-20 16:15:13,434 INFO sqlalchemy.engine.Engine [generated in 0.00058s] [SQL parameters hidden due to hide_parameters=True]
+2026-06-20 16:15:13,437 INFO sqlalchemy.engine.Engine ROLLBACK
+2026-06-20 16:15:13,439 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-06-20 16:15:13,441 INFO sqlalchemy.engine.Engine SELECT users.id AS users_id, users.username AS users_username, users.user_type AS users_user_type, users.password_hash AS users_password_hash, users.display_name AS users_display_name, users.email AS users_email, users.is_active AS users_is_active, users.created_at AS users_created_at, users.updated_at AS users_updated_at 
+FROM users 
+WHERE users.username = %(username_1)s 
+ LIMIT %(param_1)s
+2026-06-20 16:15:13,441 INFO sqlalchemy.engine.Engine [generated in 0.00041s] [SQL parameters hidden due to hide_parameters=True]
+2026-06-20 16:15:13,446 INFO sqlalchemy.engine.Engine SELECT user_groups.user_id AS user_groups_user_id, user_groups.id AS user_groups_id, user_groups.group_id AS user_groups_group_id, user_groups.group_role AS user_groups_group_role, user_groups.created_at AS user_groups_created_at, user_groups.updated_at AS user_groups_updated_at 
+FROM user_groups 
+WHERE user_groups.user_id IN (%(primary_keys_1)s)
+2026-06-20 16:15:13,446 INFO sqlalchemy.engine.Engine [generated in 0.00055s] [SQL parameters hidden due to hide_parameters=True]
+2026-06-20 16:15:13,449 INFO sqlalchemy.engine.Engine SELECT groups.id AS groups_id, groups.group_name AS groups_group_name, groups.description AS groups_description, groups.created_at AS groups_created_at, groups.updated_at AS groups_updated_at 
+FROM groups 
+WHERE groups.id IN (%(primary_keys_1)s)
+2026-06-20 16:15:13,450 INFO sqlalchemy.engine.Engine [generated in 0.00064s] [SQL parameters hidden due to hide_parameters=True]
+2026-06-20 16:15:13,453 INFO sqlalchemy.engine.Engine ROLLBACK
+INFO:     127.0.0.1:4931 - "GET /api/health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:4948 - "GET /api/health HTTP/1.1" 200 OK
+2026-06-20 16:17:49,100 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-06-20 16:17:49,101 INFO sqlalchemy.engine.Engine SELECT users.id AS users_id, users.username AS users_username, users.user_type AS users_user_type, users.password_hash AS users_password_hash, users.display_name AS users_display_name, users.email AS users_email, users.is_active AS users_is_active, users.created_at AS users_created_at, users.updated_at AS users_updated_at 
+FROM users 
+WHERE users.username = %(username_1)s 
+ LIMIT %(param_1)s
+2026-06-20 16:17:49,101 INFO sqlalchemy.engine.Engine [cached since 155.7s ago] [SQL parameters hidden due to hide_parameters=True]
+2026-06-20 16:17:49,105 INFO sqlalchemy.engine.Engine SELECT user_groups.user_id AS user_groups_user_id, user_groups.id AS user_groups_id, user_groups.group_id AS user_groups_group_id, user_groups.group_role AS user_groups_group_role, user_groups.created_at AS user_groups_created_at, user_groups.updated_at AS user_groups_updated_at 
+FROM user_groups 
+WHERE user_groups.user_id IN (%(primary_keys_1)s)
+2026-06-20 16:17:49,106 INFO sqlalchemy.engine.Engine [cached since 155.7s ago] [SQL parameters hidden due to hide_parameters=True]
+2026-06-20 16:17:49,112 INFO sqlalchemy.engine.Engine SELECT groups.id AS groups_id, groups.group_name AS groups_group_name, groups.description AS groups_description, groups.created_at AS groups_created_at, groups.updated_at AS groups_updated_at 
+FROM groups 
+WHERE groups.id IN (%(primary_keys_1)s)
+2026-06-20 16:17:49,112 INFO sqlalchemy.engine.Engine [cached since 155.7s ago] [SQL parameters hidden due to hide_parameters=True]
+2026-06-20 16:17:49,357 INFO sqlalchemy.engine.Engine SELECT user_groups.id AS user_groups_id, user_groups.user_id AS user_groups_user_id, user_groups.group_id AS user_groups_group_id, user_groups.group_role AS user_groups_group_role, user_groups.created_at AS user_groups_created_at, user_groups.updated_at AS user_groups_updated_at, groups.id AS groups_id, groups.group_name AS groups_group_name, groups.description AS groups_description, groups.created_at AS groups_created_at, groups.updated_at AS groups_updated_at 
+FROM user_groups JOIN groups ON user_groups.group_id = groups.id 
+WHERE user_groups.user_id = %(user_id_1)s::UUID
+2026-06-20 16:17:49,358 INFO sqlalchemy.engine.Engine [generated in 0.00088s] [SQL parameters hidden due to hide_parameters=True]
+2026-06-20 16:17:49,360 INFO sqlalchemy.engine.Engine SELECT groups.id AS groups_id, groups.group_name AS groups_group_name, groups.description AS groups_description, groups.created_at AS groups_created_at, groups.updated_at AS groups_updated_at 
+FROM groups 
+WHERE groups.id IN (%(primary_keys_1)s)
+2026-06-20 16:17:49,361 INFO sqlalchemy.engine.Engine [generated in 0.00056s] [SQL parameters hidden due to hide_parameters=True]
+2026-06-20 16:17:49,363 INFO sqlalchemy.engine.Engine SELECT user_groups.id AS user_groups_id, user_groups.user_id AS user_groups_user_id, user_groups.group_id AS user_groups_group_id, user_groups.group_role AS user_groups_group_role, user_groups.created_at AS user_groups_created_at, user_groups.updated_at AS user_groups_updated_at 
+FROM user_groups JOIN groups ON user_groups.group_id = groups.id 
+WHERE user_groups.user_id = %(user_id_1)s::UUID AND groups.group_name = %(group_name_1)s 
+ LIMIT %(param_1)s
+2026-06-20 16:17:49,364 INFO sqlalchemy.engine.Engine [generated in 0.00050s] [SQL parameters hidden due to hide_parameters=True]
+2026-06-20 16:17:49,365 INFO sqlalchemy.engine.Engine SELECT groups.id AS groups_id, groups.group_name AS groups_group_name, groups.description AS groups_description, groups.created_at AS groups_created_at, groups.updated_at AS groups_updated_at 
+FROM groups 
+WHERE groups.id IN (%(primary_keys_1)s)
+2026-06-20 16:17:49,365 INFO sqlalchemy.engine.Engine [cached since 0.005214s ago] [SQL parameters hidden due to hide_parameters=True]
+2026-06-20 16:17:49,366 INFO sqlalchemy.engine.Engine SELECT permissions.permission_key AS permissions_permission_key 
+FROM permissions ORDER BY permissions.permission_key
+2026-06-20 16:17:49,366 INFO sqlalchemy.engine.Engine [generated in 0.00038s] [SQL parameters hidden due to hide_parameters=True]
+2026-06-20 16:17:49,368 INFO sqlalchemy.engine.Engine ROLLBACK
+INFO:     127.0.0.1:5089 - "POST /api/auth/login HTTP/1.1" 200 OK
+2026-06-20 16:17:49,422 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-06-20 16:17:49,423 INFO sqlalchemy.engine.Engine SELECT users.id AS users_id, users.username AS users_username, users.user_type AS users_user_type, users.password_hash AS users_password_hash, users.display_name AS users_display_name, users.email AS users_email, users.is_active AS users_is_active, users.created_at AS users_created_at, users.updated_at AS users_updated_at 
+FROM users 
+WHERE users.username = %(username_1)s 
+ LIMIT %(param_1)s
+2026-06-20 16:17:49,423 INFO sqlalchemy.engine.Engine [cached since 156s ago] [SQL parameters hidden due to hide_parameters=True]
+2026-06-20 16:17:49,425 INFO sqlalchemy.engine.Engine SELECT user_groups.user_id AS user_groups_user_id, user_groups.id AS user_groups_id, user_groups.group_id AS user_groups_group_id, user_groups.group_role AS user_groups_group_role, user_groups.created_at AS user_groups_created_at, user_groups.updated_at AS user_groups_updated_at 
+FROM user_groups 
+WHERE user_groups.user_id IN (%(primary_keys_1)s)
+2026-06-20 16:17:49,425 INFO sqlalchemy.engine.Engine [cached since 156s ago] [SQL parameters hidden due to hide_parameters=True]
+2026-06-20 16:17:49,646 INFO sqlalchemy.engine.Engine SELECT user_groups.id AS user_groups_id, user_groups.user_id AS user_groups_user_id, user_groups.group_id AS user_groups_group_id, user_groups.group_role AS user_groups_group_role, user_groups.created_at AS user_groups_created_at, user_groups.updated_at AS user_groups_updated_at, groups.id AS groups_id, groups.group_name AS groups_group_name, groups.description AS groups_description, groups.created_at AS groups_created_at, groups.updated_at AS groups_updated_at 
+FROM user_groups JOIN groups ON user_groups.group_id = groups.id 
+WHERE user_groups.user_id = %(user_id_1)s::UUID
+2026-06-20 16:17:49,648 INFO sqlalchemy.engine.Engine [cached since 0.2907s ago] [SQL parameters hidden due to hide_parameters=True]
+2026-06-20 16:17:49,650 INFO sqlalchemy.engine.Engine SELECT user_groups.id AS user_groups_id, user_groups.user_id AS user_groups_user_id, user_groups.group_id AS user_groups_group_id, user_groups.group_role AS user_groups_group_role, user_groups.created_at AS user_groups_created_at, user_groups.updated_at AS user_groups_updated_at 
+FROM user_groups JOIN groups ON user_groups.group_id = groups.id 
+WHERE user_groups.user_id = %(user_id_1)s::UUID AND groups.group_name = %(group_name_1)s 
+ LIMIT %(param_1)s
+2026-06-20 16:17:49,651 INFO sqlalchemy.engine.Engine [cached since 0.2873s ago] [SQL parameters hidden due to hide_parameters=True]
+2026-06-20 16:17:49,652 INFO sqlalchemy.engine.Engine SELECT DISTINCT permissions.permission_key AS permissions_permission_key 
+FROM permissions JOIN group_permissions ON group_permissions.permission_id = permissions.id JOIN user_groups ON user_groups.group_id = group_permissions.group_id 
+WHERE user_groups.user_id = %(user_id_1)s::UUID ORDER BY permissions.permission_key
+2026-06-20 16:17:49,653 INFO sqlalchemy.engine.Engine [generated in 0.00058s] [SQL parameters hidden due to hide_parameters=True]
+2026-06-20 16:17:49,673 INFO sqlalchemy.engine.Engine ROLLBACK
+INFO:     127.0.0.1:5089 - "POST /api/auth/login HTTP/1.1" 200 OK
+2026-06-20 16:17:49,677 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-06-20 16:17:49,677 INFO sqlalchemy.engine.Engine SELECT users.id AS users_id, users.username AS users_username, users.user_type AS users_user_type, users.password_hash AS users_password_hash, users.display_name AS users_display_name, users.email AS users_email, users.is_active AS users_is_active, users.created_at AS users_created_at, users.updated_at AS users_updated_at 
+FROM users 
+WHERE users.username = %(username_1)s 
+ LIMIT %(param_1)s
+2026-06-20 16:17:49,677 INFO sqlalchemy.engine.Engine [cached since 156.2s ago] [SQL parameters hidden due to hide_parameters=True]
+2026-06-20 16:17:49,678 INFO sqlalchemy.engine.Engine SELECT user_groups.user_id AS user_groups_user_id, user_groups.id AS user_groups_id, user_groups.group_id AS user_groups_group_id, user_groups.group_role AS user_groups_group_role, user_groups.created_at AS user_groups_created_at, user_groups.updated_at AS user_groups_updated_at 
+FROM user_groups 
+WHERE user_groups.user_id IN (%(primary_keys_1)s)
+2026-06-20 16:17:49,678 INFO sqlalchemy.engine.Engine [cached since 156.2s ago] [SQL parameters hidden due to hide_parameters=True]
+2026-06-20 16:17:49,899 INFO sqlalchemy.engine.Engine SELECT user_groups.id AS user_groups_id, user_groups.user_id AS user_groups_user_id, user_groups.group_id AS user_groups_group_id, user_groups.group_role AS user_groups_group_role, user_groups.created_at AS user_groups_created_at, user_groups.updated_at AS user_groups_updated_at, groups.id AS groups_id, groups.group_name AS groups_group_name, groups.description AS groups_description, groups.created_at AS groups_created_at, groups.updated_at AS groups_updated_at 
+FROM user_groups JOIN groups ON user_groups.group_id = groups.id 
+WHERE user_groups.user_id = %(user_id_1)s::UUID
+2026-06-20 16:17:49,900 INFO sqlalchemy.engine.Engine [cached since 0.5439s ago] [SQL parameters hidden due to hide_parameters=True]
+2026-06-20 16:17:49,902 INFO sqlalchemy.engine.Engine SELECT user_groups.id AS user_groups_id, user_groups.user_id AS user_groups_user_id, user_groups.group_id AS user_groups_group_id, user_groups.group_role AS user_groups_group_role, user_groups.created_at AS user_groups_created_at, user_groups.updated_at AS user_groups_updated_at 
+FROM user_groups JOIN groups ON user_groups.group_id = groups.id 
+WHERE user_groups.user_id = %(user_id_1)s::UUID AND groups.group_name = %(group_name_1)s 
+ LIMIT %(param_1)s
+2026-06-20 16:17:49,903 INFO sqlalchemy.engine.Engine [cached since 0.5395s ago] [SQL parameters hidden due to hide_parameters=True]
+2026-06-20 16:17:49,904 INFO sqlalchemy.engine.Engine SELECT DISTINCT permissions.permission_key AS permissions_permission_key 
+FROM permissions JOIN group_permissions ON group_permissions.permission_id = permissions.id JOIN user_groups ON user_groups.group_id = group_permissions.group_id 
+WHERE user_groups.user_id = %(user_id_1)s::UUID ORDER BY permissions.permission_key
+2026-06-20 16:17:49,905 INFO sqlalchemy.engine.Engine [cached since 0.2523s ago] [SQL parameters hidden due to hide_parameters=True]
+2026-06-20 16:17:49,906 INFO sqlalchemy.engine.Engine ROLLBACK
+INFO:     127.0.0.1:5089 - "POST /api/auth/login HTTP/1.1" 200 OK
+INFO:     127.0.0.1:5089 - "GET /uploads/generated/codex_file_access_generated.png HTTP/1.1" 404 Not Found
+INFO:     127.0.0.1:5089 - "GET /uploads/knowledge-files/codex_file_access_doc.txt HTTP/1.1" 404 Not Found
+2026-06-20 16:17:49,993 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-06-20 16:17:50,000 INFO sqlalchemy.engine.Engine SELECT users.id AS users_id, users.username AS users_username, users.user_type AS users_user_type, users.password_hash AS users_password_hash, users.display_name AS users_display_name, users.email AS users_email, users.is_active AS users_is_active, users.created_at AS users_created_at, users.updated_at AS users_updated_at 
+FROM users 
+WHERE users.id = %(id_1)s 
+ LIMIT %(param_1)s
+2026-06-20 16:17:50,018 INFO sqlalchemy.engine.Engine [generated in 0.01842s] [SQL parameters hidden due to hide_parameters=True]
+2026-06-20 16:17:50,020 INFO sqlalchemy.engine.Engine SELECT user_groups.user_id AS user_groups_user_id, user_groups.id AS user_groups_id, user_groups.group_id AS user_groups_group_id, user_groups.group_role AS user_groups_group_role, user_groups.created_at AS user_groups_created_at, user_groups.updated_at AS user_groups_updated_at 
+FROM user_groups 
+WHERE user_groups.user_id IN (%(primary_keys_1)s)
+2026-06-20 16:17:50,020 INFO sqlalchemy.engine.Engine [cached since 156.6s ago] [SQL parameters hidden due to hide_parameters=True]
+2026-06-20 16:17:50,022 INFO sqlalchemy.engine.Engine SELECT user_groups.id AS user_groups_id, user_groups.user_id AS user_groups_user_id, user_groups.group_id AS user_groups_group_id, user_groups.group_role AS user_groups_group_role, user_groups.created_at AS user_groups_created_at, user_groups.updated_at AS user_groups_updated_at 
+FROM user_groups JOIN groups ON user_groups.group_id = groups.id 
+WHERE user_groups.user_id = %(user_id_1)s::UUID AND groups.group_name = %(group_name_1)s 
+ LIMIT %(param_1)s
+2026-06-20 16:17:50,024 INFO sqlalchemy.engine.Engine [cached since 0.6601s ago] [SQL parameters hidden due to hide_parameters=True]
+2026-06-20 16:17:50,027 INFO sqlalchemy.engine.Engine SELECT generations.id AS generations_id, generations.user_id AS generations_user_id, generations.product_id AS generations_product_id, generations.sku AS generations_sku, generations.type AS generations_type, generations.prompt AS generations_prompt, generations.negative_prompt AS generations_negative_prompt, generations.source_image_path AS generations_source_image_path, generations.result_image_path AS generations_result_image_path, generations.result_images AS generations_result_images, generations.result_video_path AS generations_result_video_path, generations.model_name AS generations_model_name, generations.parameters AS generations_parameters, generations.status AS generations_status, generations.error_message AS generations_error_message, generations.created_at AS generations_created_at 
+FROM generations 
+WHERE generations.result_image_path = %(result_image_path_1)s OR generations.result_video_path = %(result_video_path_1)s OR (CAST(generations.result_images AS VARCHAR) LIKE '%%' || %(param_1)s || '%%') 
+ LIMIT %(param_2)s
+2026-06-20 16:17:50,027 INFO sqlalchemy.engine.Engine [generated in 0.00067s] [SQL parameters hidden due to hide_parameters=True]
+2026-06-20 16:17:50,031 INFO sqlalchemy.engine.Engine ROLLBACK
+INFO:     127.0.0.1:5089 - "POST /api/files/sign HTTP/1.1" 200 OK
+INFO:     127.0.0.1:5089 - "GET /api/files/signed/eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIvdXBsb2Fkcy9nZW5lcmF0ZWQvY29kZXhfZmlsZV9hY2Nlc3NfZ2VuZXJhdGVkLnBuZyIsImF1ZCI6ImZpbGUtYWNjZXNzIiwiZXhwIjoxNzgxOTQ0MDcwfQ.35uuNyudAm55-OyVdzmBHQco1L9LAj25EnXFOAtEKNw HTTP/1.1" 200 OK
+2026-06-20 16:17:50,116 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-06-20 16:17:50,117 INFO sqlalchemy.engine.Engine SELECT users.id AS users_id, users.username AS users_username, users.user_type AS users_user_type, users.password_hash AS users_password_hash, users.display_name AS users_display_name, users.email AS users_email, users.is_active AS users_is_active, users.created_at AS users_created_at, users.updated_at AS users_updated_at 
+FROM users 
+WHERE users.id = %(id_1)s 
+ LIMIT %(param_1)s
+2026-06-20 16:17:50,135 INFO sqlalchemy.engine.Engine [cached since 0.1351s ago] [SQL parameters hidden due to hide_parameters=True]
+2026-06-20 16:17:50,137 INFO sqlalchemy.engine.Engine SELECT user_groups.user_id AS user_groups_user_id, user_groups.id AS user_groups_id, user_groups.group_id AS user_groups_group_id, user_groups.group_role AS user_groups_group_role, user_groups.created_at AS user_groups_created_at, user_groups.updated_at AS user_groups_updated_at 
+FROM user_groups 
+WHERE user_groups.user_id IN (%(primary_keys_1)s)
+2026-06-20 16:17:50,138 INFO sqlalchemy.engine.Engine [cached since 156.7s ago] [SQL parameters hidden due to hide_parameters=True]
+2026-06-20 16:17:50,140 INFO sqlalchemy.engine.Engine SELECT user_groups.id AS user_groups_id, user_groups.user_id AS user_groups_user_id, user_groups.group_id AS user_groups_group_id, user_groups.group_role AS user_groups_group_role, user_groups.created_at AS user_groups_created_at, user_groups.updated_at AS user_groups_updated_at 
+FROM user_groups JOIN groups ON user_groups.group_id = groups.id 
+WHERE user_groups.user_id = %(user_id_1)s::UUID AND groups.group_name = %(group_name_1)s 
+ LIMIT %(param_1)s
+2026-06-20 16:17:50,140 INFO sqlalchemy.engine.Engine [cached since 0.7768s ago] [SQL parameters hidden due to hide_parameters=True]
+2026-06-20 16:17:50,142 INFO sqlalchemy.engine.Engine SELECT generations.id AS generations_id, generations.user_id AS generations_user_id, generations.product_id AS generations_product_id, generations.sku AS generations_sku, generations.type AS generations_type, generations.prompt AS generations_prompt, generations.negative_prompt AS generations_negative_prompt, generations.source_image_path AS generations_source_image_path, generations.result_image_path AS generations_result_image_path, generations.result_images AS generations_result_images, generations.result_video_path AS generations_result_video_path, generations.model_name AS generations_model_name, generations.parameters AS generations_parameters, generations.status AS generations_status, generations.error_message AS generations_error_message, generations.created_at AS generations_created_at 
+FROM generations 
+WHERE generations.result_image_path = %(result_image_path_1)s OR generations.result_video_path = %(result_video_path_1)s OR (CAST(generations.result_images AS VARCHAR) LIKE '%%' || %(param_1)s || '%%') 
+ LIMIT %(param_2)s
+2026-06-20 16:17:50,142 INFO sqlalchemy.engine.Engine [cached since 0.116s ago] [SQL parameters hidden due to hide_parameters=True]
+2026-06-20 16:17:50,146 INFO sqlalchemy.engine.Engine ROLLBACK
+INFO:     127.0.0.1:5089 - "POST /api/files/sign HTTP/1.1" 403 Forbidden
+2026-06-20 16:17:50,153 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-06-20 16:17:50,154 INFO sqlalchemy.engine.Engine SELECT users.id AS users_id, users.username AS users_username, users.user_type AS users_user_type, users.password_hash AS users_password_hash, users.display_name AS users_display_name, users.email AS users_email, users.is_active AS users_is_active, users.created_at AS users_created_at, users.updated_at AS users_updated_at 
+FROM users 
+WHERE users.id = %(id_1)s 
+ LIMIT %(param_1)s
+2026-06-20 16:17:50,154 INFO sqlalchemy.engine.Engine [cached since 0.1542s ago] [SQL parameters hidden due to hide_parameters=True]
+2026-06-20 16:17:50,156 INFO sqlalchemy.engine.Engine SELECT user_groups.user_id AS user_groups_user_id, user_groups.id AS user_groups_id, user_groups.group_id AS user_groups_group_id, user_groups.group_role AS user_groups_group_role, user_groups.created_at AS user_groups_created_at, user_groups.updated_at AS user_groups_updated_at 
+FROM user_groups 
+WHERE user_groups.user_id IN (%(primary_keys_1)s)
+2026-06-20 16:17:50,156 INFO sqlalchemy.engine.Engine [cached since 156.7s ago] [SQL parameters hidden due to hide_parameters=True]
+2026-06-20 16:17:50,157 INFO sqlalchemy.engine.Engine SELECT groups.id AS groups_id, groups.group_name AS groups_group_name, groups.description AS groups_description, groups.created_at AS groups_created_at, groups.updated_at AS groups_updated_at 
+FROM groups 
+WHERE groups.id IN (%(primary_keys_1)s)
+2026-06-20 16:17:50,158 INFO sqlalchemy.engine.Engine [cached since 156.7s ago] [SQL parameters hidden due to hide_parameters=True]
+2026-06-20 16:17:50,159 INFO sqlalchemy.engine.Engine ROLLBACK
+INFO:     127.0.0.1:5089 - "POST /api/files/sign HTTP/1.1" 403 Forbidden
+2026-06-20 16:17:50,164 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-06-20 16:17:50,164 INFO sqlalchemy.engine.Engine SELECT users.id AS users_id, users.username AS users_username, users.user_type AS users_user_type, users.password_hash AS users_password_hash, users.display_name AS users_display_name, users.email AS users_email, users.is_active AS users_is_active, users.created_at AS users_created_at, users.updated_at AS users_updated_at 
+FROM users 
+WHERE users.id = %(id_1)s 
+ LIMIT %(param_1)s
+2026-06-20 16:17:50,165 INFO sqlalchemy.engine.Engine [cached since 0.1655s ago] [SQL parameters hidden due to hide_parameters=True]
+2026-06-20 16:17:50,168 INFO sqlalchemy.engine.Engine SELECT user_groups.user_id AS user_groups_user_id, user_groups.id AS user_groups_id, user_groups.group_id AS user_groups_group_id, user_groups.group_role AS user_groups_group_role, user_groups.created_at AS user_groups_created_at, user_groups.updated_at AS user_groups_updated_at 
+FROM user_groups 
+WHERE user_groups.user_id IN (%(primary_keys_1)s)
+2026-06-20 16:17:50,168 INFO sqlalchemy.engine.Engine [cached since 156.7s ago] [SQL parameters hidden due to hide_parameters=True]
+2026-06-20 16:17:50,170 INFO sqlalchemy.engine.Engine SELECT groups.id AS groups_id, groups.group_name AS groups_group_name, groups.description AS groups_description, groups.created_at AS groups_created_at, groups.updated_at AS groups_updated_at 
+FROM groups 
+WHERE groups.id IN (%(primary_keys_1)s)
+2026-06-20 16:17:50,170 INFO sqlalchemy.engine.Engine [cached since 156.7s ago] [SQL parameters hidden due to hide_parameters=True]
+2026-06-20 16:17:50,172 INFO sqlalchemy.engine.Engine SELECT user_groups.id AS user_groups_id, user_groups.user_id AS user_groups_user_id, user_groups.group_id AS user_groups_group_id, user_groups.group_role AS user_groups_group_role, user_groups.created_at AS user_groups_created_at, user_groups.updated_at AS user_groups_updated_at 
+FROM user_groups JOIN groups ON user_groups.group_id = groups.id 
+WHERE user_groups.user_id = %(user_id_1)s::UUID AND groups.group_name = %(group_name_1)s 
+ LIMIT %(param_1)s
+2026-06-20 16:17:50,172 INFO sqlalchemy.engine.Engine [cached since 0.8093s ago] [SQL parameters hidden due to hide_parameters=True]
+2026-06-20 16:17:50,174 INFO sqlalchemy.engine.Engine SELECT groups.id AS groups_id, groups.group_name AS groups_group_name, groups.description AS groups_description, groups.created_at AS groups_created_at, groups.updated_at AS groups_updated_at 
+FROM groups 
+WHERE groups.id IN (%(primary_keys_1)s)
+2026-06-20 16:17:50,174 INFO sqlalchemy.engine.Engine [cached since 0.814s ago] [SQL parameters hidden due to hide_parameters=True]
+2026-06-20 16:17:50,176 INFO sqlalchemy.engine.Engine SELECT user_groups.id AS user_groups_id, user_groups.user_id AS user_groups_user_id, user_groups.group_id AS user_groups_group_id, user_groups.group_role AS user_groups_group_role, user_groups.created_at AS user_groups_created_at, user_groups.updated_at AS user_groups_updated_at 
+FROM user_groups JOIN groups ON user_groups.group_id = groups.id 
+WHERE user_groups.user_id = %(user_id_1)s::UUID AND groups.group_name = %(group_name_1)s 
+ LIMIT %(param_1)s
+2026-06-20 16:17:50,177 INFO sqlalchemy.engine.Engine [cached since 0.8138s ago] [SQL parameters hidden due to hide_parameters=True]
+2026-06-20 16:17:50,179 INFO sqlalchemy.engine.Engine SELECT groups.id AS groups_id, groups.group_name AS groups_group_name, groups.description AS groups_description, groups.created_at AS groups_created_at, groups.updated_at AS groups_updated_at 
+FROM groups 
+WHERE groups.id IN (%(primary_keys_1)s)
+2026-06-20 16:17:50,179 INFO sqlalchemy.engine.Engine [cached since 0.8188s ago] [SQL parameters hidden due to hide_parameters=True]
+2026-06-20 16:17:50,182 INFO sqlalchemy.engine.Engine SELECT knowledge_documents.id AS knowledge_documents_id, knowledge_documents.source_type AS knowledge_documents_source_type, knowledge_documents.source_id AS knowledge_documents_source_id, knowledge_documents.sku AS knowledge_documents_sku, knowledge_documents.title AS knowledge_documents_title, knowledge_documents.content AS knowledge_documents_content, knowledge_documents.metadata_json AS knowledge_documents_metadata_json, knowledge_documents.file_name AS knowledge_documents_file_name, knowledge_documents.file_path AS knowledge_documents_file_path, knowledge_documents.file_type AS knowledge_documents_file_type, knowledge_documents.file_hash AS knowledge_documents_file_hash, knowledge_documents.page_count AS knowledge_documents_page_count, knowledge_documents.parse_status AS knowledge_documents_parse_status, knowledge_documents.parse_error AS knowledge_documents_parse_error, knowledge_documents.related_skus_json AS knowledge_documents_related_skus_json, knowledge_documents.is_active AS knowledge_documents_is_active, knowledge_documents.created_by AS knowledge_documents_created_by, knowledge_documents.created_at AS knowledge_documents_created_at, knowledge_documents.updated_at AS knowledge_documents_updated_at 
+FROM knowledge_documents 
+WHERE knowledge_documents.id = %(id_1)s 
+ LIMIT %(param_1)s
+2026-06-20 16:17:50,182 INFO sqlalchemy.engine.Engine [generated in 0.00072s] [SQL parameters hidden due to hide_parameters=True]
+2026-06-20 16:17:50,187 INFO sqlalchemy.engine.Engine ROLLBACK
+INFO:     127.0.0.1:5089 - "GET /api/knowledge-base/files/22222222-3333-4444-8555-666666666666/download HTTP/1.1" 200 OK
+2026-06-20 16:17:50,211 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-06-20 16:17:50,224 INFO sqlalchemy.engine.Engine SELECT users.id AS users_id, users.username AS users_username, users.user_type AS users_user_type, users.password_hash AS users_password_hash, users.display_name AS users_display_name, users.email AS users_email, users.is_active AS users_is_active, users.created_at AS users_created_at, users.updated_at AS users_updated_at 
+FROM users 
+WHERE users.id = %(id_1)s 
+ LIMIT %(param_1)s
+2026-06-20 16:17:50,224 INFO sqlalchemy.engine.Engine [cached since 0.224s ago] [SQL parameters hidden due to hide_parameters=True]
+2026-06-20 16:17:50,225 INFO sqlalchemy.engine.Engine SELECT user_groups.user_id AS user_groups_user_id, user_groups.id AS user_groups_id, user_groups.group_id AS user_groups_group_id, user_groups.group_role AS user_groups_group_role, user_groups.created_at AS user_groups_created_at, user_groups.updated_at AS user_groups_updated_at 
+FROM user_groups 
+WHERE user_groups.user_id IN (%(primary_keys_1)s)
+2026-06-20 16:17:50,225 INFO sqlalchemy.engine.Engine [cached since 156.8s ago] [SQL parameters hidden due to hide_parameters=True]
+2026-06-20 16:17:50,227 INFO sqlalchemy.engine.Engine SELECT user_groups.id AS user_groups_id, user_groups.user_id AS user_groups_user_id, user_groups.group_id AS user_groups_group_id, user_groups.group_role AS user_groups_group_role, user_groups.created_at AS user_groups_created_at, user_groups.updated_at AS user_groups_updated_at 
+FROM user_groups JOIN groups ON user_groups.group_id = groups.id 
+WHERE user_groups.user_id = %(user_id_1)s::UUID AND groups.group_name = %(group_name_1)s 
+ LIMIT %(param_1)s
+2026-06-20 16:17:50,227 INFO sqlalchemy.engine.Engine [cached since 0.8646s ago] [SQL parameters hidden due to hide_parameters=True]
+2026-06-20 16:17:50,229 INFO sqlalchemy.engine.Engine ROLLBACK
+INFO:     127.0.0.1:5089 - "GET /api/knowledge-base/files/22222222-3333-4444-8555-666666666666/download HTTP/1.1" 403 Forbidden
+2026-06-20 16:22:52,809 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-06-20 16:22:52,810 INFO sqlalchemy.engine.Engine SELECT users.id AS users_id, users.username AS users_username, users.user_type AS users_user_type, users.password_hash AS users_password_hash, users.display_name AS users_display_name, users.email AS users_email, users.is_active AS users_is_active, users.created_at AS users_created_at, users.updated_at AS users_updated_at 
+FROM users 
+WHERE users.username = %(username_1)s 
+ LIMIT %(param_1)s
+2026-06-20 16:22:52,811 INFO sqlalchemy.engine.Engine [cached since 459.4s ago] [SQL parameters hidden due to hide_parameters=True]
+2026-06-20 16:22:52,813 INFO sqlalchemy.engine.Engine SELECT user_groups.user_id AS user_groups_user_id, user_groups.id AS user_groups_id, user_groups.group_id AS user_groups_group_id, user_groups.group_role AS user_groups_group_role, user_groups.created_at AS user_groups_created_at, user_groups.updated_at AS user_groups_updated_at 
+FROM user_groups 
+WHERE user_groups.user_id IN (%(primary_keys_1)s)
+2026-06-20 16:22:52,814 INFO sqlalchemy.engine.Engine [cached since 459.4s ago] [SQL parameters hidden due to hide_parameters=True]
+2026-06-20 16:22:52,816 INFO sqlalchemy.engine.Engine SELECT groups.id AS groups_id, groups.group_name AS groups_group_name, groups.description AS groups_description, groups.created_at AS groups_created_at, groups.updated_at AS groups_updated_at 
+FROM groups 
+WHERE groups.id IN (%(primary_keys_1)s)
+2026-06-20 16:22:52,817 INFO sqlalchemy.engine.Engine [cached since 459.4s ago] [SQL parameters hidden due to hide_parameters=True]
+2026-06-20 16:22:53,049 INFO sqlalchemy.engine.Engine SELECT user_groups.id AS user_groups_id, user_groups.user_id AS user_groups_user_id, user_groups.group_id AS user_groups_group_id, user_groups.group_role AS user_groups_group_role, user_groups.created_at AS user_groups_created_at, user_groups.updated_at AS user_groups_updated_at, groups.id AS groups_id, groups.group_name AS groups_group_name, groups.description AS groups_description, groups.created_at AS groups_created_at, groups.updated_at AS groups_updated_at 
+FROM user_groups JOIN groups ON user_groups.group_id = groups.id 
+WHERE user_groups.user_id = %(user_id_1)s::UUID
+2026-06-20 16:22:53,050 INFO sqlalchemy.engine.Engine [cached since 303.7s ago] [SQL parameters hidden due to hide_parameters=True]
+2026-06-20 16:22:53,052 INFO sqlalchemy.engine.Engine SELECT groups.id AS groups_id, groups.group_name AS groups_group_name, groups.description AS groups_description, groups.created_at AS groups_created_at, groups.updated_at AS groups_updated_at 
+FROM groups 
+WHERE groups.id IN (%(primary_keys_1)s)
+2026-06-20 16:22:53,053 INFO sqlalchemy.engine.Engine [cached since 303.7s ago] [SQL parameters hidden due to hide_parameters=True]
+2026-06-20 16:22:53,056 INFO sqlalchemy.engine.Engine SELECT user_groups.id AS user_groups_id, user_groups.user_id AS user_groups_user_id, user_groups.group_id AS user_groups_group_id, user_groups.group_role AS user_groups_group_role, user_groups.created_at AS user_groups_created_at, user_groups.updated_at AS user_groups_updated_at 
+FROM user_groups JOIN groups ON user_groups.group_id = groups.id 
+WHERE user_groups.user_id = %(user_id_1)s::UUID AND groups.group_name = %(group_name_1)s 
+ LIMIT %(param_1)s
+2026-06-20 16:22:53,056 INFO sqlalchemy.engine.Engine [cached since 303.7s ago] [SQL parameters hidden due to hide_parameters=True]
+2026-06-20 16:22:53,058 INFO sqlalchemy.engine.Engine SELECT groups.id AS groups_id, groups.group_name AS groups_group_name, groups.description AS groups_description, groups.created_at AS groups_created_at, groups.updated_at AS groups_updated_at 
+FROM groups 
+WHERE groups.id IN (%(primary_keys_1)s)
+2026-06-20 16:22:53,059 INFO sqlalchemy.engine.Engine [cached since 303.7s ago] [SQL parameters hidden due to hide_parameters=True]
+2026-06-20 16:22:53,060 INFO sqlalchemy.engine.Engine SELECT permissions.permission_key AS permissions_permission_key 
+FROM permissions ORDER BY permissions.permission_key
+2026-06-20 16:22:53,060 INFO sqlalchemy.engine.Engine [cached since 303.7s ago] [SQL parameters hidden due to hide_parameters=True]
+2026-06-20 16:22:53,061 INFO sqlalchemy.engine.Engine ROLLBACK
+INFO:     127.0.0.1:5471 - "POST /api/auth/login HTTP/1.1" 200 OK
+2026-06-20 16:22:55,199 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-06-20 16:22:55,200 INFO sqlalchemy.engine.Engine SELECT users.id AS users_id, users.username AS users_username, users.user_type AS users_user_type, users.password_hash AS users_password_hash, users.display_name AS users_display_name, users.email AS users_email, users.is_active AS users_is_active, users.created_at AS users_created_at, users.updated_at AS users_updated_at 
+FROM users 
+WHERE users.id = %(id_1)s 
+ LIMIT %(param_1)s
+2026-06-20 16:22:55,200 INFO sqlalchemy.engine.Engine [cached since 305.2s ago] [SQL parameters hidden due to hide_parameters=True]
+2026-06-20 16:22:55,202 INFO sqlalchemy.engine.Engine SELECT user_groups.user_id AS user_groups_user_id, user_groups.id AS user_groups_id, user_groups.group_id AS user_groups_group_id, user_groups.group_role AS user_groups_group_role, user_groups.created_at AS user_groups_created_at, user_groups.updated_at AS user_groups_updated_at 
+FROM user_groups 
+WHERE user_groups.user_id IN (%(primary_keys_1)s)
+2026-06-20 16:22:55,202 INFO sqlalchemy.engine.Engine [cached since 461.8s ago] [SQL parameters hidden due to hide_parameters=True]
+2026-06-20 16:22:55,203 INFO sqlalchemy.engine.Engine SELECT groups.id AS groups_id, groups.group_name AS groups_group_name, groups.description AS groups_description, groups.created_at AS groups_created_at, groups.updated_at AS groups_updated_at 
+FROM groups 
+WHERE groups.id IN (%(primary_keys_1)s)
+2026-06-20 16:22:55,203 INFO sqlalchemy.engine.Engine [cached since 461.8s ago] [SQL parameters hidden due to hide_parameters=True]
+2026-06-20 16:22:55,206 INFO sqlalchemy.engine.Engine SELECT user_groups.id AS user_groups_id, user_groups.user_id AS user_groups_user_id, user_groups.group_id AS user_groups_group_id, user_groups.group_role AS user_groups_group_role, user_groups.created_at AS user_groups_created_at, user_groups.updated_at AS user_groups_updated_at 
+FROM user_groups JOIN groups ON user_groups.group_id = groups.id 
+WHERE user_groups.user_id = %(user_id_1)s::UUID AND groups.group_name = %(group_name_1)s 
+ LIMIT %(param_1)s
+2026-06-20 16:22:55,206 INFO sqlalchemy.engine.Engine [cached since 305.8s ago] [SQL parameters hidden due to hide_parameters=True]
+2026-06-20 16:22:55,208 INFO sqlalchemy.engine.Engine SELECT groups.id AS groups_id, groups.group_name AS groups_group_name, groups.description AS groups_description, groups.created_at AS groups_created_at, groups.updated_at AS groups_updated_at 
+FROM groups 
+WHERE groups.id IN (%(primary_keys_1)s)
+2026-06-20 16:22:55,208 INFO sqlalchemy.engine.Engine [cached since 305.8s ago] [SQL parameters hidden due to hide_parameters=True]
+2026-06-20 16:22:55,210 INFO sqlalchemy.engine.Engine SELECT product_categories.id AS product_categories_id, product_categories.category_name AS product_categories_category_name, product_categories.parent_id AS product_categories_parent_id, product_categories.description AS product_categories_description, product_categories.created_at AS product_categories_created_at 
+FROM product_categories ORDER BY product_categories.id
+2026-06-20 16:22:55,210 INFO sqlalchemy.engine.Engine [generated in 0.00038s] [SQL parameters hidden due to hide_parameters=True]
+2026-06-20 16:22:55,213 INFO sqlalchemy.engine.Engine ROLLBACK
+INFO:     127.0.0.1:5479 - "GET /api/categories HTTP/1.1" 200 OK
+2026-06-20 16:22:55,218 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-06-20 16:22:55,218 INFO sqlalchemy.engine.Engine SELECT users.id AS users_id, users.username AS users_username, users.user_type AS users_user_type, users.password_hash AS users_password_hash, users.display_name AS users_display_name, users.email AS users_email, users.is_active AS users_is_active, users.created_at AS users_created_at, users.updated_at AS users_updated_at 
+FROM users 
+WHERE users.id = %(id_1)s 
+ LIMIT %(param_1)s
+2026-06-20 16:22:55,219 INFO sqlalchemy.engine.Engine [cached since 305.2s ago] [SQL parameters hidden due to hide_parameters=True]
+2026-06-20 16:22:55,221 INFO sqlalchemy.engine.Engine SELECT user_groups.user_id AS user_groups_user_id, user_groups.id AS user_groups_id, user_groups.group_id AS user_groups_group_id, user_groups.group_role AS user_groups_group_role, user_groups.created_at AS user_groups_created_at, user_groups.updated_at AS user_groups_updated_at 
+FROM user_groups 
+WHERE user_groups.user_id IN (%(primary_keys_1)s)
+2026-06-20 16:22:55,222 INFO sqlalchemy.engine.Engine [cached since 461.8s ago] [SQL parameters hidden due to hide_parameters=True]
+2026-06-20 16:22:55,223 INFO sqlalchemy.engine.Engine SELECT groups.id AS groups_id, groups.group_name AS groups_group_name, groups.description AS groups_description, groups.created_at AS groups_created_at, groups.updated_at AS groups_updated_at 
+FROM groups 
+WHERE groups.id IN (%(primary_keys_1)s)
+2026-06-20 16:22:55,224 INFO sqlalchemy.engine.Engine [cached since 461.8s ago] [SQL parameters hidden due to hide_parameters=True]
+2026-06-20 16:22:55,226 INFO sqlalchemy.engine.Engine SELECT user_groups.id AS user_groups_id, user_groups.user_id AS user_groups_user_id, user_groups.group_id AS user_groups_group_id, user_groups.group_role AS user_groups_group_role, user_groups.created_at AS user_groups_created_at, user_groups.updated_at AS user_groups_updated_at 
+FROM user_groups JOIN groups ON user_groups.group_id = groups.id 
+WHERE user_groups.user_id = %(user_id_1)s::UUID AND groups.group_name = %(group_name_1)s 
+ LIMIT %(param_1)s
+2026-06-20 16:22:55,226 INFO sqlalchemy.engine.Engine [cached since 305.9s ago] [SQL parameters hidden due to hide_parameters=True]
+2026-06-20 16:22:55,227 INFO sqlalchemy.engine.Engine SELECT groups.id AS groups_id, groups.group_name AS groups_group_name, groups.description AS groups_description, groups.created_at AS groups_created_at, groups.updated_at AS groups_updated_at 
+FROM groups 
+WHERE groups.id IN (%(primary_keys_1)s)
+2026-06-20 16:22:55,227 INFO sqlalchemy.engine.Engine [cached since 305.9s ago] [SQL parameters hidden due to hide_parameters=True]
+2026-06-20 16:22:55,228 INFO sqlalchemy.engine.Engine SELECT product_categories.id AS product_categories_id, product_categories.category_name AS product_categories_category_name, product_categories.parent_id AS product_categories_parent_id, product_categories.description AS product_categories_description, product_categories.created_at AS product_categories_created_at 
+FROM product_categories ORDER BY product_categories.id
+2026-06-20 16:22:55,229 INFO sqlalchemy.engine.Engine [cached since 0.01919s ago] [SQL parameters hidden due to hide_parameters=True]
+2026-06-20 16:22:55,230 INFO sqlalchemy.engine.Engine ROLLBACK
+INFO:     127.0.0.1:5480 - "GET /api/categories HTTP/1.1" 200 OK
+2026-06-20 16:23:26,438 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-06-20 16:23:26,439 INFO sqlalchemy.engine.Engine SELECT users.id AS users_id, users.username AS users_username, users.user_type AS users_user_type, users.password_hash AS users_password_hash, users.display_name AS users_display_name, users.email AS users_email, users.is_active AS users_is_active, users.created_at AS users_created_at, users.updated_at AS users_updated_at 
+FROM users 
+WHERE users.id = %(id_1)s 
+ LIMIT %(param_1)s
+2026-06-20 16:23:26,439 INFO sqlalchemy.engine.Engine [cached since 336.4s ago] [SQL parameters hidden due to hide_parameters=True]
+2026-06-20 16:23:26,439 INFO sqlalchemy.engine.Engine SELECT user_groups.user_id AS user_groups_user_id, user_groups.id AS user_groups_id, user_groups.group_id AS user_groups_group_id, user_groups.group_role AS user_groups_group_role, user_groups.created_at AS user_groups_created_at, user_groups.updated_at AS user_groups_updated_at 
+FROM user_groups 
+WHERE user_groups.user_id IN (%(primary_keys_1)s)
+2026-06-20 16:23:26,440 INFO sqlalchemy.engine.Engine [cached since 493s ago] [SQL parameters hidden due to hide_parameters=True]
+2026-06-20 16:23:26,441 INFO sqlalchemy.engine.Engine SELECT groups.id AS groups_id, groups.group_name AS groups_group_name, groups.description AS groups_description, groups.created_at AS groups_created_at, groups.updated_at AS groups_updated_at 
+FROM groups 
+WHERE groups.id IN (%(primary_keys_1)s)
+2026-06-20 16:23:26,441 INFO sqlalchemy.engine.Engine [cached since 493s ago] [SQL parameters hidden due to hide_parameters=True]
+2026-06-20 16:23:26,444 INFO sqlalchemy.engine.Engine SELECT user_groups.id AS user_groups_id, user_groups.user_id AS user_groups_user_id, user_groups.group_id AS user_groups_group_id, user_groups.group_role AS user_groups_group_role, user_groups.created_at AS user_groups_created_at, user_groups.updated_at AS user_groups_updated_at 
+FROM user_groups JOIN groups ON user_groups.group_id = groups.id 
+WHERE user_groups.user_id = %(user_id_1)s::UUID AND groups.group_name = %(group_name_1)s 
+ LIMIT %(param_1)s
+2026-06-20 16:23:26,444 INFO sqlalchemy.engine.Engine [cached since 337.1s ago] [SQL parameters hidden due to hide_parameters=True]
+2026-06-20 16:23:26,445 INFO sqlalchemy.engine.Engine SELECT groups.id AS groups_id, groups.group_name AS groups_group_name, groups.description AS groups_description, groups.created_at AS groups_created_at, groups.updated_at AS groups_updated_at 
+FROM groups 
+WHERE groups.id IN (%(primary_keys_1)s)
+2026-06-20 16:23:26,446 INFO sqlalchemy.engine.Engine [cached since 337.1s ago] [SQL parameters hidden due to hide_parameters=True]
+2026-06-20 16:23:26,449 INFO sqlalchemy.engine.Engine INSERT INTO operation_logs (id, operator_id, operator_type, action_type, action_name, target_type, target_id, target_name, request_data, response_data, status, error_message, ip_address, user_agent, created_at) VALUES (%(id)s, %(operator_id)s, %(operator_type)s, %(action_type)s, %(action_name)s, %(target_type)s, %(target_id)s, %(target_name)s, %(request_data)s, %(response_data)s, %(status)s, %(error_message)s, %(ip_address)s, %(user_agent)s, %(created_at)s)
+2026-06-20 16:23:26,449 INFO sqlalchemy.engine.Engine [generated in 0.00057s] [SQL parameters hidden due to hide_parameters=True]
+2026-06-20 16:23:26,459 INFO sqlalchemy.engine.Engine COMMIT
+2026-06-20 16:23:26,489 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-06-20 16:23:26,490 INFO sqlalchemy.engine.Engine SELECT operation_logs.id, operation_logs.operator_id, operation_logs.operator_type, operation_logs.action_type, operation_logs.action_name, operation_logs.target_type, operation_logs.target_id, operation_logs.target_name, operation_logs.request_data, operation_logs.response_data, operation_logs.status, operation_logs.error_message, operation_logs.ip_address, operation_logs.user_agent, operation_logs.created_at 
+FROM operation_logs 
+WHERE operation_logs.id = %(pk_1)s
+2026-06-20 16:23:26,491 INFO sqlalchemy.engine.Engine [generated in 0.00049s] [SQL parameters hidden due to hide_parameters=True]
+2026-06-20 16:23:26,495 INFO sqlalchemy.engine.Engine ROLLBACK
+INFO:     127.0.0.1:5512 - "POST /api/products/images/upload HTTP/1.1" 200 OK
+2026-06-20 16:23:26,522 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-06-20 16:23:26,524 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-06-20 16:23:26,525 INFO sqlalchemy.engine.Engine SELECT users.id AS users_id, users.username AS users_username, users.user_type AS users_user_type, users.password_hash AS users_password_hash, users.display_name AS users_display_name, users.email AS users_email, users.is_active AS users_is_active, users.created_at AS users_created_at, users.updated_at AS users_updated_at 
+FROM users 
+WHERE users.id = %(id_1)s 
+ LIMIT %(param_1)s
+2026-06-20 16:23:26,526 INFO sqlalchemy.engine.Engine SELECT users.id AS users_id, users.username AS users_username, users.user_type AS users_user_type, users.password_hash AS users_password_hash, users.display_name AS users_display_name, users.email AS users_email, users.is_active AS users_is_active, users.created_at AS users_created_at, users.updated_at AS users_updated_at 
+FROM users 
+WHERE users.id = %(id_1)s 
+ LIMIT %(param_1)s
+2026-06-20 16:23:26,526 INFO sqlalchemy.engine.Engine [cached since 336.5s ago] [SQL parameters hidden due to hide_parameters=True]
+2026-06-20 16:23:26,527 INFO sqlalchemy.engine.Engine [cached since 336.5s ago] [SQL parameters hidden due to hide_parameters=True]
+2026-06-20 16:23:26,531 INFO sqlalchemy.engine.Engine SELECT user_groups.user_id AS user_groups_user_id, user_groups.id AS user_groups_id, user_groups.group_id AS user_groups_group_id, user_groups.group_role AS user_groups_group_role, user_groups.created_at AS user_groups_created_at, user_groups.updated_at AS user_groups_updated_at 
+FROM user_groups 
+WHERE user_groups.user_id IN (%(primary_keys_1)s)
+2026-06-20 16:23:26,533 INFO sqlalchemy.engine.Engine SELECT user_groups.user_id AS user_groups_user_id, user_groups.id AS user_groups_id, user_groups.group_id AS user_groups_group_id, user_groups.group_role AS user_groups_group_role, user_groups.created_at AS user_groups_created_at, user_groups.updated_at AS user_groups_updated_at 
+FROM user_groups 
+WHERE user_groups.user_id IN (%(primary_keys_1)s)
+2026-06-20 16:23:26,533 INFO sqlalchemy.engine.Engine [cached since 493.1s ago] [SQL parameters hidden due to hide_parameters=True]
+2026-06-20 16:23:26,534 INFO sqlalchemy.engine.Engine [cached since 493.1s ago] [SQL parameters hidden due to hide_parameters=True]
+2026-06-20 16:23:26,536 INFO sqlalchemy.engine.Engine SELECT groups.id AS groups_id, groups.group_name AS groups_group_name, groups.description AS groups_description, groups.created_at AS groups_created_at, groups.updated_at AS groups_updated_at 
+FROM groups 
+WHERE groups.id IN (%(primary_keys_1)s)
+2026-06-20 16:23:26,537 INFO sqlalchemy.engine.Engine SELECT groups.id AS groups_id, groups.group_name AS groups_group_name, groups.description AS groups_description, groups.created_at AS groups_created_at, groups.updated_at AS groups_updated_at 
+FROM groups 
+WHERE groups.id IN (%(primary_keys_1)s)
+2026-06-20 16:23:26,537 INFO sqlalchemy.engine.Engine [cached since 493.1s ago] [SQL parameters hidden due to hide_parameters=True]
+2026-06-20 16:23:26,538 INFO sqlalchemy.engine.Engine [cached since 493.1s ago] [SQL parameters hidden due to hide_parameters=True]
+2026-06-20 16:23:26,541 INFO sqlalchemy.engine.Engine SELECT user_groups.id AS user_groups_id, user_groups.user_id AS user_groups_user_id, user_groups.group_id AS user_groups_group_id, user_groups.group_role AS user_groups_group_role, user_groups.created_at AS user_groups_created_at, user_groups.updated_at AS user_groups_updated_at 
+FROM user_groups JOIN groups ON user_groups.group_id = groups.id 
+WHERE user_groups.user_id = %(user_id_1)s::UUID AND groups.group_name = %(group_name_1)s 
+ LIMIT %(param_1)s
+2026-06-20 16:23:26,541 INFO sqlalchemy.engine.Engine [cached since 337.2s ago] [SQL parameters hidden due to hide_parameters=True]
+2026-06-20 16:23:26,543 INFO sqlalchemy.engine.Engine SELECT user_groups.id AS user_groups_id, user_groups.user_id AS user_groups_user_id, user_groups.group_id AS user_groups_group_id, user_groups.group_role AS user_groups_group_role, user_groups.created_at AS user_groups_created_at, user_groups.updated_at AS user_groups_updated_at 
+FROM user_groups JOIN groups ON user_groups.group_id = groups.id 
+WHERE user_groups.user_id = %(user_id_1)s::UUID AND groups.group_name = %(group_name_1)s 
+ LIMIT %(param_1)s
+2026-06-20 16:23:26,544 INFO sqlalchemy.engine.Engine SELECT groups.id AS groups_id, groups.group_name AS groups_group_name, groups.description AS groups_description, groups.created_at AS groups_created_at, groups.updated_at AS groups_updated_at 
+FROM groups 
+WHERE groups.id IN (%(primary_keys_1)s)
+2026-06-20 16:23:26,545 INFO sqlalchemy.engine.Engine [cached since 337.2s ago] [SQL parameters hidden due to hide_parameters=True]
+2026-06-20 16:23:26,545 INFO sqlalchemy.engine.Engine [cached since 337.2s ago] [SQL parameters hidden due to hide_parameters=True]
+2026-06-20 16:23:26,548 INFO sqlalchemy.engine.Engine SELECT groups.id AS groups_id, groups.group_name AS groups_group_name, groups.description AS groups_description, groups.created_at AS groups_created_at, groups.updated_at AS groups_updated_at 
+FROM groups 
+WHERE groups.id IN (%(primary_keys_1)s)
+2026-06-20 16:23:26,548 INFO sqlalchemy.engine.Engine [cached since 337.2s ago] [SQL parameters hidden due to hide_parameters=True]
+2026-06-20 16:23:26,550 INFO sqlalchemy.engine.Engine ROLLBACK
+2026-06-20 16:23:26,550 INFO sqlalchemy.engine.Engine ROLLBACK
+INFO:     127.0.0.1:5515 - "POST /api/files/sign HTTP/1.1" 200 OK
+INFO:     127.0.0.1:5517 - "POST /api/files/sign HTTP/1.1" 200 OK
+INFO:     127.0.0.1:5521 - "GET /api/files/signed/eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIvdXBsb2Fkcy9pbWFnZXMvYTEwMGUwMDJjMTlhNDhkMzgxOGM1YzU0ODMzYjI1ZDQucG5nIiwiYXVkIjoiZmlsZS1hY2Nlc3MiLCJleHAiOjE3ODE5NDQ0MDZ9.GpMeMbOWPQ21hmX4WzG7EksoHr351CUZizQRDmNFNzM HTTP/1.1" 200 OK
+2026-06-20 16:23:41,982 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-06-20 16:23:41,984 INFO sqlalchemy.engine.Engine SELECT users.id AS users_id, users.username AS users_username, users.user_type AS users_user_type, users.password_hash AS users_password_hash, users.display_name AS users_display_name, users.email AS users_email, users.is_active AS users_is_active, users.created_at AS users_created_at, users.updated_at AS users_updated_at 
+FROM users 
+WHERE users.id = %(id_1)s 
+ LIMIT %(param_1)s
+2026-06-20 16:23:41,984 INFO sqlalchemy.engine.Engine [cached since 352s ago] [SQL parameters hidden due to hide_parameters=True]
+2026-06-20 16:23:41,986 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-06-20 16:23:41,988 INFO sqlalchemy.engine.Engine SELECT users.id AS users_id, users.username AS users_username, users.user_type AS users_user_type, users.password_hash AS users_password_hash, users.display_name AS users_display_name, users.email AS users_email, users.is_active AS users_is_active, users.created_at AS users_created_at, users.updated_at AS users_updated_at 
+FROM users 
+WHERE users.id = %(id_1)s 
+ LIMIT %(param_1)s
+2026-06-20 16:23:41,989 INFO sqlalchemy.engine.Engine SELECT user_groups.user_id AS user_groups_user_id, user_groups.id AS user_groups_id, user_groups.group_id AS user_groups_group_id, user_groups.group_role AS user_groups_group_role, user_groups.created_at AS user_groups_created_at, user_groups.updated_at AS user_groups_updated_at 
+FROM user_groups 
+WHERE user_groups.user_id IN (%(primary_keys_1)s)
+2026-06-20 16:23:41,989 INFO sqlalchemy.engine.Engine [cached since 352s ago] [SQL parameters hidden due to hide_parameters=True]
+2026-06-20 16:23:41,990 INFO sqlalchemy.engine.Engine [cached since 508.5s ago] [SQL parameters hidden due to hide_parameters=True]
+2026-06-20 16:23:41,992 INFO sqlalchemy.engine.Engine SELECT user_groups.user_id AS user_groups_user_id, user_groups.id AS user_groups_id, user_groups.group_id AS user_groups_group_id, user_groups.group_role AS user_groups_group_role, user_groups.created_at AS user_groups_created_at, user_groups.updated_at AS user_groups_updated_at 
+FROM user_groups 
+WHERE user_groups.user_id IN (%(primary_keys_1)s)
+2026-06-20 16:23:41,995 INFO sqlalchemy.engine.Engine SELECT groups.id AS groups_id, groups.group_name AS groups_group_name, groups.description AS groups_description, groups.created_at AS groups_created_at, groups.updated_at AS groups_updated_at 
+FROM groups 
+WHERE groups.id IN (%(primary_keys_1)s)
+2026-06-20 16:23:41,995 INFO sqlalchemy.engine.Engine [cached since 508.5s ago] [SQL parameters hidden due to hide_parameters=True]
+2026-06-20 16:23:41,996 INFO sqlalchemy.engine.Engine [cached since 508.5s ago] [SQL parameters hidden due to hide_parameters=True]
+2026-06-20 16:23:41,999 INFO sqlalchemy.engine.Engine SELECT groups.id AS groups_id, groups.group_name AS groups_group_name, groups.description AS groups_description, groups.created_at AS groups_created_at, groups.updated_at AS groups_updated_at 
+FROM groups 
+WHERE groups.id IN (%(primary_keys_1)s)
+2026-06-20 16:23:41,999 INFO sqlalchemy.engine.Engine [cached since 508.5s ago] [SQL parameters hidden due to hide_parameters=True]
+2026-06-20 16:23:42,002 INFO sqlalchemy.engine.Engine SELECT user_groups.id AS user_groups_id, user_groups.user_id AS user_groups_user_id, user_groups.group_id AS user_groups_group_id, user_groups.group_role AS user_groups_group_role, user_groups.created_at AS user_groups_created_at, user_groups.updated_at AS user_groups_updated_at 
+FROM user_groups JOIN groups ON user_groups.group_id = groups.id 
+WHERE user_groups.user_id = %(user_id_1)s::UUID AND groups.group_name = %(group_name_1)s 
+ LIMIT %(param_1)s
+2026-06-20 16:23:42,003 INFO sqlalchemy.engine.Engine [cached since 352.6s ago] [SQL parameters hidden due to hide_parameters=True]
+2026-06-20 16:23:42,006 INFO sqlalchemy.engine.Engine SELECT user_groups.id AS user_groups_id, user_groups.user_id AS user_groups_user_id, user_groups.group_id AS user_groups_group_id, user_groups.group_role AS user_groups_group_role, user_groups.created_at AS user_groups_created_at, user_groups.updated_at AS user_groups_updated_at 
+FROM user_groups JOIN groups ON user_groups.group_id = groups.id 
+WHERE user_groups.user_id = %(user_id_1)s::UUID AND groups.group_name = %(group_name_1)s 
+ LIMIT %(param_1)s
+2026-06-20 16:23:42,006 INFO sqlalchemy.engine.Engine [cached since 352.6s ago] [SQL parameters hidden due to hide_parameters=True]
+2026-06-20 16:23:42,008 INFO sqlalchemy.engine.Engine SELECT groups.id AS groups_id, groups.group_name AS groups_group_name, groups.description AS groups_description, groups.created_at AS groups_created_at, groups.updated_at AS groups_updated_at 
+FROM groups 
+WHERE groups.id IN (%(primary_keys_1)s)
+2026-06-20 16:23:42,008 INFO sqlalchemy.engine.Engine [cached since 352.6s ago] [SQL parameters hidden due to hide_parameters=True]
+2026-06-20 16:23:42,009 INFO sqlalchemy.engine.Engine SELECT groups.id AS groups_id, groups.group_name AS groups_group_name, groups.description AS groups_description, groups.created_at AS groups_created_at, groups.updated_at AS groups_updated_at 
+FROM groups 
+WHERE groups.id IN (%(primary_keys_1)s)
+2026-06-20 16:23:42,011 INFO sqlalchemy.engine.Engine [cached since 352.6s ago] [SQL parameters hidden due to hide_parameters=True]
+2026-06-20 16:23:42,013 INFO sqlalchemy.engine.Engine ROLLBACK
+2026-06-20 16:23:42,014 INFO sqlalchemy.engine.Engine SELECT product_categories.id AS product_categories_id, product_categories.category_name AS product_categories_category_name, product_categories.parent_id AS product_categories_parent_id, product_categories.description AS product_categories_description, product_categories.created_at AS product_categories_created_at 
+FROM product_categories ORDER BY product_categories.id
+2026-06-20 16:23:42,015 INFO sqlalchemy.engine.Engine [cached since 46.8s ago] [SQL parameters hidden due to hide_parameters=True]
+INFO:     127.0.0.1:5550 - "POST /api/files/sign HTTP/1.1" 200 OK
+2026-06-20 16:23:42,019 INFO sqlalchemy.engine.Engine ROLLBACK
+INFO:     127.0.0.1:5551 - "GET /api/categories HTTP/1.1" 200 OK
+2026-06-20 16:23:42,058 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-06-20 16:23:42,067 INFO sqlalchemy.engine.Engine SELECT users.id AS users_id, users.username AS users_username, users.user_type AS users_user_type, users.password_hash AS users_password_hash, users.display_name AS users_display_name, users.email AS users_email, users.is_active AS users_is_active, users.created_at AS users_created_at, users.updated_at AS users_updated_at 
+FROM users 
+WHERE users.id = %(id_1)s 
+ LIMIT %(param_1)s
+2026-06-20 16:23:42,068 INFO sqlalchemy.engine.Engine [cached since 352.1s ago] [SQL parameters hidden due to hide_parameters=True]
+2026-06-20 16:23:42,073 INFO sqlalchemy.engine.Engine SELECT user_groups.user_id AS user_groups_user_id, user_groups.id AS user_groups_id, user_groups.group_id AS user_groups_group_id, user_groups.group_role AS user_groups_group_role, user_groups.created_at AS user_groups_created_at, user_groups.updated_at AS user_groups_updated_at 
+FROM user_groups 
+WHERE user_groups.user_id IN (%(primary_keys_1)s)
+2026-06-20 16:23:42,073 INFO sqlalchemy.engine.Engine [cached since 508.6s ago] [SQL parameters hidden due to hide_parameters=True]
+2026-06-20 16:23:42,076 INFO sqlalchemy.engine.Engine SELECT groups.id AS groups_id, groups.group_name AS groups_group_name, groups.description AS groups_description, groups.created_at AS groups_created_at, groups.updated_at AS groups_updated_at 
+FROM groups 
+WHERE groups.id IN (%(primary_keys_1)s)
+2026-06-20 16:23:42,077 INFO sqlalchemy.engine.Engine [cached since 508.6s ago] [SQL parameters hidden due to hide_parameters=True]
+2026-06-20 16:23:42,080 INFO sqlalchemy.engine.Engine SELECT user_groups.id AS user_groups_id, user_groups.user_id AS user_groups_user_id, user_groups.group_id AS user_groups_group_id, user_groups.group_role AS user_groups_group_role, user_groups.created_at AS user_groups_created_at, user_groups.updated_at AS user_groups_updated_at 
+FROM user_groups JOIN groups ON user_groups.group_id = groups.id 
+WHERE user_groups.user_id = %(user_id_1)s::UUID AND groups.group_name = %(group_name_1)s 
+ LIMIT %(param_1)s
+2026-06-20 16:23:42,080 INFO sqlalchemy.engine.Engine [cached since 352.7s ago] [SQL parameters hidden due to hide_parameters=True]
+2026-06-20 16:23:42,084 INFO sqlalchemy.engine.Engine SELECT groups.id AS groups_id, groups.group_name AS groups_group_name, groups.description AS groups_description, groups.created_at AS groups_created_at, groups.updated_at AS groups_updated_at 
+FROM groups 
+WHERE groups.id IN (%(primary_keys_1)s)
+2026-06-20 16:23:42,085 INFO sqlalchemy.engine.Engine [cached since 352.7s ago] [SQL parameters hidden due to hide_parameters=True]
+2026-06-20 16:23:42,104 INFO sqlalchemy.engine.Engine ROLLBACK
+INFO:     127.0.0.1:5552 - "POST /api/files/sign HTTP/1.1" 200 OK
+INFO:     127.0.0.1:5555 - "GET /api/files/signed/eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIvdXBsb2Fkcy9pbWFnZXMvYTEwMGUwMDJjMTlhNDhkMzgxOGM1YzU0ODMzYjI1ZDQucG5nIiwiYXVkIjoiZmlsZS1hY2Nlc3MiLCJleHAiOjE3ODE5NDQ0MjJ9.9D4nr4AqlR6Mb6g1iG-7OjwSIdWiVJHkPtC_5Sm1n4k HTTP/1.1" 200 OK
+2026-06-20 16:23:54,764 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-06-20 16:23:54,765 INFO sqlalchemy.engine.Engine SELECT users.id AS users_id, users.username AS users_username, users.user_type AS users_user_type, users.password_hash AS users_password_hash, users.display_name AS users_display_name, users.email AS users_email, users.is_active AS users_is_active, users.created_at AS users_created_at, users.updated_at AS users_updated_at 
+FROM users 
+WHERE users.id = %(id_1)s 
+ LIMIT %(param_1)s
+2026-06-20 16:23:54,765 INFO sqlalchemy.engine.Engine [cached since 364.8s ago] [SQL parameters hidden due to hide_parameters=True]
+2026-06-20 16:23:54,767 INFO sqlalchemy.engine.Engine SELECT user_groups.user_id AS user_groups_user_id, user_groups.id AS user_groups_id, user_groups.group_id AS user_groups_group_id, user_groups.group_role AS user_groups_group_role, user_groups.created_at AS user_groups_created_at, user_groups.updated_at AS user_groups_updated_at 
+FROM user_groups 
+WHERE user_groups.user_id IN (%(primary_keys_1)s)
+2026-06-20 16:23:54,768 INFO sqlalchemy.engine.Engine [cached since 521.3s ago] [SQL parameters hidden due to hide_parameters=True]
+2026-06-20 16:23:54,770 INFO sqlalchemy.engine.Engine SELECT groups.id AS groups_id, groups.group_name AS groups_group_name, groups.description AS groups_description, groups.created_at AS groups_created_at, groups.updated_at AS groups_updated_at 
+FROM groups 
+WHERE groups.id IN (%(primary_keys_1)s)
+2026-06-20 16:23:54,770 INFO sqlalchemy.engine.Engine [cached since 521.3s ago] [SQL parameters hidden due to hide_parameters=True]
+2026-06-20 16:23:54,772 INFO sqlalchemy.engine.Engine SELECT user_groups.id AS user_groups_id, user_groups.user_id AS user_groups_user_id, user_groups.group_id AS user_groups_group_id, user_groups.group_role AS user_groups_group_role, user_groups.created_at AS user_groups_created_at, user_groups.updated_at AS user_groups_updated_at 
+FROM user_groups JOIN groups ON user_groups.group_id = groups.id 
+WHERE user_groups.user_id = %(user_id_1)s::UUID AND groups.group_name = %(group_name_1)s 
+ LIMIT %(param_1)s
+2026-06-20 16:23:54,772 INFO sqlalchemy.engine.Engine [cached since 365.4s ago] [SQL parameters hidden due to hide_parameters=True]
+2026-06-20 16:23:54,774 INFO sqlalchemy.engine.Engine SELECT groups.id AS groups_id, groups.group_name AS groups_group_name, groups.description AS groups_description, groups.created_at AS groups_created_at, groups.updated_at AS groups_updated_at 
+FROM groups 
+WHERE groups.id IN (%(primary_keys_1)s)
+2026-06-20 16:23:54,775 INFO sqlalchemy.engine.Engine [cached since 365.4s ago] [SQL parameters hidden due to hide_parameters=True]
+2026-06-20 16:23:54,777 INFO sqlalchemy.engine.Engine SELECT product_categories.id AS product_categories_id, product_categories.category_name AS product_categories_category_name, product_categories.parent_id AS product_categories_parent_id, product_categories.description AS product_categories_description, product_categories.created_at AS product_categories_created_at 
+FROM product_categories ORDER BY product_categories.id
+2026-06-20 16:23:54,777 INFO sqlalchemy.engine.Engine [cached since 59.57s ago] [SQL parameters hidden due to hide_parameters=True]
+2026-06-20 16:23:54,780 INFO sqlalchemy.engine.Engine ROLLBACK
+INFO:     127.0.0.1:5566 - "GET /api/categories HTTP/1.1" 200 OK
+2026-06-20 16:23:54,789 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-06-20 16:23:54,799 INFO sqlalchemy.engine.Engine SELECT users.id AS users_id, users.username AS users_username, users.user_type AS users_user_type, users.password_hash AS users_password_hash, users.display_name AS users_display_name, users.email AS users_email, users.is_active AS users_is_active, users.created_at AS users_created_at, users.updated_at AS users_updated_at 
+FROM users 
+WHERE users.id = %(id_1)s 
+ LIMIT %(param_1)s
+2026-06-20 16:23:54,799 INFO sqlalchemy.engine.Engine [cached since 364.8s ago] [SQL parameters hidden due to hide_parameters=True]
+2026-06-20 16:23:54,801 INFO sqlalchemy.engine.Engine SELECT user_groups.user_id AS user_groups_user_id, user_groups.id AS user_groups_id, user_groups.group_id AS user_groups_group_id, user_groups.group_role AS user_groups_group_role, user_groups.created_at AS user_groups_created_at, user_groups.updated_at AS user_groups_updated_at 
+FROM user_groups 
+WHERE user_groups.user_id IN (%(primary_keys_1)s)
+2026-06-20 16:23:54,801 INFO sqlalchemy.engine.Engine [cached since 521.4s ago] [SQL parameters hidden due to hide_parameters=True]
+2026-06-20 16:23:54,803 INFO sqlalchemy.engine.Engine SELECT groups.id AS groups_id, groups.group_name AS groups_group_name, groups.description AS groups_description, groups.created_at AS groups_created_at, groups.updated_at AS groups_updated_at 
+FROM groups 
+WHERE groups.id IN (%(primary_keys_1)s)
+2026-06-20 16:23:54,803 INFO sqlalchemy.engine.Engine [cached since 521.4s ago] [SQL parameters hidden due to hide_parameters=True]
+2026-06-20 16:23:54,804 INFO sqlalchemy.engine.Engine SELECT user_groups.id AS user_groups_id, user_groups.user_id AS user_groups_user_id, user_groups.group_id AS user_groups_group_id, user_groups.group_role AS user_groups_group_role, user_groups.created_at AS user_groups_created_at, user_groups.updated_at AS user_groups_updated_at 
+FROM user_groups JOIN groups ON user_groups.group_id = groups.id 
+WHERE user_groups.user_id = %(user_id_1)s::UUID AND groups.group_name = %(group_name_1)s 
+ LIMIT %(param_1)s
+2026-06-20 16:23:54,805 INFO sqlalchemy.engine.Engine [cached since 365.4s ago] [SQL parameters hidden due to hide_parameters=True]
+2026-06-20 16:23:54,806 INFO sqlalchemy.engine.Engine SELECT groups.id AS groups_id, groups.group_name AS groups_group_name, groups.description AS groups_description, groups.created_at AS groups_created_at, groups.updated_at AS groups_updated_at 
+FROM groups 
+WHERE groups.id IN (%(primary_keys_1)s)
+2026-06-20 16:23:54,806 INFO sqlalchemy.engine.Engine [cached since 365.4s ago] [SQL parameters hidden due to hide_parameters=True]
+2026-06-20 16:23:54,807 INFO sqlalchemy.engine.Engine SELECT product_categories.id AS product_categories_id, product_categories.category_name AS product_categories_category_name, product_categories.parent_id AS product_categories_parent_id, product_categories.description AS product_categories_description, product_categories.created_at AS product_categories_created_at 
+FROM product_categories ORDER BY product_categories.id
+2026-06-20 16:23:54,808 INFO sqlalchemy.engine.Engine [cached since 59.6s ago] [SQL parameters hidden due to hide_parameters=True]
+2026-06-20 16:23:54,810 INFO sqlalchemy.engine.Engine ROLLBACK
+INFO:     127.0.0.1:5567 - "GET /api/categories HTTP/1.1" 200 OK
+2026-06-20 16:23:55,381 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-06-20 16:23:55,382 INFO sqlalchemy.engine.Engine SELECT users.id AS users_id, users.username AS users_username, users.user_type AS users_user_type, users.password_hash AS users_password_hash, users.display_name AS users_display_name, users.email AS users_email, users.is_active AS users_is_active, users.created_at AS users_created_at, users.updated_at AS users_updated_at 
+FROM users 
+WHERE users.id = %(id_1)s 
+ LIMIT %(param_1)s
+2026-06-20 16:23:55,383 INFO sqlalchemy.engine.Engine [cached since 365.4s ago] [SQL parameters hidden due to hide_parameters=True]
+2026-06-20 16:23:55,384 INFO sqlalchemy.engine.Engine SELECT user_groups.user_id AS user_groups_user_id, user_groups.id AS user_groups_id, user_groups.group_id AS user_groups_group_id, user_groups.group_role AS user_groups_group_role, user_groups.created_at AS user_groups_created_at, user_groups.updated_at AS user_groups_updated_at 
+FROM user_groups 
+WHERE user_groups.user_id IN (%(primary_keys_1)s)
+2026-06-20 16:23:55,385 INFO sqlalchemy.engine.Engine [cached since 521.9s ago] [SQL parameters hidden due to hide_parameters=True]
+2026-06-20 16:23:55,386 INFO sqlalchemy.engine.Engine SELECT groups.id AS groups_id, groups.group_name AS groups_group_name, groups.description AS groups_description, groups.created_at AS groups_created_at, groups.updated_at AS groups_updated_at 
+FROM groups 
+WHERE groups.id IN (%(primary_keys_1)s)
+2026-06-20 16:23:55,387 INFO sqlalchemy.engine.Engine [cached since 521.9s ago] [SQL parameters hidden due to hide_parameters=True]
+2026-06-20 16:23:55,389 INFO sqlalchemy.engine.Engine SELECT user_groups.id AS user_groups_id, user_groups.user_id AS user_groups_user_id, user_groups.group_id AS user_groups_group_id, user_groups.group_role AS user_groups_group_role, user_groups.created_at AS user_groups_created_at, user_groups.updated_at AS user_groups_updated_at 
+FROM user_groups JOIN groups ON user_groups.group_id = groups.id 
+WHERE user_groups.user_id = %(user_id_1)s::UUID AND groups.group_name = %(group_name_1)s 
+ LIMIT %(param_1)s
+2026-06-20 16:23:55,390 INFO sqlalchemy.engine.Engine [cached since 366s ago] [SQL parameters hidden due to hide_parameters=True]
+2026-06-20 16:23:55,392 INFO sqlalchemy.engine.Engine SELECT groups.id AS groups_id, groups.group_name AS groups_group_name, groups.description AS groups_description, groups.created_at AS groups_created_at, groups.updated_at AS groups_updated_at 
+FROM groups 
+WHERE groups.id IN (%(primary_keys_1)s)
+2026-06-20 16:23:55,393 INFO sqlalchemy.engine.Engine [cached since 366s ago] [SQL parameters hidden due to hide_parameters=True]
+2026-06-20 16:23:55,396 INFO sqlalchemy.engine.Engine SELECT product_categories.id AS product_categories_id, product_categories.category_name AS product_categories_category_name, product_categories.parent_id AS product_categories_parent_id, product_categories.description AS product_categories_description, product_categories.created_at AS product_categories_created_at 
+FROM product_categories ORDER BY product_categories.id
+2026-06-20 16:23:55,396 INFO sqlalchemy.engine.Engine [cached since 60.19s ago] [SQL parameters hidden due to hide_parameters=True]
+2026-06-20 16:23:55,399 INFO sqlalchemy.engine.Engine ROLLBACK
+INFO:     127.0.0.1:5572 - "GET /api/categories HTTP/1.1" 200 OK
+2026-06-20 16:23:55,405 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-06-20 16:23:55,407 INFO sqlalchemy.engine.Engine SELECT users.id AS users_id, users.username AS users_username, users.user_type AS users_user_type, users.password_hash AS users_password_hash, users.display_name AS users_display_name, users.email AS users_email, users.is_active AS users_is_active, users.created_at AS users_created_at, users.updated_at AS users_updated_at 
+FROM users 
+WHERE users.id = %(id_1)s 
+ LIMIT %(param_1)s
+2026-06-20 16:23:55,408 INFO sqlalchemy.engine.Engine [cached since 365.4s ago] [SQL parameters hidden due to hide_parameters=True]
+2026-06-20 16:23:55,409 INFO sqlalchemy.engine.Engine SELECT user_groups.user_id AS user_groups_user_id, user_groups.id AS user_groups_id, user_groups.group_id AS user_groups_group_id, user_groups.group_role AS user_groups_group_role, user_groups.created_at AS user_groups_created_at, user_groups.updated_at AS user_groups_updated_at 
+FROM user_groups 
+WHERE user_groups.user_id IN (%(primary_keys_1)s)
+2026-06-20 16:23:55,410 INFO sqlalchemy.engine.Engine [cached since 522s ago] [SQL parameters hidden due to hide_parameters=True]
+2026-06-20 16:23:55,411 INFO sqlalchemy.engine.Engine SELECT groups.id AS groups_id, groups.group_name AS groups_group_name, groups.description AS groups_description, groups.created_at AS groups_created_at, groups.updated_at AS groups_updated_at 
+FROM groups 
+WHERE groups.id IN (%(primary_keys_1)s)
+2026-06-20 16:23:55,412 INFO sqlalchemy.engine.Engine [cached since 522s ago] [SQL parameters hidden due to hide_parameters=True]
+2026-06-20 16:23:55,414 INFO sqlalchemy.engine.Engine SELECT user_groups.id AS user_groups_id, user_groups.user_id AS user_groups_user_id, user_groups.group_id AS user_groups_group_id, user_groups.group_role AS user_groups_group_role, user_groups.created_at AS user_groups_created_at, user_groups.updated_at AS user_groups_updated_at 
+FROM user_groups JOIN groups ON user_groups.group_id = groups.id 
+WHERE user_groups.user_id = %(user_id_1)s::UUID AND groups.group_name = %(group_name_1)s 
+ LIMIT %(param_1)s
+2026-06-20 16:23:55,415 INFO sqlalchemy.engine.Engine [cached since 366.1s ago] [SQL parameters hidden due to hide_parameters=True]
+2026-06-20 16:23:55,416 INFO sqlalchemy.engine.Engine SELECT groups.id AS groups_id, groups.group_name AS groups_group_name, groups.description AS groups_description, groups.created_at AS groups_created_at, groups.updated_at AS groups_updated_at 
+FROM groups 
+WHERE groups.id IN (%(primary_keys_1)s)
+2026-06-20 16:23:55,417 INFO sqlalchemy.engine.Engine [cached since 366.1s ago] [SQL parameters hidden due to hide_parameters=True]
+2026-06-20 16:23:55,419 INFO sqlalchemy.engine.Engine SELECT product_categories.id AS product_categories_id, product_categories.category_name AS product_categories_category_name, product_categories.parent_id AS product_categories_parent_id, product_categories.description AS product_categories_description, product_categories.created_at AS product_categories_created_at 
+FROM product_categories ORDER BY product_categories.id
+2026-06-20 16:23:55,419 INFO sqlalchemy.engine.Engine [cached since 60.21s ago] [SQL parameters hidden due to hide_parameters=True]
+2026-06-20 16:23:55,420 INFO sqlalchemy.engine.Engine ROLLBACK
+INFO:     127.0.0.1:5573 - "GET /api/categories HTTP/1.1" 200 OK
+2026-06-20 16:23:56,526 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-06-20 16:23:56,527 INFO sqlalchemy.engine.Engine SELECT users.id AS users_id, users.username AS users_username, users.user_type AS users_user_type, users.password_hash AS users_password_hash, users.display_name AS users_display_name, users.email AS users_email, users.is_active AS users_is_active, users.created_at AS users_created_at, users.updated_at AS users_updated_at 
+FROM users 
+WHERE users.id = %(id_1)s 
+ LIMIT %(param_1)s
+2026-06-20 16:23:56,528 INFO sqlalchemy.engine.Engine [cached since 366.5s ago] [SQL parameters hidden due to hide_parameters=True]
+2026-06-20 16:23:56,530 INFO sqlalchemy.engine.Engine SELECT user_groups.user_id AS user_groups_user_id, user_groups.id AS user_groups_id, user_groups.group_id AS user_groups_group_id, user_groups.group_role AS user_groups_group_role, user_groups.created_at AS user_groups_created_at, user_groups.updated_at AS user_groups_updated_at 
+FROM user_groups 
+WHERE user_groups.user_id IN (%(primary_keys_1)s)
+2026-06-20 16:23:56,530 INFO sqlalchemy.engine.Engine [cached since 523.1s ago] [SQL parameters hidden due to hide_parameters=True]
+2026-06-20 16:23:56,531 INFO sqlalchemy.engine.Engine SELECT groups.id AS groups_id, groups.group_name AS groups_group_name, groups.description AS groups_description, groups.created_at AS groups_created_at, groups.updated_at AS groups_updated_at 
+FROM groups 
+WHERE groups.id IN (%(primary_keys_1)s)
+2026-06-20 16:23:56,532 INFO sqlalchemy.engine.Engine [cached since 523.1s ago] [SQL parameters hidden due to hide_parameters=True]
+2026-06-20 16:23:56,533 INFO sqlalchemy.engine.Engine SELECT user_groups.id AS user_groups_id, user_groups.user_id AS user_groups_user_id, user_groups.group_id AS user_groups_group_id, user_groups.group_role AS user_groups_group_role, user_groups.created_at AS user_groups_created_at, user_groups.updated_at AS user_groups_updated_at 
+FROM user_groups JOIN groups ON user_groups.group_id = groups.id 
+WHERE user_groups.user_id = %(user_id_1)s::UUID AND groups.group_name = %(group_name_1)s 
+ LIMIT %(param_1)s
+2026-06-20 16:23:56,534 INFO sqlalchemy.engine.Engine [cached since 367.2s ago] [SQL parameters hidden due to hide_parameters=True]
+2026-06-20 16:23:56,535 INFO sqlalchemy.engine.Engine SELECT groups.id AS groups_id, groups.group_name AS groups_group_name, groups.description AS groups_description, groups.created_at AS groups_created_at, groups.updated_at AS groups_updated_at 
+FROM groups 
+WHERE groups.id IN (%(primary_keys_1)s)
+2026-06-20 16:23:56,535 INFO sqlalchemy.engine.Engine [cached since 367.2s ago] [SQL parameters hidden due to hide_parameters=True]
+2026-06-20 16:23:56,537 INFO sqlalchemy.engine.Engine INSERT INTO operation_logs (id, operator_id, operator_type, action_type, action_name, target_type, target_id, target_name, request_data, response_data, status, error_message, ip_address, user_agent, created_at) VALUES (%(id)s, %(operator_id)s, %(operator_type)s, %(action_type)s, %(action_name)s, %(target_type)s, %(target_id)s, %(target_name)s, %(request_data)s, %(response_data)s, %(status)s, %(error_message)s, %(ip_address)s, %(user_agent)s, %(created_at)s)
+2026-06-20 16:23:56,538 INFO sqlalchemy.engine.Engine [cached since 30.09s ago] [SQL parameters hidden due to hide_parameters=True]
+2026-06-20 16:23:56,539 INFO sqlalchemy.engine.Engine COMMIT
+2026-06-20 16:23:56,550 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-06-20 16:23:56,578 INFO sqlalchemy.engine.Engine SELECT operation_logs.id, operation_logs.operator_id, operation_logs.operator_type, operation_logs.action_type, operation_logs.action_name, operation_logs.target_type, operation_logs.target_id, operation_logs.target_name, operation_logs.request_data, operation_logs.response_data, operation_logs.status, operation_logs.error_message, operation_logs.ip_address, operation_logs.user_agent, operation_logs.created_at 
+FROM operation_logs 
+WHERE operation_logs.id = %(pk_1)s
+2026-06-20 16:23:56,578 INFO sqlalchemy.engine.Engine [cached since 30.09s ago] [SQL parameters hidden due to hide_parameters=True]
+2026-06-20 16:23:56,582 INFO sqlalchemy.engine.Engine ROLLBACK
+INFO:     127.0.0.1:5575 - "POST /api/products/images/upload HTTP/1.1" 200 OK
+2026-06-20 16:23:56,598 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-06-20 16:23:56,599 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-06-20 16:23:56,608 INFO sqlalchemy.engine.Engine SELECT users.id AS users_id, users.username AS users_username, users.user_type AS users_user_type, users.password_hash AS users_password_hash, users.display_name AS users_display_name, users.email AS users_email, users.is_active AS users_is_active, users.created_at AS users_created_at, users.updated_at AS users_updated_at 
+FROM users 
+WHERE users.id = %(id_1)s 
+ LIMIT %(param_1)s
+2026-06-20 16:23:56,608 INFO sqlalchemy.engine.Engine SELECT users.id AS users_id, users.username AS users_username, users.user_type AS users_user_type, users.password_hash AS users_password_hash, users.display_name AS users_display_name, users.email AS users_email, users.is_active AS users_is_active, users.created_at AS users_created_at, users.updated_at AS users_updated_at 
+FROM users 
+WHERE users.id = %(id_1)s 
+ LIMIT %(param_1)s
+2026-06-20 16:23:56,609 INFO sqlalchemy.engine.Engine [cached since 366.6s ago] [SQL parameters hidden due to hide_parameters=True]
+2026-06-20 16:23:56,609 INFO sqlalchemy.engine.Engine [cached since 366.6s ago] [SQL parameters hidden due to hide_parameters=True]
+2026-06-20 16:23:56,611 INFO sqlalchemy.engine.Engine SELECT user_groups.user_id AS user_groups_user_id, user_groups.id AS user_groups_id, user_groups.group_id AS user_groups_group_id, user_groups.group_role AS user_groups_group_role, user_groups.created_at AS user_groups_created_at, user_groups.updated_at AS user_groups_updated_at 
+FROM user_groups 
+WHERE user_groups.user_id IN (%(primary_keys_1)s)
+2026-06-20 16:23:56,612 INFO sqlalchemy.engine.Engine SELECT user_groups.user_id AS user_groups_user_id, user_groups.id AS user_groups_id, user_groups.group_id AS user_groups_group_id, user_groups.group_role AS user_groups_group_role, user_groups.created_at AS user_groups_created_at, user_groups.updated_at AS user_groups_updated_at 
+FROM user_groups 
+WHERE user_groups.user_id IN (%(primary_keys_1)s)
+2026-06-20 16:23:56,612 INFO sqlalchemy.engine.Engine [cached since 523.2s ago] [SQL parameters hidden due to hide_parameters=True]
+2026-06-20 16:23:56,612 INFO sqlalchemy.engine.Engine [cached since 523.2s ago] [SQL parameters hidden due to hide_parameters=True]
+2026-06-20 16:23:56,614 INFO sqlalchemy.engine.Engine SELECT groups.id AS groups_id, groups.group_name AS groups_group_name, groups.description AS groups_description, groups.created_at AS groups_created_at, groups.updated_at AS groups_updated_at 
+FROM groups 
+WHERE groups.id IN (%(primary_keys_1)s)
+2026-06-20 16:23:56,615 INFO sqlalchemy.engine.Engine SELECT groups.id AS groups_id, groups.group_name AS groups_group_name, groups.description AS groups_description, groups.created_at AS groups_created_at, groups.updated_at AS groups_updated_at 
+FROM groups 
+WHERE groups.id IN (%(primary_keys_1)s)
+2026-06-20 16:23:56,615 INFO sqlalchemy.engine.Engine [cached since 523.2s ago] [SQL parameters hidden due to hide_parameters=True]
+2026-06-20 16:23:56,615 INFO sqlalchemy.engine.Engine [cached since 523.2s ago] [SQL parameters hidden due to hide_parameters=True]
+2026-06-20 16:23:56,616 INFO sqlalchemy.engine.Engine SELECT user_groups.id AS user_groups_id, user_groups.user_id AS user_groups_user_id, user_groups.group_id AS user_groups_group_id, user_groups.group_role AS user_groups_group_role, user_groups.created_at AS user_groups_created_at, user_groups.updated_at AS user_groups_updated_at 
+FROM user_groups JOIN groups ON user_groups.group_id = groups.id 
+WHERE user_groups.user_id = %(user_id_1)s::UUID AND groups.group_name = %(group_name_1)s 
+ LIMIT %(param_1)s
+2026-06-20 16:23:56,617 INFO sqlalchemy.engine.Engine [cached since 367.3s ago] [SQL parameters hidden due to hide_parameters=True]
+2026-06-20 16:23:56,617 INFO sqlalchemy.engine.Engine SELECT user_groups.id AS user_groups_id, user_groups.user_id AS user_groups_user_id, user_groups.group_id AS user_groups_group_id, user_groups.group_role AS user_groups_group_role, user_groups.created_at AS user_groups_created_at, user_groups.updated_at AS user_groups_updated_at 
+FROM user_groups JOIN groups ON user_groups.group_id = groups.id 
+WHERE user_groups.user_id = %(user_id_1)s::UUID AND groups.group_name = %(group_name_1)s 
+ LIMIT %(param_1)s
+2026-06-20 16:23:56,618 INFO sqlalchemy.engine.Engine SELECT groups.id AS groups_id, groups.group_name AS groups_group_name, groups.description AS groups_description, groups.created_at AS groups_created_at, groups.updated_at AS groups_updated_at 
+FROM groups 
+WHERE groups.id IN (%(primary_keys_1)s)
+2026-06-20 16:23:56,618 INFO sqlalchemy.engine.Engine [cached since 367.3s ago] [SQL parameters hidden due to hide_parameters=True]
+2026-06-20 16:23:56,618 INFO sqlalchemy.engine.Engine [cached since 367.3s ago] [SQL parameters hidden due to hide_parameters=True]
+2026-06-20 16:23:56,619 INFO sqlalchemy.engine.Engine SELECT groups.id AS groups_id, groups.group_name AS groups_group_name, groups.description AS groups_description, groups.created_at AS groups_created_at, groups.updated_at AS groups_updated_at 
+FROM groups 
+WHERE groups.id IN (%(primary_keys_1)s)
+2026-06-20 16:23:56,620 INFO sqlalchemy.engine.Engine [cached since 367.3s ago] [SQL parameters hidden due to hide_parameters=True]
+2026-06-20 16:23:56,621 INFO sqlalchemy.engine.Engine ROLLBACK
+INFO:     127.0.0.1:5578 - "POST /api/files/sign HTTP/1.1" 200 OK
+2026-06-20 16:23:56,624 INFO sqlalchemy.engine.Engine ROLLBACK
+INFO:     127.0.0.1:5579 - "POST /api/files/sign HTTP/1.1" 200 OK
+INFO:     127.0.0.1:5581 - "GET /api/files/signed/eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIvdXBsb2Fkcy9pbWFnZXMvNzM0ZjllYjBiZWYxNDUyZjk5MTE0NjIzYmNjNWRjMDYucG5nIiwiYXVkIjoiZmlsZS1hY2Nlc3MiLCJleHAiOjE3ODE5NDQ0MzZ9.GoF9t643FTLdxNzTGNH66-ya7FwaCeEbosML5qQJfWY HTTP/1.1" 200 OK

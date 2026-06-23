@@ -3,6 +3,7 @@ import { api } from '../services/api'
 import type { GenerationRecord, GenerationStats } from '../types'
 import { useAuthStore } from '../store/authStore'
 import Lightbox from '../components/Lightbox'
+import { SecureImage, SecureVideo } from '../components/SecureFile'
 
 export default function History() {
   const [records, setRecords] = useState<GenerationRecord[]>([])
@@ -293,7 +294,7 @@ export default function History() {
                     <div>
                       <label className="text-xs font-medium text-apple-gray-dark mb-2 block">生成结果</label>
                       {selected.result_video_path ? (
-                        <video src={selected.result_video_path} controls className="w-full rounded-xl" />
+                        <SecureVideo src={selected.result_video_path} controls className="w-full rounded-xl" />
                       ) : selected.result_images && selected.result_images.length > 1 ? (
                         <div className="grid grid-cols-2 gap-2">
                           {selected.result_images.map((url: string, idx: number) => (
@@ -302,15 +303,15 @@ export default function History() {
                               onClick={() => { setLightboxImages(selected.result_images || []); setLightboxIndex(idx) }}
                               className="relative aspect-square rounded-xl overflow-hidden cursor-pointer"
                             >
-                              <img src={url} alt={`结果 ${idx + 1}`} className="w-full h-full object-cover" />
+                              <SecureImage src={url} alt={`result ${idx + 1}`} className="w-full h-full object-cover" />
                               <span className="absolute top-1.5 left-1.5 text-[10px] bg-black/60 text-white px-1.5 rounded">#{idx + 1}</span>
                             </button>
                           ))}
                         </div>
                       ) : selected.result_images && selected.result_images.length === 1 ? (
-                        <img src={selected.result_images[0]} alt="Result" className="w-full rounded-xl" />
+                        <SecureImage src={selected.result_images[0]} alt="Result" className="w-full rounded-xl" />
                       ) : (
-                        <img src={selected.result_image_path} alt="Result" className="w-full rounded-xl" />
+                        <SecureImage src={selected.result_image_path || ''} alt="Result" className="w-full rounded-xl" />
                       )}
                     </div>
                   )}

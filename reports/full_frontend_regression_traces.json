@@ -1,0 +1,377 @@
+[
+  {
+    "question": "推荐一款适合2个人露营做饭的锅",
+    "conversation_id": "081af452-14a7-42c1-9195-345edad706d5",
+    "first_content_ms": 3705,
+    "last_content_ms": 5260,
+    "content_count": 148,
+    "trace": {
+      "trace_id": "d324613c437b4399add64d63ce0aacd1",
+      "conversation_id": "081af452-14a7-42c1-9195-345edad706d5",
+      "agent_mode": "agent",
+      "intent": "recommend_products",
+      "result_skus": [
+        "CW-C05-37",
+        "CW-C83",
+        "CW-C83-1",
+        "CW-C83-2",
+        "CW-C01-37"
+      ],
+      "llm_call_count": 1,
+      "prompt_chars": 6643,
+      "total_ms": 5225.48,
+      "first_token_ms": 3551.44,
+      "hit_faq_fast_path": false,
+      "entered_process_agent_request": true,
+      "entered_process_intent_fallback": false,
+      "entered_semantic_retrieve": true,
+      "entered_hybrid_search": true,
+      "recommendation_context_found": true,
+      "previous_recommended_skus_excluded": [],
+      "type": "trace"
+    },
+    "group": "recommendation_three_turns",
+    "turn": 1
+  },
+  {
+    "question": "为什么推荐这个",
+    "conversation_id": "081af452-14a7-42c1-9195-345edad706d5",
+    "first_content_ms": 7008,
+    "last_content_ms": 9889,
+    "content_count": 251,
+    "trace": {
+      "trace_id": "56eede92c6b04bd1928a7e5780f27614",
+      "conversation_id": "081af452-14a7-42c1-9195-345edad706d5",
+      "agent_mode": "agent",
+      "intent": "product_detail",
+      "result_skus": [
+        "CW-C05-37",
+        "CW-C83",
+        "CW-C83-1",
+        "CW-C83-2",
+        "CW-C01-37"
+      ],
+      "llm_call_count": 1,
+      "prompt_chars": 6580,
+      "total_ms": 9847.44,
+      "first_token_ms": 6902.71,
+      "hit_faq_fast_path": false,
+      "entered_process_agent_request": true,
+      "entered_process_intent_fallback": false,
+      "entered_semantic_retrieve": false,
+      "entered_hybrid_search": false,
+      "recommendation_context_found": true,
+      "previous_recommended_skus_excluded": [],
+      "type": "trace"
+    },
+    "group": "recommendation_three_turns",
+    "turn": 2
+  },
+  {
+    "question": "换一个推荐，不要刚才那个",
+    "conversation_id": "081af452-14a7-42c1-9195-345edad706d5",
+    "first_content_ms": 5037,
+    "last_content_ms": 6135,
+    "content_count": 102,
+    "trace": {
+      "trace_id": "b05ef3ce3726476e9a22a0f59193f76d",
+      "conversation_id": "081af452-14a7-42c1-9195-345edad706d5",
+      "agent_mode": "agent",
+      "intent": "recommend_products",
+      "result_skus": [
+        "CS-B14",
+        "CW-C93",
+        "CF-PG19PRO",
+        "TW-502"
+      ],
+      "llm_call_count": 1,
+      "prompt_chars": 4427,
+      "total_ms": 6096.46,
+      "first_token_ms": 4933.38,
+      "hit_faq_fast_path": false,
+      "entered_process_agent_request": true,
+      "entered_process_intent_fallback": false,
+      "entered_semantic_retrieve": true,
+      "entered_hybrid_search": true,
+      "recommendation_context_found": true,
+      "previous_recommended_skus_excluded": [
+        "CW-C05-37",
+        "CW-C83",
+        "CW-C83-1",
+        "CW-C83-2",
+        "CW-C01-37"
+      ],
+      "type": "trace"
+    },
+    "group": "recommendation_three_turns",
+    "turn": 3
+  },
+  {
+    "question": "旋焰酒精炉表面处理是什么",
+    "conversation_id": "0cc51355-214c-4f27-ba39-c8d72f97825c",
+    "first_content_ms": 3475,
+    "last_content_ms": 3475,
+    "content_count": 2,
+    "trace": {
+      "trace_id": "6d3a642c208649a5ab7359010cf369e0",
+      "conversation_id": "0cc51355-214c-4f27-ba39-c8d72f97825c",
+      "agent_mode": "agent",
+      "intent": "product_detail",
+      "result_skus": [
+        "CS-B14"
+      ],
+      "llm_call_count": 1,
+      "prompt_chars": 3388,
+      "total_ms": 3437.85,
+      "first_token_ms": 3423.72,
+      "hit_faq_fast_path": false,
+      "entered_process_agent_request": true,
+      "entered_process_intent_fallback": false,
+      "entered_semantic_retrieve": false,
+      "entered_hybrid_search": false,
+      "recommendation_context_found": false,
+      "previous_recommended_skus_excluded": [],
+      "type": "trace"
+    },
+    "group": "entity_reference",
+    "turn": 1
+  },
+  {
+    "question": "它是什么材质",
+    "conversation_id": "0cc51355-214c-4f27-ba39-c8d72f97825c",
+    "first_content_ms": 2750,
+    "last_content_ms": 2750,
+    "content_count": 10,
+    "trace": {
+      "trace_id": "b312a7603b0948f38448c608084f0902",
+      "conversation_id": "0cc51355-214c-4f27-ba39-c8d72f97825c",
+      "agent_mode": "agent",
+      "intent": "product_detail",
+      "result_skus": [
+        "CS-B14"
+      ],
+      "llm_call_count": 1,
+      "prompt_chars": 2494,
+      "total_ms": 2721.09,
+      "first_token_ms": 2719.87,
+      "hit_faq_fast_path": false,
+      "entered_process_agent_request": true,
+      "entered_process_intent_fallback": false,
+      "entered_semantic_retrieve": false,
+      "entered_hybrid_search": false,
+      "recommendation_context_found": false,
+      "previous_recommended_skus_excluded": [],
+      "type": "trace"
+    },
+    "group": "entity_reference",
+    "turn": 2
+  },
+  {
+    "question": "食品级吗",
+    "conversation_id": "0cc51355-214c-4f27-ba39-c8d72f97825c",
+    "first_content_ms": 5769,
+    "last_content_ms": 5769,
+    "content_count": 4,
+    "trace": {
+      "trace_id": "708280dad474432eb207ac89c2b4765c",
+      "conversation_id": "0cc51355-214c-4f27-ba39-c8d72f97825c",
+      "agent_mode": "agent",
+      "intent": "product_detail",
+      "result_skus": [
+        "CS-B14"
+      ],
+      "llm_call_count": 2,
+      "prompt_chars": 6187,
+      "total_ms": 5727.7,
+      "first_token_ms": 5690.88,
+      "hit_faq_fast_path": false,
+      "entered_process_agent_request": true,
+      "entered_process_intent_fallback": false,
+      "entered_semantic_retrieve": false,
+      "entered_hybrid_search": false,
+      "recommendation_context_found": false,
+      "previous_recommended_skus_excluded": [],
+      "type": "trace"
+    },
+    "group": "entity_reference",
+    "turn": 3
+  },
+  {
+    "question": "旋焰酒精炉表面处理是什么",
+    "conversation_id": "05a13ac0-3c71-4e6b-ad9f-3cd3f0ebe97f",
+    "first_content_ms": 2154,
+    "last_content_ms": 2154,
+    "content_count": 17,
+    "trace": {
+      "trace_id": "0ee0179891384d189845aae6b77f6379",
+      "conversation_id": "05a13ac0-3c71-4e6b-ad9f-3cd3f0ebe97f",
+      "agent_mode": "agent",
+      "intent": "product_detail",
+      "result_skus": [
+        "CS-B14"
+      ],
+      "llm_call_count": 1,
+      "prompt_chars": 3388,
+      "total_ms": 2041.2,
+      "first_token_ms": 2034.91,
+      "hit_faq_fast_path": false,
+      "entered_process_agent_request": true,
+      "entered_process_intent_fallback": false,
+      "entered_semantic_retrieve": false,
+      "entered_hybrid_search": false,
+      "recommendation_context_found": false,
+      "previous_recommended_skus_excluded": [],
+      "type": "trace"
+    },
+    "group": "product_backreference",
+    "turn": 1
+  },
+  {
+    "question": "悦享杯套装有哪些颜色",
+    "conversation_id": "05a13ac0-3c71-4e6b-ad9f-3cd3f0ebe97f",
+    "first_content_ms": 2121,
+    "last_content_ms": 2121,
+    "content_count": 15,
+    "trace": {
+      "trace_id": "858fdbcb442c4d00aaeeff02586da7ca",
+      "conversation_id": "05a13ac0-3c71-4e6b-ad9f-3cd3f0ebe97f",
+      "agent_mode": "agent",
+      "intent": "product_detail",
+      "result_skus": [
+        "TW-502"
+      ],
+      "llm_call_count": 1,
+      "prompt_chars": 2745,
+      "total_ms": 2049.64,
+      "first_token_ms": 2034.27,
+      "hit_faq_fast_path": false,
+      "entered_process_agent_request": true,
+      "entered_process_intent_fallback": false,
+      "entered_semantic_retrieve": false,
+      "entered_hybrid_search": false,
+      "recommendation_context_found": false,
+      "previous_recommended_skus_excluded": [],
+      "type": "trace"
+    },
+    "group": "product_backreference",
+    "turn": 2
+  },
+  {
+    "question": "前面那款酒精炉的认证信息有吗",
+    "conversation_id": "05a13ac0-3c71-4e6b-ad9f-3cd3f0ebe97f",
+    "first_content_ms": 6226,
+    "last_content_ms": 6505,
+    "content_count": 24,
+    "trace": {
+      "trace_id": "cec584e3845c42488785847095cd1afc",
+      "conversation_id": "05a13ac0-3c71-4e6b-ad9f-3cd3f0ebe97f",
+      "agent_mode": "agent",
+      "intent": "product_detail",
+      "result_skus": [
+        "CS-B14"
+      ],
+      "llm_call_count": 2,
+      "prompt_chars": 6523,
+      "total_ms": 6435.92,
+      "first_token_ms": 6107.35,
+      "hit_faq_fast_path": false,
+      "entered_process_agent_request": true,
+      "entered_process_intent_fallback": false,
+      "entered_semantic_retrieve": false,
+      "entered_hybrid_search": false,
+      "recommendation_context_found": false,
+      "previous_recommended_skus_excluded": [],
+      "type": "trace"
+    },
+    "group": "product_backreference",
+    "turn": 3
+  },
+  {
+    "question": "你们产品在哪里可以买到",
+    "conversation_id": "b57f9389-528b-4686-bdc4-be6eecd8a13f",
+    "first_content_ms": 222,
+    "last_content_ms": 225,
+    "content_count": 36,
+    "trace": {
+      "trace_id": "3907c89e99d648c7805439e1b3e7e5ca",
+      "conversation_id": "b57f9389-528b-4686-bdc4-be6eecd8a13f",
+      "agent_mode": "faq_fast",
+      "intent": "purchase_channel",
+      "result_skus": [],
+      "llm_call_count": 0,
+      "prompt_chars": 0,
+      "total_ms": 128.44,
+      "first_token_ms": 117.89,
+      "hit_faq_fast_path": true,
+      "entered_process_agent_request": false,
+      "entered_process_intent_fallback": false,
+      "entered_semantic_retrieve": false,
+      "entered_hybrid_search": false,
+      "recommendation_context_found": false,
+      "previous_recommended_skus_excluded": [],
+      "type": "trace"
+    },
+    "group": "purchase_channel",
+    "turn": 1
+  },
+  {
+    "question": "炊墨套锅手柄是什么材质",
+    "conversation_id": "3b418261-f222-4c97-886d-a75c536db736",
+    "first_content_ms": 4120,
+    "last_content_ms": 4120,
+    "content_count": 10,
+    "trace": {
+      "trace_id": "36a98b32c54e428995580b0af460aa2d",
+      "conversation_id": "3b418261-f222-4c97-886d-a75c536db736",
+      "agent_mode": "agent",
+      "intent": "product_detail",
+      "result_skus": [
+        "CW-C83"
+      ],
+      "llm_call_count": 1,
+      "prompt_chars": 3361,
+      "total_ms": 4029.29,
+      "first_token_ms": 4027.85,
+      "hit_faq_fast_path": false,
+      "entered_process_agent_request": true,
+      "entered_process_intent_fallback": false,
+      "entered_semantic_retrieve": false,
+      "entered_hybrid_search": false,
+      "recommendation_context_found": false,
+      "previous_recommended_skus_excluded": [],
+      "type": "trace"
+    },
+    "group": "compound_field",
+    "turn": 1
+  },
+  {
+    "question": "1－2人野营锅7件套有哪些颜色",
+    "conversation_id": "1bd95daf-97a7-40b4-bc72-f98ff2a202c6",
+    "first_content_ms": 2612,
+    "last_content_ms": 2612,
+    "content_count": 19,
+    "trace": {
+      "trace_id": "db963e9e46cc4a57922cc86cae78f9b8",
+      "conversation_id": "1bd95daf-97a7-40b4-bc72-f98ff2a202c6",
+      "agent_mode": "agent",
+      "intent": "product_detail",
+      "result_skus": [
+        "CW-C01-37"
+      ],
+      "llm_call_count": 1,
+      "prompt_chars": 3407,
+      "total_ms": 2559.7,
+      "first_token_ms": 2558.01,
+      "hit_faq_fast_path": false,
+      "entered_process_agent_request": true,
+      "entered_process_intent_fallback": false,
+      "entered_semantic_retrieve": false,
+      "entered_hybrid_search": false,
+      "recommendation_context_found": false,
+      "previous_recommended_skus_excluded": [],
+      "type": "trace"
+    },
+    "group": "fullwidth_input",
+    "turn": 1
+  }
+]

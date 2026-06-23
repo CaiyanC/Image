@@ -1,4 +1,4 @@
-import uuid
+﻿import uuid
 import os
 from typing import List
 
@@ -7,6 +7,7 @@ from sqlalchemy.orm import Session
 
 from ..core.config import settings
 from ..core.database import get_db
+from ..core.rate_limit import enforce_rate_limit
 from ..core.security import require_permission, require_product_permission
 from ..models.user import User
 from ..schemas.product import (
@@ -16,7 +17,7 @@ from ..schemas.product import (
     QaBatchImportRequest,
     ProductPromptsCreate,
 )
-from ..services import operation_log_service, product_service, product_vector_index_service
+from ..services import operation_log_service, product_recovery_service, product_service, product_vector_index_service
 
 router = APIRouter(prefix="/api/products", tags=["products"])
 MAX_PRODUCT_IMAGE_BYTES = 10 * 1024 * 1024
@@ -119,6 +120,14 @@ def advanced_search_products(
     return {"items": items, "total": total}
 
 
+@router.get("/filter-options")
+def get_product_filter_options(
+    current_user: User = Depends(require_product_permission("read")),
+    db: Session = Depends(get_db),
+):
+    return product_service.get_product_filter_options(db)
+
+
 @router.get("/by-sku/{sku}")
 def get_product_by_sku(
     sku: str,
@@ -147,11 +156,12 @@ def create_product(
     product = product_service.create_product(
         db, product_data.model_dump(), creator_id=current_user.id
     )
-    operation_log_service.log_operation(
+    after_data = product_service.get_product_detail(db, product.sku)
+    log = operation_log_service.log_operation(
         db,
         operator_id=current_user.id,
         action_type="create",
-        action_name="创建产品",
+        action_name="鍒涘缓浜у搧",
         target_type="product",
         target_id=product.id,
         target_name=product.sku,
@@ -159,8 +169,9 @@ def create_product(
         response_data={"sku": product.sku, "product_id": product.id},
         request=request,
     )
+    _record_product_snapshot(db, log, current_user.id, product.sku, "create", None, after_data)
     product_service.sync_product_to_vector_db(db, product.sku)
-    return product_service.get_product_detail(db, product.sku)
+    return after_data
 
 
 @router.put("/{sku}")
@@ -172,12 +183,14 @@ def update_product(
     db: Session = Depends(get_db),
 ):
     payload = product_update.model_dump(exclude_unset=True)
+    before_data = _snapshot_product_detail(db, sku)
     product = product_service.update_product(db, sku, payload)
-    operation_log_service.log_operation(
+    after_data = product_service.get_product_detail(db, product.sku)
+    log = operation_log_service.log_operation(
         db,
         operator_id=current_user.id,
         action_type="update",
-        action_name="编辑产品",
+        action_name="缂栬緫浜у搧",
         target_type="product",
         target_id=product.id,
         target_name=product.sku,
@@ -185,8 +198,9 @@ def update_product(
         response_data={"sku": product.sku, "product_id": product.id},
         request=request,
     )
+    _record_product_snapshot(db, log, current_user.id, product.sku, "update", before_data, after_data)
     product_service.sync_product_to_vector_db(db, product.sku)
-    return product_service.get_product_detail(db, product.sku)
+    return after_data
 
 
 @router.put("/{sku}/full")
@@ -199,6 +213,7 @@ def update_product_full(
 ):
     if not product_service.get_product_by_sku(db, sku):
         raise HTTPException(status_code=404, detail="Product not found")
+    before_data = _snapshot_product_detail(db, sku)
     body_sku = str(body.get("sku") or sku).strip()
     if body_sku != sku:
         raise HTTPException(status_code=400, detail="Request SKU must match product SKU")
@@ -208,11 +223,12 @@ def update_product_full(
     product = product_service.create_product(
         db, body, creator_id=current_user.id
     )
-    operation_log_service.log_operation(
+    after_data = product_service.get_product_detail(db, product.sku)
+    log = operation_log_service.log_operation(
         db,
         operator_id=current_user.id,
         action_type="replace",
-        action_name="覆盖更新产品",
+        action_name="瑕嗙洊鏇存柊浜у搧",
         target_type="product",
         target_id=product.id,
         target_name=product.sku,
@@ -220,8 +236,9 @@ def update_product_full(
         response_data={"sku": product.sku, "product_id": product.id},
         request=request,
     )
+    _record_product_snapshot(db, log, current_user.id, product.sku, "replace", before_data, after_data)
     product_service.sync_product_to_vector_db(db, product.sku)
-    return product_service.get_product_detail(db, product.sku)
+    return after_data
 
 
 @router.delete("/{sku}")
@@ -233,19 +250,66 @@ def delete_product(
 ):
     product = product_service.get_product_by_sku(db, sku)
     product_id = product.id if product else sku
+    before_data = _snapshot_product_detail(db, sku)
     product_service.delete_product(db, sku)
-    operation_log_service.log_operation(
+    log = operation_log_service.log_operation(
         db,
         operator_id=current_user.id,
         action_type="delete",
-        action_name="删除产品",
+        action_name="鍒犻櫎浜у搧",
         target_type="product",
         target_id=product_id,
         target_name=sku,
         response_data={"detail": "Product deleted"},
         request=request,
     )
+    _record_product_snapshot(db, log, current_user.id, sku, "delete", before_data, None)
     return {"detail": "Product deleted"}
+
+
+@router.post("/operation-snapshots/{snapshot_id}/restore")
+def restore_product_operation_snapshot(
+    snapshot_id: str,
+    request: Request,
+    current_user: User = Depends(require_product_permission("delete")),
+    db: Session = Depends(get_db),
+):
+    result = product_recovery_service.restore_product_snapshot(
+        db,
+        snapshot_id,
+        operator_id=current_user.id,
+        request=request,
+    )
+    if product_service.get_product_by_sku(db, result["sku"]):
+        product_service.sync_product_to_vector_db(db, result["sku"])
+    return result
+
+
+def _snapshot_product_detail(db: Session, sku: str) -> dict | None:
+    try:
+        return product_service.get_product_detail(db, sku)
+    except HTTPException:
+        return None
+
+
+def _record_product_snapshot(
+    db: Session,
+    log,
+    operator_id: str,
+    sku: str,
+    action_type: str,
+    before_data: dict | None,
+    after_data: dict | None,
+):
+    return product_recovery_service.create_product_snapshot(
+        db,
+        operation_log_id=log.id,
+        operator_id=operator_id,
+        sku=sku,
+        action_type=action_type,
+        before_data=before_data,
+        after_data=after_data,
+    )
 
 
 @router.put("/{sku}/specs")
@@ -256,18 +320,21 @@ def update_product_specs(
     current_user: User = Depends(require_product_permission("update")),
     db: Session = Depends(get_db),
 ):
+    before_data = _snapshot_product_detail(db, sku)
     result = product_service.update_product_specs(db, sku, body)
-    operation_log_service.log_operation(
+    after_data = _snapshot_product_detail(db, sku)
+    log = operation_log_service.log_operation(
         db,
         operator_id=current_user.id,
         action_type="update",
-        action_name="编辑产品规格",
+        action_name="缂栬緫浜у搧瑙勬牸",
         target_type="product",
         target_id=result["id"],
         target_name=sku,
         request_data=body,
         request=request,
     )
+    _record_product_snapshot(db, log, current_user.id, sku, "update", before_data, after_data)
     # Auto-sync affected products to vector DB
     for item in result.get("results", []):
         if item.get("status") == "success":
@@ -283,18 +350,21 @@ def update_product_business(
     current_user: User = Depends(require_product_permission("update")),
     db: Session = Depends(get_db),
 ):
+    before_data = _snapshot_product_detail(db, sku)
     result = product_service.update_product_business(db, sku, body)
-    operation_log_service.log_operation(
+    after_data = _snapshot_product_detail(db, sku)
+    log = operation_log_service.log_operation(
         db,
         operator_id=current_user.id,
         action_type="update",
-        action_name="编辑产品商业信息",
+        action_name="缂栬緫浜у搧鍟嗕笟淇℃伅",
         target_type="product",
         target_id=result["id"],
         target_name=sku,
         request_data=body,
         request=request,
     )
+    _record_product_snapshot(db, log, current_user.id, sku, "update", before_data, after_data)
     # Auto-sync affected products to vector DB
     for item in result.get("results", []):
         if item.get("status") == "success":
@@ -310,18 +380,21 @@ def update_product_content(
     current_user: User = Depends(require_product_permission("update")),
     db: Session = Depends(get_db),
 ):
+    before_data = _snapshot_product_detail(db, sku)
     result = product_service.update_product_content(db, sku, body)
-    operation_log_service.log_operation(
+    after_data = _snapshot_product_detail(db, sku)
+    log = operation_log_service.log_operation(
         db,
         operator_id=current_user.id,
         action_type="update",
-        action_name="编辑产品内容",
+        action_name="缂栬緫浜у搧鍐呭",
         target_type="product",
         target_id=result["id"],
         target_name=sku,
         request_data=body,
         request=request,
     )
+    _record_product_snapshot(db, log, current_user.id, sku, "update", before_data, after_data)
     # Auto-sync affected products to vector DB
     for item in result.get("results", []):
         if item.get("status") == "success":
@@ -329,7 +402,7 @@ def update_product_content(
     return result
 
 
-# ── QA endpoints ──
+# 鈹€鈹€ QA endpoints 鈹€鈹€
 
 @router.get("/{sku}/qa")
 def list_qa(
@@ -353,7 +426,7 @@ def import_qa_batch(
         db,
         operator_id=current_user.id,
         action_type="import",
-        action_name="批量导入产品QA",
+        action_name="鎵归噺瀵煎叆浜у搧QA",
         target_type="product_qa",
         target_id="batch",
         target_name=f"{len(items)} file(s)",
@@ -385,7 +458,7 @@ def add_qa(
         db,
         operator_id=current_user.id,
         action_type="create",
-        action_name="新增产品QA",
+        action_name="鏂板浜у搧QA",
         target_type="product_qa",
         target_id=qa.id,
         target_name=sku,
@@ -410,7 +483,7 @@ def update_qa(
         db,
         operator_id=current_user.id,
         action_type="update",
-        action_name="编辑产品QA",
+        action_name="缂栬緫浜у搧QA",
         target_type="product_qa",
         target_id=qa.id,
         target_name=sku,
@@ -434,7 +507,7 @@ def delete_qa(
         db,
         operator_id=current_user.id,
         action_type="delete",
-        action_name="删除产品QA",
+        action_name="鍒犻櫎浜у搧QA",
         target_type="product_qa",
         target_id=qa_id,
         target_name=sku,
@@ -477,7 +550,7 @@ def upsert_qa_negative(
     return product_service.model_to_dict(qa_negative)
 
 
-# ── Prompts ──
+# 鈹€鈹€ Prompts 鈹€鈹€
 
 @router.post("/{sku}/prompts")
 def add_product_prompt(
@@ -524,7 +597,7 @@ def delete_product_prompt(
     return {"ok": True}
 
 
-# ── Media ──
+# 鈹€鈹€ Media 鈹€鈹€
 
 @router.post("/{sku}/media")
 def add_product_media(
@@ -539,7 +612,7 @@ def add_product_media(
         db,
         operator_id=current_user.id,
         action_type="create",
-        action_name="新增产品素材",
+        action_name="鏂板浜у搧绱犳潗",
         target_type="product_media",
         target_id=media.id,
         target_name=sku,
@@ -563,7 +636,7 @@ def update_product_media(
         db,
         operator_id=current_user.id,
         action_type="update",
-        action_name="编辑产品素材",
+        action_name="缂栬緫浜у搧绱犳潗",
         target_type="product_media",
         target_id=media.id,
         target_name=sku,
@@ -586,7 +659,7 @@ def delete_product_media(
         db,
         operator_id=current_user.id,
         action_type="delete",
-        action_name="删除产品素材",
+        action_name="鍒犻櫎浜у搧绱犳潗",
         target_type="product_media",
         target_id=media_id,
         target_name=sku,
@@ -595,7 +668,7 @@ def delete_product_media(
     return {"ok": True}
 
 
-# ── M2M associations ──
+# 鈹€鈹€ M2M associations 鈹€鈹€
 
 @router.get("/{sku}/channels")
 def get_product_channels(
@@ -620,7 +693,7 @@ def add_channel(
         db,
         operator_id=current_user.id,
         action_type="create",
-        action_name="关联产品渠道",
+        action_name="鍏宠仈浜у搧娓犻亾",
         target_type="product_channel",
         target_id=channel_id,
         target_name=sku,
@@ -643,7 +716,7 @@ def remove_channel(
         db,
         operator_id=current_user.id,
         action_type="delete",
-        action_name="移除产品渠道",
+        action_name="绉婚櫎浜у搧娓犻亾",
         target_type="product_channel",
         target_id=channel_id,
         target_name=sku,
@@ -653,7 +726,7 @@ def remove_channel(
     return {"ok": True}
 
 
-# ── File uploads ──
+# 鈹€鈹€ File uploads 鈹€鈹€
 
 @router.post("/images/upload")
 def upload_product_images(
@@ -662,6 +735,7 @@ def upload_product_images(
     current_user: User = Depends(require_permission("media.upload")),
     db: Session = Depends(get_db),
 ):
+    _enforce_product_upload_limit(current_user, "products.images.upload")
     os.makedirs(settings.IMAGE_UPLOAD_DIR, exist_ok=True)
     urls: List[str] = []
     for file in files:
@@ -670,7 +744,7 @@ def upload_product_images(
             allowed_suffixes=ALLOWED_PRODUCT_IMAGE_SUFFIXES,
             allowed_mime_types=ALLOWED_PRODUCT_IMAGE_MIME_TYPES,
         )
-        content = _read_limited_upload(file, MAX_PRODUCT_IMAGE_BYTES, "图片不能超过 10MB")
+        content = _read_limited_upload(file, MAX_PRODUCT_IMAGE_BYTES, "鍥剧墖涓嶈兘瓒呰繃 10MB")
         name = f"{uuid.uuid4().hex}{ext}"
         path = os.path.join(settings.IMAGE_UPLOAD_DIR, name)
         with open(path, "wb") as f:
@@ -680,7 +754,7 @@ def upload_product_images(
         db,
         operator_id=current_user.id,
         action_type="upload",
-        action_name="上传产品图片",
+        action_name="涓婁紶浜у搧鍥剧墖",
         target_type="product_media_file",
         target_id="image_upload",
         target_name=f"{len(urls)} image(s)",
@@ -697,6 +771,7 @@ def upload_product_videos(
     current_user: User = Depends(require_permission("media.upload")),
     db: Session = Depends(get_db),
 ):
+    _enforce_product_upload_limit(current_user, "products.videos.upload")
     os.makedirs(settings.VIDEO_UPLOAD_DIR, exist_ok=True)
     urls: List[str] = []
     for file in files:
@@ -705,7 +780,7 @@ def upload_product_videos(
             allowed_suffixes=ALLOWED_PRODUCT_VIDEO_SUFFIXES,
             allowed_mime_types=ALLOWED_PRODUCT_VIDEO_MIME_TYPES,
         )
-        content = _read_limited_upload(file, MAX_PRODUCT_VIDEO_BYTES, "视频不能超过 100MB")
+        content = _read_limited_upload(file, MAX_PRODUCT_VIDEO_BYTES, "瑙嗛涓嶈兘瓒呰繃 100MB")
         name = f"{uuid.uuid4().hex}{ext}"
         path = os.path.join(settings.VIDEO_UPLOAD_DIR, name)
         with open(path, "wb") as f:
@@ -715,7 +790,7 @@ def upload_product_videos(
         db,
         operator_id=current_user.id,
         action_type="upload",
-        action_name="上传产品视频",
+        action_name="涓婁紶浜у搧瑙嗛",
         target_type="product_media_file",
         target_id="video_upload",
         target_name=f"{len(urls)} video(s)",
@@ -723,6 +798,15 @@ def upload_product_videos(
         request=request,
     )
     return {"urls": urls}
+
+
+def _enforce_product_upload_limit(current_user: User, scope: str) -> None:
+    enforce_rate_limit(
+        user_id=str(current_user.id),
+        scope=scope,
+        limit=45,
+        window_seconds=60,
+    )
 
 
 def _validate_media_upload(
@@ -734,9 +818,9 @@ def _validate_media_upload(
     ext = os.path.splitext(file.filename or "")[1].lower()
     content_type = (file.content_type or "").split(";", 1)[0].strip().lower()
     if ext not in allowed_suffixes:
-        raise HTTPException(status_code=400, detail="不支持的文件类型")
+        raise HTTPException(status_code=400, detail="涓嶆敮鎸佺殑鏂囦欢绫诲瀷")
     if content_type and content_type not in allowed_mime_types:
-        raise HTTPException(status_code=400, detail="不支持的文件类型")
+        raise HTTPException(status_code=400, detail="涓嶆敮鎸佺殑鏂囦欢绫诲瀷")
     return ext
 
 
@@ -745,3 +829,4 @@ def _read_limited_upload(file: UploadFile, max_bytes: int, message: str) -> byte
     if len(content) > max_bytes:
         raise HTTPException(status_code=400, detail=message)
     return content
+

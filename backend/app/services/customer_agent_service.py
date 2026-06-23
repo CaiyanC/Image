@@ -1,5 +1,6 @@
 import json
 import re
+import unicodedata
 from typing import Any
 
 from sqlalchemy import String, cast, or_
@@ -13,6 +14,25 @@ from . import agent_action_service, product_service
 
 
 SKU_RE = re.compile(r"\b[A-Za-z]{1,6}[-_][A-Za-z0-9][A-Za-z0-9_-]{1,40}\b")
+def normalize_search_text(value: Any) -> str:
+    text = unicodedata.normalize("NFKC", str(value or ""))
+    replacements = {
+        "‐": "-",
+        "‑": "-",
+        "‒": "-",
+        "–": "-",
+        "—": "-",
+        "―": "-",
+        "－": "-",
+        "（": "(",
+        "）": ")",
+        "【": "[",
+        "】": "]",
+        "　": " ",
+    }
+    for source, target in replacements.items():
+        text = text.replace(source, target)
+    return re.sub(r"\s+", " ", text).strip()
 
 QUERY_FIELD_ALIASES = {
     **agent_action_service.FIELD_ALIASES,
@@ -385,13 +405,58 @@ def _try_search_products(db: Session, question: str) -> dict | None:
     }
 
 
+_FAST_RECOMMENDATION_SEARCH_FIELDS = [
+    "product.product_name_cn",
+    "product.product_name_en",
+    "product.brand",
+    "product.series",
+    "product.category",
+    "product.sub_category",
+    "specs.capacity",
+    "specs.gross_weight_g",
+    "specs.body_material",
+    "specs.surface_finish",
+    "specs.heat_source",
+    "business.top_selling_points",
+    "business.target_audience",
+    "business.positioning",
+    "business.usage_scenarios",
+    "content.title_cn",
+    "content.listing_cn",
+    "content.bullet_points",
+]
+
+
+def _should_use_fast_recommendation_search(raw_term: str, structured_filters: dict[str, Any]) -> bool:
+    text = normalize_search_text(raw_term).strip()
+    if not text or not structured_filters:
+        return False
+    if len(text) < 3:
+        return False
+    if text in {"锅具", "炉具", "水具", "餐具", "杯具", "锅", "炉", "杯", "壶", "包"}:
+        return False
+    if re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9\-]{2,}", text):
+        return False
+    if any(token in text for token in ("露营", "做饭", "烹饪", "野餐", "便携", "多人", "2人", "两人", "推荐", "适合", "锅", "套锅", "炉")):
+        return True
+    return len(text) <= 6
+
+
 def search_products(db: Session, term: str, limit: int = 50, filters: dict[str, Any] | None = None) -> list[dict]:
     structured_filters = _normalize_structured_filters(filters or {})
-    expanded_terms = _expand_search_terms(term)
+    raw_term = str(term or "").strip()
+    term = normalize_search_text(raw_term)
+    expanded_terms = _expand_search_terms(raw_term)
     likes = [f"%{item}%" for item in expanded_terms]
+    search_field_paths = list(QUERY_FIELD_SPECS.keys())
+    if _should_use_fast_recommendation_search(raw_term, structured_filters):
+        search_field_paths = [item for item in _FAST_RECOMMENDATION_SEARCH_FIELDS if item in QUERY_FIELD_SPECS]
     query_filters = []
     for item_like in likes:
-        query_filters.extend(cast(column, String).ilike(item_like) for *_, column in QUERY_FIELD_SPECS.values())
+        query_filters.extend(
+            cast(QUERY_FIELD_SPECS[field_path][3], String).ilike(item_like)
+            for field_path in search_field_paths
+        )
     query = (
         db.query(Product, ProductSpecs, ProductBusiness, ProductContent)
         .outerjoin(ProductSpecs, ProductSpecs.product_id == Product.id)
@@ -403,21 +468,110 @@ def search_products(db: Session, term: str, limit: int = 50, filters: dict[str, 
     for field_path, value in structured_filters.items():
         spec = QUERY_FIELD_SPECS.get(field_path)
         if spec and value not in (None, ""):
-            query = query.filter(cast(spec[3], String).ilike(f"%{str(value).strip()}%"))
+            query = query.filter(cast(spec[3], String).ilike(f"%{normalize_search_text(value)}%"))
     if not query_filters and not structured_filters:
         return []
     rows = query.limit(limit).all()
     exact_rows = [
         row for row in rows
-        if _is_exact_product_match(term, row[0])
+        if _is_exact_product_match(term, row[0]) or _is_exact_product_match_any(expanded_terms, row[0])
     ]
     if exact_rows:
         rows = exact_rows
+    rows = _expand_structured_filter_rows(db, rows, structured_filters, limit)
     results = []
     for product, specs, business, content in rows:
         matched_by = _matched_by(term, product, specs, business, content)
         results.append(_result_row(product, specs, business, content, matched_by))
     return results
+
+
+def _expand_structured_filter_rows(
+    db: Session,
+    rows: list[tuple],
+    structured_filters: dict[str, Any],
+    limit: int,
+) -> list[tuple]:
+    if not structured_filters or len(rows) >= limit:
+        return rows
+    expandable_fields = {"specs.body_material", "specs.surface_finish", "specs.heat_source"}
+    exact_context_fields = {"product.category"}
+    if not any(field_path in expandable_fields for field_path in structured_filters):
+        return rows
+    if any(field_path not in expandable_fields and field_path not in exact_context_fields for field_path in structured_filters):
+        return rows
+    existing = {getattr(row[0], "id", None) for row in rows if row and row[0] is not None}
+    candidates = (
+        db.query(Product, ProductSpecs, ProductBusiness, ProductContent)
+        .outerjoin(ProductSpecs, ProductSpecs.product_id == Product.id)
+        .outerjoin(ProductBusiness, ProductBusiness.product_id == Product.id)
+        .outerjoin(ProductContent, ProductContent.product_id == Product.id)
+        .limit(200)
+        .all()
+    )
+    expanded = list(rows)
+    for row in candidates:
+        product = row[0]
+        if getattr(product, "id", None) in existing:
+            continue
+        if _row_matches_structured_filters(row, structured_filters):
+            expanded.append(row)
+            existing.add(getattr(product, "id", None))
+            if len(expanded) >= limit:
+                break
+    return expanded
+
+
+def _row_matches_structured_filters(row: tuple, structured_filters: dict[str, Any]) -> bool:
+    product, specs, business, content = row
+    sections = {
+        "product": product,
+        "specs": specs,
+        "business": business,
+        "content": content,
+    }
+    for field_path, expected in structured_filters.items():
+        spec = QUERY_FIELD_SPECS.get(field_path)
+        if not spec:
+            return False
+        section, field, *_ = spec
+        source = sections.get(section)
+        actual = getattr(source, field, None) if source is not None else None
+        if not _structured_filter_value_matches(actual, expected):
+            return False
+    return True
+
+
+def _structured_filter_value_matches(actual: Any, expected: Any) -> bool:
+    actual_text = normalize_search_text(_stringify(actual)).lower()
+    expected_text = normalize_search_text(expected).lower()
+    if not actual_text or not expected_text:
+        return False
+    if expected_text in actual_text:
+        return True
+    actual_compact = _compact_filter_text(actual_text)
+    expected_compact = _compact_filter_text(expected_text)
+    if expected_compact and expected_compact in actual_compact:
+        return True
+    expected_without_suffix = re.sub(r"(工艺|材质|处理|产品)$", "", expected_compact)
+    if expected_without_suffix and expected_without_suffix in actual_compact:
+        return True
+    expected_parts = _filter_match_parts(expected_compact)
+    return bool(expected_parts) and all(part in actual_compact for part in expected_parts)
+
+
+def _compact_filter_text(value: str) -> str:
+    return re.sub(r"[\s,，、/\\|;；:：()（）\\[\\]{}\"'`]+", "", normalize_search_text(value).lower())
+
+
+def _filter_match_parts(value: str) -> list[str]:
+    parts = re.findall(r"[a-z]+|\d+|[\u4e00-\u9fff]+", value)
+    cleaned = []
+    for part in parts:
+        item = re.sub(r"(工艺|材质|处理|产品)$", "", part)
+        if item and item not in cleaned:
+            cleaned.append(item)
+    return cleaned
 
 
 def _normalize_structured_filters(filters: dict[str, Any]) -> dict[str, Any]:
@@ -427,7 +581,7 @@ def _normalize_structured_filters(filters: dict[str, Any]) -> dict[str, Any]:
             continue
         field_path = QUERY_FIELD_ALIASES.get(str(key).strip()) or str(key).strip()
         if field_path in QUERY_FIELD_SPECS:
-            normalized[field_path] = value
+            normalized[field_path] = normalize_search_text(value)
     return normalized
 
 
@@ -613,8 +767,11 @@ def _clean_collection_subject(value: str) -> str:
 
 
 def _expand_search_terms(term: str) -> list[str]:
-    text = str(term or "").strip()
-    terms = [text]
+    raw_text = str(term or "").strip()
+    text = normalize_search_text(raw_text)
+    terms = [raw_text, text]
+    for variant in _punctuation_variants(text):
+        terms.append(variant)
     compact = re.sub(r"\s+", "", text)
     if compact and compact != text:
         terms.append(compact)
@@ -648,8 +805,17 @@ def _expand_search_terms(term: str) -> list[str]:
     return list(dict.fromkeys([item for item in terms if item]))
 
 
+def _punctuation_variants(text: str) -> list[str]:
+    variants = []
+    if "-" in text:
+        variants.append(text.replace("-", "－"))
+    if "(" in text or ")" in text:
+        variants.append(text.replace("(", "（").replace(")", "）"))
+    return variants
+
+
 def _clean_filter_value(value: str) -> str:
-    value = re.split(r"(的产品|有哪些|给我|我想|想改|改成|，|,|。)", value.strip(), maxsplit=1)[0]
+    value = re.split(r"(的(?:产品|商品|锅具|锅|炉具|炉|水具|杯|壶)|有哪些|哪些|给我|我想|想改|改成|，|,|。|？|\?)", value.strip(), maxsplit=1)[0]
     return value.strip()
 
 
@@ -676,7 +842,7 @@ def _matched_by(term: str, product, specs, business, content) -> str:
 
 
 def _is_exact_product_match(term: str, product) -> bool:
-    normalized = str(term or "").strip().lower()
+    normalized = normalize_search_text(term).lower()
     compact = re.sub(r"\s+", "", normalized)
     if not normalized:
         return False
@@ -687,7 +853,7 @@ def _is_exact_product_match(term: str, product) -> bool:
         product.product_name_en,
     ]
     for item in candidates:
-        value = str(item or "").strip().lower()
+        value = normalize_search_text(item).lower()
         if not value:
             continue
         if normalized == value or value in normalized:
@@ -698,6 +864,10 @@ def _is_exact_product_match(term: str, product) -> bool:
         if "pro" in compact_value and "pro" in compact and compact_value.replace("pro", "") in compact:
             return True
     return False
+
+
+def _is_exact_product_match_any(terms: list[str], product) -> bool:
+    return any(_is_exact_product_match(term, product) for term in terms)
 
 
 def _first_nonempty(values: list[Any]) -> str:

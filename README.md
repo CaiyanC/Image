@@ -70,8 +70,9 @@ source venv/bin/activate
 # 安装依赖
 pip install -r requirements.txt
 
-# 启动服务
-python -m uvicorn app.main:app --host 0.0.0.0 --port 8001 --reload
+# 启动开发环境
+cd ..
+start-dev.bat
 ```
 
 后端 API 文档：启动后访问 http://localhost:8001/docs
@@ -85,10 +86,10 @@ cd frontend
 npm install
 
 # 启动开发服务器
-npm run dev
+npm run dev:dev
 ```
 
-前端访问地址：http://localhost:5175
+前端访问地址：http://localhost:5276
 
 ### 5. 登录
 

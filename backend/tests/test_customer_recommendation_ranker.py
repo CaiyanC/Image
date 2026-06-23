@@ -1,5 +1,6 @@
 import unittest
 
+from app.services import customer_dialogue_state
 from app.services import customer_recommendation_ranker
 
 
@@ -44,6 +45,32 @@ class CustomerRecommendationRankerTest(unittest.TestCase):
         self.assertGreater(customer_recommendation_ranker.budget_score("预算不高", rows[1]), 0)
         self.assertLess(customer_recommendation_ranker.budget_score("预算不高", rows[0]), 0)
 
+    def test_not_too_expensive_is_treated_as_low_budget(self):
+        rows = [
+            {"sku": "HIGH-1", "price_positioning": "高端价格带"},
+            {"sku": "VALUE-1", "price_positioning": "常规价格带，性价比款"},
+        ]
+
+        self.assertTrue(customer_dialogue_state.is_low_budget_query("不是很贵的锅推荐一下"))
+        self.assertGreater(
+            customer_recommendation_ranker.budget_score("不是很贵的锅推荐一下", rows[1]),
+            customer_recommendation_ranker.budget_score("不是很贵的锅推荐一下", rows[0]),
+        )
+
+    def test_high_end_query_prefers_high_price_candidate(self):
+        rows = [
+            {"sku": "VALUE-1", "product_name_cn": "常规单锅", "price_positioning": "常规价格带"},
+            {"sku": "HIGH-1", "product_name_cn": "高端套锅", "price_positioning": "高端价格带"},
+        ]
+
+        ranked = customer_recommendation_ranker.fallback_rank(rows, "推荐高端一点的锅")
+
+        self.assertEqual(ranked[0]["row"]["sku"], "HIGH-1")
+        self.assertGreater(
+            customer_recommendation_ranker.recommendation_score("推荐高端一点的锅", rows[1]),
+            customer_recommendation_ranker.recommendation_score("推荐高端一点的锅", rows[0]),
+        )
+
     def test_four_person_cooking_prefers_mid_capacity(self):
         rows = [
             {
@@ -65,6 +92,9 @@ class CustomerRecommendationRankerTest(unittest.TestCase):
         ranked = customer_recommendation_ranker.fallback_rank(rows, "适合四个人做饭的锅")
 
         self.assertEqual(ranked[0]["row"]["sku"], "MID-1")
+        self.assertTrue(any("容量适合3-4人" in item for item in ranked[0]["matched"]))
+        self.assertTrue(any("做饭" in item or "煎炒煮" in item for item in ranked[0]["matched"]))
+        self.assertIn("score_reason", ranked[0])
         self.assertGreater(
             customer_recommendation_ranker.recommendation_score("适合四个人做饭的锅", rows[1]),
             customer_recommendation_ranker.recommendation_score("适合四个人做饭的锅", rows[0]),
@@ -150,6 +180,37 @@ class CustomerRecommendationRankerTest(unittest.TestCase):
         self.assertGreater(
             customer_recommendation_ranker.recommendation_score("推荐一款适合1-2人轻量徒步的锅具", compact),
             customer_recommendation_ranker.recommendation_score("推荐一款适合1-2人轻量徒步的锅具", family),
+        )
+
+    def test_two_person_high_end_cooking_prefers_dual_capacity_over_single_ultralight(self):
+        single = {
+            "sku": "CW-C93",
+            "product_name_cn": "行山单锅",
+            "category": "锅具",
+            "capacity": "锅 1000ML",
+            "features": "适配多种炉头，聚能结构，95秒速沸",
+            "target_audience": "单人背包客，极限轻量徒步者，速穿玩家",
+            "usage_scenarios": "高海拔徒步，极限轻量游，单人野宿",
+            "price_positioning": "高端",
+        }
+        dual = {
+            "sku": "CW-S10-A",
+            "product_name_cn": "激川单锅",
+            "category": "锅具",
+            "capacity": "锅 1400ML",
+            "features": "1.4L大容量满足双人需求，食品级陶瓷不沾，高效集热",
+            "target_audience": "1-2人露营者，轻量徒步爱好者",
+            "usage_scenarios": "轻量徒步，双人露营，户外小份烹饪",
+            "price_positioning": "高端",
+        }
+
+        query = "两个人旅行，要能煎炒煮；追加条件：推荐高端一点的锅"
+        ranked = customer_recommendation_ranker.fallback_rank([single, dual], query)
+
+        self.assertEqual(ranked[0]["row"]["sku"], "CW-S10-A")
+        self.assertGreater(
+            customer_recommendation_ranker.recommendation_score(query, dual),
+            customer_recommendation_ranker.recommendation_score(query, single),
         )
 
     def test_water_gear_request_penalizes_stove_and_pot_candidates(self):

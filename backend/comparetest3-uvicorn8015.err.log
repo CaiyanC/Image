@@ -1,0 +1,864 @@
+INFO:     Uvicorn running on http://127.0.0.1:8015 (Press CTRL+C to quit)
+INFO:     Started parent process [24464]
+D:\CaiYan\Image-Generation-feature-v5\backend\venv\lib\site-packages\pydantic\_internal\_fields.py:161: UserWarning: Field "model_name" has conflict with protected namespace "model_".
+
+You may be able to resolve this warning by setting `model_config['protected_namespaces'] = ()`.
+  warnings.warn(
+D:\CaiYan\Image-Generation-feature-v5\backend\venv\lib\site-packages\pydantic\_internal\_fields.py:161: UserWarning: Field "model_name" has conflict with protected namespace "model_".
+
+You may be able to resolve this warning by setting `model_config['protected_namespaces'] = ()`.
+  warnings.warn(
+D:\CaiYan\Image-Generation-feature-v5\backend\venv\lib\site-packages\pydantic\_internal\_fields.py:161: UserWarning: Field "model_name" has conflict with protected namespace "model_".
+
+You may be able to resolve this warning by setting `model_config['protected_namespaces'] = ()`.
+  warnings.warn(
+D:\CaiYan\Image-Generation-feature-v5\backend\venv\lib\site-packages\pydantic\_internal\_fields.py:161: UserWarning: Field "model_name" has conflict with protected namespace "model_".
+
+You may be able to resolve this warning by setting `model_config['protected_namespaces'] = ()`.
+  warnings.warn(
+INFO:     Started server process [22044]
+INFO:     Waiting for application startup.
+INFO:     Started server process [24720]
+INFO:     Waiting for application startup.
+INFO:     Started server process [25184]
+INFO:     Started server process [16860]
+INFO:     Waiting for application startup.
+INFO:     Waiting for application startup.
+INFO:     Application startup complete.
+INFO:     Application startup complete.
+INFO:     Application startup complete.
+INFO:     Application startup complete.
+INFO:     [CUSTOMER_PERF] {"trace_id": "ec1e69c095a245a49380e779f6b4d74c", "stage": "ask_stream.precheck", "elapsed_ms": 1.36, "extra": {"permission_checked": true, "rate_limit_checked": true}}
+INFO:     [CUSTOMER_PERF] {"trace_id": "ec1e69c095a245a49380e779f6b4d74c", "stage": "customer_faq_fast_path", "elapsed_ms": 0.11, "extra": {"hit": false, "intent": null, "agent_mode": null}}
+INFO:     [CUSTOMER_PERF] {"trace_id": "ec1e69c095a245a49380e779f6b4d74c", "stage": "guardrail.evaluate_question", "elapsed_ms": 0.04, "extra": {"matched": false}}
+INFO:     [CUSTOMER_PERF] {"trace_id": "ec1e69c095a245a49380e779f6b4d74c", "stage": "context_read", "elapsed_ms": 0.01, "extra": {"entity_stack_count": 0, "conversation_history_count": 0, "previous_result_skus_count": 0, "recommendation_context_present": false}}
+INFO:     [CUSTOMER_PERF] {"trace_id": "ec1e69c095a245a49380e779f6b4d74c", "stage": "named_product_shortcut", "elapsed_ms": 7.25, "extra": {"hit": false, "agent_mode": null}}
+INFO:     [CUSTOMER_PERF] {"trace_id": "ec1e69c095a245a49380e779f6b4d74c", "stage": "plan_conversation_route.skipped", "elapsed_ms": null, "extra": {"reason": "fresh_recommendation_question"}}
+INFO:     [CUSTOMER_PERF] {"trace_id": "ec1e69c095a245a49380e779f6b4d74c", "stage": "route_deterministic_fact_question", "elapsed_ms": 0.13, "extra": {"hit": false, "intent": null, "agent_mode": null}}
+INFO:     [CUSTOMER_AGENT_TOOL_SELECTION_REQUEST] {
+  "messages": {
+    "type": "list",
+    "count": 2,
+    "sample": [
+      {
+        "role": "system",
+        "content": "你是内部产品数据库 Agent。你可以自己选择后端白名单工具查询产品、读取详情、提出修改或删除建议。严禁编写 SQL，严禁直接执行写库。所有修改/删除只能调用 propose_* 工具生成待确认动作。如果用户要查询多个产品、条形码、类目或功能，优先调用 search_products。如果同时有精确条件和模糊语义需求，优先调用 hybrid_search_products。search_products 支持 term 全字段搜索，也支持 filters 精确筛选，例如 {\"...<chars:1201>"
+      },
+      {
+        "role": "user",
+        "content": "{\"question\": \"推荐三款适合露营多人做饭的套锅，并说明区别。\", \"recommendation_question\": \"推荐三款适合露营多人做饭的套锅，并说明区别。\", \"previous_result_skus\": [], \"entity_stack\": [], \"route_hints\": {\"detected_skus\": [], \"has_new_product\": false, \"intent\": \"recommend_products\", \"has_...<chars:3230>"
+      }
+    ]
+  },
+  "tools": {
+    "type": "list",
+    "count": 7,
+    "sample": [
+      {
+        "name": "search_products",
+        "description": "全字段查询多条产品信息。适合 SKU、条形码、名称、品牌、系列、类目、等级、生命周期、负责人、备注、容量、重量、材质、颜色、工艺、热源、功率、卖点、目标人群、定位、价格定位、情绪价值、使用场景、竞品、标题、描述、关键词、listing 等条件。",
+        "arguments": {
+          "term": "搜索词，例如 SKU、条形码、负责人、锅、防滑条、露营泡咖啡、300ml、Yao",
+          "filters": "可选，结构化筛选。例如 {\"负责人\":\"Yao\",\"类目\":\"锅\"} 或 {\"product.person_in_charge\":\"Yao\"}",
+          "fields": "可选，要重点返回的字段名列表，例如 容量、材质、卖点",
+          "limit": "可选，默认 50"
+        }
+      },
+      {
+        "name": "semantic_search_knowledge",
+        "description": "语义/关键词检索产品知识库。适合露营泡咖啡、情绪价值、使用场景、模糊需求等问题。V1 使用知识库关键词兜底，后续可升级 pgvector 相似度。",
+        "arguments": {
+          "query": "用户的语义需求",
+          "sku": "可选，限定 SKU",
+          "limit": "可选，默认 8"
+        }
+      },
+      {
+        "name": "hybrid_search_products",
+        "description": "融合查询产品。精确条件走产品 SQL filters，模糊语义需求走知识库/pgvector，再按 SKU 合并排序。适合“负责人Yao且适合露营泡咖啡的锅”。",
+        "arguments": {
+          "term": "可选，全字段关键词",
+          "filters": "可选，结构化筛选，例如 {\"负责人\":\"Yao\",\"类目\":\"锅具\"}",
+          "semantic_query": "可选，模糊语义需求，例如 适合露营泡咖啡",
+          "fields": "可选，要重点返回的字段名列表",
+          "limit": "可选，默认 50"
+        }
+      }
+    ]
+  ...<truncated>
+INFO:     [CUSTOMER_AGENT_AI_REQUEST] {
+  "url": "https://api.deepseek.com/v1/chat/completions",
+  "body": {
+    "model": "deepseek-v4-pro",
+    "messages": {
+      "type": "list",
+      "count": 2,
+      "sample": [
+        {
+          "role": "system",
+          "content": "你是内部产品数据库 Agent。你可以自己选择后端白名单工具查询产品、读取详情、提出修改或删除建议。严禁编写 SQL，严禁直接执行写库。所有修改/删除只能调用 propose_* 工具生成待确认动作。如果用户要查询多个产品、条形码、类目或功能，优先调用 search_products。如果同时有精确条件和模糊语义需求，优先调用 hybrid_search_products。search_products 支持 term 全字段搜索，也支持 filters 精确筛选，例如 {\"...<chars:1201>"
+        },
+        {
+          "role": "user",
+          "content": "{\"question\": \"推荐三款适合露营多人做饭的套锅，并说明区别。\", \"recommendation_question\": \"推荐三款适合露营多人做饭的套锅，并说明区别。\", \"previous_result_skus\": [], \"entity_stack\": [], \"route_hints\": {\"detected_skus\": [], \"has_new_product\": false, \"intent\": \"recommend_products\", \"has_...<chars:3230>"
+        }
+      ]
+    },
+    "temperature": 0,
+    "max_tokens": "***"
+  }
+}
+INFO:     [CUSTOMER_PERF] {"trace_id": "ec1e69c095a245a49380e779f6b4d74c", "stage": "ai_semaphore_wait", "elapsed_ms": null, "extra": {"ai_semaphore_wait_ms": 0.15, "acquired": true, "queue_timeout_seconds": 8.0, "max_concurrent_requests": 10}}
+INFO:     [CUSTOMER_AGENT_AI_SEMAPHORE_WAIT] {
+  "ai_semaphore_wait_ms": 0.15,
+  "acquired": true,
+  "queue_timeout_seconds": 8.0,
+  "max_concurrent_requests": 10
+}
+INFO:     [CUSTOMER_AGENT_AI_RESPONSE] {
+  "id": "175d0a31-73d9-412f-959d-f4cbb74e1218",
+  "object": "chat.completion",
+  "created": 1781974112,
+  "model": "deepseek-v4-pro",
+  "choices": {
+    "type": "list",
+    "count": 1,
+    "sample": [
+      {
+        "index": 0,
+        "message": {
+          "role": "assistant",
+          "content": "{\"tool_calls\":[{\"name\":\"hybrid_search_products\",\"arguments\":{\"term\":\"套锅\",\"filters\":{\"类目\":\"套锅\"},\"semantic_query\":\"适合露营多人做饭的套锅\",\"fields\":[\"SKU\",\"名称\",\"品牌\",\"系列\",\"容量\",\"材质\",\"重量\",\"卖点\",\"使用场景\",\"目标人群\",\"价格定位\",\"定位\",\"情绪价值\",\"热源\",\"功率\",\"颜色\",\"工艺\",\"竞品\",\"备注\"]...<chars:255>",
+          "reasoning_content": "我们被要求推荐三款适合露营多人做饭的套锅，并说明区别。首先需要搜索套锅产品，条件：类目可能是“套锅”或“锅具”，场景是露营，适合多人。需要查询相关产品。使用search_products或hybrid_search_products。可能需要在term里用“套锅”，filters里用相关筛选，比如“使用场景”包含露营。但是“使用场景”是白名单字段。可以先搜索“套锅” term，然后从结果中筛选适合露营的。也可以使用语义搜索“适合露营多人做饭的套锅”。用hybrid_searc...<chars:495>"
+        },
+        "logprobs": null,
+        "finish_reason": "stop"
+      }
+    ]
+  },
+  "usage": {
+    "prompt_tokens": "***",
+    "completion_tokens": "***",
+    "total_tokens": "***",
+    "prompt_tokens_details": "***",
+    "completion_tokens_details": "***",
+    "prompt_cache_hit_tokens": "***",
+    "prompt_cache_miss_tokens": "***"
+  },
+  "system_fingerprint": "fp_9954b31ca7_prod0820_fp8_kvcache_20260402"
+}
+INFO:     [CUSTOMER_PERF] {"trace_id": "ec1e69c095a245a49380e779f6b4d74c", "stage": "llm_call", "elapsed_ms": 4784.44, "extra": {"llm_call_index": 1, "purpose": "tool_selection", "model": "deepseek-v4-pro", "prompt_chars": 4431, "prompt_tokens_est": 1107, "completion_chars": 255, "completion_tokens_est": 63, "retries": 0, "timeout": false, "fallback": false, "error": null}}
+INFO:     [CUSTOMER_AGENT_TOOL_SELECTION_RESPONSE] {
+  "round": 1,
+  "content": "{\"tool_calls\":[{\"name\":\"hybrid_search_products\",\"arguments\":{\"term\":\"套锅\",\"filters\":{\"类目\":\"套锅\"},\"semantic_query\":\"适合露营多人做饭的套锅\",\"fields\":[\"SKU\",\"名称\",\"品牌\",\"系列\",\"容量\",\"材质\",\"重量\",\"卖点\",\"使用场景\",\"目标人群\",\"价格定位\",\"定位\",\"情绪价值\",\"热源\",\"功率\",\"颜色\",\"工艺\",\"竞品\",\"备注\"]...<chars:255>"
+}
+INFO:     [CUSTOMER_AGENT_TOOL_CALL] {
+  "name": "hybrid_search_products",
+  "arguments": {
+    "term": "套锅",
+    "filters": {
+      "类目": "套锅"
+    },
+    "semantic_query": "适合露营多人做饭的套锅",
+    "fields": {
+      "type": "list",
+      "count": 26,
+      "sample": [
+        "SKU",
+        "名称",
+        "品牌"
+      ]
+    },
+    "limit": 20
+  }
+}
+INFO:     [CUSTOMER_PERF] {"trace_id": "ec1e69c095a245a49380e779f6b4d74c", "stage": "hybrid_search_products.semantic_retrieve", "elapsed_ms": 364.89, "extra": {"semantic_query": "适合露营多人做饭的套锅", "semantic_rows": 20}}
+INFO:     [CUSTOMER_PERF] {"trace_id": "ec1e69c095a245a49380e779f6b4d74c", "stage": "hybrid_search_products.breakdown", "elapsed_ms": 77.36, "extra": {"sql_filter_ms": 37.93, "embedding_query_ms": 0.0, "vector_search_ms": 0.0, "merge_rank_ms": 0.01, "get_detail_ms": 77.34, "candidates_count": 0, "prompt_chars": 0}}
+INFO:     [CUSTOMER_PERF] {"trace_id": "ec1e69c095a245a49380e779f6b4d74c", "stage": "tool.execute_async", "elapsed_ms": 443.62, "extra": {"tool": "hybrid_search_products", "async_call": true, "ok": true}}
+INFO:     [CUSTOMER_AGENT_TOOL_RESULT] {
+  "ok": true,
+  "tool": "hybrid_search_products",
+  "query": "套锅",
+  "filters": {
+    "类目": "套锅"
+  },
+  "semantic_query": "适合露营多人做饭的套锅",
+  "count": 0,
+  "results": {
+    "type": "list",
+    "count": 0
+  }
+}
+INFO:     [CUSTOMER_AGENT_FINAL_REQUEST] {
+  "messages": {
+    "type": "list",
+    "count": 3,
+    "sample": [
+      {
+        "role": "system",
+        "content": "你是alocs爱路客的产品客服助手。【核心规则，最高优先级】1. 严禁引入retrieved_products之外的产品事实、参数、认证、价格或库存。2. 工具结果里没有的信息，必须说\"暂无此数据\"，不得推断或编造。3. 用户没有问到的话题不要主动引入（用户没问认证就不提认证，没问食品级就不提食品级）。产品数据可能包含嵌套的specs字段，specs里的内容（如gross_weight_g/body_material/surface_finish等）都是产品属性，回答时需要一...<chars:632>"
+      },
+      {
+        "role": "system",
+        "content": "换推荐时，如果 recommendation_context 里有原始品类需求，要用它判断候选产品是否明显偏离用户最初需求。例如最初要“锅”，候选里出现“烧水壶”、“炉具”等不同品类，应优先选品类一致的候选。如果候选池里没有品类一致的产品，要明说“当前品类暂无更多推荐，以下是相关周边产品”，不要在没有说明的情况下直接跨品类推荐。"
+      },
+      {
+        "role": "user",
+        "content": "{\"question\": \"推荐三款适合露营多人做饭的套锅，并说明区别。\", \"conversation_context\": {\"mode\": \"current_question\", \"previous_user_need\": \"\", \"combined_user_need\": \"推荐三款适合露营多人做饭的套锅，并说明区别。\", \"instruction\": \"本轮问题信息较完整，优先按当前问题重新检索和回答；历史只作背景参考。\", \"summary\": \"场景=露营；人群=...<chars:997>"
+      }
+    ]
+  }
+}
+INFO:     [CUSTOMER_AGENT_AI_STREAM_REQUEST] {
+  "url": "https://api.deepseek.com/v1/chat/completions",
+  "body": {
+    "model": "deepseek-v4-pro",
+    "messages": {
+      "type": "list",
+      "count": 3,
+      "sample": [
+        {
+          "role": "system",
+          "content": "你是alocs爱路客的产品客服助手。【核心规则，最高优先级】1. 严禁引入retrieved_products之外的产品事实、参数、认证、价格或库存。2. 工具结果里没有的信息，必须说\"暂无此数据\"，不得推断或编造。3. 用户没有问到的话题不要主动引入（用户没问认证就不提认证，没问食品级就不提食品级）。产品数据可能包含嵌套的specs字段，specs里的内容（如gross_weight_g/body_material/surface_finish等）都是产品属性，回答时需要一...<chars:632>"
+        },
+        {
+          "role": "system",
+          "content": "换推荐时，如果 recommendation_context 里有原始品类需求，要用它判断候选产品是否明显偏离用户最初需求。例如最初要“锅”，候选里出现“烧水壶”、“炉具”等不同品类，应优先选品类一致的候选。如果候选池里没有品类一致的产品，要明说“当前品类暂无更多推荐，以下是相关周边产品”，不要在没有说明的情况下直接跨品类推荐。"
+        },
+        {
+          "role": "user",
+          "content": "{\"question\": \"推荐三款适合露营多人做饭的套锅，并说明区别。\", \"conversation_context\": {\"mode\": \"current_question\", \"previous_user_need\": \"\", \"combined_user_need\": \"推荐三款适合露营多人做饭的套锅，并说明区别。\", \"instruction\": \"本轮问题信息较完整，优先按当前问题重新检索和回答；历史只作背景参考。\", \"summary\": \"场景=露营；人群=...<chars:997>"
+        }
+      ]
+    },
+    "temperature": 0.2,
+    "max_tokens": "***",
+    "stream": true
+  }
+}
+INFO:     [CUSTOMER_PERF] {"trace_id": "ec1e69c095a245a49380e779f6b4d74c", "stage": "sse_first_answer_delta", "elapsed_ms": 6767.07, "extra": {}}
+INFO:     [CUSTOMER_PERF] {"trace_id": "ec1e69c095a245a49380e779f6b4d74c", "stage": "llm_call", "elapsed_ms": 1761.84, "extra": {"llm_call_index": 2, "purpose": "final_answer", "model": "deepseek-v4-pro", "prompt_chars": 1794, "prompt_tokens_est": 448, "completion_chars": 45, "completion_tokens_est": 11, "retries": 0, "timeout": false, "fallback": false, "error": null}}
+INFO:     [CUSTOMER_AGENT_FINAL_RESPONSE] {
+  "content": "{\"answer\": \"目前暂无符合要求的套锅产品信息，建议您查看其他品类或稍后再试。\"}"
+}
+INFO:     [CUSTOMER_PERF] {"trace_id": "ec1e69c095a245a49380e779f6b4d74c", "stage": "process_agent_request", "elapsed_ms": 7080.79, "extra": {"hit": true, "intent": "compare_products", "agent_mode": "llm_tool_calling"}}
+INFO:     [CUSTOMER_PERF] {"trace_id": "ec1e69c095a245a49380e779f6b4d74c", "stage": "hybrid_search_products.semantic_retrieve", "elapsed_ms": 325.55, "extra": {"semantic_query": "推荐三款适合露营多人做饭的套锅，并说明区别", "semantic_rows": 50}}
+INFO:     [CUSTOMER_PERF] {"trace_id": "ec1e69c095a245a49380e779f6b4d74c", "stage": "hybrid_search_products.breakdown", "elapsed_ms": 262.06, "extra": {"sql_filter_ms": 36.8, "embedding_query_ms": 0.0, "vector_search_ms": 0.0, "merge_rank_ms": 0.01, "get_detail_ms": 261.71, "candidates_count": 10, "prompt_chars": 24919}}
+INFO:     [CUSTOMER_PERF] {"trace_id": "ec1e69c095a245a49380e779f6b4d74c", "stage": "tool.execute_async", "elapsed_ms": 589.41, "extra": {"tool": "hybrid_search_products", "async_call": true, "ok": true}}
+INFO:     [CUSTOMER_AGENT_AI_REQUEST] {
+  "url": "https://api.deepseek.com/v1/chat/completions",
+  "body": {
+    "model": "deepseek-v4-pro",
+    "messages": {
+      "type": "list",
+      "count": 2,
+      "sample": [
+        {
+          "role": "system",
+          "content": "你是产品知识库智能客服。请基于给定产品资料、QA 和知识库片段回答用户。\n\n要求：\n1. 先给结论，再给依据。\n2. 如果 QA 能直接回答，优先使用 QA。\n3. 如果知识库有补充信息，可以合并说明。\n4. 不要编造工具结果之外的参数、价格、库存或承诺。\n5. 如果数据缺失，要明确说“资料里暂未提供”。\n6. 回答控制在 1-2 段，必要时给下一步建议。\n7. 如果有异常或警告，要友善提醒。\n8. 推荐类问题要解释取舍理由。\n9. 当用户询问食品级、认证、安全性时，只能引用...<chars:349>"
+        },
+        {
+          "role": "user",
+          "content": "用户问题：锅\n\n产品资料：\n[\n  {\n    \"SKU\": \"CW-C01-37\",\n    \"名称\": \"1－2人野营锅7件套\",\n    \"品牌\": \"alocs爱路客\",\n    \"类目\": \"锅具\",\n    \"负责人\": \"Kaka\",\n    \"生命周期\": \"常规品\",\n    \"容量\": \"锅 900ML，碗 450ML\",\n    \"材质\": \"硬质氧化铝合金、不锈钢、铜\",\n    \"颜色\": \"氧化铝本色、不锈钢原色\",\n    \"热源\": \"酒精炉,...<chars:1968>"
+        }
+      ]
+    },
+    "temperature": 0.3,
+    "max_tokens": "***"
+  }
+}
+INFO:     [CUSTOMER_PERF] {"trace_id": "ec1e69c095a245a49380e779f6b4d74c", "stage": "ai_semaphore_wait", "elapsed_ms": null, "extra": {"ai_semaphore_wait_ms": 0.11, "acquired": true, "queue_timeout_seconds": 8.0, "max_concurrent_requests": 10}}
+INFO:     [CUSTOMER_AGENT_AI_SEMAPHORE_WAIT] {
+  "ai_semaphore_wait_ms": 0.11,
+  "acquired": true,
+  "queue_timeout_seconds": 8.0,
+  "max_concurrent_requests": 10
+}
+INFO:     [CUSTOMER_AGENT_AI_RESPONSE] {
+  "id": "2efa9e26-900a-4732-a207-9b594b39b693",
+  "object": "chat.completion",
+  "created": 1781974120,
+  "model": "deepseek-v4-pro",
+  "choices": {
+    "type": "list",
+    "count": 1,
+    "sample": [
+      {
+        "index": 0,
+        "message": {
+          "role": "assistant",
+          "content": "目前资料里共有 5 款 alocs 爱路客的锅具，分别覆盖单人轻量到家庭露营场景，均以硬质氧化铝合金材质为主。  \n- CW-C01-37 “1－2人野营锅7件套”：适合轻量徒步和双人露营，锅 900ML、碗 450ML，可用酒精炉或燃气炉。  \n- CW-C93 “行山单锅”：主推新品，锅 1000ML，带进口 TPE 盖，定位高海拔/极限轻量，单人使用。  \n- CW-C83 “炊墨套锅”：非主推新品，锅 3700ML + 煎盘 2300ML，白蜡木手柄，可用电磁炉/燃气...<chars:477>",
+          "reasoning_content": "我们被要求根据产品资料回答用户的问题“锅”。这个太笼统，我们需要解读。可能用户想了解这些锅的基本信息。因为只有产品资料，没有QA和知识库相关信息。资料中有五款锅。我们需要给出一个总体介绍，然后引导细化。按照要求：先给结论，再给依据。不能编造。可以列出大概。但我们不要用表格。我们可以简要说明有5款锅，并分别介绍名称、适用人数、容量、材质等关键点。控制1-2段。如果数据缺失，说“资料里暂未提供”。再建议下一步。另外，可以提到异常/警告无。知识库片段：有关于材质和容量的问答，但可能...<chars:516>"
+        },
+        "logprobs": null,
+        "finish_reason": "stop"
+      }
+    ]
+  },
+  "usage": {
+    "prompt_tokens": "***",
+    "completion_tokens": "***",
+    "total_tokens": "***",
+    "prompt_tokens_details": "***",
+    "completion_tokens_details": "***",
+    "prompt_cache_hit_tokens": "***",
+    "prompt_cache_miss_tokens": "***"
+  },
+  "system_fingerprint": "fp_9954b31ca7_prod0820_fp8_kvcache_20260402"
+}
+INFO:     [CUSTOMER_PERF] {"trace_id": "ec1e69c095a245a49380e779f6b4d74c", "stage": "llm_call", "elapsed_ms": 9071.53, "extra": {"llm_call_index": 3, "purpose": "detail_answer", "model": "deepseek-v4-pro", "prompt_chars": 2317, "prompt_tokens_est": 579, "completion_chars": 477, "completion_tokens_est": 119, "retries": 0, "timeout": false, "fallback": false, "error": null}}
+INFO:     [CUSTOMER_AGENT_AI_REQUEST] {
+  "url": "https://api.deepseek.com/v1/chat/completions",
+  "body": {
+    "model": "deepseek-v4-pro",
+    "messages": {
+      "type": "list",
+      "count": 2,
+      "sample": [
+        {
+          "role": "system",
+          "content": "你是户外装备推荐专家。根据用户需求，从候选产品中选出最合适的，并给出排名理由。输出JSON格式：{\"ranking\": [{\"index\": 0, \"reason\": \"推荐理由\"}, ...]}推荐时要综合考虑容量、材质、适用场景、目标人群、价格定位、产品定位、便携性等因素。如果用户说预算不高、便宜点、性价比，要优先选择价格定位更亲民/入门/常规的候选；高端或高价定位不能作为低预算首选。按推荐优先顺序排列。"
+        },
+        {
+          "role": "user",
+          "content": "用户需求: 三款适合露营多人做饭的套锅，并说明区别\n\n候选产品:\n[\n  {\n    \"index\": 0,\n    \"sku\": \"CW-C01-37\",\n    \"name\": \"1－2人野营锅7件套\",\n    \"category\": \"锅具\",\n    \"capacity\": \"锅 900ML，碗 450ML\",\n    \"material\": \"硬质氧化铝合金、不锈钢、铜\",\n    \"color\": \"氧化铝本色、不锈钢原色\",\n    \"features\": \"...<chars:4539>"
+        }
+      ]
+    },
+    "temperature": 0.1,
+    "max_tokens": "***"
+  }
+}
+INFO:     [CUSTOMER_PERF] {"trace_id": "ec1e69c095a245a49380e779f6b4d74c", "stage": "ai_semaphore_wait", "elapsed_ms": null, "extra": {"ai_semaphore_wait_ms": 0.11, "acquired": true, "queue_timeout_seconds": 8.0, "max_concurrent_requests": 10}}
+INFO:     [CUSTOMER_AGENT_AI_SEMAPHORE_WAIT] {
+  "ai_semaphore_wait_ms": 0.11,
+  "acquired": true,
+  "queue_timeout_seconds": 8.0,
+  "max_concurrent_requests": 10
+}
+INFO:     [CUSTOMER_AGENT_AI_RESPONSE] {
+  "id": "3ab86e0b-6066-45ae-9bc0-4ca801857328",
+  "object": "chat.completion",
+  "created": 1781974129,
+  "model": "deepseek-v4-pro",
+  "choices": {
+    "type": "list",
+    "count": 1,
+    "sample": [
+      {
+        "index": 0,
+        "message": {
+          "role": "assistant",
+          "content": "",
+          "reasoning_content": "我们被要求推荐三款适合露营多人做饭的套锅。用户强调“多人做饭”，容量要大，套锅意味着多件。候选中有套锅：索引0是1-2人7件套，索引3是2-4人10件套，索引2是炊墨套锅（锅3700ml，煎盘2300ml）也算套锅。还有单锅和烤盘等非套锅。只推荐三款，需要排名理由。综合考虑容量、材质、适用场景、目标人群、价格定位、产品定位、便携性等。用户没提预算，默认考虑所有。适合露营多人做饭，必须容量大，套锅有多个锅具，方便煎炒煮。索引3是“2-4人野餐锅10件套”，容量1.7L锅+1.4...<chars:846>"
+        },
+        "logprobs": null,
+        "finish_reason": "length"
+      }
+    ]
+  },
+  "usage": {
+    "prompt_tokens": "***",
+    "completion_tokens": "***",
+    "total_tokens": "***",
+    "prompt_tokens_details": "***",
+    "completion_tokens_details": "***",
+    "prompt_cache_hit_tokens": "***",
+    "prompt_cache_miss_tokens": "***"
+  },
+  "system_fingerprint": "fp_9954b31ca7_prod0820_fp8_kvcache_20260402"
+}
+INFO:     [CUSTOMER_PERF] {"trace_id": "ec1e69c095a245a49380e779f6b4d74c", "stage": "llm_call", "elapsed_ms": 9176.66, "extra": {"llm_call_index": 4, "purpose": "rank", "model": "deepseek-v4-pro", "prompt_chars": 4745, "prompt_tokens_est": 1186, "completion_chars": 0, "completion_tokens_est": 0, "retries": 0, "timeout": false, "fallback": false, "error": null}}
+INFO:     [CUSTOMER_AGENT_AI_REQUEST] {
+  "url": "https://api.deepseek.com/v1/chat/completions",
+  "body": {
+    "model": "deepseek-v4-pro",
+    "messages": {
+      "type": "list",
+      "count": 2,
+      "sample": [
+        {
+          "role": "system",
+          "content": "你是alocs爱路客的产品客服助手。【核心规则，最高优先级】1. 严禁引入retrieved_products之外的产品事实、参数、认证、价格或库存。2. 工具结果里没有的信息，必须说\"暂无此数据\"，不得推断或编造。3. 用户没有问到的话题不要主动引入。【任务】根据用户需求和retrieved_products里的完整产品数据，组织自然的推荐回答。先给首选推荐，再说明为什么匹配用户需求；理由必须引用具体参数、场景、人群、容量、重量、材质、卖点或recommendation_m...<chars:350>"
+        },
+        {
+          "role": "user",
+          "content": "{\"question\": \"三款适合露营多人做饭的套锅，并说明区别\", \"intent_hint\": \"recommend_products\", \"recommendation_query\": \"三款适合露营多人做饭的套锅，并说明区别\", \"retrieved_products\": [{\"sku\": \"CW-C83\", \"product_name_cn\": \"炊墨套锅\", \"product_name_en\": \"camping cookware set\", \"category...<chars:4207>"
+        }
+      ]
+    },
+    "temperature": 0.2,
+    "max_tokens": "***"
+  }
+}
+INFO:     [CUSTOMER_PERF] {"trace_id": "ec1e69c095a245a49380e779f6b4d74c", "stage": "ai_semaphore_wait", "elapsed_ms": null, "extra": {"ai_semaphore_wait_ms": 0.49, "acquired": true, "queue_timeout_seconds": 8.0, "max_concurrent_requests": 10}}
+INFO:     [CUSTOMER_AGENT_AI_SEMAPHORE_WAIT] {
+  "ai_semaphore_wait_ms": 0.49,
+  "acquired": true,
+  "queue_timeout_seconds": 8.0,
+  "max_concurrent_requests": 10
+}
+INFO:     [CUSTOMER_AGENT_AI_RESPONSE] {
+  "id": "931a7e52-4da1-4a01-9c78-f0815c34d9f6",
+  "object": "chat.completion",
+  "created": 1781974138,
+  "model": "deepseek-v4-pro",
+  "choices": {
+    "type": "list",
+    "count": 1,
+    "sample": [
+      {
+        "index": 0,
+        "message": {
+          "role": "assistant",
+          "content": "{\n  \"answer\": \"为您推荐三款适合露营多人做饭的锅具方案，其中两款是完整套锅，第三款是炊墨系列的单品锅，组合起来同样能覆盖丰富烹饪场景。首选炊墨套锅，它将3700mL深锅与2300mL煎盘组合，总重2000g，适合3-4人营地大餐。这套锅的硬质氧化铝合金锅体搭配水性不沾涂层，支持无油煎蛋，而且复底设计通吃明火、燃气炉、电磁炉等几乎所有炉具。快拆手柄一拧就拆，收纳方便，非常适合家庭精致露营和房车自驾。次选2-4人野餐锅10件套，容量包括1.7L锅、1.4L浅锅和7....<chars:578>",
+          "reasoning_content": "我们被要求输出JSON，格式为{\"answer\":\"...\"}。需要推荐三款适合露营多人做饭的套锅，并说明区别。根据retrieved_products，有多个产品，但注意CF-PG19Pro缺乏容量等信息，不适合作为套锅推荐。符合条件的套锅有：炊墨套锅（CW-C83，含锅3700ML+煎盘2300ML，重量2000g），2-4人野餐锅10件套（CW-C05-37，容量1.7L锅、1.4L浅锅、7.5英寸煎盘，重量1030g）。炊墨炒锅（CW-C83-1）只有锅3700ML，...<chars:1583>"
+        },
+        "logprobs": null,
+        "finish_reason": "stop"
+      }
+    ]
+  },
+  "usage": {
+    "prompt_tokens": "***",
+    "completion_tokens": "***",
+    "total_tokens": "***",
+    "prompt_tokens_details": "***",
+    "completion_tokens_details": "***",
+    "prompt_cache_hit_tokens": "***",
+    "prompt_cache_miss_tokens": "***"
+  },
+  "system_fingerprint": "fp_9954b31ca7_prod0820_fp8_kvcache_20260402"
+}
+INFO:     [CUSTOMER_PERF] {"trace_id": "ec1e69c095a245a49380e779f6b4d74c", "stage": "llm_call", "elapsed_ms": 19378.71, "extra": {"llm_call_index": 5, "purpose": "recommend_answer", "model": "deepseek-v4-pro", "prompt_chars": 4557, "prompt_tokens_est": 1139, "completion_chars": 578, "completion_tokens_est": 144, "retries": 0, "timeout": false, "fallback": false, "error": null}}
+INFO:     [CUSTOMER_PERF] {"trace_id": "ec1e69c095a245a49380e779f6b4d74c", "stage": "process_intent_request_retry", "elapsed_ms": 38564.27, "extra": {"hit": true, "intent": "recommend_products"}}
+INFO:     [CUSTOMER_PERF] {"trace_id": "ec1e69c095a245a49380e779f6b4d74c", "stage": "save_messages_and_commit", "elapsed_ms": 25.94, "extra": {"branch": "agent", "skip_polish": true}}
+INFO:     [CUSTOMER_PERF] {"trace_id": "ec1e69c095a245a49380e779f6b4d74c", "stage": "ask_customer_service.total", "elapsed_ms": 45705.56, "extra": {"branch": "agent", "intent": "recommend_products", "agent_mode": null}}
+INFO:     [CUSTOMER_PERF] {"trace_id": "ec1e69c095a245a49380e779f6b4d74c", "stage": "summary", "elapsed_ms": 45709.78, "extra": {"llm_call_count": 5, "llm_calls": [{"llm_call_index": 1, "purpose": "tool_selection", "model": "deepseek-v4-pro", "prompt_chars": 4431, "prompt_tokens_est": 1107, "completion_chars": 255, "completion_tokens_est": 63, "retries": 0, "timeout": false, "fallback": false, "error": null}, {"llm_call_index": 2, "purpose": "final_answer", "model": "deepseek-v4-pro", "prompt_chars": 1794, "prompt_tokens_est": 448, "completion_chars": 45, "completion_tokens_est": 11, "retries": 0, "timeout": false, "fallback": false, "error": null}, {"llm_call_index": 3, "purpose": "detail_answer", "model": "deepseek-v4-pro", "prompt_chars": 2317, "prompt_tokens_est": 579, "completion_chars": 477, "completion_tokens_est": 119, "retries": 0, "timeout": false, "fallback": false, "error": null}, {"llm_call_index": 4, "purpose": "rank", "model": "deepseek-v4-pro", "prompt_chars": 4745, "prompt_tokens_est": 1186, "completion_chars": 0, "completion_tokens_est": 0, "retries": 0, "timeout": false, "fallback": false, "error": null}, {"llm_call_index": 5, "purpose": "recommend_answer", "model": "deepseek-v4-pro", "prompt_chars": 4557, "prompt_tokens_est": 1139, "completion_chars": 578, "completion_tokens_est": 144, "retries": 0, "timeout": false, "fallback": false, "error": null}], "stages": [{"stage": "ask_stream.precheck", "elapsed_ms": 1.36, "extra": {"permission_checked": true, "rate_limit_checked": true}}, {"stage": "customer_faq_fast_path", "elapsed_ms": 0.11, "extra": {"hit": false, "intent": null, "agent_mode": null}}, {"stage": "guardrail.evaluate_question", "elapsed_ms": 0.04, "extra": {"matched": false}}, {"stage": "context_read", "elapsed_ms": 0.01, "extra": {"entity_stack_count": 0, "conversation_history_count": 0, "previous_result_skus_count": 0, "recommendation_context_present": false}}, {"stage": "named_product_shortcut", "elapsed_ms": 7.25, "extra": {"hit": false, "agent_mode": null}}, {"stage": "route_deterministic_fact_question", "elapsed_ms": 0.13, "extra": {"hit": false, "intent": null, "agent_mode": null}}, {"stage": "hybrid_search_products.semantic_retrieve", "elapsed_ms": 364.89, "extra": {"semantic_query": "适合露营多人做饭的套锅", "semantic_rows": 20}}, {"stage": "hybrid_search_products.breakdown", "elapsed_ms": 77.36, "extra": {"sql_filter_ms": 37.93, "embedding_query_ms": 0.0, "vector_search_ms": 0.0, "merge_rank_ms": 0.01, "get_detail_ms": 77.34, "candidates_count": 0, "prompt_chars": 0}}, {"stage": "tool.execute_async", "elapsed_ms": 443.62, "extra": {"tool": "hybrid_search_products", "async_call": true, "ok": true}}, {"stage": "process_agent_request", "elapsed_ms": 7080.79, "extra": {"hit": true, "intent": "compare_products", "agent_mode": "llm_tool_calling"}}, {"stage": "hybrid_search_products.semantic_retrieve", "elapsed_ms": 325.55, "extra": {"semantic_query": "推荐三款适合露营多人做饭的套锅，并说明区别", "semantic_rows": 50}}, {"stage": "hybrid_search_products.breakdown", "elapsed_ms": 262.06, "extra": {"sql_filter_ms": 36.8, "embedding_query_ms": 0.0, "vector_search_ms": 0.0, "merge_rank_ms": 0.01, "get_detail_ms": 261.71, "candidates_count": 10, "prompt_chars": 24919}}, {"stage": "tool.execute_async", "elapsed_ms": 589.41, "extra": {"tool": "hybrid_search_products", "async_call": true, "ok": true}}, {"stage": "process_intent_request_retry", "elapsed_ms": 38564.27, "extra": {"hit": true, "intent": "recommend_products"}}, {"stage": "save_messages_and_commit", "elapsed_ms": 25.94, "extra": {"branch": "agent", "skip_polish": true}}, {"stage": "ask_customer_service.total", "elapsed_ms": 45705.56, "extra": {"branch": "agent", "intent": "recommend_products", "agent_mode": null}}], "first_answer_delta_ms": 6767.07, "done_ms": null, "final_answer": "为您推荐三款适合露营多人做饭的锅具方案，其中两款是完整套锅，第三款是炊墨系列的单品锅，组合起来同样能覆盖丰富烹饪场景。首选炊墨套锅，它将3700mL深锅与2300mL煎盘组合，总重2000g，适合3-4人营地大餐。这套锅的硬质氧化铝合金锅体搭配水性不沾涂层，支持无油煎蛋，而且复底设计通吃明火、燃气炉、电磁炉等几乎所有炉具。快拆手柄一拧就拆，收纳方便，非常适合家庭精致露营和房车自驾。次选2-4人野餐锅10件套，容量包括1.7L锅、1.4L浅锅和7.5英寸煎盘，很轻，总重仅1030g。它最大的亮点是十件全套配置，连碗、勺、铲都配齐了，一个收纳包就能全部带走，性价比高，是首次露营家庭或小型团建聚餐的好选择。第三款是炊墨炒锅和炊墨煎锅的组合推荐：炊墨炒锅拥有3700mL大容量，1200g，复底全炉具兼容；炊墨煎锅2300mL，810g，轻巧不沾。两者都采用同样的硬质氧化铝和白蜡木柄，水性涂层好用好洗。如果现有装备中缺一口专门的大炒锅或轻煎盘，可以单独选配，补强户外煎炒能力，但这种搭配不含配套碗勺和收纳包，不像前两款那样一包即走。三款区别主要在配件完整度和重量：炊墨套锅有锅盘组合和快拆手柄，兼顾烹炒与蒸煮；10件套配件最全，但锅体略小且只能用酒精炉、燃气炉；炊墨单锅功能专注、轻量，适合已有基础装备的用户按需补充。", "intent": "recommend_products", "agent_mode": null}}
+INFO:     [CUSTOMER_PERF] {"trace_id": "ec1e69c095a245a49380e779f6b4d74c", "stage": "ask_stream.service_call", "elapsed_ms": 45715.96, "extra": {"conversation_id": "0ee5a052-ed0c-4390-884b-a0d544d7b681", "intent": "recommend_products", "agent_mode": null}}
+INFO:     [CUSTOMER_PERF] {"trace_id": "ec1e69c095a245a49380e779f6b4d74c", "stage": "sse_done", "elapsed_ms": 45768.08, "extra": {}}
+INFO:     [CUSTOMER_PERF] {"trace_id": "ec1e69c095a245a49380e779f6b4d74c", "stage": "ask_stream.total", "elapsed_ms": 45772.0, "extra": {"conversation_id": "0ee5a052-ed0c-4390-884b-a0d544d7b681", "intent": "recommend_products"}}
+INFO:     [CUSTOMER_PERF] {"trace_id": "ec1e69c095a245a49380e779f6b4d74c", "stage": "summary", "elapsed_ms": 45772.45, "extra": {"llm_call_count": 5, "llm_calls": [{"llm_call_index": 1, "purpose": "tool_selection", "model": "deepseek-v4-pro", "prompt_chars": 4431, "prompt_tokens_est": 1107, "completion_chars": 255, "completion_tokens_est": 63, "retries": 0, "timeout": false, "fallback": false, "error": null}, {"llm_call_index": 2, "purpose": "final_answer", "model": "deepseek-v4-pro", "prompt_chars": 1794, "prompt_tokens_est": 448, "completion_chars": 45, "completion_tokens_est": 11, "retries": 0, "timeout": false, "fallback": false, "error": null}, {"llm_call_index": 3, "purpose": "detail_answer", "model": "deepseek-v4-pro", "prompt_chars": 2317, "prompt_tokens_est": 579, "completion_chars": 477, "completion_tokens_est": 119, "retries": 0, "timeout": false, "fallback": false, "error": null}, {"llm_call_index": 4, "purpose": "rank", "model": "deepseek-v4-pro", "prompt_chars": 4745, "prompt_tokens_est": 1186, "completion_chars": 0, "completion_tokens_est": 0, "retries": 0, "timeout": false, "fallback": false, "error": null}, {"llm_call_index": 5, "purpose": "recommend_answer", "model": "deepseek-v4-pro", "prompt_chars": 4557, "prompt_tokens_est": 1139, "completion_chars": 578, "completion_tokens_est": 144, "retries": 0, "timeout": false, "fallback": false, "error": null}], "stages": [{"stage": "ask_stream.precheck", "elapsed_ms": 1.36, "extra": {"permission_checked": true, "rate_limit_checked": true}}, {"stage": "customer_faq_fast_path", "elapsed_ms": 0.11, "extra": {"hit": false, "intent": null, "agent_mode": null}}, {"stage": "guardrail.evaluate_question", "elapsed_ms": 0.04, "extra": {"matched": false}}, {"stage": "context_read", "elapsed_ms": 0.01, "extra": {"entity_stack_count": 0, "conversation_history_count": 0, "previous_result_skus_count": 0, "recommendation_context_present": false}}, {"stage": "named_product_shortcut", "elapsed_ms": 7.25, "extra": {"hit": false, "agent_mode": null}}, {"stage": "route_deterministic_fact_question", "elapsed_ms": 0.13, "extra": {"hit": false, "intent": null, "agent_mode": null}}, {"stage": "hybrid_search_products.semantic_retrieve", "elapsed_ms": 364.89, "extra": {"semantic_query": "适合露营多人做饭的套锅", "semantic_rows": 20}}, {"stage": "hybrid_search_products.breakdown", "elapsed_ms": 77.36, "extra": {"sql_filter_ms": 37.93, "embedding_query_ms": 0.0, "vector_search_ms": 0.0, "merge_rank_ms": 0.01, "get_detail_ms": 77.34, "candidates_count": 0, "prompt_chars": 0}}, {"stage": "tool.execute_async", "elapsed_ms": 443.62, "extra": {"tool": "hybrid_search_products", "async_call": true, "ok": true}}, {"stage": "process_agent_request", "elapsed_ms": 7080.79, "extra": {"hit": true, "intent": "compare_products", "agent_mode": "llm_tool_calling"}}, {"stage": "hybrid_search_products.semantic_retrieve", "elapsed_ms": 325.55, "extra": {"semantic_query": "推荐三款适合露营多人做饭的套锅，并说明区别", "semantic_rows": 50}}, {"stage": "hybrid_search_products.breakdown", "elapsed_ms": 262.06, "extra": {"sql_filter_ms": 36.8, "embedding_query_ms": 0.0, "vector_search_ms": 0.0, "merge_rank_ms": 0.01, "get_detail_ms": 261.71, "candidates_count": 10, "prompt_chars": 24919}}, {"stage": "tool.execute_async", "elapsed_ms": 589.41, "extra": {"tool": "hybrid_search_products", "async_call": true, "ok": true}}, {"stage": "process_intent_request_retry", "elapsed_ms": 38564.27, "extra": {"hit": true, "intent": "recommend_products"}}, {"stage": "save_messages_and_commit", "elapsed_ms": 25.94, "extra": {"branch": "agent", "skip_polish": true}}, {"stage": "ask_customer_service.total", "elapsed_ms": 45705.56, "extra": {"branch": "agent", "intent": "recommend_products", "agent_mode": null}}, {"stage": "ask_stream.service_call", "elapsed_ms": 45715.96, "extra": {"conversation_id": "0ee5a052-ed0c-4390-884b-a0d544d7b681", "intent": "recommend_products", "agent_mode": null}}, {"stage": "ask_stream.total", "elapsed_ms": 45772.0, "extra": {"conversation_id": "0ee5a052-ed0c-4390-884b-a0d544d7b681", "intent": "recommend_products"}}], "first_answer_delta_ms": 6767.07, "done_ms": 45768.08, "final_answer": "为您推荐三款适合露营多人做饭的锅具方案，其中两款是完整套锅，第三款是炊墨系列的单品锅，组合起来同样能覆盖丰富烹饪场景。首选炊墨套锅，它将3700mL深锅与2300mL煎盘组合，总重2000g，适合3-4人营地大餐。这套锅的硬质氧化铝合金锅体搭配水性不沾涂层，支持无油煎蛋，而且复底设计通吃明火、燃气炉、电磁炉等几乎所有炉具。快拆手柄一拧就拆，收纳方便，非常适合家庭精致露营和房车自驾。次选2-4人野餐锅10件套，容量包括1.7L锅、1.4L浅锅和7.5英寸煎盘，很轻，总重仅1030g。它最大的亮点是十件全套配置，连碗、勺、铲都配齐了，一个收纳包就能全部带走，性价比高，是首次露营家庭或小型团建聚餐的好选择。第三款是炊墨炒锅和炊墨煎锅的组合推荐：炊墨炒锅拥有3700mL大容量，1200g，复底全炉具兼容；炊墨煎锅2300mL，810g，轻巧不沾。两者都采用同样的硬质氧化铝和白蜡木柄，水性涂层好用好洗。如果现有装备中缺一口专门的大炒锅或轻煎盘，可以单独选配，补强户外煎炒能力，但这种搭配不含配套碗勺和收纳包，不像前两款那样一包即走。三款区别主要在配件完整度和重量：炊墨套锅有锅盘组合和快拆手柄，兼顾烹炒与蒸煮；10件套配件最全，但锅体略小且只能用酒精炉、燃气炉；炊墨单锅功能专注、轻量，适合已有基础装备的用户按需补充。", "intent": "recommend_products", "agent_mode": null}}
+INFO:     [CUSTOMER_PERF] {"trace_id": "86faa3b4257d469b89c8d076e2ba305e", "stage": "ask_stream.precheck", "elapsed_ms": 0.65, "extra": {"permission_checked": true, "rate_limit_checked": true}}
+INFO:     [CUSTOMER_PERF] {"trace_id": "86faa3b4257d469b89c8d076e2ba305e", "stage": "customer_faq_fast_path", "elapsed_ms": 0.02, "extra": {"hit": false, "intent": null, "agent_mode": null}}
+INFO:     [CUSTOMER_PERF] {"trace_id": "86faa3b4257d469b89c8d076e2ba305e", "stage": "guardrail.evaluate_question", "elapsed_ms": 0.03, "extra": {"matched": false}}
+INFO:     [CUSTOMER_PERF] {"trace_id": "86faa3b4257d469b89c8d076e2ba305e", "stage": "context_read", "elapsed_ms": 9.6, "extra": {"entity_stack_count": 5, "conversation_history_count": 2, "previous_result_skus_count": 0, "recommendation_context_present": false}}
+INFO:     [CUSTOMER_PERF] {"trace_id": "86faa3b4257d469b89c8d076e2ba305e", "stage": "named_product_shortcut", "elapsed_ms": 4.58, "extra": {"hit": false, "agent_mode": null}}
+INFO:     [CUSTOMER_AGENT_AI_REQUEST] {
+  "url": "https://api.deepseek.com/v1/chat/completions",
+  "body": {
+    "model": "deepseek-v4-pro",
+    "messages": {
+      "type": "list",
+      "count": 3,
+      "sample": [
+        {
+          "role": "system",
+          "content": "你是内部产品客服的指代消解器，只负责在“没有新产品名命中”的前提下，判断当前问题实际指向哪些已有 SKU。\n你会收到 current_question、entity_stack、conversation_history。entity_stack 中的每一项都包含 sku、name、turn，turn 越小越早出现。\n请只输出 JSON，且只允许包含 resolved_skus 和 reason 两个字段。\nresolved_skus 里填写当前问题实际指向的 SKU 列表。\n...<chars:714>"
+        },
+        {
+          "role": "system",
+          "content": "补充任务：你还需要判断 current_question 的 query_type。如果用户是在寻找某个明确命名的产品，但该产品没有出现在 entity_stack 中，输出 query_type=\"specific_product\"，并在 product_name 写出该产品名。如果用户是在描述使用场景、需求、预算、人群或品类偏好，输出 query_type=\"scene_description\"。如果只是普通指代消解、对比、推荐、事实查询，也可以输出 fact/recom...<chars:473>"
+        },
+        {
+          "role": "user",
+          "content": "{\"current_question\": \"对比一下高端和入门款，分别适合什么客户。\", \"entity_stack\": [{\"sku\": \"CW-C83\", \"name\": \"炊墨套锅\", \"turn\": 0, \"role\": \"current\", \"source\": \"results\"}, {\"sku\": \"CW-C05-37\", \"name\": \"2-4人野餐锅10件套\", \"turn\": 0, \"role\": \"result\", \"source\": \"results\"...<chars:2392>"
+        }
+      ]
+    },
+    "temperature": 0,
+    "max_tokens": "***"
+  }
+}
+INFO:     [CUSTOMER_PERF] {"trace_id": "86faa3b4257d469b89c8d076e2ba305e", "stage": "ai_semaphore_wait", "elapsed_ms": null, "extra": {"ai_semaphore_wait_ms": 0.19, "acquired": true, "queue_timeout_seconds": 8.0, "max_concurrent_requests": 10}}
+INFO:     [CUSTOMER_AGENT_AI_SEMAPHORE_WAIT] {
+  "ai_semaphore_wait_ms": 0.19,
+  "acquired": true,
+  "queue_timeout_seconds": 8.0,
+  "max_concurrent_requests": 10
+}
+INFO:     [CUSTOMER_AGENT_AI_RESPONSE] {
+  "id": "573f1226-f5fb-4d2c-a96a-cb0f520af7df",
+  "object": "chat.completion",
+  "created": 1781974158,
+  "model": "deepseek-v4-pro",
+  "choices": {
+    "type": "list",
+    "count": 1,
+    "sample": [
+      {
+        "index": 0,
+        "message": {
+          "role": "assistant",
+          "content": "",
+          "reasoning_content": "我们被要求对 \"对比一下高端和入门款，分别适合什么客户。\" 进行指代消解。当前 entity_stack 中有多个 SKU，全部 turn=0，来自上一轮 assistant 的推荐。用户问题没有明确新产品名，但提到了“高端和入门款”，这显然是在指代之前推荐的几款产品中的分类。我们需要判断哪些是高端，哪些是入门款。从上一轮 assistant 的回答来看，推荐了三款方案：首选炊墨套锅（CW-C83），次选2-4人野餐锅10件套（CW-C05-37），第三是炊墨炒锅+煎锅组合（...<chars:869>"
+        },
+        "logprobs": null,
+        "finish_reason": "length"
+      }
+    ]
+  },
+  "usage": {
+    "prompt_tokens": "***",
+    "completion_tokens": "***",
+    "total_tokens": "***",
+    "prompt_tokens_details": "***",
+    "completion_tokens_details": "***",
+    "prompt_cache_hit_tokens": "***",
+    "prompt_cache_miss_tokens": "***"
+  },
+  "system_fingerprint": "fp_9954b31ca7_prod0820_fp8_kvcache_20260402"
+}
+INFO:     [CUSTOMER_PERF] {"trace_id": "86faa3b4257d469b89c8d076e2ba305e", "stage": "llm_call", "elapsed_ms": 6464.82, "extra": {"llm_call_index": 1, "purpose": "route", "model": "deepseek-v4-pro", "prompt_chars": 3579, "prompt_tokens_est": 894, "completion_chars": 0, "completion_tokens_est": 0, "retries": 0, "timeout": false, "fallback": false, "error": null}}
+INFO:     [CUSTOMER_PERF] {"trace_id": "86faa3b4257d469b89c8d076e2ba305e", "stage": "plan_conversation_route.llm", "elapsed_ms": 6465.31, "extra": {"llm_called": true, "query_type": null, "resolved_skus": []}}
+INFO:     [CUSTOMER_PERF] {"trace_id": "86faa3b4257d469b89c8d076e2ba305e", "stage": "plan_conversation_route", "elapsed_ms": 6465.83, "extra": {"llm_called": false, "query_type": null, "resolved_skus": []}}
+INFO:     [CUSTOMER_PERF] {"trace_id": "86faa3b4257d469b89c8d076e2ba305e", "stage": "route_deterministic_fact_question", "elapsed_ms": 0.14, "extra": {"hit": false, "intent": null, "agent_mode": null}}
+INFO:     [CUSTOMER_AGENT_TOOL_SELECTION_REQUEST] {
+  "messages": {
+    "type": "list",
+    "count": 2,
+    "sample": [
+      {
+        "role": "system",
+        "content": "你是内部产品数据库 Agent。你可以自己选择后端白名单工具查询产品、读取详情、提出修改或删除建议。严禁编写 SQL，严禁直接执行写库。所有修改/删除只能调用 propose_* 工具生成待确认动作。如果用户要查询多个产品、条形码、类目或功能，优先调用 search_products。如果同时有精确条件和模糊语义需求，优先调用 hybrid_search_products。search_products 支持 term 全字段搜索，也支持 filters 精确筛选，例如 {\"...<chars:1201>"
+      },
+      {
+        "role": "user",
+        "content": "{\"question\": \"对比一下高端和入门款，分别适合什么客户。\", \"recommendation_question\": \"推荐三款适合露营多人做饭的套锅，并说明区别。；追加条件：对比一下高端和入门款，分别适合什么客户。\", \"previous_result_skus\": [], \"entity_stack\": [{\"sku\": \"CW-C83\", \"name\": \"炊墨套锅\", \"turn\": 0, \"role\": \"current\", \"source\": \"resu...<chars:4853>"
+      }
+    ]
+  },
+  "tools": {
+    "type": "list",
+    "count": 7,
+    "sample": [
+      {
+        "name": "search_products",
+        "description": "全字段查询多条产品信息。适合 SKU、条形码、名称、品牌、系列、类目、等级、生命周期、负责人、备注、容量、重量、材质、颜色、工艺、热源、功率、卖点、目标人群、定位、价格定位、情绪价值、使用场景、竞品、标题、描述、关键词、listing 等条件。",
+        "arguments": {
+          "term": "搜索词，例如 SKU、条形码、负责人、锅、防滑条、露营泡咖啡、300ml、Yao",
+          "filters": "可选，结构化筛选。例如 {\"负责人\":\"Yao\",\"类目\":\"锅\"} 或 {\"product.person_in_charge\":\"Yao\"}",
+          "fields": "可选，要重点返回的字段名列表，例如 容量、材质、卖点",
+          "limit": "可选，默认 50"
+        }
+      },
+      {
+        "name": "semantic_search_knowledge",
+        "description": "语义/关键词检索产品知识库。适合露营泡咖啡、情绪价值、使用场景、模糊需求等问题。V1 使用知识库关键词兜底，后续可升级 pgvector 相似度。",
+        "arguments": {
+          "query": "用户的语义需求",
+          "sku": "可选，限定 SKU",
+          "limit": "可选，默认 8"
+        }
+      },
+      {
+        "name": "hybrid_search_products",
+        "description": "融合查询产品。精确条件走产品 SQL filters，模糊语义需求走知识库/pgvector，再按 SKU 合并排序。适合“负责人Yao且适合露营泡咖啡的锅”。",
+        "arguments": {
+          "term": "可选，全字段关键词",
+          "filters": "可选，结构化筛选，例如 {\"负责人\":\"Yao\",\"类目\":\"锅具\"}",
+          "semantic_query": "可选，模糊语义需求，例如 适合露营泡咖啡",
+          "fields": "可选，要重点返回的字段名列表",
+          "limit": "可选，默认 50"
+        }
+      }
+  ...<truncated>
+INFO:     [CUSTOMER_AGENT_AI_REQUEST] {
+  "url": "https://api.deepseek.com/v1/chat/completions",
+  "body": {
+    "model": "deepseek-v4-pro",
+    "messages": {
+      "type": "list",
+      "count": 2,
+      "sample": [
+        {
+          "role": "system",
+          "content": "你是内部产品数据库 Agent。你可以自己选择后端白名单工具查询产品、读取详情、提出修改或删除建议。严禁编写 SQL，严禁直接执行写库。所有修改/删除只能调用 propose_* 工具生成待确认动作。如果用户要查询多个产品、条形码、类目或功能，优先调用 search_products。如果同时有精确条件和模糊语义需求，优先调用 hybrid_search_products。search_products 支持 term 全字段搜索，也支持 filters 精确筛选，例如 {\"...<chars:1201>"
+        },
+        {
+          "role": "user",
+          "content": "{\"question\": \"对比一下高端和入门款，分别适合什么客户。\", \"recommendation_question\": \"推荐三款适合露营多人做饭的套锅，并说明区别。；追加条件：对比一下高端和入门款，分别适合什么客户。\", \"previous_result_skus\": [], \"entity_stack\": [{\"sku\": \"CW-C83\", \"name\": \"炊墨套锅\", \"turn\": 0, \"role\": \"current\", \"source\": \"resu...<chars:4853>"
+        }
+      ]
+    },
+    "temperature": 0,
+    "max_tokens": "***"
+  }
+}
+INFO:     [CUSTOMER_PERF] {"trace_id": "86faa3b4257d469b89c8d076e2ba305e", "stage": "ai_semaphore_wait", "elapsed_ms": null, "extra": {"ai_semaphore_wait_ms": 0.11, "acquired": true, "queue_timeout_seconds": 8.0, "max_concurrent_requests": 10}}
+INFO:     [CUSTOMER_AGENT_AI_SEMAPHORE_WAIT] {
+  "ai_semaphore_wait_ms": 0.11,
+  "acquired": true,
+  "queue_timeout_seconds": 8.0,
+  "max_concurrent_requests": 10
+}
+INFO:     [CUSTOMER_AGENT_AI_RESPONSE] {
+  "id": "95cb37fc-96a0-4ab5-8cc7-1dd234c457b4",
+  "object": "chat.completion",
+  "created": 1781974164,
+  "model": "deepseek-v4-pro",
+  "choices": {
+    "type": "list",
+    "count": 1,
+    "sample": [
+      {
+        "index": 0,
+        "message": {
+          "role": "assistant",
+          "content": "{\"tool_calls\":[{\"name\":\"get_product_detail\",\"arguments\":{\"skus\":[\"CW-C83\",\"CW-C05-37\",\"CW-C83-1\",\"CW-C83-2\"],\"fields\":[\"价格定位\",\"材质\",\"容量\",\"重量\",\"目标人群\",\"情绪价值\",\"卖点\",\"定位\",\"使用场景\",\"热源\",\"颜色\",\"标题\",\"描述\"]}}]}",
+          "reasoning_content": "我们被要求“对比一下高端和入门款，分别适合什么客户”，结合对话历史，上一轮推荐了三款产品：炊墨套锅（CW-C83）、2-4人野餐锅10件套（CW-C05-37）、炊墨炒锅+煎锅组合。用户现在想让对比高端和入门款，说明哪款适合什么客户。但我们还需要检索产品详情，才能准确判断定位。对话上下文说“预算=low；对比=是”，但实际上是追加条件，需要从推荐的三款中区分高端和入门。可能这三款里有高端有入门，需要明确它们的价格定位、材质、容量、卖点、目标人群等。我们需要调用 get_pro...<chars:1359>"
+        },
+        "logprobs": null,
+        "finish_reason": "stop"
+      }
+    ]
+  },
+  "usage": {
+    "prompt_tokens": "***",
+    "completion_tokens": "***",
+    "total_tokens": "***",
+    "prompt_tokens_details": "***",
+    "completion_tokens_details": "***",
+    "prompt_cache_hit_tokens": "***",
+    "prompt_cache_miss_tokens": "***"
+  },
+  "system_fingerprint": "fp_9954b31ca7_prod0820_fp8_kvcache_20260402"
+}
+INFO:     [CUSTOMER_PERF] {"trace_id": "86faa3b4257d469b89c8d076e2ba305e", "stage": "llm_call", "elapsed_ms": 9783.24, "extra": {"llm_call_index": 2, "purpose": "tool_selection", "model": "deepseek-v4-pro", "prompt_chars": 6054, "prompt_tokens_est": 1513, "completion_chars": 196, "completion_tokens_est": 49, "retries": 0, "timeout": false, "fallback": false, "error": null}}
+INFO:     [CUSTOMER_AGENT_TOOL_SELECTION_RESPONSE] {
+  "round": 1,
+  "content": "{\"tool_calls\":[{\"name\":\"get_product_detail\",\"arguments\":{\"skus\":[\"CW-C83\",\"CW-C05-37\",\"CW-C83-1\",\"CW-C83-2\"],\"fields\":[\"价格定位\",\"材质\",\"容量\",\"重量\",\"目标人群\",\"情绪价值\",\"卖点\",\"定位\",\"使用场景\",\"热源\",\"颜色\",\"标题\",\"描述\"]}}]}"
+}
+INFO:     [CUSTOMER_AGENT_TOOL_CALL] {
+  "name": "get_product_detail",
+  "arguments": {
+    "skus": {
+      "type": "list",
+      "count": 4,
+      "sample": [
+        "CW-C83",
+        "CW-C05-37",
+        "CW-C83-1"
+      ]
+    },
+    "fields": {
+      "type": "list",
+      "count": 13,
+      "sample": [
+        "价格定位",
+        "材质",
+        "容量"
+      ]
+    }
+  }
+}
+INFO:     [CUSTOMER_PERF] {"trace_id": "86faa3b4257d469b89c8d076e2ba305e", "stage": "tool.execute", "elapsed_ms": 1.53, "extra": {"tool": "get_product_detail", "async_call": false, "ok": true}}
+INFO:     [CUSTOMER_PERF] {"trace_id": "86faa3b4257d469b89c8d076e2ba305e", "stage": "tool.execute_async", "elapsed_ms": 1.88, "extra": {"tool": "get_product_detail", "async_call": true, "ok": true}}
+INFO:     [CUSTOMER_AGENT_TOOL_RESULT] {
+  "ok": true,
+  "tool": "get_product_detail",
+  "skus": {
+    "type": "list",
+    "count": 4,
+    "sample": [
+      "CW-C83",
+      "CW-C05-37",
+      "CW-C83-1"
+    ]
+  },
+  "count": 4,
+  "details": {
+    "type": "list",
+    "count": 4,
+    "sample": [
+      {
+        "id": "14687936-a92c-40f2-a378-b74ecb8454ed",
+        "sku": "CW-C83",
+        "barcode": "6959291008582",
+        "product_name_cn": "炊墨套锅",
+        "product_name_en": "camping cookware set",
+        "brand": "alocs爱路客",
+        "series": "归野主题-老饕",
+        "category": "锅具",
+        "sub_category": null,
+        "product_level": "A类品",
+        "launch_date": "2025-05-27",
+        "lifecycle_status": "非主推新品",
+        "person_in_charge": "Greta",
+        "active_flag": true,
+        "sync_flag": true,
+        "quality_note": null,
+        "status_note": null,
+        "created_at": "2026-06-11 16:42:20.217545",
+        "updated_at": "2026-06-13 18:18:45.491123",
+        "specs": {
+          "id": "0be94ab1-2705-45f0-8797-2920ed02345b",
+          "size_info": {
+            "type": "list",
+            "count": 5,
+            "sample": [
+              {
+                "unit": "cm",
+                "label": "收纳带手柄",
+                "value": "52*28.6*14.5"
+              },
+              {
+                "unit": "cm",
+                "label": "单锅展开尺寸(带手柄)",
+                "value": "52*27.8*13"
+              },
+              {
+                "unit": "cm",
+                "label": "锅",
+                "value": "φ27.8*13"
+              }
+            ]
+          },
+          "capacity": {
+            "type": "list",
+            "count": 2,
+            "sample": [
+              {
+                "label": "锅",
+                "value": "3700ML"
+              },
+              {
+                "label": "煎盘",
+                "value": "2300ML"
+              }
+            ]
+          },
+          "gross_weight_g": 2000.0,
+          "body_material": "硬质氧化铝合金、白蜡木",
+          "color": "氧化铝本色、黑色、木色",
+          "surfac...<truncated>
+INFO:     [CUSTOMER_AGENT_AI_REQUEST] {
+  "url": "https://api.deepseek.com/v1/chat/completions",
+  "body": {
+    "model": "deepseek-v4-pro",
+    "messages": {
+      "type": "list",
+      "count": 4,
+      "sample": [
+        {
+          "role": "system",
+          "content": "你是内部产品数据库 Agent。你可以自己选择后端白名单工具查询产品、读取详情、提出修改或删除建议。严禁编写 SQL，严禁直接执行写库。所有修改/删除只能调用 propose_* 工具生成待确认动作。如果用户要查询多个产品、条形码、类目或功能，优先调用 search_products。如果同时有精确条件和模糊语义需求，优先调用 hybrid_search_products。search_products 支持 term 全字段搜索，也支持 filters 精确筛选，例如 {\"...<chars:1201>"
+        },
+        {
+          "role": "user",
+          "content": "{\"question\": \"对比一下高端和入门款，分别适合什么客户。\", \"recommendation_question\": \"推荐三款适合露营多人做饭的套锅，并说明区别。；追加条件：对比一下高端和入门款，分别适合什么客户。\", \"previous_result_skus\": [], \"entity_stack\": [{\"sku\": \"CW-C83\", \"name\": \"炊墨套锅\", \"turn\": 0, \"role\": \"current\", \"source\": \"resu...<chars:4853>"
+        },
+        {
+          "role": "assistant",
+          "content": "{\"tool_calls\":[{\"name\":\"get_product_detail\",\"arguments\":{\"skus\":[\"CW-C83\",\"CW-C05-37\",\"CW-C83-1\",\"CW-C83-2\"],\"fields\":[\"价格定位\",\"材质\",\"容量\",\"重量\",\"目标人群\",\"情绪价值\",\"卖点\",\"定位\",\"使用场景\",\"热源\",\"颜色\",\"标题\",\"描述\"]}}]}"
+        }
+      ]
+    },
+    "temperature": 0,
+    "max_tokens": "***"
+  }
+}
+INFO:     [CUSTOMER_PERF] {"trace_id": "86faa3b4257d469b89c8d076e2ba305e", "stage": "ai_semaphore_wait", "elapsed_ms": null, "extra": {"ai_semaphore_wait_ms": 0.11, "acquired": true, "queue_timeout_seconds": 8.0, "max_concurrent_requests": 10}}
+INFO:     [CUSTOMER_AGENT_AI_SEMAPHORE_WAIT] {
+  "ai_semaphore_wait_ms": 0.11,
+  "acquired": true,
+  "queue_timeout_seconds": 8.0,
+  "max_concurrent_requests": 10
+}
+INFO:     [CUSTOMER_AGENT_AI_RESPONSE] {
+  "id": "505d0216-9357-4c33-b7c9-f56c2cc324d6",
+  "object": "chat.completion",
+  "created": 1781974174,
+  "model": "deepseek-v4-pro",
+  "choices": {
+    "type": "list",
+    "count": 1,
+    "sample": [
+      {
+        "index": 0,
+        "message": {
+          "role": "assistant",
+          "content": "{\"answer\":\"基于上一轮提到的三款露营套锅，我来对比高端款和入门款，并分析各自适合的客户群体。\\n\\n---\\n\\n## 一、价格定位说明\\n\\n从产品数据库看，这四款产品（CW-C83 炊墨套锅、CW-C05-37 2-4人野餐锅10件套、CW-C83-1 炊墨炒锅、CW-C83-2 炊墨煎锅）的「价格定位」字段均标注为“高端”。但综合材质、工艺、功能和整体定位来看，2-4人野餐锅10件套在配置上更偏向入门级露营需求，而炊墨系列（套锅和单品锅）才是实质上的高端线。以...<chars:770>",
+          "reasoning_content": "好的，用户问的是“对比一下高端和入门款，分别适合什么客户”，这是一个产品对比和客户分析问题。我需要先理解用户的状态和需求。\n\n从对话历史看，用户之前要求“推荐三款适合露营多人做饭的套锅，并说明区别”，然后我助理给出了三款推荐：炊墨套锅、2-4人野餐锅10件套和炊墨炒锅+煎锅组合。现在用户追问高端和入门款的对比，显然是想要我在这三款推荐的基础上，进一步分析它们的定位和适合的客户群体。\n\n我需要查看这些产品的详细信息。刚才的工具调用已经返回了四款产品的完整资料，包括CW-C83炊...<chars:1074>"
+        },
+        "logprobs": null,
+        "finish_reason": "length"
+      }
+    ]
+  },
+  "usage": {
+    "prompt_tokens": "***",
+    "completion_tokens": "***",
+    "total_tokens": "***",
+    "prompt_tokens_details": "***",
+    "completion_tokens_details": "***",
+    "prompt_cache_hit_tokens": "***",
+    "prompt_cache_miss_tokens": "***"
+  },
+  "system_fingerprint": "fp_9954b31ca7_prod0820_fp8_kvcache_20260402"
+}
+INFO:     [CUSTOMER_PERF] {"trace_id": "86faa3b4257d469b89c8d076e2ba305e", "stage": "llm_call", "elapsed_ms": 16169.71, "extra": {"llm_call_index": 3, "purpose": "tool_selection", "model": "deepseek-v4-pro", "prompt_chars": 53678, "prompt_tokens_est": 13419, "completion_chars": 770, "completion_tokens_est": 192, "retries": 0, "timeout": false, "fallback": false, "error": null}}
+INFO:     [CUSTOMER_AGENT_TOOL_SELECTION_RESPONSE] {
+  "round": 2,
+  "content": "{\"answer\":\"基于上一轮提到的三款露营套锅，我来对比高端款和入门款，并分析各自适合的客户群体。\\n\\n---\\n\\n## 一、价格定位说明\\n\\n从产品数据库看，这四款产品（CW-C83 炊墨套锅、CW-C05-37 2-4人野餐锅10件套、CW-C83-1 炊墨炒锅、CW-C83-2 炊墨煎锅）的「价格定位」字段均标注为“高端”。但综合材质、工艺、功能和整体定位来看，2-4人野餐锅10件套在配置上更偏向入门级露营需求，而炊墨系列（套锅和单品锅）才是实质上的高端线。以...<chars:770>"
+}
+INFO:     [CUSTOMER_AGENT_FINAL_REQUEST] {
+  "messages": {
+    "type": "list",
+    "count": 3,
+    "sample": [
+      {
+        "role": "system",
+        "content": "你是alocs爱路客的产品客服助手。【核心规则，最高优先级】1. 严禁引入retrieved_products之外的产品事实、参数、认证、价格或库存。2. 工具结果里没有的信息，必须说\"暂无此数据\"，不得推断或编造。3. 用户没有问到的话题不要主动引入（用户没问认证就不提认证，没问食品级就不提食品级）。产品数据可能包含嵌套的specs字段，specs里的内容（如gross_weight_g/body_material/surface_finish等）都是产品属性，回答时需要一...<chars:632>"
+      },
+      {
+        "role": "system",
+        "content": "换推荐时，如果 recommendation_context 里有原始品类需求，要用它判断候选产品是否明显偏离用户最初需求。例如最初要“锅”，候选里出现“烧水壶”、“炉具”等不同品类，应优先选品类一致的候选。如果候选池里没有品类一致的产品，要明说“当前品类暂无更多推荐，以下是相关周边产品”，不要在没有说明的情况下直接跨品类推荐。"
+      },
+      {
+        "role": "user",
+        "content": "{\"question\": \"对比一下高端和入门款，分别适合什么客户。\", \"conversation_context\": {\"mode\": \"budget_followup\", \"previous_user_need\": \"推荐三款适合露营多人做饭的套锅，并说明区别。\", \"combined_user_need\": \"推荐三款适合露营多人做饭的套锅，并说明区别。；追加条件：对比一下高端和入门款，分别适合什么客户。\", \"instruction\": \"本轮是预算/性价比追问，继...<chars:6815>"
+      }
+    ]
+  }
+}
+INFO:     [CUSTOMER_AGENT_AI_STREAM_REQUEST] {
+  "url": "https://api.deepseek.com/v1/chat/completions",
+  "body": {
+    "model": "deepseek-v4-pro",
+    "messages": {
+      "type": "list",
+      "count": 3,
+      "sample": [
+        {
+          "role": "system",
+          "content": "你是alocs爱路客的产品客服助手。【核心规则，最高优先级】1. 严禁引入retrieved_products之外的产品事实、参数、认证、价格或库存。2. 工具结果里没有的信息，必须说\"暂无此数据\"，不得推断或编造。3. 用户没有问到的话题不要主动引入（用户没问认证就不提认证，没问食品级就不提食品级）。产品数据可能包含嵌套的specs字段，specs里的内容（如gross_weight_g/body_material/surface_finish等）都是产品属性，回答时需要一...<chars:632>"
+        },
+        {
+          "role": "system",
+          "content": "换推荐时，如果 recommendation_context 里有原始品类需求，要用它判断候选产品是否明显偏离用户最初需求。例如最初要“锅”，候选里出现“烧水壶”、“炉具”等不同品类，应优先选品类一致的候选。如果候选池里没有品类一致的产品，要明说“当前品类暂无更多推荐，以下是相关周边产品”，不要在没有说明的情况下直接跨品类推荐。"
+        },
+        {
+          "role": "user",
+          "content": "{\"question\": \"对比一下高端和入门款，分别适合什么客户。\", \"conversation_context\": {\"mode\": \"budget_followup\", \"previous_user_need\": \"推荐三款适合露营多人做饭的套锅，并说明区别。\", \"combined_user_need\": \"推荐三款适合露营多人做饭的套锅，并说明区别。；追加条件：对比一下高端和入门款，分别适合什么客户。\", \"instruction\": \"本轮是预算/性价比追问，继...<chars:6815>"
+        }
+      ]
+    },
+    "temperature": 0.2,
+    "max_tokens": "***",
+    "stream": true
+  }
+}
+INFO:     [CUSTOMER_PERF] {"trace_id": "86faa3b4257d469b89c8d076e2ba305e", "stage": "sse_first_answer_delta", "elapsed_ms": 44247.72, "extra": {}}
+INFO:     [CUSTOMER_PERF] {"trace_id": "86faa3b4257d469b89c8d076e2ba305e", "stage": "llm_call", "elapsed_ms": 13947.76, "extra": {"llm_call_index": 4, "purpose": "final_answer", "model": "deepseek-v4-pro", "prompt_chars": 7612, "prompt_tokens_est": 1903, "completion_chars": 305, "completion_tokens_est": 76, "retries": 0, "timeout": false, "fallback": false, "error": null}}
+INFO:     [CUSTOMER_AGENT_FINAL_RESPONSE] {
+  "content": "{\n  \"answer\": \"在上一轮推荐的三款产品中，高端款是炊墨套锅（CW-C83），入门款是2-4人野餐锅10件套（CW-C05-37）。炊墨套锅重2000g，采用复底设计不挑炉具（明火、燃气炉、电磁炉均可用），配合水性不沾涂层可实现无油煎蛋，快拆手柄收纳方便，定位为全炉具兼容的轻量化微压不沾套锅，适合追求烹饪体验、对炉具兼容性和不沾性能有要求、常进行家庭精致露营或房车自驾的高端客户。2-4人野餐锅10件套重1030g，10件全套配置（含锅、碗、勺、铲等）一个收纳包即可...<chars:305>"
+}
+INFO:     [CUSTOMER_PERF] {"trace_id": "86faa3b4257d469b89c8d076e2ba305e", "stage": "process_agent_request", "elapsed_ms": 46534.33, "extra": {"hit": true, "intent": "compare_products", "agent_mode": "llm_tool_calling"}}
+INFO:     [CUSTOMER_PERF] {"trace_id": "86faa3b4257d469b89c8d076e2ba305e", "stage": "save_messages_and_commit", "elapsed_ms": 52.15, "extra": {"branch": "agent", "skip_polish": true}}
+INFO:     [CUSTOMER_PERF] {"trace_id": "86faa3b4257d469b89c8d076e2ba305e", "stage": "ask_customer_service.total", "elapsed_ms": 46610.41, "extra": {"branch": "agent", "intent": "compare_products", "agent_mode": "llm_tool_calling"}}
+INFO:     [CUSTOMER_PERF] {"trace_id": "86faa3b4257d469b89c8d076e2ba305e", "stage": "summary", "elapsed_ms": 46622.24, "extra": {"llm_call_count": 4, "llm_calls": [{"llm_call_index": 1, "purpose": "route", "model": "deepseek-v4-pro", "prompt_chars": 3579, "prompt_tokens_est": 894, "completion_chars": 0, "completion_tokens_est": 0, "retries": 0, "timeout": false, "fallback": false, "error": null}, {"llm_call_index": 2, "purpose": "tool_selection", "model": "deepseek-v4-pro", "prompt_chars": 6054, "prompt_tokens_est": 1513, "completion_chars": 196, "completion_tokens_est": 49, "retries": 0, "timeout": false, "fallback": false, "error": null}, {"llm_call_index": 3, "purpose": "tool_selection", "model": "deepseek-v4-pro", "prompt_chars": 53678, "prompt_tokens_est": 13419, "completion_chars": 770, "completion_tokens_est": 192, "retries": 0, "timeout": false, "fallback": false, "error": null}, {"llm_call_index": 4, "purpose": "final_answer", "model": "deepseek-v4-pro", "prompt_chars": 7612, "prompt_tokens_est": 1903, "completion_chars": 305, "completion_tokens_est": 76, "retries": 0, "timeout": false, "fallback": false, "error": null}], "stages": [{"stage": "ask_stream.precheck", "elapsed_ms": 0.65, "extra": {"permission_checked": true, "rate_limit_checked": true}}, {"stage": "customer_faq_fast_path", "elapsed_ms": 0.02, "extra": {"hit": false, "intent": null, "agent_mode": null}}, {"stage": "guardrail.evaluate_question", "elapsed_ms": 0.03, "extra": {"matched": false}}, {"stage": "context_read", "elapsed_ms": 9.6, "extra": {"entity_stack_count": 5, "conversation_history_count": 2, "previous_result_skus_count": 0, "recommendation_context_present": false}}, {"stage": "named_product_shortcut", "elapsed_ms": 4.58, "extra": {"hit": false, "agent_mode": null}}, {"stage": "plan_conversation_route.llm", "elapsed_ms": 6465.31, "extra": {"llm_called": true, "query_type": null, "resolved_skus": []}}, {"stage": "plan_conversation_route", "elapsed_ms": 6465.83, "extra": {"llm_called": false, "query_type": null, "resolved_skus": []}}, {"stage": "route_deterministic_fact_question", "elapsed_ms": 0.14, "extra": {"hit": false, "intent": null, "agent_mode": null}}, {"stage": "tool.execute", "elapsed_ms": 1.53, "extra": {"tool": "get_product_detail", "async_call": false, "ok": true}}, {"stage": "tool.execute_async", "elapsed_ms": 1.88, "extra": {"tool": "get_product_detail", "async_call": true, "ok": true}}, {"stage": "process_agent_request", "elapsed_ms": 46534.33, "extra": {"hit": true, "intent": "compare_products", "agent_mode": "llm_tool_calling"}}, {"stage": "save_messages_and_commit", "elapsed_ms": 52.15, "extra": {"branch": "agent", "skip_polish": true}}, {"stage": "ask_customer_service.total", "elapsed_ms": 46610.41, "extra": {"branch": "agent", "intent": "compare_products", "agent_mode": "llm_tool_calling"}}], "first_answer_delta_ms": 44247.72, "done_ms": null, "final_answer": "在上一轮推荐的三款产品中，高端款是炊墨套锅（CW-C83），入门款是2-4人野餐锅10件套（CW-C05-37）。炊墨套锅重2000g，采用复底设计不挑炉具（明火、燃气炉、电磁炉均可用），配合水性不沾涂层可实现无油煎蛋，快拆手柄收纳方便，定位为全炉具兼容的轻量化微压不沾套锅，适合追求烹饪体验、对炉具兼容性和不沾性能有要求、常进行家庭精致露营或房车自驾的高端客户。2-4人野餐锅10件套重1030g，10件全套配置（含锅、碗、勺、铲等）一个收纳包即可带走，定位为一套满足户外煎炒煮炖、无需额外购置配件的省心方案，适合首次露营、小型团建聚餐或注重一套购齐、轻便出行的入门客户。", "intent": "compare_products", "agent_mode": "llm_tool_calling"}}
+INFO:     [CUSTOMER_PERF] {"trace_id": "86faa3b4257d469b89c8d076e2ba305e", "stage": "ask_stream.service_call", "elapsed_ms": 46626.11, "extra": {"conversation_id": "0ee5a052-ed0c-4390-884b-a0d544d7b681", "intent": "compare_products", "agent_mode": "llm_tool_calling"}}
+INFO:     [CUSTOMER_PERF] {"trace_id": "86faa3b4257d469b89c8d076e2ba305e", "stage": "sse_done", "elapsed_ms": 46719.51, "extra": {}}
+INFO:     [CUSTOMER_PERF] {"trace_id": "86faa3b4257d469b89c8d076e2ba305e", "stage": "ask_stream.total", "elapsed_ms": 46722.21, "extra": {"conversation_id": "0ee5a052-ed0c-4390-884b-a0d544d7b681", "intent": "compare_products"}}
+INFO:     [CUSTOMER_PERF] {"trace_id": "86faa3b4257d469b89c8d076e2ba305e", "stage": "summary", "elapsed_ms": 46722.68, "extra": {"llm_call_count": 4, "llm_calls": [{"llm_call_index": 1, "purpose": "route", "model": "deepseek-v4-pro", "prompt_chars": 3579, "prompt_tokens_est": 894, "completion_chars": 0, "completion_tokens_est": 0, "retries": 0, "timeout": false, "fallback": false, "error": null}, {"llm_call_index": 2, "purpose": "tool_selection", "model": "deepseek-v4-pro", "prompt_chars": 6054, "prompt_tokens_est": 1513, "completion_chars": 196, "completion_tokens_est": 49, "retries": 0, "timeout": false, "fallback": false, "error": null}, {"llm_call_index": 3, "purpose": "tool_selection", "model": "deepseek-v4-pro", "prompt_chars": 53678, "prompt_tokens_est": 13419, "completion_chars": 770, "completion_tokens_est": 192, "retries": 0, "timeout": false, "fallback": false, "error": null}, {"llm_call_index": 4, "purpose": "final_answer", "model": "deepseek-v4-pro", "prompt_chars": 7612, "prompt_tokens_est": 1903, "completion_chars": 305, "completion_tokens_est": 76, "retries": 0, "timeout": false, "fallback": false, "error": null}], "stages": [{"stage": "ask_stream.precheck", "elapsed_ms": 0.65, "extra": {"permission_checked": true, "rate_limit_checked": true}}, {"stage": "customer_faq_fast_path", "elapsed_ms": 0.02, "extra": {"hit": false, "intent": null, "agent_mode": null}}, {"stage": "guardrail.evaluate_question", "elapsed_ms": 0.03, "extra": {"matched": false}}, {"stage": "context_read", "elapsed_ms": 9.6, "extra": {"entity_stack_count": 5, "conversation_history_count": 2, "previous_result_skus_count": 0, "recommendation_context_present": false}}, {"stage": "named_product_shortcut", "elapsed_ms": 4.58, "extra": {"hit": false, "agent_mode": null}}, {"stage": "plan_conversation_route.llm", "elapsed_ms": 6465.31, "extra": {"llm_called": true, "query_type": null, "resolved_skus": []}}, {"stage": "plan_conversation_route", "elapsed_ms": 6465.83, "extra": {"llm_called": false, "query_type": null, "resolved_skus": []}}, {"stage": "route_deterministic_fact_question", "elapsed_ms": 0.14, "extra": {"hit": false, "intent": null, "agent_mode": null}}, {"stage": "tool.execute", "elapsed_ms": 1.53, "extra": {"tool": "get_product_detail", "async_call": false, "ok": true}}, {"stage": "tool.execute_async", "elapsed_ms": 1.88, "extra": {"tool": "get_product_detail", "async_call": true, "ok": true}}, {"stage": "process_agent_request", "elapsed_ms": 46534.33, "extra": {"hit": true, "intent": "compare_products", "agent_mode": "llm_tool_calling"}}, {"stage": "save_messages_and_commit", "elapsed_ms": 52.15, "extra": {"branch": "agent", "skip_polish": true}}, {"stage": "ask_customer_service.total", "elapsed_ms": 46610.41, "extra": {"branch": "agent", "intent": "compare_products", "agent_mode": "llm_tool_calling"}}, {"stage": "ask_stream.service_call", "elapsed_ms": 46626.11, "extra": {"conversation_id": "0ee5a052-ed0c-4390-884b-a0d544d7b681", "intent": "compare_products", "agent_mode": "llm_tool_calling"}}, {"stage": "ask_stream.total", "elapsed_ms": 46722.21, "extra": {"conversation_id": "0ee5a052-ed0c-4390-884b-a0d544d7b681", "intent": "compare_products"}}], "first_answer_delta_ms": 44247.72, "done_ms": 46719.51, "final_answer": "在上一轮推荐的三款产品中，高端款是炊墨套锅（CW-C83），入门款是2-4人野餐锅10件套（CW-C05-37）。炊墨套锅重2000g，采用复底设计不挑炉具（明火、燃气炉、电磁炉均可用），配合水性不沾涂层可实现无油煎蛋，快拆手柄收纳方便，定位为全炉具兼容的轻量化微压不沾套锅，适合追求烹饪体验、对炉具兼容性和不沾性能有要求、常进行家庭精致露营或房车自驾的高端客户。2-4人野餐锅10件套重1030g，10件全套配置（含锅、碗、勺、铲等）一个收纳包即可带走，定位为一套满足户外煎炒煮炖、无需额外购置配件的省心方案，适合首次露营、小型团建聚餐或注重一套购齐、轻便出行的入门客户。", "intent": "compare_products", "agent_mode": "llm_tool_calling"}}

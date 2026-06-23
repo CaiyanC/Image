@@ -1,0 +1,36 @@
+{
+  "total_requests": 241,
+  "success_rate": 1.0,
+  "status_counts": {
+    "200": 241
+  },
+  "error_rate_4xx": 0.0,
+  "error_rate_5xx": 0.0,
+  "timeout_or_exception": 0,
+  "p50_ms": 125.58,
+  "p95_ms": 48923.74,
+  "p99_ms": 66607.97,
+  "stop_reason": "recent p95 exceeded 30s",
+  "db_connections_peak": 0,
+  "redis_ops_peak": 27,
+  "worker_cpu_peak_percent": 8.69,
+  "worker_memory_peak_mb": 603.9,
+  "last_monitor_sample": {
+    "at": "2026-06-20 23:13:01",
+    "health_status": 200,
+    "db_error": "ProgrammingError('invalid dsn: missing \"=\" after \"postgresql+psycopg2://postgres:Cy040226~@localhost:5432/product_knowledge_loadtest\" in connection info string\\n')",
+    "redis_connected_clients": 22,
+    "redis_ops_per_sec": 2,
+    "redis_used_memory_human": "1.29M",
+    "redis_dbsize": 10,
+    "worker_pids": [
+      11232,
+      13012,
+      13288,
+      14484,
+      30464
+    ],
+    "worker_cpu_percent_total": 3.05,
+    "worker_memory_total_mb": 603.9
+  }
+}

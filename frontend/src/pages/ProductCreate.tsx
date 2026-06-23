@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import { api, type CategoryItem } from '../services/api'
 import type { ProductDraft } from '../types'
+import { SecureImage } from '../components/SecureFile'
 
 interface DimensionLine {
   label: string
@@ -605,7 +606,9 @@ export default function ProductCreate() {
     if (!files) return
     for (const file of Array.from(files)) {
       try {
-        const response = await api.uploadImage([file])
+        const response = key === 'social_video_urls'
+          ? await api.uploadVideo([file])
+          : await api.uploadImage([file])
         const imageUrl = response.urls[0]
         const images = getMediaImages(key)
         setMedia({ ...media, [key]: [...images, imageUrl] })
@@ -805,6 +808,10 @@ export default function ProductCreate() {
   function removePromptTemplate(index: number) {
     const templates = prompt.prompts || []
     setPrompt({ prompts: templates.filter((_, i) => i !== index) })
+  }
+
+  function isDisplayableMediaUrl(url: string) {
+    return url.startsWith('http') || url.startsWith('/uploads') || url.startsWith('/api/files/signed/')
   }
 
   function showNotice(type: 'success' | 'error', text: string) {
@@ -1607,10 +1614,9 @@ export default function ProductCreate() {
                                           <div className="grid grid-cols-4 gap-2">
                                             {getChannelVersionImages(ch, vi, ct.key).map((img, ii) => (
                                               <div key={ii} className="relative group">
-                                                {(img.startsWith('http') || img.startsWith('/uploads')) ? (
-                                                  <div className="aspect-square bg-gray-100 rounded-lg overflow-hidden cursor-pointer"
-                                                    onClick={() => setLightboxImage(img.startsWith('/') ? `http://192.168.3.109:8000${img}` : img)}>
-                                                    <img src={img.startsWith('/') ? `http://192.168.3.109:8000${img}` : img} alt="" className="w-full h-full object-cover" />
+                                                {isDisplayableMediaUrl(img) ? (
+                                                  <div className="aspect-square bg-gray-100 rounded-lg overflow-hidden cursor-pointer">
+                                                    <SecureImage src={img} alt="" className="w-full h-full object-cover" onClick={(url) => setLightboxImage(url)} />
                                                   </div>
                                                 ) : (
                                                   <input type="text" value={img}
@@ -1681,10 +1687,9 @@ export default function ProductCreate() {
                               <div className="grid grid-cols-4 gap-2">
                                 {images.map((img: string, i: number) => (
                                   <div key={i} className="relative group">
-                                    {(img.startsWith('http') || img.startsWith('/uploads')) ? (
-                                      <div className="aspect-square bg-gray-100 rounded-lg overflow-hidden cursor-pointer"
-                                        onClick={() => setLightboxImage(img.startsWith('/') ? `http://192.168.3.109:8000${img}` : img)}>
-                                        <img src={img.startsWith('/') ? `http://192.168.3.109:8000${img}` : img} alt="" className="w-full h-full object-cover" />
+                                    {isDisplayableMediaUrl(img) ? (
+                                      <div className="aspect-square bg-gray-100 rounded-lg overflow-hidden cursor-pointer">
+                                        <SecureImage src={img} alt="" className="w-full h-full object-cover" onClick={(url) => setLightboxImage(url)} />
                                       </div>
                                     ) : (
                                       <input type="text" value={img}

@@ -10,9 +10,11 @@ backend/.env
 # Generated/uploaded image files
 uploads/
 backend/uploads/
+backend/uploads_dev/
 logs/
 backend/logs/
 backend/runtime/
+backups/
 
 # Python virtual environment
 venv/

@@ -4,19 +4,31 @@ import { api, type CategoryItem } from '../services/api'
 import type { Product, ProductMediaItem } from '../types'
 import L1L4Importer from '../components/ProductImport/L1L4Importer'
 import L5Importer from '../components/ProductImport/L5Importer'
+import { SecureImage } from '../components/SecureFile'
+import { useAuthStore } from '../store/authStore'
+import { canUsePermission, showNoPermissionToast } from '../services/permissionFeedback'
 
 export default function ProductManagement() {
   const navigate = useNavigate()
+  const { user, isManagement } = useAuthStore()
   const [searchParams, setSearchParams] = useSearchParams()
   const [products, setProducts] = useState<Product[]>([])
+  const [totalProducts, setTotalProducts] = useState(0)
+  const [page, setPage] = useState(1)
+  const pageSize = 50
   const [loading, setLoading] = useState(true)
   const [selected, setSelected] = useState<Product | null>(null)
   const [searchQuery, setSearchQuery] = useState('')
   const [categoryFilter, setCategoryFilter] = useState('')
   const [categoryOptions, setCategoryOptions] = useState<CategoryItem[]>([])
   const [deleteConfirmSku, setDeleteConfirmSku] = useState<string | null>(null)
+  const [multiSelectMode, setMultiSelectMode] = useState(false)
+  const [selectedSkus, setSelectedSkus] = useState<string[]>([])
+  const [confirmBatchDelete, setConfirmBatchDelete] = useState(false)
   const [activeLayer, setActiveLayer] = useState<string>('L1')
   const [advancedOpen, setAdvancedOpen] = useState(false)
+  const [advancedSearchActive, setAdvancedSearchActive] = useState(false)
+  const [advancedOptions, setAdvancedOptions] = useState<Record<string, string[]>>({})
   const [advancedFilters, setAdvancedFilters] = useState({
     brand: '',
     series: '',
@@ -25,7 +37,6 @@ export default function ProductManagement() {
     product_level: '',
     lifecycle_status: '',
     person_in_charge: '',
-    quality_note: '',
     capacity: '',
     body_material: '',
     color: '',
@@ -39,7 +50,7 @@ export default function ProductManagement() {
   })
 
   useEffect(() => {
-    loadProducts()
+    loadProducts(1)
   }, [])
 
   useEffect(() => {
@@ -56,13 +67,17 @@ export default function ProductManagement() {
 
   useEffect(() => {
     api.categories.list().then(setCategoryOptions).catch(() => {})
+    api.products.filterOptions().then(setAdvancedOptions).catch(() => {})
   }, [])
 
-  async function loadProducts() {
+  async function loadProducts(nextPage = page) {
     setLoading(true)
     try {
-      const result = await api.products.list(0, 100)
+      const result = await api.products.list((nextPage - 1) * pageSize, pageSize, searchQuery || undefined)
       setProducts(result.items)
+      setTotalProducts(result.total)
+      setPage(nextPage)
+      setAdvancedSearchActive(false)
       const skuFromUrl = searchParams.get('sku')
       if (skuFromUrl) {
         await selectProductBySku(skuFromUrl, result.items)
@@ -107,6 +122,8 @@ export default function ProductManagement() {
     try {
       await api.products.delete(sku)
       setProducts(products.filter(p => p.sku !== sku))
+      setTotalProducts((prev) => Math.max(prev - 1, 0))
+      setSelectedSkus((prev) => prev.filter((item) => item !== sku))
       if (selected?.sku === sku) setSelected(null)
       setDeleteConfirmSku(null)
     } catch (err) {
@@ -114,13 +131,66 @@ export default function ProductManagement() {
     }
   }
 
-  async function handleAdvancedSearch() {
+  function toggleProductSelection(sku: string) {
+    setSelectedSkus((prev) => (
+      prev.includes(sku) ? prev.filter((item) => item !== sku) : [...prev, sku]
+    ))
+    setConfirmBatchDelete(false)
+  }
+
+  function toggleMultiSelectMode() {
+    setMultiSelectMode((prev) => {
+      const next = !prev
+      if (!next) {
+        setSelectedSkus([])
+        setConfirmBatchDelete(false)
+      }
+      return next
+    })
+  }
+
+  function selectAllFilteredProducts() {
+    setSelectedSkus(Array.from(new Set(filteredProducts.map((product) => product.sku))))
+    setConfirmBatchDelete(false)
+  }
+
+  async function handleBatchDelete() {
+    if (!selectedSkus.length) return
+    try {
+      await Promise.all(selectedSkus.map((sku) => api.products.delete(sku)))
+      const deleted = new Set(selectedSkus)
+      setProducts((prev) => prev.filter((product) => !deleted.has(product.sku)))
+      setTotalProducts((prev) => Math.max(prev - deleted.size, 0))
+      if (selected && deleted.has(selected.sku)) setSelected(null)
+      setSelectedSkus([])
+      setConfirmBatchDelete(false)
+    } catch (err) {
+      console.error('Batch delete failed:', err)
+    }
+  }
+
+  function runWithPermission(permissionKey: string, action: () => void) {
+    if (!canUsePermission(user, isManagement, permissionKey)) {
+      showNoPermissionToast()
+      return
+    }
+    action()
+  }
+
+  function guardImporterClick(event: React.MouseEvent, permissionKey: string) {
+    if (canUsePermission(user, isManagement, permissionKey)) return
+    event.preventDefault()
+    event.stopPropagation()
+    showNoPermissionToast()
+  }
+
+  async function handleAdvancedSearch(nextPage = 1) {
     setLoading(true)
     try {
       const payload: Record<string, unknown> = {
         keyword: searchQuery,
-        skip: 0,
-        limit: 100,
+        skip: (nextPage - 1) * pageSize,
+        limit: pageSize,
         sort_by: 'updated_at',
         sort_order: 'desc',
       }
@@ -131,6 +201,9 @@ export default function ProductManagement() {
       if (payload.gross_weight_max) payload.gross_weight_max = Number(payload.gross_weight_max)
       const result = await api.products.advancedSearch(payload)
       setProducts(result.items as Product[])
+      setTotalProducts(result.total)
+      setPage(nextPage)
+      setAdvancedSearchActive(true)
       setSelected(null)
       const next = new URLSearchParams(searchParams)
       next.delete('sku')
@@ -155,7 +228,6 @@ export default function ProductManagement() {
       product_level: '',
       lifecycle_status: '',
       person_in_charge: '',
-      quality_note: '',
       capacity: '',
       body_material: '',
       color: '',
@@ -172,21 +244,22 @@ export default function ProductManagement() {
     const next = new URLSearchParams(searchParams)
     next.delete('sku')
     setSearchParams(next, { replace: true })
-    await loadProducts()
+    await loadProducts(1)
   }
 
   const filteredProducts = products.filter(p => {
-    const matchesSearch = p.sku.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      p.product_name_cn?.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      p.product_name_en?.toLowerCase().includes(searchQuery.toLowerCase())
-    const matchesCategory = !categoryFilter || p.category === categoryFilter
-    return matchesSearch && matchesCategory
+    return !categoryFilter || p.category === categoryFilter
   })
 
-  const getImageUrl = (img: string) => {
-    if (img.startsWith('http')) return img
-    if (img.startsWith('/')) return `http://192.168.3.109:8000${img}`
-    return img
+  const totalPages = Math.max(1, Math.ceil(totalProducts / pageSize))
+
+  async function goToPage(nextPage: number) {
+    const safePage = Math.min(Math.max(nextPage, 1), totalPages)
+    if (advancedSearchActive) {
+      await handleAdvancedSearch(safePage)
+    } else {
+      await loadProducts(safePage)
+    }
   }
 
   if (loading) {
@@ -206,12 +279,16 @@ export default function ProductManagement() {
             className="px-4 py-2 bg-gray-100 text-gray-700 rounded-lg text-sm font-medium hover:bg-gray-200 transition-colors">
             📋 草稿箱
           </button>
-          <button onClick={() => navigate('/products/create')}
+          <button onClick={() => runWithPermission('product.create', () => navigate('/products/create'))}
             className="px-4 py-2 bg-blue-500 text-white rounded-lg text-sm font-medium hover:bg-blue-600 transition-colors">
             + 新增产品
           </button>
-          <L1L4Importer onImportComplete={loadProducts} />
-          <L5Importer onImportComplete={loadProducts} />
+          <div onClickCapture={(event) => guardImporterClick(event, 'product.create')}>
+            <L1L4Importer onImportComplete={() => loadProducts(page)} />
+          </div>
+          <div onClickCapture={(event) => guardImporterClick(event, 'product.edit')}>
+            <L5Importer onImportComplete={() => loadProducts(page)} />
+          </div>
         </div>
       </div>
 
@@ -221,6 +298,9 @@ export default function ProductManagement() {
           placeholder="搜索产品 SKU 或名称..."
           value={searchQuery}
           onChange={(e) => setSearchQuery(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') loadProducts(1)
+          }}
           className="flex-1 px-4 py-2 bg-white/50 border border-gray-200 rounded-lg text-sm focus:outline-none focus:border-blue-400"
         />
         <select
@@ -234,6 +314,12 @@ export default function ProductManagement() {
           ))}
         </select>
         <button
+          onClick={() => loadProducts(1)}
+          className="px-4 py-2 bg-blue-500 text-white rounded-lg text-sm font-medium hover:bg-blue-600 transition-colors"
+        >
+          搜索
+        </button>
+        <button
           onClick={() => setAdvancedOpen(!advancedOpen)}
           className="px-4 py-2 bg-gray-100 text-gray-700 rounded-lg text-sm font-medium hover:bg-gray-200 transition-colors"
         >
@@ -244,27 +330,26 @@ export default function ProductManagement() {
       {advancedOpen && (
         <div className="glass rounded-xl p-4 mb-4">
           <div className="grid grid-cols-2 md:grid-cols-4 xl:grid-cols-6 gap-3">
-            <SearchField label="品牌" value={advancedFilters.brand} onChange={(v) => updateAdvancedFilter('brand', v)} />
-            <SearchField label="系列" value={advancedFilters.series} onChange={(v) => updateAdvancedFilter('series', v)} />
-            <SearchField label="类目" value={advancedFilters.category} onChange={(v) => updateAdvancedFilter('category', v)} />
-            <SearchField label="子类目" value={advancedFilters.sub_category} onChange={(v) => updateAdvancedFilter('sub_category', v)} />
-            <SearchField label="产品等级" value={advancedFilters.product_level} onChange={(v) => updateAdvancedFilter('product_level', v)} />
-            <SearchField label="生命周期" value={advancedFilters.lifecycle_status} onChange={(v) => updateAdvancedFilter('lifecycle_status', v)} />
-            <SearchField label="负责人" value={advancedFilters.person_in_charge} onChange={(v) => updateAdvancedFilter('person_in_charge', v)} />
-            <SearchField label="品质情况" value={advancedFilters.quality_note} onChange={(v) => updateAdvancedFilter('quality_note', v)} />
+            <FilterSelect label="品牌" value={advancedFilters.brand} options={advancedOptions.brand} onChange={(v) => updateAdvancedFilter('brand', v)} />
+            <FilterSelect label="系列" value={advancedFilters.series} options={advancedOptions.series} onChange={(v) => updateAdvancedFilter('series', v)} />
+            <FilterSelect label="类目" value={advancedFilters.category} options={advancedOptions.category} onChange={(v) => updateAdvancedFilter('category', v)} />
+            <FilterSelect label="子类目" value={advancedFilters.sub_category} options={advancedOptions.sub_category} onChange={(v) => updateAdvancedFilter('sub_category', v)} />
+            <FilterSelect label="产品等级" value={advancedFilters.product_level} options={advancedOptions.product_level} onChange={(v) => updateAdvancedFilter('product_level', v)} />
+            <FilterSelect label="生命周期" value={advancedFilters.lifecycle_status} options={advancedOptions.lifecycle_status} onChange={(v) => updateAdvancedFilter('lifecycle_status', v)} />
+            <FilterSelect label="负责人" value={advancedFilters.person_in_charge} options={advancedOptions.person_in_charge} onChange={(v) => updateAdvancedFilter('person_in_charge', v)} />
             <SearchField label="容量" value={advancedFilters.capacity} onChange={(v) => updateAdvancedFilter('capacity', v)} />
-            <SearchField label="材质" value={advancedFilters.body_material} onChange={(v) => updateAdvancedFilter('body_material', v)} />
-            <SearchField label="颜色" value={advancedFilters.color} onChange={(v) => updateAdvancedFilter('color', v)} />
-            <SearchField label="适用热源" value={advancedFilters.heat_source} onChange={(v) => updateAdvancedFilter('heat_source', v)} />
+            <FilterSelect label="材质" value={advancedFilters.body_material} options={advancedOptions.body_material} onChange={(v) => updateAdvancedFilter('body_material', v)} />
+            <FilterSelect label="颜色" value={advancedFilters.color} options={advancedOptions.color} onChange={(v) => updateAdvancedFilter('color', v)} />
+            <FilterSelect label="适用热源" value={advancedFilters.heat_source} options={advancedOptions.heat_source} onChange={(v) => updateAdvancedFilter('heat_source', v)} />
             <SearchField label="最小重量g" value={advancedFilters.gross_weight_min} onChange={(v) => updateAdvancedFilter('gross_weight_min', v)} />
             <SearchField label="最大重量g" value={advancedFilters.gross_weight_max} onChange={(v) => updateAdvancedFilter('gross_weight_max', v)} />
-            <SearchField label="渠道" value={advancedFilters.channel} onChange={(v) => updateAdvancedFilter('channel', v)} />
-            <SearchField label="地区" value={advancedFilters.region} onChange={(v) => updateAdvancedFilter('region', v)} />
-            <SearchField label="认证" value={advancedFilters.certification} onChange={(v) => updateAdvancedFilter('certification', v)} />
-            <SearchField label="关键词" value={advancedFilters.search_keyword} onChange={(v) => updateAdvancedFilter('search_keyword', v)} />
+            <FilterSelect label="渠道" value={advancedFilters.channel} options={advancedOptions.channel} onChange={(v) => updateAdvancedFilter('channel', v)} />
+            <FilterSelect label="地区" value={advancedFilters.region} options={advancedOptions.region} onChange={(v) => updateAdvancedFilter('region', v)} />
+            <FilterSelect label="认证" value={advancedFilters.certification} options={advancedOptions.certification} onChange={(v) => updateAdvancedFilter('certification', v)} />
+            <FilterSelect label="关键词" value={advancedFilters.search_keyword} options={advancedOptions.search_keyword} onChange={(v) => updateAdvancedFilter('search_keyword', v)} />
           </div>
           <div className="flex items-center gap-3 mt-4">
-            <button onClick={handleAdvancedSearch} className="btn-primary px-5 py-2 text-sm">查询产品</button>
+            <button onClick={() => handleAdvancedSearch(1)} className="btn-primary px-5 py-2 text-sm">查询产品</button>
             <button onClick={resetAdvancedSearch} className="px-4 py-2 text-sm text-apple-gray-dark hover:text-apple-text">清空条件</button>
             <span className="text-sm text-apple-gray-medium">查询结果会直接显示在下方产品列表中。</span>
           </div>
@@ -279,14 +364,76 @@ export default function ProductManagement() {
       ) : (
         <div className="grid grid-cols-[280px_1fr] gap-4">
           <div className="glass divide-y divide-black/5 min-h-0 h-[calc(100vh-10rem)] flex flex-col rounded-xl">
+            <div className="p-3 bg-white/60 border-b border-black/5 shrink-0">
+              <div className="flex items-center justify-between gap-2">
+                <div className="text-xs text-apple-gray-medium">共 {totalProducts} 个产品</div>
+                <button
+                  onClick={toggleMultiSelectMode}
+                  className={multiSelectMode ? 'px-3 py-1.5 rounded-lg text-xs font-medium transition-colors bg-blue-100 text-blue-600' : 'px-3 py-1.5 rounded-lg text-xs font-medium transition-colors bg-gray-100 text-gray-600 hover:bg-gray-200'}
+                >
+                  {multiSelectMode ? '退出多选' : '多选'}
+                </button>
+              </div>
+              {multiSelectMode && (
+                <div className="mt-2 space-y-2">
+                  <div className="flex items-center justify-between gap-2">
+                    <label className="flex items-center gap-2 text-xs text-apple-gray-dark">
+                      <input
+                        type="checkbox"
+                        checked={filteredProducts.length > 0 && selectedSkus.length === filteredProducts.length}
+                        onChange={(event) => event.target.checked ? selectAllFilteredProducts() : setSelectedSkus([])}
+                        className="rounded border-gray-300"
+                      />
+                      已选 {selectedSkus.length} 个
+                    </label>
+                    <button
+                      onClick={() => setSelectedSkus([])}
+                      disabled={selectedSkus.length === 0}
+                      className="text-xs text-apple-gray-medium hover:text-apple-text disabled:opacity-40"
+                    >
+                      清空
+                    </button>
+                  </div>
+                  {selectedSkus.length > 0 && (
+                    <>
+                  {!confirmBatchDelete ? (
+                    <button
+                      onClick={() => runWithPermission('product.delete', () => setConfirmBatchDelete(true))}
+                      className="w-full px-3 py-1.5 rounded-lg bg-red-50 text-red-600 text-xs font-medium hover:bg-red-100"
+                    >
+                      批量删除所选
+                    </button>
+                  ) : (
+                    <div className="rounded-lg bg-red-50 border border-red-100 p-2">
+                      <div className="text-xs text-red-600">确认删除 {selectedSkus.length} 个产品？此操作不可撤销。</div>
+                      <div className="flex justify-end gap-2 mt-2">
+                        <button onClick={() => setConfirmBatchDelete(false)} className="px-2 py-1 text-xs text-gray-600 hover:bg-gray-100 rounded">取消</button>
+                        <button onClick={handleBatchDelete} className="px-2 py-1 text-xs text-red-600 hover:bg-red-100 rounded">确认删除</button>
+                      </div>
+                    </div>
+                  )}
+                    </>
+                  )}
+                </div>
+              )}
+            </div>
             <div className="flex-1 overflow-y-auto scrollbar-thin divide-y divide-black/5">
               {filteredProducts.map((product) => (
                 <div
                   key={product.sku}
-                  onClick={() => handleSelectProduct(product)}
+                  onClick={() => multiSelectMode ? toggleProductSelection(product.sku) : handleSelectProduct(product)}
                   className={`p-3 cursor-pointer transition-colors ${selected?.sku === product.sku ? 'bg-blue-50' : 'hover:bg-white/50'}`}
                 >
                   <div className="flex items-center gap-2">
+                    {multiSelectMode && (
+                      <input
+                        type="checkbox"
+                        checked={selectedSkus.includes(product.sku)}
+                        onChange={() => toggleProductSelection(product.sku)}
+                        onClick={(event) => event.stopPropagation()}
+                        className="rounded border-gray-300"
+                      />
+                    )}
                     <div className="font-medium text-apple-text text-sm">{product.sku}</div>
                     {product.category && (
                       <span className="text-[10px] px-1.5 py-0.5 bg-blue-100 text-blue-600 rounded-full font-medium">{product.category}</span>
@@ -297,6 +444,27 @@ export default function ProductManagement() {
                   </div>
                 </div>
               ))}
+            </div>
+            <div className="p-3 border-t border-black/5 bg-white/60 shrink-0">
+              <div className="flex items-center justify-between gap-2">
+                <button
+                  onClick={() => goToPage(page - 1)}
+                  disabled={page <= 1}
+                  className="px-3 py-1.5 rounded-lg bg-gray-100 text-xs text-gray-600 hover:bg-gray-200 disabled:opacity-40"
+                >
+                  上一页
+                </button>
+                <div className="text-xs text-apple-gray-medium">
+                  第 {page} / {totalPages} 页，共 {totalProducts} 条
+                </div>
+                <button
+                  onClick={() => goToPage(page + 1)}
+                  disabled={page >= totalPages}
+                  className="px-3 py-1.5 rounded-lg bg-gray-100 text-xs text-gray-600 hover:bg-gray-200 disabled:opacity-40"
+                >
+                  下一页
+                </button>
+              </div>
             </div>
           </div>
 
@@ -309,8 +477,8 @@ export default function ProductManagement() {
                   <p className="text-sm text-apple-gray-medium mt-0.5">{selected.product_name_cn || selected.product_name_en || '-'}</p>
                 </div>
                 <div className="flex items-center gap-2">
-                  <button onClick={() => navigate(`/products/edit/${selected.sku}`)} className="px-3 py-1.5 text-sm text-blue-500 hover:text-blue-700 hover:bg-blue-50 rounded-lg transition-colors">编辑</button>
-                  <button onClick={() => setDeleteConfirmSku(selected.sku)} className="px-3 py-1.5 text-sm text-red-500 hover:text-red-700 hover:bg-red-50 rounded-lg transition-colors">删除</button>
+                  <button onClick={() => runWithPermission('product.edit', () => navigate(`/products/edit/${selected.sku}`))} className="px-3 py-1.5 text-sm text-blue-500 hover:text-blue-700 hover:bg-blue-50 rounded-lg transition-colors">编辑</button>
+                  <button onClick={() => runWithPermission('product.delete', () => setDeleteConfirmSku(selected.sku))} className="px-3 py-1.5 text-sm text-red-500 hover:text-red-700 hover:bg-red-50 rounded-lg transition-colors">删除</button>
                 </div>
               </div>
 
@@ -418,10 +586,6 @@ export default function ProductManagement() {
                         <div className="text-xs text-apple-text">负责人</div>
                         <div className="text-sm font-medium text-apple-text mt-1">{selected.person_in_charge || '-'}</div>
                       </div>
-                      <div className="bg-white/50 rounded-lg p-3">
-                        <div className="text-xs text-apple-text">品质情况</div>
-                        <div className="text-sm font-medium text-apple-text mt-1">{selected.quality_note || '-'}</div>
-                      </div>
                     </div>
                   </div>
                 )}
@@ -458,7 +622,7 @@ export default function ProductManagement() {
                     {(selected.specs?.size_info != null) && (
                       <div className="mt-3 bg-white/50 rounded-lg p-3">
                         <div className="text-xs text-apple-text mb-2">尺寸规格</div>
-                        <div className="text-sm text-apple-text whitespace-pre-wrap">{typeof selected.specs.size_info === 'string' ? selected.specs.size_info : JSON.stringify(selected.specs.size_info, null, 2)}</div>
+                        <div className="text-sm text-apple-text whitespace-pre-wrap">{formatSpecValue(selected.specs.size_info, '暂无尺寸信息')}</div>
                       </div>
                     )}
                     {selected.certifications?.length ? (
@@ -480,7 +644,7 @@ export default function ProductManagement() {
                     {selected.specs?.capacity != null && (
                       <div className="mt-3 bg-white/50 rounded-lg p-3">
                         <div className="text-xs text-apple-text mb-2">容量信息</div>
-                        <div className="text-sm text-apple-text whitespace-pre-wrap">{typeof selected.specs.capacity === 'string' ? selected.specs.capacity : JSON.stringify(selected.specs.capacity, null, 2)}</div>
+                        <div className="text-sm text-apple-text whitespace-pre-wrap">{formatSpecValue(selected.specs.capacity, '暂无容量信息')}</div>
                       </div>
                     )}
                     {selected.specs?.usage_instruction && (
@@ -569,16 +733,19 @@ export default function ProductManagement() {
                         <div className="bg-white/50 rounded-lg p-3">
                           <div className="text-xs text-apple-gray-medium mb-2">搜索关键词库</div>
                           <div className="flex flex-wrap gap-2">
-                            {(selected.content!.search_keywords as any[]).map((kw: any, i: number) => (
+                            {(selected.content!.search_keywords as any[]).map((kw: any, i: number) => {
+                              const item = normalizeKeywordDisplay(kw)
+                              return (
                               <span key={i} className={`px-2 py-1 text-xs rounded-full ${
-                                typeof kw === 'object' && kw.priority === 'A' ? 'bg-red-50 text-red-600' :
-                                typeof kw === 'object' && kw.priority === 'B' ? 'bg-yellow-50 text-yellow-600' :
-                                typeof kw === 'object' && kw.priority === 'C' ? 'bg-green-50 text-green-600' :
+                                item.priority === 'A' ? 'bg-red-50 text-red-600' :
+                                item.priority === 'B' ? 'bg-yellow-50 text-yellow-600' :
+                                item.priority === 'C' ? 'bg-green-50 text-green-600' :
                                 'bg-green-50 text-green-600'
                               }`}>
-                                {typeof kw === 'string' ? kw : `${kw.keyword} [${kw.priority}]`}
+                                {item.priority ? `${item.keyword} [${item.priority}]` : item.keyword}
                               </span>
-                            ))}
+                              )
+                            })}
                           </div>
                         </div>
                       )}
@@ -642,7 +809,7 @@ export default function ProductManagement() {
                                 {items.map((m) => (
                                   <div key={m.id} className="relative group">
                                     {m.file_url ? (
-                                      <img src={getImageUrl(m.file_url)} alt={m.file_name} className="w-full aspect-square object-cover rounded-lg" />
+                                      <SecureImage src={m.file_url} alt={m.file_name} className="w-full aspect-square object-cover rounded-lg" />
                                     ) : (
                                       <div className="w-full aspect-square bg-gray-100 rounded-lg flex items-center justify-center text-xs text-apple-gray-medium">{m.file_name || '-'}</div>
                                     )}
@@ -728,4 +895,93 @@ function SearchField({ label, value, onChange }: { label: string; value: string;
       <input value={value} onChange={(e) => onChange(e.target.value)} className="glass-input w-full px-3 py-2 text-sm" />
     </label>
   )
+}
+
+function FilterSelect({
+  label,
+  value,
+  options = [],
+  onChange,
+}: {
+  label: string
+  value: string
+  options?: string[]
+  onChange: (value: string) => void
+}) {
+  const listId = `filter-options-${label.replace(/\\s+/g, '-')}`
+  return (
+    <label className="block">
+      <span className="block text-[11px] font-medium text-apple-gray-dark mb-1">{label}</span>
+      <input
+        value={value}
+        list={listId}
+        placeholder="全部 / 可输入关键词"
+        onChange={(e) => onChange(e.target.value)}
+        className="glass-input w-full px-3 py-2 text-sm"
+      />
+      <datalist id={listId}>
+        {options.map((option) => {
+          const label = formatFilterOption(option)
+          return <option key={option} value={option} label={label} />
+        })}
+      </datalist>
+    </label>
+  )
+}
+
+function formatFilterOption(value: string): string {
+  const trimmed = String(value || '').trim()
+  if (!trimmed) return ''
+  if (!trimmed.startsWith('[') && !trimmed.startsWith('{')) return trimmed
+  try {
+    return formatSpecValue(JSON.parse(trimmed), trimmed)
+  } catch {
+    return trimmed
+  }
+}
+
+function formatSpecValue(value: unknown, emptyText: string): string {
+  if (value === null || value === undefined || value === '') return emptyText
+  if (typeof value === 'string') {
+    const trimmed = value.trim()
+    return !trimmed || trimmed === '/' ? emptyText : trimmed
+  }
+  if (Array.isArray(value)) {
+    const lines = value
+      .map((item) => formatSpecItem(item))
+      .filter((line) => line && line !== '/')
+    return lines.length ? lines.join('\n') : emptyText
+  }
+  if (typeof value === 'object') {
+    const line = formatSpecItem(value)
+    return line && line !== '/' ? line : emptyText
+  }
+  return String(value)
+}
+
+function formatSpecItem(item: unknown): string {
+  if (item === null || item === undefined) return ''
+  if (typeof item !== 'object') return String(item).trim()
+  const data = item as { label?: unknown; value?: unknown; unit?: unknown }
+  const label = String(data.label ?? '').trim()
+  const rawValue = String(data.value ?? '').trim()
+  const unit = String(data.unit ?? '').trim()
+  if (!rawValue || rawValue === '/') return ''
+  const valueWithUnit = unit && !rawValue.toLowerCase().endsWith(unit.toLowerCase()) ? `${rawValue} ${unit}` : rawValue
+  return label ? `${label}: ${valueWithUnit}` : valueWithUnit
+}
+
+function normalizeKeywordDisplay(value: unknown): { keyword: string; priority: string } {
+  const rawKeyword = typeof value === 'object' && value !== null
+    ? String((value as { keyword?: unknown }).keyword ?? '')
+    : String(value ?? '')
+  const rawPriority = typeof value === 'object' && value !== null
+    ? String((value as { priority?: unknown }).priority ?? '')
+    : ''
+  const cleaned = rawKeyword.replace(/^级[：:]\s*/, '').trim()
+  const suffixMatch = cleaned.match(/^(.+?)\s*[\[【(（]([ABC])[\]】)）]\s*$/i)
+  const prefixMatch = cleaned.match(/^([ABC])级[：:]\s*(.+)$/i)
+  const keyword = (suffixMatch?.[1] || prefixMatch?.[2] || cleaned).replace(/^级[：:]\s*/, '').trim()
+  const priority = (rawPriority || suffixMatch?.[2] || prefixMatch?.[1] || '').toUpperCase()
+  return { keyword, priority }
 }

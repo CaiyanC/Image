@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { api } from '../services/api'
+import KnowledgeBase from './KnowledgeBase'
 
 interface ModelItem {
   id: string
@@ -58,6 +59,7 @@ export default function AdminSettings() {
   const [saving, setSaving] = useState(false)
   const [message, setMessage] = useState('')
   const [expandedId, setExpandedId] = useState<string | null>(null)
+  const [showKnowledgeBase, setShowKnowledgeBase] = useState(true)
 
   useEffect(() => {
     loadModels()
@@ -223,6 +225,24 @@ export default function AdminSettings() {
             </section>
           )
         })}
+      </div>
+
+      <div className="mt-8 overflow-hidden rounded-3xl border border-white/70 bg-white/45 shadow-[0_24px_80px_rgba(15,23,42,0.08)]">
+        <button
+          onClick={() => setShowKnowledgeBase((value) => !value)}
+          className="flex w-full items-center justify-between px-5 py-4 text-left"
+        >
+          <div>
+            <h2 className="text-lg font-black text-apple-text">知识库运维</h2>
+            <p className="mt-1 text-sm text-apple-gray-medium">仅超级管理员可见。这里直接查看知识库健康、检索预览和重建任务。</p>
+          </div>
+          <span className="text-sm font-bold text-teal-700">{showKnowledgeBase ? '收起' : '展开'}</span>
+        </button>
+        {showKnowledgeBase && (
+          <div className="border-t border-black/5">
+            <KnowledgeBase />
+          </div>
+        )}
       </div>
     </div>
   )

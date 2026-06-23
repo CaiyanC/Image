@@ -3,6 +3,7 @@ from __future__ import annotations
 import re
 from typing import Any
 
+from . import customer_price_signal
 from . import customer_recommendation_ranker
 
 
@@ -234,7 +235,7 @@ def _extract_skus(text: str) -> set[str]:
 
 
 def _is_low_budget_query(question: str) -> bool:
-    return any(term in str(question or "") for term in ("预算不高", "预算低", "便宜", "实惠", "性价比", "入门", "低预算", "省钱", "不要太贵"))
+    return customer_price_signal.is_low_price_query(question)
 
 
 def _is_high_price_row(row: dict[str, Any]) -> bool:

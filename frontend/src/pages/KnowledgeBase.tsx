@@ -6,7 +6,7 @@ import type { KnowledgeBaseHealth, KnowledgeJob, KnowledgeSearchPreview } from '
 export default function KnowledgeBase() {
   const [health, setHealth] = useState<KnowledgeBaseHealth | null>(null)
   const [preview, setPreview] = useState<KnowledgeSearchPreview | null>(null)
-  const [query, setQuery] = useState('camping coffee')
+  const [query, setQuery] = useState('露营咖啡')
   const [sku, setSku] = useState('')
   const [jobs, setJobs] = useState<KnowledgeJob[]>([])
   const [loading, setLoading] = useState(false)
@@ -32,7 +32,7 @@ export default function KnowledgeBase() {
     try {
       setHealth(await api.knowledgeBase.health())
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to load knowledge health')
+      setError(err instanceof Error ? err.message : '加载知识库状态失败')
     }
   }
 
@@ -56,7 +56,7 @@ export default function KnowledgeBase() {
         limit: 8,
       }))
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Search preview failed')
+      setError(err instanceof Error ? err.message : '检索预览失败')
     } finally {
       setLoading(false)
     }
@@ -69,7 +69,7 @@ export default function KnowledgeBase() {
       await api.knowledgeBase.createReindexJob({ mode, limit: mode === 'full' ? undefined : 100, embed: true })
       await loadJobs()
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to create reindex job')
+      setError(err instanceof Error ? err.message : '创建重建任务失败')
     } finally {
       setJobLoading(false)
     }
@@ -82,7 +82,7 @@ export default function KnowledgeBase() {
       await api.knowledgeBase.retryEmbeddings({ limit: 20 })
       await loadJobs()
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to create retry job')
+      setError(err instanceof Error ? err.message : '创建重试任务失败')
     } finally {
       setJobLoading(false)
     }
@@ -97,22 +97,22 @@ export default function KnowledgeBase() {
       <div className="mb-5 overflow-hidden rounded-[2rem] border border-white/70 bg-white/60 p-6 shadow-[0_24px_80px_rgba(15,23,42,0.10)] backdrop-blur-xl">
         <div className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
           <div>
-            <p className="text-xs font-black uppercase tracking-[0.24em] text-teal-700/70">Enterprise RAG Ops</p>
-            <h1 className="mt-2 text-3xl font-black tracking-tight text-apple-text">Knowledge Base Control Center</h1>
+            <p className="text-xs font-black uppercase tracking-[0.24em] text-teal-700/70">企业级 RAG 运维</p>
+            <h1 className="mt-2 text-3xl font-black tracking-tight text-apple-text">知识库控制台</h1>
             <p className="mt-2 max-w-3xl text-sm leading-6 text-apple-gray-dark">
-              Monitor product coverage, vector readiness, failed chunks and retrieval evidence before customer-service answers reach users.
+              在客服回答触达用户前，先检查产品覆盖率、向量可用性、失败分片和检索证据。
             </p>
           </div>
           <div className="flex flex-wrap gap-2">
-            <button className="btn-secondary px-4 py-2 text-sm" onClick={() => { loadHealth(); loadJobs() }} disabled={jobLoading}>Refresh</button>
+            <button className="btn-secondary px-4 py-2 text-sm" onClick={() => { loadHealth(); loadJobs() }} disabled={jobLoading}>刷新</button>
             <button className="btn-secondary px-4 py-2 text-sm" onClick={() => createReindexJob('pending')} disabled={jobLoading || hasActiveJob}>
-              Sync Pending
+              同步待处理
             </button>
             <button className="btn-secondary px-4 py-2 text-sm" onClick={retryEmbeddings} disabled={jobLoading || hasActiveJob}>
-              Retry Failed
+              重试失败
             </button>
             <button className="btn-primary px-4 py-2 text-sm" onClick={() => createReindexJob('full')} disabled={jobLoading || hasActiveJob}>
-              {jobLoading || hasActiveJob ? 'Job Running...' : 'Full Reindex'}
+              {jobLoading || hasActiveJob ? '任务执行中...' : '全量重建'}
             </button>
           </div>
         </div>
@@ -121,21 +121,21 @@ export default function KnowledgeBase() {
       {error && <div className="mb-4 rounded-2xl border border-red-100 bg-red-50 px-4 py-3 text-sm text-red-700">{error}</div>}
 
       <div className="grid gap-4 lg:grid-cols-4">
-        <Metric title="Health Grade" value={health?.grade || '-'} tone={health?.grade === 'healthy' ? 'good' : health?.grade === 'critical' ? 'bad' : 'warn'} />
-        <Metric title="Product Coverage" value={productCoverage} sub={`${health?.totals.indexed_product_skus ?? 0}/${health?.totals.products ?? 0} products`} />
-        <Metric title="Embedding Coverage" value={embeddingCoverage} sub={`${health?.vector.embedded_chunks ?? 0}/${health?.totals.chunks ?? 0} chunks`} />
-        <Metric title="Vector Engine" value={health?.vector.available ? 'pgvector on' : 'fallback'} tone={health?.vector.available ? 'good' : 'warn'} />
+        <Metric title="健康等级" value={health?.grade || '-'} tone={health?.grade === 'healthy' ? 'good' : health?.grade === 'critical' ? 'bad' : 'warn'} />
+        <Metric title="产品覆盖率" value={productCoverage} sub={`${health?.totals.indexed_product_skus ?? 0}/${health?.totals.products ?? 0} 个产品`} />
+        <Metric title="向量覆盖率" value={embeddingCoverage} sub={`${health?.vector.embedded_chunks ?? 0}/${health?.totals.chunks ?? 0} 个分片`} />
+        <Metric title="向量引擎" value={health?.vector.available ? 'pgvector 已启用' : '关键词兜底'} tone={health?.vector.available ? 'good' : 'warn'} />
       </div>
 
       <div className="mt-4 grid gap-4 lg:grid-cols-[1.1fr_0.9fr]">
         <section className="glass rounded-3xl p-5">
           <div className="mb-4 flex items-center justify-between gap-3">
             <div>
-              <h2 className="text-lg font-black text-apple-text">Retrieval Preview</h2>
-              <p className="text-sm text-apple-gray-medium">Test what the customer-service agent can retrieve before it answers.</p>
+              <h2 className="text-lg font-black text-apple-text">检索预览</h2>
+              <p className="text-sm text-apple-gray-medium">在客服回答前，先测试它能检索到什么内容。</p>
             </div>
             <span className="rounded-full bg-teal-50 px-3 py-1 text-xs font-bold text-teal-700">
-              {preview?.mode || 'not tested'}
+              {preview?.mode || '未测试'}
             </span>
           </div>
 
@@ -144,32 +144,32 @@ export default function KnowledgeBase() {
               value={query}
               onChange={(event) => setQuery(event.target.value)}
               className="glass-input px-3 py-2 text-sm"
-              placeholder="Semantic query"
+              placeholder="语义查询"
             />
             <input
               value={sku}
               onChange={(event) => setSku(event.target.value)}
               className="glass-input px-3 py-2 text-sm"
-              placeholder="Optional SKU"
+              placeholder="可选 SKU"
             />
             <button className="btn-primary px-4 py-2 text-sm" onClick={runPreview} disabled={loading || !query.trim()}>
-              {loading ? 'Testing...' : 'Test'}
+              {loading ? '测试中...' : '测试'}
             </button>
           </div>
 
           <div className="mt-4 space-y-3">
             {(preview?.results || []).length === 0 ? (
               <div className="rounded-2xl border border-black/5 bg-white/60 px-4 py-8 text-center text-sm text-apple-gray-medium">
-                No retrieval preview yet.
+                还没有检索预览结果。
               </div>
             ) : preview?.results.map((item, index) => (
               <div key={`${item.sku || 'global'}-${index}`} className="rounded-2xl border border-black/5 bg-white/70 p-4">
                 <div className="flex flex-wrap items-center justify-between gap-2">
                   <div className="flex items-center gap-2">
-                    <span className="rounded-full bg-blue-50 px-2.5 py-1 text-xs font-black text-blue-700">{item.source_type || 'knowledge'}</span>
+                    <span className="rounded-full bg-blue-50 px-2.5 py-1 text-xs font-black text-blue-700">{item.source_type || '知识库'}</span>
                     {item.sku && <span className="font-mono text-xs font-bold text-apple-text">{item.sku}</span>}
                   </div>
-                  <span className="text-xs text-apple-gray-medium">score {formatScore(item.score)}</span>
+                  <span className="text-xs text-apple-gray-medium">评分 {formatScore(item.score)}</span>
                 </div>
                 <p className="mt-3 whitespace-pre-wrap text-sm leading-6 text-apple-text">{item.content}</p>
                 {item.metadata && Object.keys(item.metadata).length > 0 && (
@@ -183,9 +183,9 @@ export default function KnowledgeBase() {
         </section>
 
         <section className="space-y-4">
-          <Panel title="Readiness Recommendations">
+          <Panel title="就绪建议">
             {(health?.recommendations || []).length === 0 ? (
-              <p className="text-sm text-emerald-700">No blocking recommendation. Knowledge base is ready.</p>
+              <p className="text-sm text-emerald-700">没有阻塞项，知识库已就绪。</p>
             ) : (
               <div className="space-y-2">
                 {health?.recommendations.map((item, index) => (
@@ -195,20 +195,20 @@ export default function KnowledgeBase() {
             )}
           </Panel>
 
-          <Panel title="Background Jobs">
+          <Panel title="后台任务">
             <JobList jobs={jobs} onRefresh={loadJobs} />
           </Panel>
 
-          <Panel title="Embedding Status">
+          <Panel title="Embedding 状态">
             <KeyValue data={health?.embedding_status_counts || {}} />
           </Panel>
 
-          <Panel title="Source Types">
+          <Panel title="来源类型">
             <KeyValue data={health?.source_type_counts || {}} />
           </Panel>
 
-          <ChunkSamples title="Failed Chunks" items={health?.samples.failed_chunks || []} />
-          <ChunkSamples title="Pending Chunks" items={health?.samples.pending_chunks || []} />
+          <ChunkSamples title="失败分片" items={health?.samples.failed_chunks || []} />
+          <ChunkSamples title="待处理分片" items={health?.samples.pending_chunks || []} />
         </section>
       </div>
     </div>
@@ -242,7 +242,7 @@ function Panel({ title, children }: { title: string; children: ReactNode }) {
 
 function KeyValue({ data }: { data: Record<string, number> }) {
   const entries = Object.entries(data)
-  if (!entries.length) return <p className="text-sm text-apple-gray-medium">No data</p>
+  if (!entries.length) return <p className="text-sm text-apple-gray-medium">暂无数据</p>
   return (
     <div className="space-y-2">
       {entries.map(([key, value]) => (
@@ -259,7 +259,7 @@ function ChunkSamples({ title, items }: { title: string; items: Array<Record<str
   return (
     <Panel title={title}>
       {items.length === 0 ? (
-        <p className="text-sm text-apple-gray-medium">No samples</p>
+        <p className="text-sm text-apple-gray-medium">暂无样本</p>
       ) : (
         <div className="space-y-2">
           {items.map((item) => (
@@ -282,8 +282,8 @@ function JobList({ jobs, onRefresh }: { jobs: KnowledgeJob[]; onRefresh: () => v
   if (!jobs.length) {
     return (
       <div className="space-y-3">
-        <p className="text-sm text-apple-gray-medium">No background jobs yet.</p>
-        <button type="button" className="btn-secondary px-3 py-1.5 text-xs" onClick={onRefresh}>Refresh Jobs</button>
+        <p className="text-sm text-apple-gray-medium">当前还没有后台任务。</p>
+        <button type="button" className="btn-secondary px-3 py-1.5 text-xs" onClick={onRefresh}>刷新任务</button>
       </div>
     )
   }
@@ -311,7 +311,7 @@ function JobList({ jobs, onRefresh }: { jobs: KnowledgeJob[]; onRefresh: () => v
           </div>
         )
       })}
-      <button type="button" className="btn-secondary px-3 py-1.5 text-xs" onClick={onRefresh}>Refresh Jobs</button>
+      <button type="button" className="btn-secondary px-3 py-1.5 text-xs" onClick={onRefresh}>刷新任务</button>
     </div>
   )
 }

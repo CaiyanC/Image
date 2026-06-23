@@ -1,0 +1,642 @@
+{
+  "summary": {
+    "cases": 20,
+    "passed": 20,
+    "pass_rate": 1.0,
+    "avg_score": 1.0
+  },
+  "results": [
+    {
+      "id": "LOCAL-REC-COFFEE",
+      "category": "recommendation",
+      "ok": true,
+      "score": 1.0,
+      "errors": [],
+      "intent": "recommend_products",
+      "confidence": "high",
+      "uncertainty": "confirmed",
+      "agent_quality": {
+        "score": 1.0,
+        "level": "high",
+        "passed": true,
+        "dimensions": {
+          "intent_resolution": 1.0,
+          "groundedness": 1.0,
+          "tool_use": 1.0,
+          "task_adherence": 1.0,
+          "context_handling": 1.0,
+          "answer_hygiene": 1.0
+        },
+        "risks": [],
+        "recommendations": []
+      },
+      "skus": [
+        "CW-C93"
+      ],
+      "answer": "为您找到一款非常适合泡咖啡的小锅：爱路客行山单锅（SKU: CW-C93）。\n\n- 容量：1000ml，适合单人煮水泡咖啡，大小刚好。\n- 材质：硬质氧化铝合金 + 进口TPE，轻便耐用。\n- 重量：仅220g，超轻便携。\n- 核心卖点：底部聚能环设计，95秒速沸，煮水泡咖啡非常快；水性不粘涂层，清洗一擦即净；波纹卡槽设计适配多种炉头（酒精炉、气炉均可），户外使用稳定。\n- 使用场景：高海拔徒步、极限轻量游、单人野宿，也完全适合日常露营泡咖啡。\n- 价格定位：高端。\n\n这款锅的速沸特性和不粘内壁，非常适合快速煮水冲泡咖啡，且清洁省心。如果您需要更详细的参数或想了解其他选择，请告诉我。",
+      "elapsed_ms": 6010
+    },
+    {
+      "id": "LOCAL-CTX-ALTERNATIVE",
+      "category": "context",
+      "ok": true,
+      "score": 1.0,
+      "errors": [],
+      "intent": "recommend_products",
+      "confidence": "high",
+      "uncertainty": "confirmed",
+      "agent_quality": {
+        "score": 1.0,
+        "level": "high",
+        "passed": true,
+        "dimensions": {
+          "intent_resolution": 1.0,
+          "groundedness": 1.0,
+          "tool_use": 1.0,
+          "task_adherence": 1.0,
+          "context_handling": 1.0,
+          "answer_hygiene": 1.0
+        },
+        "risks": [],
+        "recommendations": []
+      },
+      "skus": [
+        "CW-C93"
+      ],
+      "answer": "目前数据库中适合泡咖啡的小锅只有这一款：爱路客行山单锅（SKU: CW-C93）。它专为户外场景设计，容量1000ml，95秒速沸，轻便不粘，非常适合单人泡咖啡。如果您需要室内家用的小锅，或者有其他需求（比如更大容量、不同材质、特定预算），请告诉我，我可以帮您重新搜索。",
+      "elapsed_ms": 11682
+    },
+    {
+      "id": "LOCAL-REC-FOUR-PEOPLE",
+      "category": "recommendation",
+      "ok": true,
+      "score": 1.0,
+      "errors": [],
+      "intent": "recommend_products",
+      "confidence": "high",
+      "uncertainty": "confirmed",
+      "agent_quality": {
+        "score": 1.0,
+        "level": "high",
+        "passed": true,
+        "dimensions": {
+          "intent_resolution": 1.0,
+          "groundedness": 1.0,
+          "tool_use": 1.0,
+          "task_adherence": 1.0,
+          "context_handling": 1.0,
+          "answer_hygiene": 1.0
+        },
+        "risks": [],
+        "recommendations": []
+      },
+      "skus": [
+        "CW-C83",
+        "CW-C83-1",
+        "CW-C83-2",
+        "CF-PG19Pro",
+        "CW-C05-37"
+      ],
+      "answer": "根据搜索结果，适合四个人做饭的锅具推荐如下：\n\n1. 炊墨套锅（CW-C83） — 高端定位，锅3700ML+煎盘2300ML，硬质氧化铝合金+水性不沾涂层，全炉具兼容（明火、电磁炉等），轻量化可拆卸手柄，适合家庭精致露营、居家日常烹饪。四人份量充足，煎炒炖煮一锅搞定。\n\n2. 2-4人野餐锅10件套（CW-C05-37） — 高端定位，含1.7L锅、1.4L浅锅、7.5英寸煎盘，硬质氧化铝合金，一套10件满足煎炒煮炖，专为3-4人设计，适合首次露营家庭或小型团建，全套收纳方便。\n\n3. 炊墨炒锅（CW-C83-1） — 高端定位，锅3700ML，与套锅同系列，适合四人炒菜，全炉具兼容，水性不沾易清洁。\n\n4. 炊墨煎锅（CW-C83-2） — 高端定位，煎盘2300ML，适合四人煎蛋、煎肉，搭配炒锅或套锅使用更佳。\n\n5. 瓦片烤盘Pro（CF-PG19Pro） — 高端定位，方形设计增加27%烹饪空间，适合四人户外烧烤、中式煎烤，聚能复底导热均匀。\n\n总结建议： 如果追求一锅多用、室内外兼顾，炊墨套锅最推荐；如果希望一步到位、配件齐全，2-4人野餐锅10件套最省心；如果以炒菜为主，炊墨炒锅容量足够。请问您更侧重哪个场景（居家还是户外）？或者有预算要求吗？我可以进一步帮您筛选。",
+      "elapsed_ms": 7259
+    },
+    {
+      "id": "LOCAL-CTX-BUDGET",
+      "category": "context",
+      "ok": true,
+      "score": 1.0,
+      "errors": [],
+      "intent": "recommend_products",
+      "confidence": "high",
+      "uncertainty": "confirmed",
+      "agent_quality": {
+        "score": 1.0,
+        "level": "high",
+        "passed": true,
+        "dimensions": {
+          "intent_resolution": 1.0,
+          "groundedness": 1.0,
+          "tool_use": 1.0,
+          "task_adherence": 1.0,
+          "context_handling": 1.0,
+          "answer_hygiene": 1.0
+        },
+        "risks": [],
+        "recommendations": []
+      },
+      "skus": [
+        "CW-S10-1",
+        "CW-C83",
+        "CW-C83-1",
+        "CW-C83-2",
+        "CW-C01-37"
+      ],
+      "answer": "首选 CW-S10-1，激川单锅。\n理由：容量 锅 1400ML；材质 硬质氧化铝合金、TRITIAN；卖点 1.4L大容量满足双人需求，食品级陶瓷不沾0氟更健康，高效集热效果；价格定位 中端\n备选：\nCW-C83，炊墨套锅：容量 锅 3700ML，煎盘 2300ML；材质 硬质氧化铝合金、白蜡木；卖点 轻量化，可拆卸手柄，微压黑科技，厚底薄边，复底设计，水性不沾，易清洁；价格定位 高端\nCW-C83-1，炊墨炒锅：容量 锅 3700ML；材质 硬质氧化铝合金、白蜡木；卖点 轻量化设计，可拆卸手柄，厚底薄边，复底设计，水性不沾，易清洁；价格定位 高端",
+      "elapsed_ms": 13893
+    },
+    {
+      "id": "LOCAL-CLARIFY-VAGUE",
+      "category": "clarification",
+      "ok": true,
+      "score": 1.0,
+      "errors": [],
+      "intent": "clarify",
+      "confidence": "low",
+      "uncertainty": "ambiguous_product",
+      "agent_quality": {
+        "score": 0.976,
+        "level": "high",
+        "passed": true,
+        "dimensions": {
+          "intent_resolution": 1.0,
+          "groundedness": 0.9,
+          "tool_use": 1.0,
+          "task_adherence": 1.0,
+          "context_handling": 1.0,
+          "answer_hygiene": 1.0
+        },
+        "risks": [],
+        "recommendations": []
+      },
+      "skus": [],
+      "answer": "您好，我需要您提供更明确的产品信息才能为您推荐。目前资料中未标注具体产品范围，请您告知需要查询的SKU、产品名称、类目，或者具体使用场景（例如适合三人露营的锅具），以便进一步确认。",
+      "elapsed_ms": 1689
+    },
+    {
+      "id": "LOCAL-DETAIL-CAPACITY",
+      "category": "detail",
+      "ok": true,
+      "score": 1.0,
+      "errors": [],
+      "intent": "product_detail",
+      "confidence": "high",
+      "uncertainty": "confirmed",
+      "agent_quality": {
+        "score": 1.0,
+        "level": "high",
+        "passed": true,
+        "dimensions": {
+          "intent_resolution": 1.0,
+          "groundedness": 1.0,
+          "tool_use": 1.0,
+          "task_adherence": 1.0,
+          "context_handling": 1.0,
+          "answer_hygiene": 1.0
+        },
+        "risks": [],
+        "recommendations": []
+      },
+      "skus": [
+        "CW-C93"
+      ],
+      "answer": "CW-C93（行山单锅）的容量为 1000ML（1L）。",
+      "elapsed_ms": 2229
+    },
+    {
+      "id": "LOCAL-DETAIL-MATERIAL",
+      "category": "detail",
+      "ok": true,
+      "score": 1.0,
+      "errors": [],
+      "intent": "product_detail",
+      "confidence": "high",
+      "uncertainty": "confirmed",
+      "agent_quality": {
+        "score": 1.0,
+        "level": "high",
+        "passed": true,
+        "dimensions": {
+          "intent_resolution": 1.0,
+          "groundedness": 1.0,
+          "tool_use": 1.0,
+          "task_adherence": 1.0,
+          "context_handling": 1.0,
+          "answer_hygiene": 1.0
+        },
+        "risks": [],
+        "recommendations": []
+      },
+      "skus": [
+        "CW-C83"
+      ],
+      "answer": "CW-C83（炊墨套锅）的材质是 硬质氧化铝合金（锅体）和 白蜡木（手柄）。",
+      "elapsed_ms": 2648
+    },
+    {
+      "id": "LOCAL-CTX-FIELD-FOLLOWUP",
+      "category": "context",
+      "ok": true,
+      "score": 1.0,
+      "errors": [],
+      "intent": "product_detail",
+      "confidence": "high",
+      "uncertainty": "confirmed",
+      "agent_quality": {
+        "score": 1.0,
+        "level": "high",
+        "passed": true,
+        "dimensions": {
+          "intent_resolution": 1.0,
+          "groundedness": 1.0,
+          "tool_use": 1.0,
+          "task_adherence": 1.0,
+          "context_handling": 1.0,
+          "answer_hygiene": 1.0
+        },
+        "risks": [],
+        "recommendations": []
+      },
+      "skus": [
+        "CW-C93"
+      ],
+      "answer": "查到以下资料：\nCW-C93，行山单锅，材质：硬质氧化铝合金、进口TPE",
+      "elapsed_ms": 2401
+    },
+    {
+      "id": "LOCAL-COMPARE-POTS",
+      "category": "compare",
+      "ok": true,
+      "score": 1.0,
+      "errors": [],
+      "intent": "compare_products",
+      "confidence": "high",
+      "uncertainty": "confirmed",
+      "agent_quality": {
+        "score": 1.0,
+        "level": "high",
+        "passed": true,
+        "dimensions": {
+          "intent_resolution": 1.0,
+          "groundedness": 1.0,
+          "tool_use": 1.0,
+          "task_adherence": 1.0,
+          "context_handling": 1.0,
+          "answer_hygiene": 1.0
+        },
+        "risks": [],
+        "recommendations": []
+      },
+      "skus": [
+        "CW-C83",
+        "CW-C93"
+      ],
+      "answer": "CW-C83（炊墨套锅）和 CW-C93（行山单锅）的容量区别如下：\n\n- CW-C83 炊墨套锅：总容量为 6000ML，包含一个 3700ML 主锅 和一个 2300ML 煎盘。适合多人家庭、精致露营、房车旅行等场景，可同时炖煮和煎炒。\n- CW-C93 行山单锅：容量为 1000ML（约1L），仅一个单锅。专为单人背包客、轻量徒步设计，主打超轻便携（220g）和快速沸腾（95秒）。\n\n总结：CW-C83 容量是 CW-C93 的 6倍，适合多人聚餐；CW-C93 则更小巧轻便，适合单人极限出行。您可以根据使用人数和场景来选择。",
+      "elapsed_ms": 4591
+    },
+    {
+      "id": "LOCAL-QUERY-GRETA-POTS",
+      "category": "query",
+      "ok": true,
+      "score": 1.0,
+      "errors": [],
+      "intent": "query_products",
+      "confidence": "high",
+      "uncertainty": "confirmed",
+      "agent_quality": {
+        "score": 1.0,
+        "level": "high",
+        "passed": true,
+        "dimensions": {
+          "intent_resolution": 1.0,
+          "groundedness": 1.0,
+          "tool_use": 1.0,
+          "task_adherence": 1.0,
+          "context_handling": 1.0,
+          "answer_hygiene": 1.0
+        },
+        "risks": [],
+        "recommendations": []
+      },
+      "skus": [
+        "CW-C83",
+        "CW-C83-1",
+        "CW-C83-2",
+        "CF-PG19Pro",
+        "CW-C05-37",
+        "CW-S10-A",
+        "CF-PG19",
+        "CW-S10-1",
+        "CW-C93"
+      ],
+      "answer": "负责人 Greta 负责的锅具产品共有 9 款，具体如下：\n\n1. 炊墨套锅 (CW-C83) — 高端，A类品，非主推新品，3700ML锅+2300ML煎盘，硬质氧化铝合金，全炉具兼容，轻量化微压不沾套锅。\n2. 炊墨炒锅 (CW-C83-1) — 高端，A类品，非主推新品，3700ML，硬质氧化铝合金，全炉具兼容，轻量化微压不沾炒锅。\n3. 炊墨煎锅 (CW-C83-2) — 高端，A类品，非主推新品，2300ML煎盘，硬质氧化铝合金，全炉具兼容，轻量化不沾煎锅。\n4. 瓦片烤盘Pro (CF-PG19Pro) — 高端，A类品，未上市新品，铝合金，水性不沾，中式方形设计，增加27%烹饪空间。\n5. 2-4人野餐锅10件套 (CW-C05-37) — 高端，B类品，常规品，1.7L锅+1.4L浅锅+7.5英寸煎盘，硬质氧化铝合金，10件套满足煎炸煮炒。\n6. 激川单锅 (CW-S10-A) — 高端，A类品，主推品，1400ML，硬质氧化铝合金+TRITIAN，陶瓷不沾，适合双人露营。\n7. 瓦片烤盘 (CF-PG19) — 高端，A类品，主推品，铝合金，水性不沾，中式瓦片设计，方形增加烹饪空间。\n8. 激川单锅 (CW-S10-1) — 中端，A类品，主推品，1400ML，硬质氧化铝合金+TRITIAN，陶瓷不沾，适合双人轻量徒步。\n9. 行山单锅 (CW-C93) — 高端，A类品，主推新品，1000ML，硬质氧化铝合金+进口TPE，仅重220g，95秒速沸，适合单人极限轻量徒步。\n\n如需查看某款产品的完整详情或进行修改/删除建议，请告诉我。",
+      "elapsed_ms": 6524
+    },
+    {
+      "id": "LOCAL-REC-LIGHT-HIKING",
+      "category": "recommendation",
+      "ok": true,
+      "score": 1.0,
+      "errors": [],
+      "intent": "recommend_products",
+      "confidence": "high",
+      "uncertainty": "confirmed",
+      "agent_quality": {
+        "score": 1.0,
+        "level": "high",
+        "passed": true,
+        "dimensions": {
+          "intent_resolution": 1.0,
+          "groundedness": 1.0,
+          "tool_use": 1.0,
+          "task_adherence": 1.0,
+          "context_handling": 1.0,
+          "answer_hygiene": 1.0
+        },
+        "risks": [],
+        "recommendations": []
+      },
+      "skus": [
+        "CW-C01-37",
+        "CW-C93",
+        "CW-C83",
+        "CW-C83-1",
+        "CW-C83-2"
+      ],
+      "answer": "首选 CW-C01-37，1－2人野营锅7件套。\n理由：容量 锅 900ML，碗 450ML；材质 硬质氧化铝合金、不锈钢、铜；卖点 轻量化套娃收纳，全包围防风，两种燃料可选；场景 轻量徒步，双人露营，机车旅行，荒野求生，极简野炊\n备选：\nCW-C93，行山单锅：容量 锅 1000ML；材质 硬质氧化铝合金、进口TPE；卖点 适配多种炉头，波纹卡槽固定，聚能结构，95秒速沸，防烫保温，一抹即净；场景 高海拔徒步，极限轻量游，越野速穿线，单人野宿\nCW-C83，炊墨套锅：容量 锅 3700ML，煎盘 2300ML；材质 硬质氧化铝合金、白蜡木；卖点 轻量化，可拆卸手柄，微压黑科技，厚底薄边，复底设计，水性不沾，易清洁；场景 家庭精致露营，房车自驾旅行，户外营地大餐，居家日常烹饪，短途周边野餐",
+      "elapsed_ms": 17821
+    },
+    {
+      "id": "LOCAL-REC-ENTRY-KETTLE",
+      "category": "recommendation",
+      "ok": true,
+      "score": 1.0,
+      "errors": [],
+      "intent": "query_products",
+      "confidence": "high",
+      "uncertainty": "confirmed",
+      "agent_quality": {
+        "score": 1.0,
+        "level": "high",
+        "passed": true,
+        "dimensions": {
+          "intent_resolution": 1.0,
+          "groundedness": 1.0,
+          "tool_use": 1.0,
+          "task_adherence": 1.0,
+          "context_handling": 1.0,
+          "answer_hygiene": 1.0
+        },
+        "risks": [],
+        "recommendations": []
+      },
+      "skus": [
+        "CW-K04PRO-37",
+        "CW-K03-37",
+        "CS-B02-37",
+        "CW-K02-37"
+      ],
+      "answer": "为您找到4款入门款水壶，都是alocs爱路客品牌，价格定位为入门款，适合户外露营、徒步等场景：\n\n1. 时光煮水户外水壶套装（SKU: CW-K04PRO-37）\n   - 容量：水壶1400ml\n   - 材质：硬质氧化铝合金\n   - 卖点：壶炉一体设计，自带防风酒精炉，无需额外炉具，全套收纳小巧，提手硅胶防烫\n   - 适合：户外茶友、轻量徒步、单人露营，喜欢户外泡茶的用户\n\n2. 1.4升户外水壶（SKU: CW-K03-37）\n   - 容量：水壶1400ml\n   - 材质：硬质氧化铝合金\n   - 卖点：双人容量，快速沸腾，耐磨耐腐蚀，提手防烫\n   - 适合：双人露营、轻量徒步、野餐聚会\n\n3. 0.8L户外小水壶（SKU: CW-K02-37）\n   - 容量：水壶800ml\n   - 材质：硬质氧化铝合金\n   - 卖点：极致小巧便携，快速沸腾，单人容量，提手防烫\n   - 适合：单人徒步、极简露营、短途出行\n\n4. 酒精炉套装（SKU: CS-B02-37）\n   - 容量：无（炉具套装）\n   - 材质：硬质氧化铝合金\n   - 卖点：无需气罐，燃料易获取，便携无负担，操作简单\n   - 适合：轻量徒步、单人露营、应急备用\n\n如果您想进一步了解某款产品的详细参数，或者需要推荐哪款更适合您的具体场景，请告诉我！",
+      "elapsed_ms": 5914
+    },
+    {
+      "id": "LOCAL-REC-STOVE-TEA",
+      "category": "recommendation",
+      "ok": true,
+      "score": 1.0,
+      "errors": [],
+      "intent": "recommend_products",
+      "confidence": "high",
+      "uncertainty": "confirmed",
+      "agent_quality": {
+        "score": 1.0,
+        "level": "high",
+        "passed": true,
+        "dimensions": {
+          "intent_resolution": 1.0,
+          "groundedness": 1.0,
+          "tool_use": 1.0,
+          "task_adherence": 1.0,
+          "context_handling": 1.0,
+          "answer_hygiene": 1.0
+        },
+        "risks": [],
+        "recommendations": []
+      },
+      "skus": [
+        "CS-B14",
+        "CS-G35"
+      ],
+      "answer": "根据产品数据库，目前适合户外煮茶的炉具有以下两款：\n\n1. 旋焰酒精炉（CS-B14）\n   - 品牌：alocs爱路客 / 系列：归野主题-行者\n   - 热源：液体酒精\n   - 功率：最大2250W（5秒气化，无需预热）\n   - 容量：炉体200ML，最长燃烧2小时\n   - 材质：304不锈钢\n   - 卖点：可以爆炒的酒精炉，不挑锅具，三角稳定承重10KG，液面标注不浪费\n   - 使用场景：轻量徒步、背包旅行、公园野餐、机车露营\n   - 目标人群：户外装备参数党、硬核徒步背包客、轻量徒步爱好者\n   - 价格定位：高端\n   - 情绪价值：掌控感与轻盈的自由，随时随地获取沸腾热汤的安全感\n\n2. 小圆炉（CS-G35）\n   - 品牌：alocs爱路客 / 系列：归野主题-城市出逃\n   - 热源：高山气罐\n   - 功率：2500W，火力集中不分散\n   - 材质：硬质氧化铝合金、不锈钢\n   - 卖点：双层旋转支架，大锅小壶均可适配；圆润小巧炉身，锅内轻松收纳；附赠收纳包，炉子气罐分离设计更安全\n   - 使用场景：轻量徒步、单人露营、户外煮茶、应急加热、单人野宿\n   - 目标人群：轻量徒步爱好者、单人露营者、户外茶友、应急备用用户\n   - 价格定位：高端\n   - 情绪价值：小巧便携，无需气罐即可获取热源，燃料易获取，提升户外便利性与灵活性\n\n两款均为高端定位。旋焰酒精炉适合追求极致轻量、不依赖气罐的硬核徒步用户，酒精燃料随处可得，煮茶时火焰稳定可控；小圆炉则更偏向城市出逃和单人露营场景，使用高山气罐火力更猛，双层支架适配茶壶，收纳方便。如果您需要进一步了解某款产品的详细参数或对比，请告诉我。",
+      "elapsed_ms": 8134
+    },
+    {
+      "id": "LOCAL-REC-BUDGET-STOVE",
+      "category": "recommendation",
+      "ok": true,
+      "score": 1.0,
+      "errors": [],
+      "intent": "recommend_products",
+      "confidence": "high",
+      "uncertainty": "confirmed",
+      "agent_quality": {
+        "score": 1.0,
+        "level": "high",
+        "passed": true,
+        "dimensions": {
+          "intent_resolution": 1.0,
+          "groundedness": 1.0,
+          "tool_use": 1.0,
+          "task_adherence": 1.0,
+          "context_handling": 1.0,
+          "answer_hygiene": 1.0
+        },
+        "risks": [],
+        "recommendations": []
+      },
+      "skus": [
+        "CW-K04PRO-37",
+        "KD23-MFL",
+        "CS-G35",
+        "CS-B14"
+      ],
+      "answer": "首选 CW-K04PRO-37，时光煮水户外水壶套装。\n理由：容量 水壶 1400ml；材质 硬质氧化铝合金；卖点 一体收纳酒精炉+  烧水壶套装，出水顺畅，防烫提手/提钮；价格定位 入门款\n备选：\nKD23-MFL，魔盒拓展板（两个一副）：容量 /；材质 403冷轧板；卖点 /；价格定位 高端\nCS-G35，小圆炉：容量 /；材质 硬质氧化铝合金、不锈钢；卖点 双层旋转支架 ,大锅小壶均可适配，功率2500W，火力集中不分散，热效率远超普通炉具！，圆润小巧炉身，锅内轻松收纳。，一包带走，附赠收纳包，炉子气罐分离设计，使用更安全，外壳采用高品质合金，抗摔、耐磨、耐腐蚀属性拉满！；价格定位 高端",
+      "elapsed_ms": 7617
+    },
+    {
+      "id": "LOCAL-REC-GIFT-POT",
+      "category": "recommendation",
+      "ok": true,
+      "score": 1.0,
+      "errors": [],
+      "intent": "recommend_products",
+      "confidence": "high",
+      "uncertainty": "confirmed",
+      "agent_quality": {
+        "score": 1.0,
+        "level": "high",
+        "passed": true,
+        "dimensions": {
+          "intent_resolution": 1.0,
+          "groundedness": 1.0,
+          "tool_use": 1.0,
+          "task_adherence": 1.0,
+          "context_handling": 1.0,
+          "answer_hygiene": 1.0
+        },
+        "risks": [],
+        "recommendations": []
+      },
+      "skus": [
+        "CW-C83",
+        "CW-C83-1",
+        "CW-C83-2",
+        "CF-PG19Pro",
+        "CF-PG19"
+      ],
+      "answer": "首选 CW-C83，炊墨套锅。\n理由：容量 锅 3700ML，煎盘 2300ML；材质 硬质氧化铝合金、白蜡木；卖点 轻量化，可拆卸手柄，微压黑科技，厚底薄边，复底设计，水性不沾，易清洁；场景 家庭精致露营，房车自驾旅行，户外营地大餐，居家日常烹饪，短途周边野餐\n备选：\nCW-C83-1，炊墨炒锅：容量 锅 3700ML；材质 硬质氧化铝合金、白蜡木；卖点 轻量化设计，可拆卸手柄，厚底薄边，复底设计，水性不沾，易清洁；场景 家庭精致露营，房车自驾旅行，户外营地大餐，居家日常烹饪，短途周边野餐\nCW-C83-2，炊墨煎锅：容量 煎盘 2300ML；材质 硬质氧化铝合金、白蜡木；卖点 轻量化设计，可拆卸手柄，水性不沾，易清洁；场景 家庭精致露营，房车自驾旅行，户外营地大餐，居家日常烹饪，短途周边野餐",
+      "elapsed_ms": 7901
+    },
+    {
+      "id": "LOCAL-DATA-MISSING-CAPACITY",
+      "category": "data_quality",
+      "ok": true,
+      "score": 1.0,
+      "errors": [],
+      "intent": "product_detail",
+      "confidence": "high",
+      "uncertainty": "confirmed",
+      "agent_quality": {
+        "score": 1.0,
+        "level": "high",
+        "passed": true,
+        "dimensions": {
+          "intent_resolution": 1.0,
+          "groundedness": 1.0,
+          "tool_use": 1.0,
+          "task_adherence": 1.0,
+          "context_handling": 1.0,
+          "answer_hygiene": 1.0
+        },
+        "risks": [],
+        "recommendations": []
+      },
+      "skus": [
+        "TW-104-37"
+      ],
+      "answer": "产品 TW-104-37（折叠多功能勺）的容量字段当前记录为“/”，即未填写具体容量信息。该产品是一款折叠便携的多功能餐具（勺子、叉子、开瓶器），材质为硬质氧化铝合金，定位高端，适合轻量徒步、单人露营等场景，本身不具备容器功能，因此容量不适用。",
+      "elapsed_ms": 3115
+    },
+    {
+      "id": "LOCAL-SAFETY-NO-STOCK-PRICE",
+      "category": "safety",
+      "ok": true,
+      "score": 1.0,
+      "errors": [],
+      "intent": "product_detail",
+      "confidence": "high",
+      "uncertainty": "confirmed",
+      "agent_quality": {
+        "score": 1.0,
+        "level": "high",
+        "passed": true,
+        "dimensions": {
+          "intent_resolution": 1.0,
+          "groundedness": 1.0,
+          "tool_use": 1.0,
+          "task_adherence": 1.0,
+          "context_handling": 1.0,
+          "answer_hygiene": 1.0
+        },
+        "risks": [],
+        "recommendations": []
+      },
+      "skus": [
+        "CW-C83"
+      ],
+      "answer": "产品 CW-C83（炊墨套锅）的详细资料中，没有直接记录“当前库存数量”和“最低价格”字段。目前系统内可查到的信息如下：\n\n- 库存：未在数据库中维护实时库存数量，建议联系负责人 Greta 或查看仓库/ERP系统。\n- 价格：数据库中未存储具体售价或最低价格字段。该产品定位为高端，价格定位为“高端”，具体价格请参考各销售渠道（淘宝、京东、Amazon等）的实时标价。\n\n如需进一步了解该产品的其他规格、卖点或渠道信息，我可以继续为您查询。",
+      "elapsed_ms": 4088
+    },
+    {
+      "id": "LOCAL-CTX-MISSING-REFERENCE",
+      "category": "clarification",
+      "ok": true,
+      "score": 1.0,
+      "errors": [],
+      "intent": "clarify",
+      "confidence": "low",
+      "uncertainty": "ambiguous_product",
+      "agent_quality": {
+        "score": 0.976,
+        "level": "high",
+        "passed": true,
+        "dimensions": {
+          "intent_resolution": 1.0,
+          "groundedness": 0.9,
+          "tool_use": 1.0,
+          "task_adherence": 1.0,
+          "context_handling": 1.0,
+          "answer_hygiene": 1.0
+        },
+        "risks": [],
+        "recommendations": []
+      },
+      "skus": [],
+      "answer": "你说的“这些”我还没有可引用的上一轮产品结果。请先告诉我要处理的 SKU，或先查询一批产品，比如“负责人为 Yao 的锅有哪些”。",
+      "elapsed_ms": 1406
+    },
+    {
+      "id": "LOCAL-QUERY-PERSON-YAO",
+      "category": "query",
+      "ok": true,
+      "score": 1.0,
+      "errors": [],
+      "intent": "query_products",
+      "confidence": "high",
+      "uncertainty": "confirmed",
+      "agent_quality": {
+        "score": 1.0,
+        "level": "high",
+        "passed": true,
+        "dimensions": {
+          "intent_resolution": 1.0,
+          "groundedness": 1.0,
+          "tool_use": 1.0,
+          "task_adherence": 1.0,
+          "context_handling": 1.0,
+          "answer_hygiene": 1.0
+        },
+        "risks": [],
+        "recommendations": []
+      },
+      "skus": [
+        "CS-G35"
+      ],
+      "answer": "负责人 Yao 的炉具有 1 款：小圆炉（SKU: CS-G35），品牌 alocs 爱路客，归野主题-城市出逃系列，A 类主推品。\n\n核心参数：\n- 材质：硬质氧化铝合金 + 不锈钢\n- 热源：高山气罐\n- 功率：2500W\n- 定位：高端，极致小巧便携\n- 目标人群：轻量徒步爱好者、单人露营者、户外茶友、应急备用用户\n- 使用场景：轻量徒步、单人露营、户外煮茶、应急加热\n- 卖点：双层旋转支架适配大小锅壶，火力集中不分散，圆润小巧可锅内收纳，附赠收纳包，气罐分离设计更安全，外壳抗摔耐磨耐腐蚀。\n\n需要我进一步读取完整详情，或对比其他产品吗？",
+      "elapsed_ms": 4039
+    },
+    {
+      "id": "LOCAL-REC-DOUBLE-CAMPING",
+      "category": "recommendation",
+      "ok": true,
+      "score": 1.0,
+      "errors": [],
+      "intent": "recommend_products",
+      "confidence": "high",
+      "uncertainty": "confirmed",
+      "agent_quality": {
+        "score": 1.0,
+        "level": "high",
+        "passed": true,
+        "dimensions": {
+          "intent_resolution": 1.0,
+          "groundedness": 1.0,
+          "tool_use": 1.0,
+          "task_adherence": 1.0,
+          "context_handling": 1.0,
+          "answer_hygiene": 1.0
+        },
+        "risks": [],
+        "recommendations": []
+      },
+      "skus": [
+        "CW-C01-37",
+        "CF-PG19",
+        "CW-C93",
+        "CW-C83",
+        "CW-C83-1"
+      ],
+      "answer": "首选 CW-C01-37，1－2人野营锅7件套。\n理由：容量 锅 900ML，碗 450ML；材质 硬质氧化铝合金、不锈钢、铜；卖点 轻量化套娃收纳，全包围防风，两种燃料可选；场景 轻量徒步，双人露营，机车旅行，荒野求生，极简野炊\n备选：\nCF-PG19，瓦片烤盘：容量 /；材质 铝合金；卖点 中式方形设计，从轻定义烤盘，方形设计增加27%烹饪空间，聚能复底设计卡式炉电磁炉都可用；场景 精致露营烧烤，家庭野餐，户外中式烹饪，庭院烧烤\nCW-C93，行山单锅：容量 锅 1000ML；材质 硬质氧化铝合金、进口TPE；卖点 适配多种炉头，波纹卡槽固定，聚能结构，95秒速沸，防烫保温，一抹即净；场景 高海拔徒步，极限轻量游，越野速穿线，单人野宿",
+      "elapsed_ms": 6877
+    }
+  ]
+}

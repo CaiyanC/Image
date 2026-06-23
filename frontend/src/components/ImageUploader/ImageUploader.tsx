@@ -1,4 +1,5 @@
 import { useState, useCallback, useRef } from 'react'
+import { SecureImage, useSignedFileUrl } from '../SecureFile'
 
 interface ImagePreviewProps {
   imageUrl: string | null
@@ -93,6 +94,8 @@ export default function ImageUploader({ onImageSelect }: { onImageSelect: (file:
 }
 
 export function ImagePreview({ imageUrl, onClear }: ImagePreviewProps) {
+  const signed = useSignedFileUrl(imageUrl)
+
   if (!imageUrl) {
     return (
       <div className="w-full h-full min-h-[300px] flex flex-col items-center justify-center text-apple-gray-medium">
@@ -106,14 +109,14 @@ export function ImagePreview({ imageUrl, onClear }: ImagePreviewProps) {
 
   return (
     <div className="relative w-full h-full flex items-center justify-center group animate-fade-in">
-      <img
+      <SecureImage
         src={imageUrl}
         alt="Generated"
         className="max-w-full max-h-full object-contain rounded-xl"
       />
       <div className="absolute top-3 right-3 flex gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
         <a
-          href={imageUrl}
+          href={signed.url || imageUrl}
           download
           className="w-9 h-9 rounded-full glass-light flex items-center justify-center text-apple-text hover:text-apple-blue transition-colors"
           title="下载"
