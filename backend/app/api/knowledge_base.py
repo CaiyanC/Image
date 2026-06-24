@@ -17,6 +17,7 @@ from ..core.database import SessionLocal, get_db
 from ..core.rate_limit import enforce_rate_limit
 from ..core.security import get_current_super_admin
 from ..models.knowledge_base import KnowledgeChunk, KnowledgeDocument, KnowledgeParseTask
+from ..models.product import Product
 from ..models.user import User
 from ..services import knowledge_job_service, knowledge_service, product_service, product_vector_index_service
 from ..services.file_ingestion_service import (
@@ -202,6 +203,26 @@ def get_parse_task(
     return _build_task_payload(task)
 
 
+@router.get("/files")
+def list_knowledge_files(
+    limit: int = Query(50, ge=1, le=200),
+    current_user: User = Depends(get_current_super_admin),
+    db: Session = Depends(get_db),
+):
+    documents = (
+        db.query(KnowledgeDocument)
+        .filter(KnowledgeDocument.source_type == "file")
+        .order_by(KnowledgeDocument.updated_at.desc(), KnowledgeDocument.created_at.desc())
+        .limit(limit)
+        .all()
+    )
+    total = db.query(KnowledgeDocument).filter(KnowledgeDocument.source_type == "file").count()
+    return {
+        "items": [_build_file_document_payload(db, document) for document in documents],
+        "total": total,
+    }
+
+
 @router.get("/files/{document_id}/download")
 def download_knowledge_file(
     document_id: str,
@@ -221,6 +242,25 @@ def download_knowledge_file(
     if not file_path.is_file():
         raise HTTPException(status_code=404, detail="File not found")
     return FileResponse(file_path, filename=document.file_name or file_path.name)
+
+
+@router.delete("/files/{document_id}")
+def delete_knowledge_file(
+    document_id: str,
+    current_user: User = Depends(get_current_super_admin),
+    db: Session = Depends(get_db),
+):
+    document = db.query(KnowledgeDocument).filter(KnowledgeDocument.id == document_id).first()
+    if not document or document.source_type != "file":
+        raise HTTPException(status_code=404, detail="Document not found")
+    file_path = document.file_path
+    db.query(KnowledgeChunk).filter(KnowledgeChunk.document_id == document.id).delete(synchronize_session=False)
+    db.query(KnowledgeParseTask).filter(KnowledgeParseTask.document_id == document.id).delete(synchronize_session=False)
+    db.delete(document)
+    db.commit()
+    if file_path:
+        _remove_file_safely(file_path)
+    return {"ok": True, "document_id": document_id}
 
 
 @router.post("/files/upload")
@@ -494,6 +534,52 @@ def _build_task_payload(task: KnowledgeParseTask) -> dict:
         "created_at": task.created_at.isoformat() if task.created_at else None,
         "finished_at": task.finished_at.isoformat() if task.finished_at else None,
     }
+
+
+def _build_file_document_payload(db: Session, document: KnowledgeDocument) -> dict:
+    related_skus = _load_related_skus(document.related_skus_json)
+    products = _related_product_payloads(db, related_skus)
+    chunks = db.query(KnowledgeChunk).filter(KnowledgeChunk.document_id == document.id).all()
+    embedding_synced_count = sum(1 for chunk in chunks if chunk.embedding_status == "synced")
+    embedding_pending_count = sum(1 for chunk in chunks if chunk.embedding_status == "pending")
+    embedding_failed_count = sum(1 for chunk in chunks if chunk.embedding_status == "failed")
+    task = _find_latest_parse_task(db, document.id)
+    return {
+        "document_id": document.id,
+        "file_name": document.file_name or document.title,
+        "file_type": document.file_type,
+        "parse_status": document.parse_status,
+        "parse_error": document.parse_error,
+        "chunk_count": len(chunks),
+        "embedding_synced_count": embedding_synced_count,
+        "embedding_pending_count": embedding_pending_count,
+        "embedding_failed_count": embedding_failed_count,
+        "related_skus": related_skus,
+        "related_products": products,
+        "task_id": task.id if task else None,
+        "task_status": task.status if task else None,
+        "created_at": document.created_at.isoformat() if document.created_at else None,
+        "updated_at": document.updated_at.isoformat() if document.updated_at else None,
+    }
+
+
+def _related_product_payloads(db: Session, skus: list[str]) -> list[dict]:
+    if not skus:
+        return []
+    rows = db.query(Product).filter(Product.sku.in_(skus)).all()
+    by_sku = {str(row.sku or "").upper(): row for row in rows}
+    result = []
+    for sku in skus:
+        product = by_sku.get(sku)
+        result.append(
+            {
+                "sku": sku,
+                "product_name_cn": product.product_name_cn if product else None,
+                "product_name_en": product.product_name_en if product else None,
+                "exists": bool(product),
+            }
+        )
+    return result
 
 
 def _validate_knowledge_file(file: UploadFile) -> str:

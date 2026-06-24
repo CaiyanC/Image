@@ -186,7 +186,7 @@ def keyword_retrieve(db: Session, query: str, sku: str | None = None, limit: int
     tokens = _query_tokens(query_text)
     db_query = db.query(KnowledgeChunk)
     if sku:
-        db_query = db_query.filter((KnowledgeChunk.sku == sku) | (KnowledgeChunk.sku.is_(None)))
+        db_query = db_query.filter(_chunk_matches_sku_sql(sku))
     if tokens:
         conditions = [KnowledgeChunk.content.ilike(f"%{token}%") for token in tokens[:8]]
         db_query = db_query.filter(or_(*conditions))
@@ -232,8 +232,14 @@ async def semantic_retrieve(db: Session, query: str, sku: str | None = None, lim
         where = "embedding_status = 'synced' AND embedding IS NOT NULL"
         params = {"embedding": _vector_literal(embedding), "limit": limit}
         if sku:
-            where += " AND (sku = :sku OR sku IS NULL)"
+            where += (
+                " AND (sku = :sku OR sku IS NULL "
+                "OR metadata_json LIKE :sku_json_quoted "
+                "OR metadata_json LIKE :sku_json_plain)"
+            )
             params["sku"] = sku
+            params["sku_json_quoted"] = f'%"{sku}"%'
+            params["sku_json_plain"] = f"%{sku}%"
         rows = db.execute(text(
             "SELECT source_type, sku, content, metadata_json, "
             "embedding <=> CAST(:embedding AS vector) AS distance "
@@ -271,6 +277,17 @@ def _safe_json(value: str | None) -> dict:
         return json.loads(value)
     except json.JSONDecodeError:
         return {}
+
+
+def _chunk_matches_sku_sql(sku: str):
+    like_quoted = f'%"{sku}"%'
+    like_plain = f"%{sku}%"
+    return or_(
+        KnowledgeChunk.sku == sku,
+        KnowledgeChunk.sku.is_(None),
+        KnowledgeChunk.metadata_json.ilike(like_quoted),
+        KnowledgeChunk.metadata_json.ilike(like_plain),
+    )
 
 
 def _query_tokens(query: str) -> list[str]:

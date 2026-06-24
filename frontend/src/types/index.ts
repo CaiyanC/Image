@@ -245,6 +245,53 @@ export interface ProductKeyword {
   keyword_level?: string | null
 }
 
+export interface AssetTags {
+  product_tags?: string[]
+  material_type_tags?: string[]
+  usage_tags?: string[]
+  version_tags?: string[]
+  risk_tags?: string[]
+  channel_tags?: string[]
+  language_tags?: string[]
+}
+
+export interface ProductAsset {
+  id: string
+  sku: string
+  category_code: string
+  category_name: string
+  sub_category?: string | null
+  asset_type: 'image' | 'video'
+  url: string
+  thumbnail_url?: string | null
+  brand?: string | null
+  material_type?: string | null
+  angle_scene?: string | null
+  channel?: string | null
+  language_tag?: string | null
+  version_tag?: string | null
+  date_tag?: string | null
+  status_tag?: string | null
+  seq: number
+  sort_order: number
+  tags?: AssetTags
+  notes?: string | null
+  created_at: string
+  updated_at: string
+}
+
+export interface AssetGrouped {
+  category_code: string
+  category_name: string
+  count: number
+  items: ProductAsset[]
+}
+
+export interface AssetUploadResponse {
+  count: number
+  items: ProductAsset[]
+}
+
 // ── Product list response ──
 
 export interface ProductListItem {

@@ -1,4 +1,5 @@
 import asyncio
+import json
 import unittest
 
 from sqlalchemy import create_engine
@@ -141,6 +142,42 @@ class KnowledgeServiceTest(unittest.TestCase):
         rows = knowledge_service.keyword_retrieve(self.db, "他该如何清洗保养", sku="CW-C95", limit=5)
 
         self.assertEqual({row["sku"] for row in rows}, {"CW-C95"})
+
+    def test_keyword_retrieve_matches_file_chunk_by_related_skus_metadata(self):
+        doc = KnowledgeDocument(
+            id="doc-file-multisku",
+            source_type="file",
+            source_id="file:multisku",
+            sku="CW-C93",
+            title="multi sku file",
+            content="CW-C93 and CS-B14 shared file knowledge",
+            related_skus_json=json.dumps(["CW-C93", "CS-B14"], ensure_ascii=False),
+        )
+        self.db.add(doc)
+        self.db.add(KnowledgeChunk(
+            id="chunk-file-multisku",
+            document_id=doc.id,
+            sku="CW-C93",
+            source_type="file",
+            chunk_index=1,
+            content="This file covers CW-C93 and CS-B14 shared product knowledge.",
+            metadata_json=json.dumps(
+                {
+                    "document_id": doc.id,
+                    "chunk_id": "chunk-file-multisku",
+                    "related_skus": ["CW-C93", "CS-B14"],
+                },
+                ensure_ascii=False,
+            ),
+            embedding_status="pending",
+        ))
+        self.db.commit()
+
+        rows = knowledge_service.keyword_retrieve(self.db, "shared product knowledge", sku="CS-B14", limit=5)
+
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["metadata"]["related_skus"], ["CW-C93", "CS-B14"])
+        self.assertEqual(rows[0]["metadata"]["document_id"], doc.id)
 
 
 if __name__ == "__main__":

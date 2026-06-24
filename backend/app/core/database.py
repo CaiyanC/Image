@@ -55,6 +55,7 @@ def init_db():
         import app.models  # noqa: F401
         Base.metadata.create_all(bind=engine)
         _ensure_products_compat_columns()
+        _ensure_product_assets_compat()
         _init_vector_storage()
 
         db = SessionLocal()
@@ -121,6 +122,84 @@ def _ensure_products_compat_columns():
                 conn.execute(text("ALTER TABLE products ADD COLUMN quality_note TEXT"))
     except Exception as exc:
         logger.warning("failed to ensure product compatibility columns: %s", exc)
+
+
+def _ensure_product_assets_compat():
+    try:
+        inspector = inspect(engine)
+        table_names = set(inspector.get_table_names())
+        if "product_assets" not in table_names:
+            return
+        existing_columns = {column["name"] for column in inspector.get_columns("product_assets")}
+        expected_columns = {
+            "id": "VARCHAR(36) PRIMARY KEY",
+            "sku": "VARCHAR(64) NOT NULL",
+            "category_code": "VARCHAR(2) NOT NULL",
+            "category_name": "VARCHAR(64) NOT NULL",
+            "sub_category": "VARCHAR(64)",
+            "asset_type": "VARCHAR(10) DEFAULT 'image'",
+            "url": "TEXT",
+            "thumbnail_url": "TEXT",
+            "brand": "VARCHAR(64) DEFAULT 'alocs'",
+            "material_type": "VARCHAR(64)",
+            "angle_scene": "VARCHAR(128)",
+            "channel": "VARCHAR(64)",
+            "language_tag": "VARCHAR(32)",
+            "version_tag": "VARCHAR(32)",
+            "date_tag": "VARCHAR(16)",
+            "status_tag": "VARCHAR(32)",
+            "seq": "INTEGER DEFAULT 0",
+            "sort_order": "INTEGER DEFAULT 0",
+            "tags": "TEXT DEFAULT '{}'",
+            "notes": "TEXT",
+            "created_at": "DATETIME",
+            "updated_at": "DATETIME",
+        }
+        with engine.begin() as conn:
+            for name, definition in expected_columns.items():
+                if name not in existing_columns and name != "id":
+                    conn.execute(text(f"ALTER TABLE product_assets ADD COLUMN {name} {definition}"))
+            if settings.DATABASE_URL.startswith("postgresql"):
+                orphan_count = conn.execute(text(
+                    "SELECT COUNT(*) FROM product_assets pa "
+                    "LEFT JOIN products p ON p.sku = pa.sku "
+                    "WHERE p.sku IS NULL"
+                )).scalar_one()
+                if orphan_count:
+                    raise RuntimeError(f"product_assets contains {orphan_count} orphan sku rows")
+                conn.execute(text(
+                    "DO $$ BEGIN "
+                    "IF NOT EXISTS ("
+                    "SELECT 1 FROM pg_constraint WHERE conname = 'fk_product_assets_sku_products_sku'"
+                    ") THEN "
+                    "ALTER TABLE product_assets "
+                    "ADD CONSTRAINT fk_product_assets_sku_products_sku "
+                    "FOREIGN KEY (sku) REFERENCES products (sku) ON DELETE RESTRICT; "
+                    "END IF; "
+                    "END $$;"
+                ))
+            if settings.DATABASE_URL.startswith("postgresql"):
+                conn.execute(text("CREATE INDEX IF NOT EXISTS idx_product_assets_sku ON product_assets (sku)"))
+                conn.execute(text(
+                    "CREATE INDEX IF NOT EXISTS idx_product_assets_sku_category "
+                    "ON product_assets (sku, category_code)"
+                ))
+                conn.execute(text(
+                    "CREATE INDEX IF NOT EXISTS idx_product_assets_seq_group "
+                    "ON product_assets (sku, category_code, sub_category, material_type)"
+                ))
+            else:
+                conn.execute(text("CREATE INDEX IF NOT EXISTS idx_product_assets_sku ON product_assets (sku)"))
+                conn.execute(text(
+                    "CREATE INDEX IF NOT EXISTS idx_product_assets_sku_category "
+                    "ON product_assets (sku, category_code)"
+                ))
+                conn.execute(text(
+                    "CREATE INDEX IF NOT EXISTS idx_product_assets_seq_group "
+                    "ON product_assets (sku, category_code, sub_category, material_type)"
+                ))
+    except Exception as exc:
+        logger.warning("failed to ensure product asset compatibility columns: %s", exc)
 
 
 def _seed_default_groups(db):

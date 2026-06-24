@@ -17,6 +17,7 @@ from app.core.database import Base, get_db
 from app.core.security import get_current_super_admin
 from app.main import app
 from app.models.knowledge_base import KnowledgeChunk, KnowledgeDocument, KnowledgeParseTask
+from app.models.product import Product
 from app.services.file_ingestion_service import ingest_file, recover_stuck_processing_documents
 from app.services import knowledge_service
 from app.tasks import parse_tasks
@@ -35,6 +36,7 @@ class FileIngestionStabilityTest(unittest.TestCase):
         KnowledgeDocument.__table__.create(bind=self.engine)
         KnowledgeChunk.__table__.create(bind=self.engine)
         KnowledgeParseTask.__table__.create(bind=self.engine)
+        Product.__table__.create(bind=self.engine)
         self.db = self.SessionLocal()
 
         self.original_upload_dir = kb_api.KNOWLEDGE_FILE_DIR
@@ -96,6 +98,27 @@ class FileIngestionStabilityTest(unittest.TestCase):
         self.assertEqual(rerun.parse_status, "done")
         self.assertEqual(len(rerun_chunks), len(first_chunks))
         self.assertEqual(self._chunk_indexes(rerun_chunks), list(range(1, len(rerun_chunks) + 1)))
+
+    def test_file_chunks_preserve_all_related_skus_in_metadata(self):
+        file_path = self._write_txt("multisku.txt", "CW-C93 and CS-B14 shared file knowledge.\n" * 20)
+        doc = asyncio.run(
+            ingest_file(
+                self.db,
+                file_path=str(file_path),
+                file_name=file_path.name,
+                related_skus=["CW-C93", "CS-B14"],
+            )
+        )
+
+        chunks = self._load_chunks(doc.id)
+        self.assertGreater(len(chunks), 0)
+        self.assertEqual({chunk.sku for chunk in chunks}, {"CW-C93"})
+
+        for chunk in chunks:
+            metadata = json.loads(chunk.metadata_json or "{}")
+            self.assertEqual(metadata["related_skus"], ["CW-C93", "CS-B14"])
+            self.assertEqual(metadata["document_id"], doc.id)
+            self.assertEqual(metadata["chunk_id"], chunk.id)
 
     def test_duplicate_upload_reuses_existing_document_and_merges_related_skus(self):
         file_path = self._write_txt("duplicate.txt", "重复文件测试内容。\n" * 20)
@@ -363,6 +386,87 @@ class FileIngestionStabilityTest(unittest.TestCase):
         self.assertEqual(result["mode"], "keyword")
         self.assertEqual(result["count"], 1)
         self.assertEqual(result["results"][0]["metadata"]["owner"], "qa")
+
+    def test_parse_document_embeds_only_the_parsed_file_chunks(self):
+        file_path = self._write_txt("auto-embed.txt", "Auto embedding content for file upload.\n" * 20)
+        response = self._upload_via_api(file_path, "auto-embed.txt", "text/plain", ["SKU-AUTO"])
+        self.assertEqual(response.status_code, 200, response.text)
+        item = response.json()["items"][0]
+        calls = []
+
+        def fake_embed(db, **kwargs):
+            calls.append(kwargs)
+            return {"total": 1, "embedded": 1, "failed": 0}
+
+        with (
+            patch("app.tasks.parse_tasks._should_auto_embed_document", return_value=True),
+            patch("app.services.product_vector_index_service.run_embed_pending_chunks", side_effect=fake_embed),
+        ):
+            parse_tasks.parse_document(item["document_id"], item["task_id"])
+
+        self.assertEqual(calls, [{"document_id": item["document_id"]}])
+
+    def test_file_list_returns_related_products_and_embedding_counts(self):
+        self.db.add(Product(
+            id="product-related",
+            sku="SKU-REL",
+            barcode="barcode-related",
+            product_name_cn="关联产品",
+            product_name_en="Related Product",
+            brand="alocs",
+        ))
+        document = KnowledgeDocument(
+            source_type="file",
+            source_id="hash-related",
+            title="关联资料.docx",
+            content="关联资料内容",
+            file_name="关联资料.docx",
+            file_path=str(self.temp_dir_path / "related.docx"),
+            file_type="docx",
+            file_hash="hash-related",
+            page_count=1,
+            parse_status="done",
+            related_skus_json=json.dumps(["SKU-REL"], ensure_ascii=False),
+        )
+        self.db.add(document)
+        self.db.flush()
+        self.db.add(KnowledgeChunk(
+            document_id=document.id,
+            sku="SKU-REL",
+            source_type="file",
+            chunk_index=1,
+            content="关联资料内容",
+            metadata_json="{}",
+            embedding_status="synced",
+        ))
+        self.db.commit()
+
+        app.dependency_overrides[get_current_super_admin] = lambda: SimpleNamespace(id="super-admin")
+
+        def override_get_db():
+            try:
+                yield self.db
+            finally:
+                pass
+
+        app.dependency_overrides[get_db] = override_get_db
+        try:
+            with TestClient(app) as client:
+                response = client.get("/api/knowledge-base/files")
+        finally:
+            app.dependency_overrides.pop(get_db, None)
+            app.dependency_overrides.pop(get_current_super_admin, None)
+
+        self.assertEqual(response.status_code, 200, response.text)
+        payload = response.json()
+        self.assertEqual(payload["total"], 1)
+        row = payload["items"][0]
+        self.assertEqual(row["file_name"], "关联资料.docx")
+        self.assertEqual(row["related_skus"], ["SKU-REL"])
+        self.assertEqual(row["related_products"][0]["product_name_cn"], "关联产品")
+        self.assertEqual(row["chunk_count"], 1)
+        self.assertEqual(row["embedding_synced_count"], 1)
+        self.assertEqual(row["embedding_pending_count"], 0)
 
     def _upload_via_api(self, file_path: Path, filename: str, content_type: str, related_skus: list[str]):
         app.dependency_overrides[get_current_super_admin] = lambda: SimpleNamespace(id="super-admin")

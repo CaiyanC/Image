@@ -51,6 +51,17 @@ class ProductServiceSizeInfoTest(unittest.TestCase):
         self.assertEqual(result[0]["unit"], "")
         self.assertEqual(result[0]["value"], raw_value)
 
+    def test_preserves_inner_units_when_only_trailing_unit_is_extracted(self):
+        result = _normalize_size_info([
+            {"unit": "", "label": "[大锅]", "value": "(约)直径17XH10cm/(约)1.7L"},
+            {"unit": "", "label": "登山杖展开尺寸", "value": "110cm-135cm"},
+        ])
+
+        self.assertEqual(result[0]["unit"], "")
+        self.assertEqual(result[0]["value"], "(约)直径17XH10cm/(约)1.7L")
+        self.assertEqual(result[1]["unit"], "cm")
+        self.assertEqual(result[1]["value"], "110cm-135")
+
     def test_preserves_existing_unit(self):
         result = _normalize_size_info([
             {"unit": "cm", "label": "展开尺寸", "value": "36.5*28.6*6"},
@@ -58,6 +69,20 @@ class ProductServiceSizeInfoTest(unittest.TestCase):
 
         self.assertEqual(result[0]["unit"], "cm")
         self.assertEqual(result[0]["value"], "36.5*28.6*6")
+
+    def test_preserves_decimal_dimension_when_extracting_attached_unit(self):
+        result = _normalize_size_info([
+            {"unit": "", "label": "", "value": "8.2x23cm"},
+            {"unit": "", "label": "", "value": "2.2L锅18.5*11cm"},
+            {"unit": "", "label": "", "value": "0.8L水壶13*7.5cm"},
+        ])
+
+        self.assertEqual(result[0]["unit"], "cm")
+        self.assertEqual(result[0]["value"], "8.2x23")
+        self.assertEqual(result[1]["unit"], "cm")
+        self.assertEqual(result[1]["value"], "2.2L锅18.5*11")
+        self.assertEqual(result[2]["unit"], "cm")
+        self.assertEqual(result[2]["value"], "0.8L水壶13*7.5")
 
 
 class ProductServiceVectorSyncTest(unittest.TestCase):

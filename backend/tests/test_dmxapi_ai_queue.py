@@ -66,5 +66,25 @@ class AiRequestQueueTest(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(any(not event["acquired"] for event in wait_events))
 
 
+class ActualEmbeddingConfigTest(unittest.TestCase):
+    def setUp(self):
+        self.original_key = dmxapi_service.settings.DASHSCOPE_API_KEY
+
+    def tearDown(self):
+        dmxapi_service.settings.DASHSCOPE_API_KEY = self.original_key
+
+    def test_embedding_default_uses_dashscope_runtime_config(self):
+        dmxapi_service.settings.DASHSCOPE_API_KEY = "sk-test-dashscope"
+
+        cfg = dmxapi_service.get_default_model_by_type(object(), "embedding")
+
+        self.assertEqual(cfg["id"], "dashscope-text-embedding-v4")
+        self.assertEqual(cfg["api_model"], "text-embedding-v4")
+        self.assertEqual(cfg["embedding_url"], "https://dashscope.aliyuncs.com/compatible-mode/v1/embeddings")
+        self.assertEqual(cfg["api_key"], "sk-test-dashscope")
+        self.assertTrue(cfg["actual"])
+        self.assertEqual(cfg["managed_by"], "DASHSCOPE_API_KEY")
+
+
 if __name__ == "__main__":
     unittest.main()

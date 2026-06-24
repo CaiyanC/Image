@@ -172,7 +172,7 @@ def _semantic_search_knowledge(db: Session, arguments: dict[str, Any]) -> dict:
     sku = str(arguments.get("sku") or "").strip().upper() or None
     limit = int(arguments.get("limit") or 8)
     rows = knowledge_service.keyword_retrieve(db, query, sku=sku, limit=limit)
-    rows = _enrich_semantic_rows(db, rows)
+    rows = _expand_and_enrich_semantic_rows(db, rows)
     return {"ok": True, "tool": "semantic_search_knowledge", "query": query, "sku": sku, "mode": "keyword", "count": len(rows), "results": rows}
 
 
@@ -181,7 +181,7 @@ async def _semantic_search_knowledge_async(db: Session, arguments: dict[str, Any
     sku = str(arguments.get("sku") or "").strip().upper() or None
     limit = int(arguments.get("limit") or 8)
     rows = await knowledge_service.semantic_retrieve(db, query, sku=sku, limit=limit)
-    rows = _enrich_semantic_rows(db, rows)
+    rows = _expand_and_enrich_semantic_rows(db, rows)
     return {"ok": True, "tool": "semantic_search_knowledge", "query": query, "sku": sku, "mode": "semantic", "count": len(rows), "results": rows}
 
 
@@ -199,7 +199,7 @@ async def _semantic_rows_for_hybrid_search(db: Session, arguments: dict[str, Any
         semantic_query=semantic_query,
         semantic_rows=len(semantic_rows or []),
     )
-    return semantic_rows
+    return _expand_and_enrich_semantic_rows(db, semantic_rows)
 
 
 def _hybrid_search_sql_rows(db: Session, arguments: dict[str, Any]) -> tuple[list[dict], float]:
@@ -492,6 +492,7 @@ def _enrich_semantic_rows(db: Session, rows: list[dict]) -> list[dict]:
         try:
             detail = product_service.get_product_detail(db, sku)
         except Exception:
+            enriched_rows.append({**row, "sku": sku})
             continue
         specs = detail.get("specs") or {}
         business = detail.get("business") or {}
@@ -515,6 +516,26 @@ def _enrich_semantic_rows(db: Session, rows: list[dict]) -> list[dict]:
         }
         enriched_rows.append(enriched)
     return enriched_rows
+
+
+def _expand_and_enrich_semantic_rows(db: Session, rows: list[dict]) -> list[dict]:
+    expanded_rows: list[dict] = []
+    for row in rows or []:
+        if not isinstance(row, dict):
+            continue
+        metadata = row.get("metadata") if isinstance(row.get("metadata"), dict) else {}
+        related_skus = metadata.get("related_skus") if isinstance(metadata, dict) else None
+        if not isinstance(related_skus, list) or not related_skus:
+            expanded_rows.append(row)
+            continue
+        seen: set[str] = set()
+        for item in related_skus:
+            sku = str(item or "").strip().upper()
+            if not sku or sku in seen:
+                continue
+            seen.add(sku)
+            expanded_rows.append({**row, "sku": sku})
+    return _enrich_semantic_rows(db, expanded_rows)
 
 
 def _safe_stringify(value: Any) -> str:

@@ -16,6 +16,8 @@ interface ModelItem {
   chat_url: string
   embedding_url: string
   enabled: boolean
+  actual?: boolean
+  managed_by?: string
 }
 
 const typeLabels: Record<string, string> = {
@@ -128,7 +130,7 @@ export default function AdminSettings() {
       <div className="flex items-center justify-between mb-6">
         <div>
           <h1 className="text-2xl font-bold text-apple-text tracking-tight">模型与 API 配置</h1>
-          <p className="text-sm text-apple-gray-medium mt-1">图片生成、智能客服、向量知识库统一在这里配置。</p>
+          <p className="text-sm text-apple-gray-medium mt-1">图片生成、智能客服、向量知识库统一在这里配置和查看。</p>
         </div>
         <div className="flex items-center gap-2">
           <button onClick={addDeepSeek} disabled={saving} className="px-4 py-2 text-sm bg-emerald-500 text-white rounded-lg hover:bg-emerald-600 disabled:opacity-50">
@@ -164,6 +166,9 @@ export default function AdminSettings() {
                     <div className="flex items-center gap-2">
                       <span className="text-sm px-2 py-0.5 rounded-full bg-blue-50 text-blue-600">{typeLabels[model.type] || model.type}</span>
                       <span className="text-xs text-apple-gray-medium">{model.api_format}</span>
+                      {model.actual && (
+                        <span className="text-xs px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-100">实际使用</span>
+                      )}
                     </div>
                     <h2 className="text-lg font-semibold text-apple-text mt-1">{model.name || model.id}</h2>
                   </div>
@@ -173,6 +178,12 @@ export default function AdminSettings() {
 
               {expanded && (
                 <div className="p-5 space-y-5">
+                  {model.actual && model.managed_by && (
+                    <div className="rounded-xl border border-emerald-100 bg-emerald-50/80 px-4 py-3 text-sm text-emerald-800">
+                      这是后端当前实际使用的配置，密钥来自 <span className="font-mono">{model.managed_by}</span>。
+                    </div>
+                  )}
+
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                     <Field label="配置 ID" hint="系统内部配置标识" value={model.id} onChange={(v) => update(model.id, 'id', v)} />
                     <Field label="显示名称" hint="页面展示名称" value={model.name} onChange={(v) => update(model.id, 'name', v)} />

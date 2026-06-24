@@ -75,7 +75,7 @@ for /f "tokens=*" %%i in ('netstat -ano ^| findstr /R /C:":5275 .*LISTENING"') d
 if defined FRONTEND_RUNNING (
     echo Frontend port 5275 is already listening. Skipping frontend start.
 ) else (
-    start "CaiYan Frontend - 5275" powershell -NoExit -NoProfile -ExecutionPolicy Bypass -Command "$Host.UI.RawUI.WindowTitle='CaiYan Frontend - 5275'; Set-Location -LiteralPath '%~dp0frontend'; if (-not (Test-Path 'node_modules')) { npm install }; npm run dev:prod"
+    start "CaiYan Frontend - 5275" powershell -NoExit -NoProfile -ExecutionPolicy Bypass -Command "$Host.UI.RawUI.WindowTitle='CaiYan Frontend - 5275'; Set-Location -LiteralPath '%~dp0frontend'; if (-not (Test-Path 'node_modules')) { npm install }; npm run build; if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }; npm run serve:prod"
 )
 
 set "LAN_IP="
@@ -146,5 +146,7 @@ cd /d "%~dp0frontend"
 if not exist "node_modules" (
     npm install
 )
-npm run dev:prod
+npm run build
+if errorlevel 1 exit /b %errorlevel%
+npm run serve:prod
 exit /b %errorlevel%

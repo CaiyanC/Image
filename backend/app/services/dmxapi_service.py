@@ -13,11 +13,13 @@ from . import agent_trace_service, customer_perf_service
 logger = logging.getLogger("uvicorn")
 
 DEFAULT_BASE_URL = "https://www.dmxapi.cn"
+DASHSCOPE_EMBEDDING_URL = "https://dashscope.aliyuncs.com/compatible-mode/v1/embeddings"
+DASHSCOPE_EMBEDDING_MODEL = "text-embedding-v4"
+DASHSCOPE_EMBEDDING_ID = "dashscope-text-embedding-v4"
 
 DEFAULT_MODELS = [
     {"id": "deepseek-customer-service", "name": "DeepSeek 客服模型", "type": "chat", "description": "智能客服推荐模型", "api_key": "", "api_base_url": "https://api.deepseek.com", "api_format": "openai", "api_model": "deepseek-v4-flash", "chat_url": "https://api.deepseek.com/chat/completions", "enabled": True},
     {"id": "gpt-4o-mini", "name": "Customer Service Chat", "type": "chat", "description": "Smart customer service answers", "api_key": "", "api_base_url": DEFAULT_BASE_URL, "api_format": "openai"},
-    {"id": "text-embedding-3-small", "name": "Knowledge Embedding", "type": "embedding", "description": "Vector knowledge base embeddings", "api_key": "", "api_base_url": DEFAULT_BASE_URL, "api_format": "openai"},
     {"id": "gpt-image-2-ssvip", "name": "GPT Image 2 SSVIP", "type": "image", "description": "GPT Image 2 增强版（推荐）", "api_key": "", "api_base_url": DEFAULT_BASE_URL, "api_format": "openai"},
     {"id": "gpt-image-2", "name": "GPT Image 2", "type": "image", "description": "GPT Image 第二代图像模型", "api_key": "", "api_base_url": DEFAULT_BASE_URL, "api_format": "openai"},
     {"id": "gemini-3.1-flash-image-preview", "name": "Nano Banana 2", "type": "image", "description": "Gemini 文生图/图生图（计划接入）", "api_key": "", "api_base_url": DEFAULT_BASE_URL, "api_format": "gemini"},
@@ -132,6 +134,8 @@ def _get_model_config(db: Session, model_id: str) -> dict | None:
 
 
 def _resolve_model_config(db: Session, model_id: str) -> dict:
+    if model_id == DASHSCOPE_EMBEDDING_ID:
+        return get_actual_embedding_config()
     cfg = _get_model_config(db, model_id)
     if cfg:
         return cfg
@@ -148,6 +152,27 @@ def _resolve_model_config(db: Session, model_id: str) -> dict:
         "api_format": "openai",
         "api_model": model_id,
         "enabled": True,
+    }
+
+
+def get_actual_embedding_config() -> dict:
+    api_key = settings.DASHSCOPE_API_KEY.strip()
+    return {
+        "id": DASHSCOPE_EMBEDDING_ID,
+        "name": "阿里云 DashScope 向量模型",
+        "type": "embedding",
+        "description": "知识库实际使用的向量化模型",
+        "api_key": api_key,
+        "api_base_url": "https://dashscope.aliyuncs.com/compatible-mode",
+        "api_format": "openai",
+        "api_model": DASHSCOPE_EMBEDDING_MODEL,
+        "txt2img_url": "",
+        "img2img_url": "",
+        "chat_url": "",
+        "embedding_url": DASHSCOPE_EMBEDDING_URL,
+        "enabled": bool(api_key),
+        "actual": True,
+        "managed_by": "DASHSCOPE_API_KEY",
     }
 
 
@@ -513,13 +538,15 @@ def get_available_models(db: Session) -> list[dict]:
             cfg = _get_model_config(db, model_id)
             if cfg:
                 result.append(cfg)
+        result = [model for model in result if model.get("type") != "embedding"]
+        result.append(get_actual_embedding_config())
         configured_ids = {m["id"] for m in result}
         for model in DEFAULT_MODELS:
             if model["id"] not in configured_ids:
                 result.append(dict(model))
         return result
 
-    return [dict(m) for m in DEFAULT_MODELS]
+    return [get_actual_embedding_config(), *[dict(m) for m in DEFAULT_MODELS]]
 
 
 def set_model_config(db: Session, models: list[dict]):
@@ -562,6 +589,8 @@ def set_model_config(db: Session, models: list[dict]):
 
 
 def get_default_model_by_type(db: Session, model_type: str) -> dict | None:
+    if model_type == "embedding":
+        return get_actual_embedding_config()
     models = get_available_models(db)
     for model in models:
         if model.get("type") == model_type and model.get("api_key") and model.get("enabled", True):
@@ -687,11 +716,12 @@ async def create_embedding(
     text: str,
     model: str | None = None,
 ) -> tuple[list[float], str]:
-    api_key = settings.DASHSCOPE_API_KEY.strip()
+    cfg = get_actual_embedding_config()
+    api_key = cfg["api_key"].strip()
     if not api_key:
         raise ValueError("DASHSCOPE_API_KEY is not configured")
 
-    model_name = "text-embedding-v4"
+    model_name = cfg["api_model"]
     body = {
         "model": model_name,
         "input": text,
@@ -701,7 +731,7 @@ async def create_embedding(
         "Authorization": f"Bearer {api_key}",
         "Content-Type": "application/json",
     }
-    url = "https://dashscope.aliyuncs.com/compatible-mode/v1/embeddings"
+    url = cfg["embedding_url"]
     release_session_connection(db)
 
     def _request_sync():
@@ -710,7 +740,7 @@ async def create_embedding(
             return client.post(url, headers=headers, json=body)
 
     if _AI_SEMAPHORE.locked():
-        raise RuntimeError("褰撳墠璇锋眰杈冨锛岃绋嶅悗鍐嶈瘯")
+        raise RuntimeError("????????????")
     async with _AI_SEMAPHORE:
         response = await asyncio.wait_for(
             asyncio.to_thread(_request_sync),

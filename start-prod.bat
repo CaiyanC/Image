@@ -6,7 +6,7 @@ cd /d "%~dp0"
 
 echo Starting production environment:
 echo - Backend: 8000
-echo - Frontend: 5275
+echo - Frontend: 5275 (dist static serve)
 echo - Database: product_knowledge
 echo - Redis: redis://localhost:6379/0
 echo - Queue: celery_prod

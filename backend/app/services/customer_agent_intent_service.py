@@ -24,6 +24,66 @@ RECOMMEND_WORDS = ("推荐", "更适合", "最适合", "最合适", "合适", "�
 FOLLOWUP_NARROW_WORDS = ("排除", "不要", "去掉", "剔除", "排掉")
 PLACEHOLDER_WORDS = {"tbd", "todo", "test", "null", "none", "n/a", "na", "-", "--", "unknown"}
 PART_WORDS = ("主体", "配件", "手柄", "锅体", "盖子", "锅盖", "把手", "煎盘", "炉体", "炉架", "壶身", "壶嘴", "杯身", "杯盖")
+USAGE_CARE_TERMS = (
+    "清洗",
+    "保养",
+    "护理",
+    "清洁",
+    "怎么洗",
+    "怎么清洗",
+    "怎么保养",
+    "怎么护理",
+    "怎么处理",
+    "咋办",
+    "不好洗",
+    "洗碗机",
+    "收拾",
+    "擦干",
+    "烘干",
+    "泡水",
+    "浸泡",
+    "洗洁精",
+    "钢丝球",
+    "硬刷",
+    "硬物",
+    "刮擦",
+    "水垢",
+    "积碳",
+    "异味",
+    "第一次使用",
+    "首次使用",
+    "用完",
+    "使用后",
+    "收纳前",
+    "不好清洗",
+    "糊锅",
+    "烧糊",
+    "糊了",
+    "焦",
+    "粘锅",
+    "不粘",
+    "不沾",
+    "涂层",
+)
+USAGE_CARE_SCRIPT_TERMS = ("客服怎么回复", "怎么回复客户", "客户说")
+USAGE_CARE_CLEANING_TERMS = ("清洗", "清洁", "怎么洗", "怎么清洗", "软刷", "温水", "擦干", "烘干", "钢丝球", "硬物刮擦")
+USAGE_CARE_MAINTENANCE_TERMS = ("保养", "护理", "养护", "存放", "晾干", "擦干", "烘干")
+USAGE_CARE_STICKING_TERMS = ("粘锅", "不好清洗", "不粘", "不沾", "防粘", "不易粘", "粘")
+USAGE_CARE_BURNT_TERMS = ("糊锅", "锅糊", "烧糊", "烧焦", "焦糊")
+USAGE_CARE_COATING_TERMS = ("涂层", "不粘涂层", "防粘涂层")
+USAGE_CARE_REPLY_TERMS = ("客服怎么回复", "怎么回复客户", "客户说", "用户说")
+USAGE_CARE_AFTERSALES_TERMS = ("质保", "保修", "售后", "退换", "退货", "换货", "售后电话", "联系方式")
+USAGE_CARE_SAFETY_TERMS = ("安全", "危险", "中毒", "火灾", "帐篷", "密闭", "一氧化碳", "爆炸")
+USAGE_CARE_GENERAL_TERMS = ("卖点", "介绍", "品牌", "官方", "旗舰店")
+USAGE_CARE_MAINTENANCE_ACTION_TERMS = ("清洗", "保养", "擦干", "烘干", "存放", "钢丝球", "硬物刮擦", "浸泡", "骤冷骤热", "涂层", "使用后")
+USAGE_CARE_MAINTENANCE_WEAK_TERMS = ("能用多久", "使用多年", "耐用", "越用越顺手")
+USAGE_CARE_BURNT_ACTION_TERMS = ("糊锅", "烧焦", "焦糊", "粘底", "残渍", "锅底", "清洗", "浸泡", "软刷", "钢丝球", "不粘涂层", "涂层保护")
+USAGE_CARE_COOKWARE_TERMS = ("锅", "锅具", "不粘锅", "涂层锅", "烤盘", "煎盘", "套锅", "炒锅")
+USAGE_CARE_NON_COOKWARE_TERMS = ("杯", "水杯", "保温杯", "户外杯", "壶", "水壶")
+FAQ_PURCHASE_TERMS = ("哪里买", "哪儿买", "在哪买", "在哪里买", "可以买到", "购买渠道", "购买链接", "怎么买", "想买", "去哪里", "小程序", "商城", "官方店", "店铺", "店铺入口", "旗舰店", "淘宝", "天猫", "京东", "拼多多", "亚马逊", "Amazon", "amazon", "独立站", "线下", "速卖通", "eBay", "ebay", "阿里国际站", "官方渠道", "哪个平台", "平台可以买", "B2C", "b2c", "下单")
+FAQ_AFTERSALES_TERMS = ("售后", "退换", "退货", "换货", "售后电话", "联系方式", "人工客服", "发票", "开发票", "物流", "快递", "订单", "发错货", "少发", "补寄", "维修", "七天无理由", "买错", "不喜欢")
+FAQ_AFTERSALES_PROBLEM_TERMS = ("问题", "质量", "坏了", "瑕疵", "破损")
+FAQ_AFTERSALES_HELP_TERMS = ("怎么办", "咋办", "怎么处理", "找谁", "谁处理", "联系谁")
 
 
 def _is_placeholder_value(value: str) -> bool:
@@ -81,6 +141,7 @@ async def process_intent_request(
     question: str,
     sku: str | None = None,
     previous_result_skus: list[str] | None = None,
+    allow_llm_fallback: bool = True,
 ) -> dict | None:
     request_start = perf_counter()
     previous_result_skus = previous_result_skus or []
@@ -94,7 +155,7 @@ async def process_intent_request(
     # Try regex parser first - it's fast and accurate for structured queries
     intent = parse_intent(question, sku=sku, previous_result_skus=previous_result_skus)
     # Only use LLM if regex parser failed or returned clarify
-    if not intent or intent.intent == "clarify":
+    if allow_llm_fallback and (not intent or intent.intent == "clarify"):
         llm_start = perf_counter()
         llm_intent = await _llm_parse_intent(db, question, sku=sku, previous_result_skus=previous_result_skus)
         customer_perf_service.log_stage("process_intent_request.llm_fallback", llm_start, hit=bool(llm_intent), intent=llm_intent.intent if llm_intent else None, fallback_used=bool(llm_intent and llm_intent.intent != "clarify"))
@@ -115,7 +176,7 @@ async def process_intent_request(
                         intent.requested_fields.append(f)
     if intent:
         intent = _sanitize_intent(intent)
-    if not intent:
+    if not intent and allow_llm_fallback:
         # Last resort: try LLM with no extra context
         llm_start = perf_counter()
         llm_intent = await _llm_parse_intent(db, question, sku=sku, previous_result_skus=[])
@@ -125,6 +186,18 @@ async def process_intent_request(
     if not intent:
         return None
 
+    if (
+        _looks_like_usage_care_question(question)
+        and not _looks_like_usage_care_aftersales_question(question)
+        and not _looks_like_product_detail_question(question)
+    ):
+        usage_care_result = await answer_product_usage_care_request(db, question=question)
+        if usage_care_result:
+            return usage_care_result
+
+    if _looks_like_customer_faq_question(question):
+        return None
+
     # Final safety: if intent is still clarify but regex has concrete search params, override
     if intent.intent == "clarify":
         regex_final = parse_intent(question, sku=sku, previous_result_skus=[])
@@ -132,6 +205,8 @@ async def process_intent_request(
             intent = regex_final
     if intent.intent == "clarify":
         return _clarify_result(intent)
+    if intent.intent == "product_usage_care":
+        return await answer_product_usage_care_request(db, question=question)
     if intent.intent == "product_detail":
         return await _product_detail_result(db, intent)
     if intent.intent == "compare_products":
@@ -147,6 +222,128 @@ async def process_intent_request(
     if intent.intent == "query_products":
         return await _query_products_result(db, user_id, intent, original_question=question)
     return None
+
+
+async def answer_product_usage_care_request(
+    db: Session,
+    *,
+    question: str,
+    named_products: list[Product] | None = None,
+) -> dict | None:
+    text = str(question or "").strip()
+    if not _looks_like_usage_care_question(text):
+        return None
+    if _looks_like_product_detail_question(text):
+        return None
+    request_start = perf_counter()
+    named_products = named_products or []
+    usage_subtype = _detect_usage_care_subtype(text)
+    intent = CustomerIntent(
+        intent="product_usage_care",
+        term=text,
+        semantic_query=text,
+        target_skus=[product.sku for product in named_products[:3] if getattr(product, "sku", None)],
+        source_context="question",
+        is_single_field_sufficient=False,
+    )
+    response_style = "customer_service_script" if usage_subtype == "customer_reply" else "usage_guidance"
+    qa_hits, knowledge_hits, search_debug = await _search_usage_care_qa(db, text, intent.target_skus, usage_subtype=usage_subtype)
+    compose_start = perf_counter()
+    if not qa_hits and not knowledge_hits:
+        if usage_subtype == "burnt":
+            answer = "\n".join([
+                "清洁方法：目前没有专门糊锅资料，可先用温水和软刷轻刷处理。",
+                "注意事项：如果是涂层锅，先避免强力刮擦。",
+                "避免事项：不要用钢丝球硬刮，避免伤涂层。",
+            ])
+        else:
+            answer = "系统暂未配置对应清洗/保养资料，建议联系人工客服确认。"
+        compose_answer_ms = customer_perf_service.perf_ms(compose_start)
+        total_ms = customer_perf_service.perf_ms(request_start)
+        return _build_response(
+            intent=intent,
+            answer=answer,
+            sku=intent.target_skus[0] if len(intent.target_skus) == 1 else None,
+            sources=[{"type": "usage_care_knowledge", "label": "使用/清洗保养检索", "count": 0}],
+            results=[],
+            steps=_steps(intent, [{"type": "usage_care_search", "label": "检索使用/清洗保养资料", "detail": "未命中 QA 或知识库", "ok": True}]),
+            confidence="low",
+            warnings=["usage_care_data_missing"],
+            anomalies=[],
+            suggested_followups=["如果你能提供具体 SKU 或产品名，我可以继续按单品资料重查。"],
+            answer_type="product_usage_care",
+            debug={
+                "intent": intent.as_dict(),
+                "steps": _steps(intent, [{"type": "usage_care_search", "label": "检索使用/清洗保养资料", "detail": "未命中 QA 或知识库", "ok": True}]),
+                "warnings": ["usage_care_data_missing"],
+                "anomalies": [],
+                "raw_results": [],
+                "agent_mode": "product_usage_care_fast_path",
+                "usage_care_subtype": usage_subtype,
+                "response_style": response_style,
+                "qa_result_count": 0,
+                "knowledge_result_count": 0,
+                "product_qa_ms": search_debug["product_qa_ms"],
+                "knowledge_search_ms": search_debug["knowledge_search_ms"],
+                "rerank_ms": search_debug["rerank_ms"],
+                "compose_answer_ms": round(compose_answer_ms, 2),
+                "total_ms": round(total_ms, 2),
+                "filtered_or_downgraded": search_debug["filtered_or_downgraded"],
+                "final_used_sources_count": 0,
+            },
+        )
+
+    raw_used_sources_text = _usage_care_debug_source_texts(qa_hits, knowledge_hits)
+    answer_before_clean = _compose_usage_care_answer(text, qa_hits, knowledge_hits, response_style=response_style)
+    answer_after_clean = _sanitize_usage_care_answer_text(answer_before_clean)
+    answer = answer_after_clean
+    compose_answer_ms = customer_perf_service.perf_ms(compose_start)
+    results = _usage_care_results_for_response(qa_hits, knowledge_hits)
+    sources: list[dict] = []
+    if qa_hits:
+        sources.append({"type": "product_qa", "label": "产品 QA", "count": len(qa_hits), "skus": sorted({item.get('sku') for item in qa_hits if item.get('sku')})})
+    if knowledge_hits:
+        sources.append({"type": "usage_care_knowledge", "label": "使用/清洗保养知识库", "count": len(knowledge_hits), "skus": sorted({item.get('sku') for item in knowledge_hits if item.get('sku')})})
+    steps = _steps(intent, [{"type": "usage_care_search", "label": "检索使用/清洗保养资料", "detail": f"命中 QA {len(qa_hits)} 条，知识库 {len(knowledge_hits)} 条", "ok": True}])
+    total_ms = customer_perf_service.perf_ms(request_start)
+    response = _build_response(
+        intent=intent,
+        answer=answer,
+        sku=intent.target_skus[0] if len(intent.target_skus) == 1 else None,
+        sources=sources,
+        results=results,
+        steps=steps,
+        confidence="high" if qa_hits else "medium",
+        warnings=[],
+        anomalies=[],
+        suggested_followups=["如果你告诉我具体 SKU，我可以再按该产品说明补充更精确的使用建议。"],
+        answer_type="product_usage_care",
+        debug={
+            "intent": intent.as_dict(),
+            "steps": steps,
+            "warnings": [],
+            "anomalies": [],
+            "raw_results": results,
+            "agent_mode": "product_usage_care_fast_path",
+            "usage_care_subtype": usage_subtype,
+            "response_style": response_style,
+            "qa_result_count": len(qa_hits),
+            "knowledge_result_count": len(knowledge_hits),
+            "raw_used_sources_text": raw_used_sources_text,
+            "answer_before_usage_care_clean": answer_before_clean,
+            "answer_after_usage_care_clean": answer_after_clean,
+            "final_answer_before_sse": answer_after_clean,
+            "final_answer_after_sse_clean": answer_after_clean,
+            "product_qa_ms": search_debug["product_qa_ms"],
+            "knowledge_search_ms": search_debug["knowledge_search_ms"],
+            "rerank_ms": search_debug["rerank_ms"],
+            "compose_answer_ms": round(compose_answer_ms, 2),
+            "total_ms": round(total_ms, 2),
+            "filtered_or_downgraded": search_debug["filtered_or_downgraded"],
+            "final_used_sources_count": len(qa_hits) + len(knowledge_hits),
+        },
+    )
+    return response
 
 
 
@@ -320,9 +517,7 @@ def _sanitize_intent(intent: CustomerIntent) -> CustomerIntent | None:
         has_chinese = bool(re.search(r'[一-鿿]', intent.term))
         if has_chinese and not any(s.upper() in term_upper for s in intent.target_skus):
             intent.intent = "query_products"
-    # If product_detail but no target_skus, convert to query_products to find by name first
-    if intent.intent == "product_detail" and not intent.target_skus and intent.term:
-        intent.intent = "query_products"
+    # Keep product_detail for "product name + field question"; target SKU can be resolved later.
     # If query_products with only requested_fields (no filters, no term, no target_skus) -> clarify
     if intent.intent == "query_products" and intent.requested_fields and not intent.filters and not intent.term and not intent.target_skus and not intent.semantic_query:
         if not any(w in intent.clarification_question for w in ("SKU", "产品", "范围", "哪款")):
@@ -369,6 +564,14 @@ def parse_intent(question: str, *, sku: str | None = None, previous_result_skus:
     semantic_query = _parse_semantic_query(text)
     recommendation_query = _parse_recommendation_query(text, semantic_query)
     term = _parse_term(text, filters, semantic_query)
+    if not requested_fields and _looks_like_product_detail_question(text):
+        requested_fields = _requested_fields_for_detail_question(text)
+    if not recommendation_query and _looks_like_recommendation_question(text):
+        recommendation_query = semantic_query or text
+    if recommendation_query and not semantic_query:
+        semantic_query = recommendation_query
+    if not term and requested_fields:
+        term = _detail_subject_from_question(text)
 
     if previous_result_skus and not target_skus and negative_filters and any(word in text for word in FOLLOWUP_NARROW_WORDS):
         target_skus = previous_result_skus
@@ -384,12 +587,7 @@ def parse_intent(question: str, *, sku: str | None = None, previous_result_skus:
             is_single_field_sufficient=False,
         )
 
-    if any(word in text for word in RECOMMEND_WORDS):
-        if not target_skus and not filters and not semantic_query:
-            return CustomerIntent(
-                intent="clarify",
-                clarification_question="我可以帮你推荐，但需要先告诉我范围，比如 SKU、类目，或描述使用场景。",
-            )
+    if _looks_like_recommendation_question(text):
         return CustomerIntent(
             intent="recommend_products",
             filters=filters,
@@ -438,6 +636,27 @@ def parse_intent(question: str, *, sku: str | None = None, previous_result_skus:
             is_single_field_sufficient=_is_single_field_sufficient(text, requested_fields, target_skus),
         )
 
+    if term and requested_fields and not filters and not negative_filters:
+        return CustomerIntent(
+            intent="product_detail",
+            requested_fields=requested_fields,
+            term=term,
+            semantic_query=semantic_query,
+            source_context=source_context,
+            is_single_field_sufficient=_is_single_field_sufficient(text, requested_fields, target_skus),
+        )
+
+    if requested_fields and (target_skus or term or _looks_like_product_detail_question(text)):
+        return CustomerIntent(
+            intent="product_detail",
+            requested_fields=requested_fields,
+            target_skus=target_skus,
+            term=term or _detail_subject_from_question(text),
+            semantic_query=semantic_query or text,
+            source_context=source_context,
+            is_single_field_sufficient=_is_single_field_sufficient(text, requested_fields, target_skus),
+        )
+
     if filters or negative_filters or semantic_query or term or any(word in text for word in QUESTION_WORDS):
         return CustomerIntent(
             intent="query_products",
@@ -456,6 +675,57 @@ def parse_intent(question: str, *, sku: str | None = None, previous_result_skus:
 
 def _is_compare_question(text: str) -> bool:
     return any(word in text for word in COMPARE_WORDS + ("一样", "不一样", "相同", "不同"))
+
+
+def _looks_like_recommendation_question(text: str) -> bool:
+    value = str(text or "")
+    if not value:
+        return False
+    explicit_recommendation_terms = ("推荐", "哪款", "选什么", "用什么", "帮我选", "帮我挑", "合适", "适合")
+    if any(term in value for term in FAQ_PURCHASE_TERMS) and not any(term in value for term in explicit_recommendation_terms):
+        return False
+    if any(word in value for word in RECOMMEND_WORDS):
+        return True
+    scenario_terms = ("适合", "徒步", "露营", "车露", "登山", "野餐", "野炊", "自驾", "背包客", "新手", "小白", "家庭", "多人", "两人", "2人", "三人", "四人", "一个人", "轻量", "轻便", "便携", "预算", "性价比", "煮饭", "煮面", "烧水", "煎烤", "火锅")
+    product_terms = ("锅", "套锅", "单锅", "炉", "炉具", "酒精炉", "壶", "水壶", "餐具", "套装")
+    choice_terms = ("用什么", "选什么", "哪款", "哪个", "有没有", "帮我选", "帮我挑", "合适")
+    if any(term in value for term in scenario_terms) and any(term in value for term in product_terms) and any(term in value for term in choice_terms):
+        return True
+    if value.startswith("适合") and any(term in value for term in scenario_terms) and any(term in value for term in product_terms):
+        return True
+    return any(term in value for term in ("买什么", "有适合")) and any(term in value for term in scenario_terms) and any(term in value for term in product_terms)
+
+
+def _looks_like_product_detail_question(text: str) -> bool:
+    value = str(text or "")
+    if not value:
+        return False
+    if _looks_like_recommendation_question(value):
+        return False
+    product_hint = bool(_extract_skus(value) or _detail_subject_from_question(value))
+    product_hint = product_hint or any(term in value for term in ("套锅", "单锅", "酒精炉", "小方锅", "炊墨", "行山", "旋焰", "烽宴", "CW-", "CS-", "TW-"))
+    field_hint = bool(_requested_fields_for_detail_question(value))
+    return product_hint and field_hint
+
+
+def _requested_fields_for_detail_question(text: str) -> list[str]:
+    fields = _requested_fields(text)
+    value = str(text or "")
+    additions = [
+        ("容量", ("几升", "多少升", "多大容量", "容量多少", "多大")),
+        ("重量", ("多重", "净重", "毛重", "重不重", "重量多少")),
+        ("材质", ("是什么材料", "什么材料", "是不是木头", "木头", "不锈钢", "304", "锅体", "手柄", "把手", "盖子", "锅盖")),
+        ("表面处理", ("涂层", "不粘涂层", "有涂层", "不粘吗", "不沾吗")),
+        ("卖点", ("是什么产品", "产品参数", "参数", "有什么特点")),
+        ("适用场景", ("适合几个人", "适合几人", "几个人", "几人使用", "适合什么")),
+        ("颜色", ("颜色",)),
+        ("热源", ("燃料", "用什么燃料", "热源")),
+        ("配件", ("几个锅", "几件", "包装里", "包装内", "配件", "包含什么")),
+    ]
+    for label, aliases in additions:
+        if any(alias in value for alias in aliases) and label not in fields:
+            fields.append(label)
+    return fields
 
 
 def _is_single_field_sufficient(text: str, requested_fields: list[str], target_skus: list[str] | None = None) -> bool:
@@ -543,6 +813,10 @@ async def _query_products_result(db: Session, user_id: str, intent: CustomerInte
             suggested_followups=[],
             answer_type="product_detail",
         )
+    if not rows and _looks_like_usage_care_question(original_question or search_question_text):
+        usage_care_result = await answer_product_usage_care_request(db, question=original_question or search_question_text)
+        if usage_care_result:
+            return usage_care_result
     anomalies = [] if intent.requested_fields else _detect_row_anomalies(rows, intent)
     warnings.extend(item["message"] for item in anomalies[:3])
 
@@ -559,16 +833,45 @@ async def _query_products_result(db: Session, user_id: str, intent: CustomerInte
             qa_matches = _search_product_qa(db, sku_val, search_question_text)
             qa_results.extend(qa_matches)
     # Always search knowledge chunks with the full question for richer context
-    if search_question_text:
-        try:
-            kb_results = await knowledge_service.semantic_retrieve(db, search_question_text, limit=5)
-        except Exception:
-            try:
-                kb_results = knowledge_service.keyword_retrieve(db, search_question_text, limit=5)
-            except Exception:
-                pass
+    supporting = await _semantic_supporting_evidence(
+        db,
+        search_question_text,
+        skus=[str(row.get("sku") or "") for row in rows[:5]],
+        limit=5,
+    )
+    kb_results = supporting["raw_rows"]
 
     followups = _suggest_followups(rows, intent)
+    if not rows and (supporting.get("qa") or supporting.get("kb")):
+        answer = _compose_semantic_evidence_answer(supporting)
+        response = _build_response(
+            intent=intent,
+            answer=answer,
+            sku=None,
+            sources=[
+                {"type": "product_search", "label": "意图解析查询", "query": query, "count": 0},
+                *supporting["sources"],
+            ],
+            results=[],
+            steps=_steps(intent, [{"type": tool_name, "label": "执行产品查询", "detail": "商品库未命中，使用 QA/知识库语义证据补充", "ok": True}]),
+            confidence="medium",
+            warnings=["product_db_empty_used_semantic_evidence"],
+            anomalies=[],
+            suggested_followups=followups,
+            answer_type="knowledge_base_answer",
+            evidence=supporting["evidence"],
+            debug=_knowledge_enrichment_debug(
+                intent,
+                steps=_steps(intent, [{"type": tool_name, "label": "执行产品查询", "detail": "商品库未命中，使用 QA/知识库语义证据补充", "ok": True}]),
+                warnings=["product_db_empty_used_semantic_evidence"],
+                anomalies=[],
+                results=[],
+                supporting=supporting,
+            ),
+        )
+        _attach_knowledge_enrichment(response, primary_source="qa_kb", supporting=supporting)
+        response["skip_polish"] = True
+        return response
 
     # When user asked for specific fields and we found 1 product: upgrade to detail answer
     answer_type = None
@@ -577,7 +880,7 @@ async def _query_products_result(db: Session, user_id: str, intent: CustomerInte
         answer = await _compose_filter_answer(db, original_question or search_question_text, rows, intent)
         answer_type = "product_query"
         used_filter_finalizer = True
-    elif intent.requested_fields and len(rows) == 1 and intent.intent == "query_products":
+    elif intent.requested_fields and rows and intent.intent in {"query_products", "product_detail"}:
         sku = rows[0].get("sku", "")
         detail = product_service.get_product_detail(db, sku)
         if _is_material_safety_question(original_question or search_question_text):
@@ -590,7 +893,10 @@ async def _query_products_result(db: Session, user_id: str, intent: CustomerInte
                 intent=intent,
                 answer=answer,
                 sku=sku,
-                sources=[{"type": "product_search", "label": "意图解析查询", "query": query, "count": len(rows)}],
+                sources=[
+                    {"type": "product_search", "label": "意图解析查询", "query": query, "count": len(rows)},
+                    *supporting["sources"],
+                ],
                 results=rows,
                 steps=_steps(intent, [{"type": tool_name, "label": "执行产品查询", "detail": f"命中 {len(rows)} 条", "ok": True}]),
                 confidence=_confidence_for_rows(rows, intent, warnings),
@@ -598,34 +904,42 @@ async def _query_products_result(db: Session, user_id: str, intent: CustomerInte
                 anomalies=anomalies,
                 suggested_followups=followups,
                 answer_type=answer_type,
+                evidence=supporting["evidence"],
+                debug=_knowledge_enrichment_debug(intent, steps=[], warnings=warnings, anomalies=anomalies, results=rows, supporting=supporting),
             )
+            _attach_knowledge_enrichment(response, primary_source="product_db", supporting=supporting)
             response["skip_polish"] = True
             return response
-        if not getattr(intent, "is_single_field_sufficient", True):
-            answer = await _llm_compose_answer(db, original_question or search_question_text, rows, intent, qa_results, kb_results, warnings, followups)
-            answer_type = "product_detail"
-        else:
-            field_paths = [_resolve_query_field(f) for f in intent.requested_fields]
-            field_paths = [p for p in field_paths if p]
-            detail_rows = [{"sku": sku, "product_name_cn": detail.get("product_name_cn"), "product_name_en": detail.get("product_name_en"), "field_values": {}}]
-            for fp in field_paths:
-                label = _field_label(fp)
-                value = _value_from_detail(detail, fp)
-                text = _format_field_value(value, fp) if value not in (None, "") else "暂无"
-                detail_rows[0]["field_values"][label] = text
-                anomaly = _field_anomaly_for_value(sku, label, text)
-                if anomaly:
-                    anomalies.append(anomaly)
-            answer = _compose_detail_answer(detail_rows, field_paths, warnings, anomalies, [])
-            answer_type = "product_detail"
+        field_paths = [_resolve_query_field(f) for f in intent.requested_fields]
+        field_paths = [p for p in field_paths if p]
+        detail_rows = [{"sku": sku, "product_name_cn": detail.get("product_name_cn"), "product_name_en": detail.get("product_name_en"), "field_values": {}}]
+        for fp in field_paths:
+            label = _field_label(fp)
+            value = _value_from_detail(detail, fp)
+            text = _format_field_value(value, fp) if value not in (None, "") else "暂无"
+            detail_rows[0]["field_values"][label] = text
+            anomaly = _field_anomaly_for_value(sku, label, text)
+            if anomaly:
+                anomalies.append(anomaly)
+        answer = _compose_detail_answer(detail_rows, field_paths, warnings, anomalies, [])
+        answer_type = "product_detail"
+    elif intent.requested_fields and intent.intent in {"query_products", "product_detail"}:
+        field_paths = [_resolve_query_field(f) for f in intent.requested_fields]
+        field_paths = [p for p in field_paths if p]
+        answer = _compose_detail_answer([], field_paths, warnings, anomalies, [])
+        answer_type = "product_detail"
     else:
         answer = await _llm_compose_answer(db, search_question_text, rows, intent, qa_results, kb_results, warnings, followups)
 
+    supporting_sources = supporting["sources"] if rows else []
     response = _build_response(
         intent=intent,
         answer=answer,
         sku=rows[0]["sku"] if len(rows) == 1 else None,
-        sources=[{"type": "product_search", "label": "意图解析查询", "query": query, "count": len(rows)}],
+        sources=[
+            {"type": "product_search", "label": "意图解析查询", "query": query, "count": len(rows)},
+            *supporting_sources,
+        ],
         results=rows,
         steps=_steps(intent, [{"type": tool_name, "label": "执行产品查询", "detail": f"命中 {len(rows)} 条", "ok": True}]),
         confidence=_confidence_for_rows(rows, intent, warnings),
@@ -633,13 +947,32 @@ async def _query_products_result(db: Session, user_id: str, intent: CustomerInte
         anomalies=anomalies,
         suggested_followups=followups,
         answer_type=answer_type,
+        evidence=supporting["evidence"] if rows else None,
+        debug=_knowledge_enrichment_debug(
+            intent,
+            steps=_steps(intent, [{"type": tool_name, "label": "执行产品查询", "detail": f"命中 {len(rows)} 条", "ok": True}]),
+            warnings=warnings,
+            anomalies=anomalies,
+            results=rows,
+            supporting=supporting,
+        ) if rows else None,
     )
-    if used_filter_finalizer:
+    if rows:
+        _attach_knowledge_enrichment(response, primary_source="product_db", supporting=supporting)
+    if used_filter_finalizer or answer_type == "product_detail":
         response["skip_polish"] = True
     return response
 
 
 async def _product_detail_result(db: Session, intent: CustomerIntent) -> dict:
+    if not intent.target_skus and intent.term:
+        candidate_rows = customer_agent_service.search_products(db, intent.term, limit=10, filters={})
+        if candidate_rows:
+            candidate_rows = _filter_rows(candidate_rows, filters={}, negative_filters={}, term=intent.term)
+        if candidate_rows:
+            intent.target_skus = [str(candidate_rows[0].get("sku") or "").strip().upper()]
+        else:
+            return await _query_products_result(db, "intent-product-detail", intent, original_question=intent.semantic_query or intent.term or "")
     intent.target_skus = [_resolve_existing_sku(db, sku) for sku in intent.target_skus]
     rows = []
     field_paths = [_resolve_query_field(field) for field in intent.requested_fields]
@@ -648,6 +981,10 @@ async def _product_detail_result(db: Session, intent: CustomerIntent) -> dict:
     details: list[dict[str, Any]] = []
 
     for sku in intent.target_skus:
+        product = db.query(Product).filter(Product.sku.ilike(sku)).first()
+        if not product:
+            continue
+        sku = product.sku
         detail = product_service.get_product_detail(db, sku)
         details.append(detail)
         row = {
@@ -666,40 +1003,52 @@ async def _product_detail_result(db: Session, intent: CustomerIntent) -> dict:
                 anomalies.append(anomaly)
         rows.append(row)
 
-    # Search QA knowledge base and vector DB for richer answers
-    qa_results: list[dict] = []
-    kb_results: list[dict] = []
     search_question = intent.semantic_query or intent.term or ""
-    for sku in intent.target_skus:
-        qa_matches = _search_product_qa(db, sku, search_question)
-        qa_results.extend(qa_matches)
-    if search_question:
-        try:
-            kb_results = await knowledge_service.semantic_retrieve(db, search_question, limit=5)
-        except Exception:
-            try:
-                kb_results = knowledge_service.keyword_retrieve(db, search_question, limit=5)
-            except Exception:
-                pass
+    supporting = await _semantic_supporting_evidence(
+        db,
+        search_question,
+        skus=intent.target_skus,
+        limit=5,
+    )
 
     warnings = [item["message"] for item in anomalies[:3]]
     followups = _suggest_detail_followups(intent)
-    if field_paths:
+    if not rows:
+        missing = "、".join(intent.target_skus or [intent.term or "该产品"])
+        answer = f"没有找到{missing}的产品资料，请确认产品名或 SKU 后再查询。"
+    elif field_paths:
         answer = _compose_detail_answer(rows, field_paths, warnings, anomalies, followups)
     else:
         answer = _compose_unknown_attribute_answer(details, intent.requested_fields, followups)
-    return _build_response(
+    response = _build_response(
         intent=intent,
         answer=answer,
         sku=intent.target_skus[0] if len(intent.target_skus) == 1 else None,
-        sources=[{"type": "product", "label": "按意图读取产品字段", "count": len(rows)}],
+        sources=[
+            {"type": "product", "label": "按意图读取产品字段", "count": len(rows)},
+            *supporting["sources"],
+        ],
         results=rows,
         steps=_steps(intent, [{"type": "product_detail", "label": "读取产品字段", "detail": f"读取 {len(rows)} 个 SKU", "ok": True}]),
         confidence="high" if rows else "low",
         warnings=warnings,
         anomalies=anomalies,
         suggested_followups=followups,
+        answer_type="product_detail",
+        evidence=supporting["evidence"] if rows else None,
+        debug=_knowledge_enrichment_debug(
+            intent,
+            steps=_steps(intent, [{"type": "product_detail", "label": "读取产品字段", "detail": f"读取 {len(rows)} 个 SKU", "ok": True}]),
+            warnings=warnings,
+            anomalies=anomalies,
+            results=rows,
+            supporting=supporting,
+        ) if rows else None,
     )
+    if rows:
+        _attach_knowledge_enrichment(response, primary_source="product_db", supporting=supporting)
+    response["skip_polish"] = True
+    return response
 
 
 async def _compare_result(db: Session, intent: CustomerIntent, original_question: str = "") -> dict:
@@ -948,18 +1297,8 @@ async def _recommend_result(db: Session, user_id: str, intent: CustomerIntent) -
     if cached is not None:
         return cached
 
-    base_result = await _query_products_result(db, user_id, CustomerIntent(
-        intent="query_products",
-        filters=intent.filters,
-        negative_filters=intent.negative_filters,
-        semantic_query=intent.semantic_query,
-        target_skus=intent.target_skus,
-        requested_fields=intent.requested_fields,
-        special_filter=intent.special_filter,
-        exact_value=intent.exact_value,
-        term=intent.term,
-        source_context=intent.source_context,
-    ))
+    query_text = intent.recommendation_query or intent.semantic_query or intent.term or ""
+    base_result = await _recommendation_candidate_result(db, user_id, intent, query_text)
     rows = base_result.get("results") or []
     # If no results with filters, try broader search without filters
     if not rows and (intent.filters or intent.negative_filters):
@@ -973,7 +1312,7 @@ async def _recommend_result(db: Session, user_id: str, intent: CustomerIntent) -
             term=intent.term,
             source_context="question",
         )
-        fallback_base = await _query_products_result(db, user_id, fallback_intent, original_question=intent.recommendation_query or intent.semantic_query or intent.term)
+        fallback_base = await _recommendation_candidate_result(db, user_id, fallback_intent, query_text)
         if fallback_base and fallback_base.get("results"):
             rows = fallback_base.get("results") or []
             base_result = fallback_base
@@ -1024,7 +1363,7 @@ async def _recommend_result(db: Session, user_id: str, intent: CustomerIntent) -
             ],
         )
 
-    ranked = await _rank_rows_for_recommendation_llm(db, rows, intent.recommendation_query or intent.semantic_query or intent.term)
+    ranked = _fallback_rank(rows, query_text)
     best = ranked[0]
     anomalies = _detect_row_anomalies([item["row"] for item in ranked[:3]], intent)
     warnings = [item["message"] for item in anomalies[:2]]
@@ -1042,18 +1381,9 @@ async def _recommend_result(db: Session, user_id: str, intent: CustomerIntent) -
             "score_reason": item.get("score_reason") or "",
         }
         result_rows.append(row)
-    answer = await _compose_recommendation_answer(
-        db,
-        intent.recommendation_query or intent.semantic_query or intent.term,
-        ranked,
-        intent,
-        warnings,
-        anomalies,
-        followups,
-        result_rows,
-    )
+    answer = _compose_recommendation_answer_template(ranked, intent, warnings, anomalies, followups)
 
-    return _build_response(
+    response = _build_response(
         intent=intent,
         answer=answer,
         sku=best["row"].get("sku"),
@@ -1064,9 +1394,57 @@ async def _recommend_result(db: Session, user_id: str, intent: CustomerIntent) -
         warnings=warnings,
         anomalies=anomalies,
         suggested_followups=followups,
+        answer_type="recommendation",
     )
+    response["skip_polish"] = True
     customer_cache_service.recommendation_candidate_cache.set(cache_key, response)
     return response
+
+
+async def _recommendation_candidate_result(db: Session, user_id: str, intent: CustomerIntent, query_text: str) -> dict:
+    """Retrieve recommendation candidates without composing a product-query LLM answer."""
+    fields = [
+        "specs.capacity",
+        "specs.body_material",
+        "specs.heat_source",
+        "specs.power",
+        "business.top_selling_points",
+        "business.usage_scenarios",
+        "business.target_audience",
+        "business.positioning",
+        "business.price_positioning",
+    ]
+    arguments = {
+        "term": intent.term or "",
+        "filters": intent.filters or {},
+        "semantic_query": query_text,
+        "fields": fields,
+        "limit": 50,
+    }
+    if intent.semantic_query and intent.filters:
+        tool_result = await customer_agent_tool_service.execute_tool_async(
+            db,
+            user_id=user_id,
+            name="hybrid_search_products",
+            arguments=arguments,
+        )
+    else:
+        tool_result = await customer_agent_tool_service.execute_tool_async(
+            db,
+            user_id=user_id,
+            name="hybrid_search_products",
+            arguments=arguments,
+        )
+    rows = tool_result.get("results") or []
+    if intent.target_skus:
+        rows = _filter_rows(rows or _rows_for_target_skus(db, intent.target_skus), filters=intent.filters, negative_filters=intent.negative_filters, term=intent.term)
+    return {
+        "ok": True,
+        "tool": tool_result.get("tool", "hybrid_search_products"),
+        "query": tool_result.get("query") or query_text,
+        "results": rows,
+        "sources": tool_result.get("sources") or [{"type": "product_search", "label": "推荐候选范围", "count": len(rows)}],
+    }
 
 
 async def _compose_recommendation_answer(
@@ -1093,7 +1471,7 @@ async def _compose_recommendation_answer(
             followups=followups,
         )
         if answer:
-            return answer
+            return _shape_recommendation_answer_text(answer, ranked)
     return _compose_recommendation_answer_template(ranked, intent, warnings, anomalies, followups)
 
 
@@ -1106,41 +1484,7 @@ def _compose_recommendation_answer_template(
 ) -> str:
     if not ranked:
         return "目前没有找到合适的产品推荐，你可以换个场景或条件试试。"
-    
-    best = ranked[0]
-    best_row = best["row"]
-    sku = best_row.get("sku", "")
-    name = best_row.get("product_name_cn") or best_row.get("product_name_en") or sku
-    matched = best.get("matched") or best.get("reasons", [])
-    missing = best.get("missing_or_uncertain") or []
-    score_reason = best.get("score_reason") or (f"排序分数 {best.get('score')}" if best.get("score") is not None else "")
-    
-    lines = [f"根据你的需求，我优先推荐 {name}（{sku}）。"]
-    
-    if matched:
-        lines.append("匹配依据：" + "；".join(matched[:4]) + "。")
-    if missing:
-        lines.append("未注明或需确认：" + "；".join(missing[:3]) + "。")
-    if score_reason:
-        lines.append(score_reason + "。")
-    
-    # Show runner-ups
-    if len(ranked) > 1:
-        lines.append("其他候选：")
-        for item in ranked[1:4]:
-            r = item["row"]
-            s = r.get("sku", "")
-            n = r.get("product_name_cn") or r.get("product_name_en") or s
-            item_matched = item.get("matched") or item.get("reasons") or []
-            reason = f"：{item_matched[0]}" if item_matched else ""
-            lines.append(f"- {n}（{s}）{reason}")
-    
-    if warnings:
-        lines.append("注意：" + warnings[0])
-    if followups:
-        lines.append(followups[0])
-    
-    return "\n".join(lines)
+    return _shape_recommendation_answer_from_ranked(ranked[:3])
 
 
 def _recommendation_product_data(db: Session, rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -1935,6 +2279,10 @@ def _detail_subject_from_question(text: str) -> str:
     if not cleaned:
         return ""
     patterns = (
+        r"^(?P<subject>.+?)(?:是|为)?(?:什么产品|哪款产品).*$",
+        r"^(?P<subject>.+?)(?:的)?(?:尺寸|包装|配件|净重|毛重|适合几个人|适合几人|几个人|几人使用|涂层|不粘涂层)(?:是|为|有|有啥|有哪些|是什么|多少|几|吗|呢|？|。|$).*$",
+        r"^(?P<subject>.+?)(?:有没有|是否有|有无)(?:不粘涂层|涂层|配件).*$",
+        r"^(?P<subject>.+?)(?:是不是|是否是)(?:304不锈钢|不锈钢|木头|铝合金).*$",
         r"^(?P<subject>.+?)(?:的)?(?:主体|配件|手柄|锅体|盖子|锅盖|把手|煎盘|炉体|炉架|壶身|壶嘴|杯身|杯盖)?(?:是|为|用的是|用的|可以用|能用)?(?:什么|啥|哪种|哪些)?(?:材质|颜色|重量|容量|热源|燃料|功率|表面处理|认证|安全性|食品级)(?:.*)?$",
         r"^(?P<subject>.+?)(?:的(?:主要)?(?:卖点|负责人|容量|材质|颜色|重量|英文名|英文名称|类目|品质情况|信息|资料|详情|参数|场景|适用场景))(?:是|为|有|有啥|有哪些|是什么|多少|几|吗|呢|？|。|$).*$",
         r"^(?P<subject>.+?)(?:的)?(?:卖点|负责人|容量|材质|颜色|重量|英文名|英文名称|类目|品质情况|信息|资料|详情|参数|场景|适用场景)(?:是|为|有|有啥|有哪些|是什么|多少|几|吗|呢|？|。|$).*$",
@@ -2070,33 +2418,12 @@ def _compose_detail_answer(
     if not rows:
         return "没有找到对应产品。请确认 SKU 或产品名是否正确。"
 
-    labels = [_field_label(path) for path in field_paths]
     row = rows[0]
     title = row.get("product_name_cn") or row.get("product_name_en") or ""
     sku_val = row["sku"]
     detail = "；".join(f"{key}：{value}" for key, value in row.get("field_values", {}).items())
-
-    lines = [f"{title}（{sku_val}）的{', '.join(labels)}：{detail}。"]
-
-    if qa_results:
-        lines.append("")
-        lines.append("相关 QA 资料：")
-        for qa in qa_results[:2]:
-            lines.append(f"Q: {qa['question']}")
-            lines.append(f"A: {qa['answer']}")
-
-    if kb_results:
-        lines.append("")
-        for kb in kb_results[:2]:
-            content_text = kb.get("content", "")[:200]
-            if content_text:
-                lines.append(f"知识库：{content_text}")
-
-    if warnings:
-        lines.append(f"提示：{warnings[0]}")
-    if followups:
-        lines.append(followups[0])
-    return "\n".join(lines)
+    prefix = f"{title}（{sku_val}）" if title else sku_val
+    return f"{prefix}：{detail}。"
 
 
 def _compose_unknown_attribute_answer(
@@ -2105,26 +2432,14 @@ def _compose_unknown_attribute_answer(
     followups: list[str],
 ) -> str:
     if not details:
-        return "先说结论：我还不能直接确认，因为没有找到对应产品资料。"
+        return "当前没有找到对应产品资料。"
 
     field_text = "、".join(requested_fields or ["这个属性"])
-    lines = [f"先说结论：产品资料里没有标注{field_text}，所以不能直接确认。"]
-    lines.append("我能看到的相关依据如下：")
-
-    for detail in details[:3]:
-        sku = detail.get("sku") or ""
-        name = detail.get("product_name_cn") or detail.get("product_name_en") or ""
-        evidence = _unknown_attribute_evidence(detail)
-        if not evidence:
-            continue
-        title = f"{sku} {name}".strip()
-        lines.append(f"- {title}：" + "；".join(evidence[:6]))
-
-    if len(lines) == 2:
-        lines.append("- 当前资料缺少可用于判断的材质、表面处理、使用场景或使用说明。")
-    if followups:
-        lines.append(f"下一步建议：{followups[0]}")
-    return "\n".join(lines)
+    first = details[0]
+    sku = first.get("sku") or ""
+    name = first.get("product_name_cn") or first.get("product_name_en") or ""
+    prefix = f"{name}（{sku}）" if name else sku
+    return f"{prefix}：当前资料未明确标注{field_text}。"
 
 
 def _search_product_qa(db: Session, sku: str, question: str, limit: int = 3) -> list[dict]:
@@ -2168,6 +2483,751 @@ def _search_product_qa(db: Session, sku: str, question: str, limit: int = 3) -> 
                 "tags": qa.tags,
                 "source_type": "product_qa",
             })
+    return results
+
+
+def _is_semantic_qa_chunk(row: dict[str, Any]) -> bool:
+    metadata = row.get("metadata") if isinstance(row.get("metadata"), dict) else {}
+    section = str(metadata.get("section") or "").lower()
+    content = str(row.get("content") or "")
+    return section.startswith("qa:") or ("Q:" in content and "A:" in content)
+
+
+def _compact_evidence_text(text: str, limit: int = 180) -> str:
+    value = re.sub(r"\s+", " ", str(text or "")).strip()
+    if len(value) <= limit:
+        return value
+    return value[: limit - 1].rstrip() + "…"
+
+
+def _evidence_identity(item: dict[str, Any]) -> str:
+    metadata = item.get("metadata") if isinstance(item.get("metadata"), dict) else {}
+    return "|".join([
+        str(item.get("source_kind") or item.get("source_type") or ""),
+        str(item.get("sku") or ""),
+        str(metadata.get("section") or metadata.get("source_id") or ""),
+        str(item.get("content") or "")[:120],
+    ])
+
+
+async def _semantic_supporting_evidence(
+    db: Session,
+    question: str,
+    *,
+    skus: list[str] | None = None,
+    limit: int = 5,
+) -> dict[str, Any]:
+    query = str(question or "").strip()
+    if not query:
+        return {
+            "qa": [],
+            "kb": [],
+            "raw_rows": [],
+            "evidence": [],
+            "sources": [],
+            "supporting_sources": [],
+        }
+
+    raw_rows: list[dict[str, Any]] = []
+    seen_raw: set[str] = set()
+    search_skus = [str(sku or "").strip().upper() for sku in (skus or []) if str(sku or "").strip()]
+    scopes = search_skus[:3] or [None]
+    for sku in scopes:
+        try:
+            rows = await knowledge_service.semantic_retrieve(db, query, sku=sku, limit=limit)
+        except Exception:
+            rows = []
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            content = str(row.get("content") or "").strip()
+            if not content:
+                continue
+            row_key = f"{row.get('source_type')}|{row.get('sku')}|{content[:160]}"
+            if row_key in seen_raw:
+                continue
+            seen_raw.add(row_key)
+            raw_rows.append(row)
+
+    qa_items: list[dict[str, Any]] = []
+    kb_items: list[dict[str, Any]] = []
+    seen_items: set[str] = set()
+    for row in raw_rows:
+        metadata = row.get("metadata") if isinstance(row.get("metadata"), dict) else {}
+        item = {
+            "source_type": row.get("source_type") or "knowledge",
+            "source_kind": "qa" if _is_semantic_qa_chunk(row) else "kb",
+            "role": "supporting",
+            "sku": row.get("sku"),
+            "content": _compact_evidence_text(str(row.get("content") or "")),
+            "metadata": metadata,
+            "score": row.get("score"),
+        }
+        key = _evidence_identity(item)
+        if key in seen_items:
+            continue
+        seen_items.add(key)
+        if item["source_kind"] == "qa":
+            qa_items.append(item)
+        else:
+            kb_items.append(item)
+        if len(qa_items) >= limit and len(kb_items) >= limit:
+            break
+
+    qa_items = qa_items[:limit]
+    kb_items = kb_items[:limit]
+    evidence = [
+        {"source": "product_db", "role": "primary"},
+        *qa_items,
+        *kb_items,
+    ]
+    sources: list[dict[str, Any]] = []
+    supporting_sources: list[str] = []
+    if qa_items:
+        sources.append({"type": "product_qa", "label": "QA 语义补充", "role": "supporting", "count": len(qa_items)})
+        supporting_sources.append("qa")
+    if kb_items:
+        sources.append({"type": "knowledge_base", "label": "文件知识库语义补充", "role": "supporting", "count": len(kb_items)})
+        supporting_sources.append("kb")
+
+    return {
+        "qa": qa_items,
+        "kb": kb_items,
+        "raw_rows": raw_rows,
+        "evidence": evidence,
+        "sources": sources,
+        "supporting_sources": supporting_sources,
+    }
+
+
+def _knowledge_enrichment_payload(primary_source: str, supporting: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "primary_source": primary_source,
+        "supporting_sources": supporting.get("supporting_sources") or [],
+        "evidence": {
+            "qa": supporting.get("qa") or [],
+            "kb": supporting.get("kb") or [],
+        },
+    }
+
+
+def _attach_knowledge_enrichment(response: dict[str, Any], *, primary_source: str, supporting: dict[str, Any]) -> None:
+    payload = _knowledge_enrichment_payload(primary_source, supporting)
+    metadata = response.get("answer_metadata") if isinstance(response.get("answer_metadata"), dict) else {}
+    metadata["knowledge_enrichment"] = payload
+    response["answer_metadata"] = metadata
+    debug = response.get("debug") if isinstance(response.get("debug"), dict) else {}
+    debug["knowledge_enrichment"] = {
+        "primary_source": payload["primary_source"],
+        "supporting_sources": payload["supporting_sources"],
+        "qa_count": len(payload["evidence"]["qa"]),
+        "kb_count": len(payload["evidence"]["kb"]),
+    }
+    response["debug"] = debug
+
+
+def _compose_semantic_evidence_answer(supporting: dict[str, Any]) -> str:
+    qa_items = supporting.get("qa") or []
+    kb_items = supporting.get("kb") or []
+    for item in [*qa_items, *kb_items]:
+        content = str(item.get("content") or "").strip()
+        if not content:
+            continue
+        answer_match = re.search(r"A:\s*(.+)$", content, flags=re.I | re.S)
+        text = answer_match.group(1).strip() if answer_match else content
+        text = re.sub(r"^Q:\s*.*?\s*A:\s*", "", text, flags=re.I | re.S).strip()
+        parts = [part.strip() for part in re.split(r"[。！？!?；;]\s*", text) if part.strip()]
+        if parts:
+            sentence = parts[0]
+            if len(sentence) > 120:
+                sentence = sentence[:119].rstrip() + "…"
+            return sentence + ("。" if not sentence.endswith("。") else "")
+    return "当前商品库没有直接命中，但 QA/知识库里有相关资料，可按现有资料进一步确认。"
+
+
+def _knowledge_enrichment_debug(
+    intent: CustomerIntent,
+    *,
+    steps: list[dict],
+    warnings: list[str],
+    anomalies: list[dict[str, Any]],
+    results: list[dict],
+    supporting: dict[str, Any],
+) -> dict[str, Any]:
+    return {
+        "intent": intent.as_dict(),
+        "steps": steps,
+        "warnings": warnings,
+        "anomalies": anomalies,
+        "raw_results": results,
+        "knowledge_enrichment": {
+            "primary_source": "product_db",
+            "supporting_sources": supporting.get("supporting_sources") or [],
+            "qa_count": len(supporting.get("qa") or []),
+            "kb_count": len(supporting.get("kb") or []),
+        },
+    }
+
+
+def _looks_like_usage_care_question(text: str) -> bool:
+    value = str(text or "").strip()
+    if not value:
+        return False
+    return any(term in value for term in USAGE_CARE_TERMS)
+
+
+def _looks_like_usage_care_aftersales_question(text: str) -> bool:
+    value = str(text or "").strip()
+    if not value:
+        return False
+    return any(term in value for term in USAGE_CARE_AFTERSALES_TERMS)
+
+
+def _looks_like_customer_faq_question(text: str) -> bool:
+    value = str(text or "").strip()
+    if not value:
+        return False
+    if _looks_like_usage_care_question(value) and not _looks_like_usage_care_aftersales_question(value):
+        return False
+    if any(term in value for term in FAQ_PURCHASE_TERMS):
+        return True
+    if any(term in value for term in FAQ_AFTERSALES_TERMS):
+        return True
+    has_problem_signal = any(term in value for term in FAQ_AFTERSALES_PROBLEM_TERMS)
+    has_help_signal = any(term in value for term in FAQ_AFTERSALES_HELP_TERMS)
+    return has_problem_signal and has_help_signal
+
+
+async def _search_usage_care_qa(
+    db: Session,
+    question: str,
+    target_skus: list[str] | None = None,
+    *,
+    usage_subtype: str | None = None,
+    limit: int = 3,
+) -> tuple[list[dict], list[dict], dict[str, Any]]:
+    search_start = perf_counter()
+    target_skus = [str(sku or "").strip().upper() for sku in (target_skus or []) if str(sku or "").strip()]
+    usage_subtype = usage_subtype or _detect_usage_care_subtype(question)
+    qa_start = perf_counter()
+    qa_hits = _search_usage_care_product_qa(db, question, target_skus, usage_subtype=usage_subtype, limit=max(limit * 3, 9))
+    product_qa_ms = customer_perf_service.perf_ms(qa_start)
+    knowledge_start = perf_counter()
+    knowledge_hits = await _search_usage_care_knowledge(db, question, target_skus, usage_subtype=usage_subtype, limit=max(limit * 3, 9))
+    knowledge_search_ms = customer_perf_service.perf_ms(knowledge_start)
+    rerank_start = perf_counter()
+    qa_ranked, qa_filtered = _rerank_usage_care_hits(question, qa_hits, usage_subtype=usage_subtype, target_skus=target_skus, source_kind="product_qa", limit=limit)
+    knowledge_ranked, knowledge_filtered = _rerank_usage_care_hits(question, knowledge_hits, usage_subtype=usage_subtype, target_skus=target_skus, source_kind="knowledge_chunks", limit=limit)
+    rerank_ms = customer_perf_service.perf_ms(rerank_start)
+    debug = {
+        "search_ms": round(customer_perf_service.perf_ms(search_start), 2),
+        "product_qa_ms": round(product_qa_ms, 2),
+        "knowledge_search_ms": round(knowledge_search_ms, 2),
+        "rerank_ms": round(rerank_ms, 2),
+        "filtered_or_downgraded": qa_filtered + knowledge_filtered,
+    }
+    return qa_ranked, knowledge_ranked, debug
+
+
+def _search_usage_care_product_qa(db: Session, question: str, target_skus: list[str], *, usage_subtype: str, limit: int = 3) -> list[dict]:
+    terms = [term for term in _usage_care_query_terms(question) if term]
+    query = db.query(ProductQa, Product).join(Product, Product.id == ProductQa.product_id)
+    if target_skus:
+        query = query.filter(Product.sku.in_(target_skus))
+    conditions = []
+    for term in terms[:8]:
+        conditions.append(ProductQa.question.ilike(f"%{term}%"))
+        conditions.append(ProductQa.answer.ilike(f"%{term}%"))
+        conditions.append(ProductQa.tags.ilike(f"%{term}%"))
+    if conditions:
+        from sqlalchemy import or_
+        query = query.filter(or_(*conditions))
+    rows = query.order_by(ProductQa.priority.desc().nullslast(), ProductQa.updated_at.desc()).limit(limit).all()
+    hits = []
+    for qa, product in rows:
+        hits.append({
+            "id": qa.id,
+            "sku": product.sku,
+            "product_name_cn": product.product_name_cn,
+            "category": product.category,
+            "question": qa.question,
+            "answer": qa.answer,
+            "tags": qa.tags,
+            "source_type": "product_qa",
+            "_usage_text": " ".join([
+                str(qa.question or ""),
+                str(qa.answer or ""),
+                str(qa.tags or ""),
+                str(product.product_name_cn or ""),
+                str(product.category or ""),
+            ]),
+            "_usage_subtype": usage_subtype,
+        })
+    return hits
+
+
+async def _search_usage_care_knowledge(db: Session, question: str, target_skus: list[str], *, usage_subtype: str, limit: int = 3) -> list[dict]:
+    scoped_hits: list[dict] = []
+    search_skus = target_skus[:1] if target_skus else [None]
+    for sku in search_skus:
+        try:
+            rows = await knowledge_service.semantic_retrieve(db, question, sku=sku, limit=limit)
+        except Exception:
+            rows = knowledge_service.keyword_retrieve(db, question, sku=sku, limit=limit)
+        for row in rows:
+            content = str(row.get("content") or "").strip()
+            if not content:
+                continue
+            metadata = row.get("metadata") if isinstance(row.get("metadata"), dict) else {}
+            haystack = " ".join([
+                content,
+                str(metadata.get("category") or ""),
+                str(metadata.get("type") or ""),
+                str(metadata.get("section") or ""),
+                str(metadata.get("title") or ""),
+            ])
+            if not any(term in haystack for term in USAGE_CARE_TERMS):
+                continue
+            scoped_hits.append({
+                "id": metadata.get("source_id") or metadata.get("title") or row.get("sku") or "",
+                "sku": row.get("sku"),
+                "source_type": row.get("source_type") or "knowledge",
+                "content": content[:500],
+                "metadata": metadata,
+                "_usage_text": haystack,
+                "_usage_subtype": usage_subtype,
+            })
+    return scoped_hits[:limit]
+
+
+def _detect_usage_care_subtype(question: str) -> str:
+    text = str(question or "")
+    if any(term in text for term in USAGE_CARE_REPLY_TERMS):
+        return "customer_reply"
+    if any(term in text for term in USAGE_CARE_BURNT_TERMS):
+        return "burnt"
+    if any(term in text for term in USAGE_CARE_COATING_TERMS):
+        return "coating"
+    if any(term in text for term in USAGE_CARE_STICKING_TERMS):
+        return "sticking"
+    if any(term in text for term in USAGE_CARE_MAINTENANCE_TERMS):
+        return "maintenance"
+    return "cleaning"
+
+
+def _usage_care_focus_terms(subtype: str) -> tuple[str, ...]:
+    if subtype == "customer_reply":
+        return USAGE_CARE_CLEANING_TERMS + USAGE_CARE_MAINTENANCE_TERMS + USAGE_CARE_STICKING_TERMS
+    if subtype == "burnt":
+        return USAGE_CARE_BURNT_TERMS + USAGE_CARE_BURNT_ACTION_TERMS + USAGE_CARE_CLEANING_TERMS
+    if subtype == "coating":
+        return USAGE_CARE_COATING_TERMS + USAGE_CARE_CLEANING_TERMS + USAGE_CARE_STICKING_TERMS
+    if subtype == "sticking":
+        return USAGE_CARE_STICKING_TERMS + USAGE_CARE_CLEANING_TERMS + USAGE_CARE_COATING_TERMS
+    if subtype == "maintenance":
+        return USAGE_CARE_MAINTENANCE_TERMS + USAGE_CARE_MAINTENANCE_ACTION_TERMS + USAGE_CARE_CLEANING_TERMS
+    return USAGE_CARE_CLEANING_TERMS + USAGE_CARE_MAINTENANCE_TERMS
+
+
+def _rerank_usage_care_hits(
+    question: str,
+    hits: list[dict],
+    *,
+    usage_subtype: str,
+    target_skus: list[str],
+    source_kind: str,
+    limit: int,
+) -> tuple[list[dict], list[dict]]:
+    question_text = str(question or "")
+    focus_terms = _usage_care_focus_terms(usage_subtype)
+    ask_aftersales = any(term in question_text for term in USAGE_CARE_AFTERSALES_TERMS)
+    ask_safety = any(term in question_text for term in USAGE_CARE_SAFETY_TERMS)
+    ask_cookware = any(term in question_text for term in USAGE_CARE_COOKWARE_TERMS)
+    ranked: list[tuple[float, dict]] = []
+    filtered: list[dict] = []
+    for item in hits:
+        text = str(item.get("_usage_text") or item.get("answer") or item.get("content") or "")
+        lowered = text
+        score = 0.0
+        flags: list[str] = []
+        if target_skus and str(item.get("sku") or "").upper() in target_skus:
+            score += 6.0
+        elif target_skus:
+            score -= 2.0
+        if source_kind == "product_qa":
+            score += 8.0
+        category_text = " ".join([
+            str(item.get("category") or ""),
+            str((item.get("metadata") or {}).get("category") or "") if isinstance(item.get("metadata"), dict) else "",
+        ])
+        if ask_cookware and any(term in category_text for term in USAGE_CARE_COOKWARE_TERMS):
+            score += 3.0
+        metadata = item.get("metadata") if isinstance(item.get("metadata"), dict) else {}
+        if source_kind == "knowledge_chunks" and (
+            "Q:" in lowered or "A:" in lowered or str(metadata.get("type") or "").lower() == "qa" or str(metadata.get("section") or "").lower() == "qa"
+        ):
+            score += 5.0
+        focus_matches = sum(1 for term in focus_terms if term in lowered)
+        score += focus_matches * 3.0
+        if any(term in lowered for term in ("清洗", "保养", "护理", "软刷", "温水", "擦干", "烘干", "钢丝球", "硬物刮擦")):
+            score += 4.0
+        if usage_subtype == "maintenance":
+            if any(term in lowered for term in USAGE_CARE_MAINTENANCE_ACTION_TERMS):
+                score += 5.0
+            if any(term in lowered for term in USAGE_CARE_MAINTENANCE_WEAK_TERMS):
+                score -= 6.0
+                flags.append("maintenance_longevity_downgraded")
+        if usage_subtype in {"sticking", "coating"} and any(term in lowered for term in ("不粘", "不沾", "涂层", "防粘", "不易粘", "粘锅")):
+            score += 4.0
+        if usage_subtype == "burnt" and any(term in lowered for term in USAGE_CARE_BURNT_ACTION_TERMS):
+            score += 5.0
+        if ask_cookware and any(term in lowered for term in USAGE_CARE_COOKWARE_TERMS):
+            score += 4.0
+        if ask_cookware and any(term in lowered for term in USAGE_CARE_NON_COOKWARE_TERMS):
+            score -= 5.0
+            flags.append("non_cookware_downgraded")
+        if any(term in lowered for term in USAGE_CARE_GENERAL_TERMS):
+            score -= 2.0
+            flags.append("general_intro_downgraded")
+        if not ask_aftersales and any(term in lowered for term in USAGE_CARE_AFTERSALES_TERMS):
+            score -= 8.0
+            flags.append("aftersales_downgraded")
+        if not ask_safety and any(term in lowered for term in USAGE_CARE_SAFETY_TERMS):
+            score -= 8.0
+            flags.append("safety_downgraded")
+        if focus_matches == 0 and not any(term in lowered for term in USAGE_CARE_TERMS):
+            flags.append("usage_focus_filtered")
+            filtered.append({
+                "source_kind": source_kind,
+                "sku": item.get("sku"),
+                "reason": "usage_focus_filtered",
+            })
+            continue
+        if score < 1.0:
+            filtered.append({
+                "source_kind": source_kind,
+                "sku": item.get("sku"),
+                "reason": ",".join(flags) if flags else "low_score_filtered",
+            })
+            continue
+        item["_usage_score"] = round(score, 2)
+        item["_usage_flags"] = flags
+        ranked.append((score, item))
+        for flag in flags:
+            filtered.append({
+                "source_kind": source_kind,
+                "sku": item.get("sku"),
+                "reason": flag,
+            })
+    ranked.sort(key=lambda pair: pair[0], reverse=True)
+    return [item for _, item in ranked[:limit]], filtered
+
+
+def _usage_care_query_terms(question: str) -> list[str]:
+    raw_terms = [item.strip() for item in re.split(r"[?,，。？！!、\s]+", str(question or "")) if item.strip()]
+    keep = []
+    stop_terms = {"怎么办", "怎么处理", "怎么回复", "客户说", "用户说"}
+    for term in raw_terms:
+        if term in stop_terms:
+            continue
+        if len(term) >= 2:
+            keep.append(term)
+    for term in USAGE_CARE_TERMS:
+        if term in str(question or "") and term not in keep:
+            keep.append(term)
+    return keep[:10]
+
+
+def _compose_usage_care_answer(question: str, qa_hits: list[dict], knowledge_hits: list[dict], *, response_style: str) -> str:
+    usage_subtype = _detect_usage_care_subtype(question)
+    suggestions: list[str] = []
+    seen = set()
+    for item in qa_hits:
+        answer = _normalize_usage_care_snippet(item.get("answer") or item.get("content") or "")
+        if answer and answer not in seen:
+            seen.add(answer)
+            suggestions.append(answer)
+    for item in knowledge_hits:
+        content = _normalize_usage_care_snippet(item.get("content") or item.get("answer") or "")
+        if content and content not in seen:
+            seen.add(content)
+            suggestions.append(content)
+    sections = _compose_usage_care_sections(question, suggestions, usage_subtype=usage_subtype)
+    if not any(sections.values()):
+        body = "系统暂未配置对应清洗/保养资料，建议联系人工客服确认。"
+    else:
+        lines = []
+        if sections["cleaning"]:
+            lines.append(f"清洁方法：{sections['cleaning']}")
+        if sections["caution"]:
+            lines.append(f"注意事项：{sections['caution']}")
+        if sections["avoid"]:
+            lines.append(f"避免事项：{sections['avoid']}")
+        body = "\n".join(lines)
+    return body
+
+
+def _normalize_usage_care_snippet(text: str) -> str:
+    value = str(text or "").strip()
+    if not value:
+        return ""
+    qa_match = re.search(r"[Aa][:：]\s*(.+)$", value, flags=re.IGNORECASE | re.DOTALL)
+    if qa_match:
+        value = qa_match.group(1).strip()
+    value = re.sub(r"^\s*Q[:：]\s*", "", value, flags=re.IGNORECASE)
+    value = re.sub(r"^\s*A[:：]\s*", "", value, flags=re.IGNORECASE)
+    value = re.sub(r"\s+", " ", value).strip()
+    return value
+
+
+def _compose_usage_care_summary(question: str, suggestions: list[str], *, usage_subtype: str) -> list[str]:
+    question_text = str(question or "")
+    points: list[str] = []
+    for text in suggestions:
+        cleaned = _normalize_usage_care_snippet(text)
+        if not cleaned:
+            continue
+        if usage_subtype == "maintenance":
+            if any(term in cleaned for term in USAGE_CARE_MAINTENANCE_WEAK_TERMS):
+                continue
+        if usage_subtype == "burnt" and any(term in question_text for term in USAGE_CARE_COOKWARE_TERMS):
+            if any(term in cleaned for term in USAGE_CARE_NON_COOKWARE_TERMS) and not any(term in cleaned for term in USAGE_CARE_COOKWARE_TERMS):
+                continue
+        points.append(cleaned.strip("。；; "))
+    if not points:
+        return []
+    if usage_subtype == "maintenance":
+        points = [p for p in points if any(term in p for term in USAGE_CARE_MAINTENANCE_ACTION_TERMS)] or points
+    if usage_subtype == "burnt":
+        points = [p for p in points if any(term in p for term in ("温水", "软刷", "浸泡", "钢丝球", "锅底", "残渍", "清洗", "涂层"))] or points
+        if not any(term in "".join(points) for term in ("糊锅", "烧焦", "焦糊", "粘底", "残渍", "锅底")):
+            points.insert(0, "目前没有专门糊锅资料，可先按类似锅具保养方式轻刷处理")
+    return points[:4]
+
+
+def _compose_usage_care_sections(question: str, suggestions: list[str], *, usage_subtype: str) -> dict[str, str]:
+    points = _compose_usage_care_summary(question, suggestions, usage_subtype=usage_subtype)
+    cleaning_parts: list[str] = []
+    caution_parts: list[str] = []
+    avoid_parts: list[str] = []
+    seen_parts: set[str] = set()
+
+    for point in points:
+        for clause in _usage_care_clauses(point):
+            normalized = clause.strip("。；; ，,")
+            if not normalized or normalized in seen_parts:
+                continue
+            bucket = _classify_usage_care_clause(normalized)
+            if bucket == "avoid":
+                avoid_parts.append(normalized)
+            elif bucket == "caution":
+                caution_parts.append(normalized)
+            else:
+                cleaning_parts.append(normalized)
+            seen_parts.add(normalized)
+
+    if not cleaning_parts and points:
+        cleaning_parts.append(_usage_care_clauses(points[0])[0].strip("。；; ，,"))
+    if not caution_parts:
+        caution_parts.append("清洗后尽量擦干或烘干，再放在干燥处保存")
+    if not avoid_parts:
+        avoid_parts.append("避免钢丝球、硬物刮擦，以及骤冷骤热或长时间浸泡")
+
+    return {
+        "cleaning": _render_usage_care_bucket("cleaning", cleaning_parts[:2], usage_subtype=usage_subtype),
+        "caution": _render_usage_care_bucket("caution", caution_parts[:2], usage_subtype=usage_subtype),
+        "avoid": _render_usage_care_bucket("avoid", avoid_parts[:2], usage_subtype=usage_subtype),
+    }
+
+
+def _usage_care_clauses(text: str) -> list[str]:
+    value = _normalize_usage_care_snippet(text)
+    if not value:
+        return []
+    parts = [part.strip() for part in re.split(r"[，,；;。]", value) if part.strip()]
+    return parts or [value]
+
+
+def _classify_usage_care_clause(clause: str) -> str:
+    avoid_terms = ("避免", "不要", "严禁", "禁用", "勿", "钢丝球", "硬物", "骤冷骤热", "干烧", "久放", "刮擦")
+    cleaning_terms = ("清洗", "清洁", "温水", "软刷", "浸泡", "擦干", "烘干", "预热", "倒油", "冲洗", "小火")
+    caution_terms = ("建议", "尽量", "及时", "趁热", "彻底", "存放", "晾干", "干燥处", "中小火", "涂层", "使用后")
+
+    if any(term in clause for term in avoid_terms):
+        return "avoid"
+    if any(term in clause for term in cleaning_terms):
+        return "cleaning"
+    if any(term in clause for term in caution_terms):
+        return "caution"
+    return "caution"
+
+
+def _short_usage_care_line(text: str) -> str:
+    value = _normalize_usage_care_snippet(text).strip("。；; ")
+    if not value:
+        return ""
+    parts = [part.strip() for part in re.split(r"[；;。，,]", value) if part.strip()]
+    line = "；".join(parts[:2]).strip("；; ")
+    if len(line) > 58:
+        line = line[:58].rstrip("，,；;、 ")
+    return line + "。"
+
+
+def _render_usage_care_bucket(bucket: str, parts: list[str], *, usage_subtype: str) -> str:
+    if usage_subtype == "burnt":
+        if bucket == "cleaning":
+            return "目前没有专门糊锅资料，可先用温水和软刷轻刷处理。"
+        if bucket == "caution":
+            return "如果是涂层锅，先避免强力刮擦。"
+        return "不要用钢丝球硬刮，避免伤到涂层。"
+
+    cleaned = []
+    for part in parts:
+        clause = _trim_usage_care_clause(part)
+        if clause and not _is_usage_care_output_noise(clause):
+            cleaned.append(clause)
+    if bucket == "cleaning":
+        return _short_usage_care_line("，".join(cleaned[:2])) or "用温水和软刷清洗，洗后擦干或小火烘干。"
+    if bucket == "caution":
+        return _short_usage_care_line("，".join(cleaned[:2])) or "洗后擦干或小火烘干，再放在干燥处保存。"
+    return _short_usage_care_line("，".join(cleaned[:2])) or "不要用钢丝球、硬物刮擦，也不要长时间浸泡。"
+
+
+def _is_usage_care_output_noise(text: str) -> bool:
+    value = str(text or "")
+    noise_terms = (
+        "表面采用",
+        "工艺",
+        "耐高温漆",
+        "水性不粘涂层",
+        "耐磨耐用",
+        "易清洁",
+        "SKU:",
+        "中文名:",
+        "英文名:",
+        "品牌:",
+        "系列:",
+        "类目:",
+        "规格信息",
+        "生命周期:",
+        "负责人:",
+    )
+    return any(term in value for term in noise_terms) or len(value) > 80
+
+
+def _trim_usage_care_clause(text: str) -> str:
+    value = _normalize_usage_care_snippet(text).strip("。；; ，,")
+    if not value:
+        return ""
+    replacements = (
+        ("根据目前知识库中的", ""),
+        ("根据目前知识库", ""),
+        ("目前知识库", ""),
+        ("下面仅能根据类似锅具与涂层产品的清洗保养资料给出保守建议", ""),
+        ("保守建议", ""),
+        ("建议使用后", "用完"),
+        ("使用后", "用完"),
+        ("及时", ""),
+        ("彻底", ""),
+        ("存放于", "放在"),
+        ("存放在", "放在"),
+        ("尽量避免", "不要"),
+        ("避免使用", "不要用"),
+        ("避免钢丝球", "不要用钢丝球"),
+        ("避免硬物", "不要用硬物"),
+    )
+    for old, new in replacements:
+        value = value.replace(old, new)
+    value = re.sub(r"\s+", "", value)
+    value = re.sub(r"^[，,；;]+", "", value)
+    return value
+
+
+def _shape_recommendation_answer_from_ranked(ranked: list[dict]) -> str:
+    picks = []
+    for item in ranked[:3]:
+        row = item.get("row") or {}
+        sku = str(row.get("sku") or "").strip()
+        if not sku:
+            continue
+        name = row.get("product_name_cn") or row.get("product_name_en") or sku
+        reasons = item.get("matched") or item.get("reasons") or []
+        reason = _short_recommendation_reason(reasons[0] if reasons else "")
+        if not reason:
+            reason = "更贴合当前使用人数和场景。"
+        picks.append({"sku": sku, "name": name, "reason": reason})
+    if not picks:
+        return "目前没有找到合适的产品推荐，你可以换个场景或条件试试。"
+    lines = ["推荐：" + " / ".join(f"{item['name']}（{item['sku']}）" for item in picks)]
+    lines.append("理由：")
+    for item in picks:
+        lines.append(f"{item['sku']}：{item['reason']}")
+    return "\n".join(lines)
+
+
+def _short_recommendation_reason(text: str) -> str:
+    value = str(text or "").strip("。；; ")
+    if not value:
+        return ""
+    parts = [part.strip() for part in re.split(r"[；;。]", value) if part.strip()]
+    return "；".join(parts[:2]) + "。"
+
+
+def _shape_recommendation_answer_text(answer: str, ranked: list[dict]) -> str:
+    text = str(answer or "").strip()
+    if not text:
+        return _shape_recommendation_answer_from_ranked(ranked)
+    lines = [line.strip() for line in text.splitlines() if line.strip()]
+    if lines and lines[0].startswith("推荐：") and any(line.startswith("理由：") or re.match(r"^[A-Z]{2,6}(?:-[A-Z0-9]{1,8})+：", line) for line in lines[1:]):
+        return "\n".join(lines[:5])
+    return _shape_recommendation_answer_from_ranked(ranked)
+
+
+def _sanitize_usage_care_answer_text(answer: str) -> str:
+    value = str(answer or "").strip()
+    if not value:
+        return ""
+    value = re.sub(r"\bQ[:：]\s*", "", value, flags=re.IGNORECASE)
+    value = re.sub(r"\bA[:：]\s*", "", value, flags=re.IGNORECASE)
+    lines = [re.sub(r"[ \t]+", " ", line).strip() for line in value.splitlines()]
+    value = "\n".join(line for line in lines if line)
+    value = value.replace("。。", "。")
+    return value
+
+
+def _usage_care_debug_source_texts(qa_hits: list[dict], knowledge_hits: list[dict]) -> list[dict]:
+    rows: list[dict] = []
+    for item in qa_hits[:3]:
+        rows.append({
+            "source_kind": "product_qa",
+            "sku": item.get("sku"),
+            "text": str(item.get("answer") or "")[:200],
+        })
+    for item in knowledge_hits[:3]:
+        rows.append({
+            "source_kind": "knowledge_chunks",
+            "sku": item.get("sku"),
+            "text": str(item.get("content") or "")[:200],
+        })
+    return rows
+
+
+def _usage_care_results_for_response(qa_hits: list[dict], knowledge_hits: list[dict]) -> list[dict]:
+    results = []
+    for item in qa_hits:
+        results.append({
+            "sku": item.get("sku"),
+            "product_name_cn": item.get("product_name_cn"),
+            "field_values": {"使用/清洗保养建议": item.get("answer") or ""},
+            "matched_by": "product_qa",
+        })
+    for item in knowledge_hits:
+        results.append({
+            "sku": item.get("sku"),
+            "product_name_cn": "",
+            "field_values": {"使用/清洗保养建议": item.get("content") or ""},
+            "matched_by": "knowledge_chunks",
+        })
     return results
 
 
@@ -2466,6 +3526,7 @@ def _requested_fields(text: str) -> list[str]:
     fields = []
     candidates = [
         ("容量", ("容量", "多少ml", "多大")),
+        ("尺寸", ("尺寸", "多大尺寸", "长宽高")),
         ("材质", ("材质", "材料")),
         ("颜色", ("颜色", "配色")),
         ("重量", ("重量", "多重")),
@@ -2475,6 +3536,8 @@ def _requested_fields(text: str) -> list[str]:
         ("认证", ("认证", "食品级")),
         ("卖点", ("卖点", "特色", "优势", "特点")),
         ("商品英文名称", ("英文名", "英文名称", "商品英文名称")),
+        ("SKU", ("SKU", "sku", "型号", "货号")),
+        ("配件", ("配件", "包装里", "包装内", "包含什么", "几个锅", "几件", "数量")),
         ("负责人", ("负责人",)),
         ("品质情况", ("品质", "品质情况", "坏损")),
         ("类目", ("类目", "品类")),
@@ -2501,7 +3564,9 @@ def _resolve_query_field(field_label: str) -> str | None:
         "品质": "product.quality_note",
         "坏损": "product.quality_note",
         "类目": "product.category",
+        "SKU": "product.sku",
         "容量": "specs.capacity",
+        "尺寸": "specs.size_info",
         "材质": "specs.body_material",
         "颜色": "specs.color",
         "重量": "specs.gross_weight_g",
@@ -2509,7 +3574,9 @@ def _resolve_query_field(field_label: str) -> str | None:
         "燃料": "specs.heat_source",
         "功率": "specs.power",
         "表面处理": "specs.surface_finish",
+        "不粘": "specs.surface_finish",
         "卖点": "business.top_selling_points",
+        "配件": "specs.usage_instruction",
     }
     return direct.get(field_label) or customer_agent_service.QUERY_FIELD_ALIASES.get(field_label) or agent_action_service.resolve_field_path(field_label)
 

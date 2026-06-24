@@ -15,6 +15,25 @@ logs/
 backend/logs/
 backend/runtime/
 backups/
+tmp/
+uploads_dev/
+*.log
+*.out
+*.err
+*.pid
+*.tmp
+reports/*.json
+reports/*.jsonl
+reports/*.log
+reports/*.png
+reports/*.csv
+reports/*.txt
+reports/**/*.json
+reports/**/*.jsonl
+reports/**/*.log
+reports/**/*.png
+reports/**/*.csv
+reports/**/*.txt
 
 # Python virtual environment
 venv/
@@ -39,6 +58,8 @@ build/
 # Node dependencies (frontend)
 frontend/node_modules/
 frontend/tsconfig.tsbuildinfo
+node_modules/
+**/node_modules/
 
 # OS files
 .DS_Store

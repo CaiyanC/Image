@@ -13,6 +13,7 @@ const AdminSettings = lazy(() => import('./pages/AdminSettings'))
 const AdminGroups = lazy(() => import('./pages/AdminGroups'))
 const AdminLogs = lazy(() => import('./pages/AdminLogs'))
 const ProductManagement = lazy(() => import('./pages/ProductManagement'))
+const AssetLibrary = lazy(() => import('./pages/AssetLibrary'))
 const CustomerService = lazy(() => import('./pages/CustomerService'))
 const KnowledgeBase = lazy(() => import('./pages/KnowledgeBase'))
 const FileKnowledgeBase = lazy(() => import('./pages/FileKnowledgeBase'))
@@ -111,6 +112,16 @@ export default function App() {
             <PermissionRoute permissionKey="product.read">
               <Layout>
                 <ProductManagement />
+              </Layout>
+            </PermissionRoute>
+          }
+        />
+        <Route
+          path="/assets"
+          element={
+            <PermissionRoute permissionKey="product.read">
+              <Layout>
+                <AssetLibrary />
               </Layout>
             </PermissionRoute>
           }

@@ -20,6 +20,7 @@ from .product_specs import ProductSpecs
 from .product_business import ProductBusiness
 from .product_content import ProductContent
 from .product_media import ProductMedia
+from .product_asset import ProductAsset
 from .product_qa import ProductQa, ProductQaNegative
 from .product_qa_answer import ProductQaAnswer
 from .qa_tags import QaTag, QaTagRelation
@@ -41,7 +42,7 @@ __all__ = [
     "Route", "PermissionRoute",
     "OperationLog", "AgentAction", "AgentTrace", "FieldConfig", "EntityFieldValue", "AiTask",
     "ProductDraft", "ProductCategory", "ProductPrompts",
-    "Product", "ProductOperationSnapshot", "ProductSpecs", "ProductBusiness", "ProductContent", "ProductMedia",
+    "Product", "ProductOperationSnapshot", "ProductSpecs", "ProductBusiness", "ProductContent", "ProductMedia", "ProductAsset",
     "ProductQa", "ProductQaNegative", "ProductQaAnswer",
     "QaTag", "QaTagRelation", "AiGeneratedAsset",
     "ListingChannel", "ProductListingChannel",

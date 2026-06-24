@@ -2532,6 +2532,8 @@ class CustomerServiceServiceTest(unittest.IsolatedAsyncioTestCase):
             OperationLog.__table__,
             CustomerServiceConversation.__table__,
             CustomerServiceMessage.__table__,
+            KnowledgeDocument.__table__,
+            KnowledgeChunk.__table__,
         ])
         self.Session = sessionmaker(bind=engine)
         self.db = self.Session()
@@ -2545,6 +2547,260 @@ class CustomerServiceServiceTest(unittest.IsolatedAsyncioTestCase):
         customer_service_service._polish_customer_answer = self.original_polish
         self.db.close()
 
+    def _seed_usage_care_knowledge(self):
+        product = Product(
+            id="usage-care-CW-C94",
+            sku="CW-C94",
+            barcode="barcode-CW-C94",
+            product_name_cn="800ml不粘单兵套锅",
+            product_name_en="800ml non-stick camping cookware set",
+            brand="alocs",
+            category="锅具",
+            product_level="A类品",
+            lifecycle_status="常规品",
+        )
+        self.db.add(product)
+        self.db.add(ProductQa(
+            id="usage-care-qa-1",
+            product_id=product.id,
+            question="800ml不粘单兵套锅如何清洗保养？",
+            answer="使用后趁热用温水加软刷清洗，彻底擦干或小火烘干，避免钢丝球刮擦表面。",
+            tags=json.dumps(["清洗", "保养", "不粘"], ensure_ascii=False),
+            priority=10,
+        ))
+        self.db.add(ProductQa(
+            id="usage-care-qa-2",
+            product_id=product.id,
+            question="800ml不粘单兵套锅的不粘涂层安全吗？",
+            answer="正常使用下可放心接触食物，避免空烧和硬物刮擦有助于延长涂层寿命。",
+            tags=json.dumps(["不粘", "涂层"], ensure_ascii=False),
+            priority=9,
+        ))
+        doc = KnowledgeDocument(
+            id="usage-care-doc-1",
+            source_type="product",
+            source_id="qa:usage-care-1",
+            sku="CW-C94",
+            title="CW-C94 清洗保养知识",
+            content="Q: 800ml不粘单兵套锅如何清洗保养？ A: 使用后趁热用温水加软刷清洗，彻底擦干或小火烘干，避免钢丝球刮擦表面。",
+            metadata_json=json.dumps({"category": "product_usage_care", "type": "qa", "section": "qa"}, ensure_ascii=False),
+        )
+        self.db.add(doc)
+        self.db.add(KnowledgeChunk(
+            id="usage-care-chunk-1",
+            document_id=doc.id,
+            sku="CW-C94",
+            source_type="product",
+            chunk_index=0,
+            content="Q: 800ml不粘单兵套锅如何清洗保养？ A: 使用后趁热用温水加软刷清洗，彻底擦干或小火烘干，避免钢丝球刮擦表面。",
+            metadata_json=json.dumps({"category": "product_usage_care", "type": "qa", "section": "qa"}, ensure_ascii=False),
+            embedding_status="pending",
+        ))
+        self.db.commit()
+
+    async def test_usage_care_question_prefers_usage_care_path_over_aftersales_faq(self):
+        self._seed_usage_care_knowledge()
+
+        result = await customer_service_service.ask_customer_service(
+            self.db,
+            user_id="user-1",
+            question="用户说不粘锅不好清洗，客服怎么回复",
+        )
+
+        self.assertEqual(result["intent"], "product_usage_care")
+        self.assertEqual(result["debug"]["agent_mode"], "product_usage_care_fast_path")
+        self.assertNotIn("售后电话", result["answer"])
+        self.assertTrue(any(source.get("type") == "product_qa" for source in result["sources"]))
+        self.assertIn("清洗", result["answer"])
+
+    async def test_usage_care_question_does_not_end_with_missing_product_results(self):
+        self._seed_usage_care_knowledge()
+
+        result = await customer_service_service.ask_customer_service(
+            self.db,
+            user_id="user-1",
+            question="不粘锅不好清洗，怎么办",
+        )
+
+        self.assertEqual(result["intent"], "product_usage_care")
+        self.assertEqual(result["debug"]["agent_mode"], "product_usage_care_fast_path")
+        self.assertNotIn("没有找到匹配的产品资料", result["answer"])
+        self.assertFalse(any(source.get("type") == "structured_faq" for source in result["sources"]))
+        self.assertTrue(any(source.get("type") in {"product_qa", "knowledge_base", "usage_care_knowledge"} for source in result["sources"]))
+        self.assertNotIn("售后电话", result["answer"])
+
+    async def test_usage_care_question_downgrades_irrelevant_aftersales_content(self):
+        self._seed_usage_care_knowledge()
+
+        result = await customer_service_service.ask_customer_service(
+            self.db,
+            user_id="user-1",
+            question="不粘锅不好清洗，怎么办",
+        )
+
+        filtered = result["debug"].get("filtered_or_downgraded") or []
+        self.assertEqual(result["debug"].get("usage_care_subtype"), "sticking")
+        self.assertGreater(result["debug"].get("product_qa_ms", 0), 0)
+        self.assertGreater(result["debug"].get("knowledge_search_ms", 0), 0)
+        self.assertGreater(result["debug"].get("rerank_ms", 0), 0)
+        self.assertGreater(result["debug"].get("compose_answer_ms", 0), 0)
+        self.assertNotIn("售后电话", result["answer"])
+        self.assertNotIn("退换货", result["answer"])
+
+    async def test_usage_care_question_with_coating_uses_usage_care_path(self):
+        self._seed_usage_care_knowledge()
+
+        result = await customer_service_service.ask_customer_service(
+            self.db,
+            user_id="user-1",
+            question="不粘涂层怎么清洗",
+        )
+
+        self.assertEqual(result["intent"], "product_usage_care")
+        self.assertEqual(result["debug"]["agent_mode"], "product_usage_care_fast_path")
+        self.assertTrue(any(source.get("type") in {"product_qa", "knowledge_base", "usage_care_knowledge"} for source in result["sources"]))
+        self.assertEqual(result["debug"].get("usage_care_subtype"), "coating")
+
+    async def test_usage_care_question_with_burnt_pot_uses_usage_care_path(self):
+        self._seed_usage_care_knowledge()
+
+        result = await customer_service_service.ask_customer_service(
+            self.db,
+            user_id="user-1",
+            question="锅糊了怎么处理",
+        )
+
+        self.assertEqual(result["intent"], "product_usage_care")
+        self.assertEqual(result["debug"]["agent_mode"], "product_usage_care_fast_path")
+        self.assertNotIn("没有找到匹配的产品资料", result["answer"])
+        self.assertEqual(result["debug"].get("usage_care_subtype"), "burnt")
+        self.assertNotIn("Q:", result["answer"])
+        self.assertNotIn("A:", result["answer"])
+        self.assertIn("清洁方法：目前没有专门糊锅资料，可先用温水和软刷轻刷处理。", result["answer"])
+        self.assertIn("注意事项：如果是涂层锅，先避免强力刮擦", result["answer"])
+        self.assertIn("避免事项：不要用钢丝球硬刮", result["answer"])
+
+    async def test_usage_care_maintenance_answer_prefers_actions_over_longevity(self):
+        self._seed_usage_care_knowledge()
+
+        result = await customer_service_service.ask_customer_service(
+            self.db,
+            user_id="user-1",
+            question="锅具使用后怎么保养",
+        )
+
+        self.assertEqual(result["debug"].get("usage_care_subtype"), "maintenance")
+        self.assertNotIn("Q:", result["answer"])
+        self.assertNotIn("A:", result["answer"])
+        self.assertNotIn("使用多年", result["answer"])
+        self.assertNotIn("越用越顺手", result["answer"])
+        self.assertTrue(any(term in result["answer"] for term in ["温水", "软刷", "擦干", "烘干", "存放"]))
+        self.assertNotIn("根据目前知识库", result["answer"])
+        self.assertNotIn("保守建议", result["answer"])
+        self.assertLessEqual(len([line for line in result["answer"].splitlines() if line.strip()]), 3)
+        self.assertLessEqual(max(line.count("；") + line.count("。") for line in result["answer"].splitlines() if line.strip()), 2)
+
+    async def test_usage_care_cleaning_answer_is_short_customer_service_style(self):
+        self._seed_usage_care_knowledge()
+
+        result = await customer_service_service.ask_customer_service(
+            self.db,
+            user_id="user-1",
+            question="不粘锅怎么清洗",
+        )
+
+        self.assertEqual(result["intent"], "product_usage_care")
+        self.assertIn("清洁方法：", result["answer"])
+        self.assertIn("注意事项：", result["answer"])
+        self.assertIn("避免事项：", result["answer"])
+        self.assertNotIn("根据目前知识库", result["answer"])
+        self.assertNotIn("不同产品说明可能略有差异", result["answer"])
+        self.assertTrue(any("用完" in line or "温水" in line for line in result["answer"].splitlines()))
+
+    async def test_query_products_single_field_detail_skips_llm_compose(self):
+        original_llm_compose = customer_agent_intent_service._llm_compose_answer
+
+        async def fail_llm_compose(*args, **kwargs):
+            raise AssertionError("single-field product detail should not call llm compose")
+
+        product = Product(
+            id="detail-CW-C83",
+            sku="CW-C83",
+            barcode="barcode-CW-C83",
+            product_name_cn="炊墨套锅",
+            product_name_en="cookware set",
+            brand="alocs",
+            category="锅具",
+            product_level="A类品",
+            lifecycle_status="常规品",
+        )
+        self.db.add(product)
+        self.db.add(ProductSpecs(
+            id="detail-specs-CW-C83",
+            product_id=product.id,
+            body_material="硬质氧化铝合金、白蜡木",
+        ))
+        self.db.commit()
+
+        customer_agent_intent_service._llm_compose_answer = fail_llm_compose
+        try:
+            result = await customer_agent_intent_service._query_products_result(
+                self.db,
+                "user-1",
+                customer_agent_intent_service.CustomerIntent(
+                    intent="query_products",
+                    term="炊墨套锅",
+                    semantic_query="炊墨套锅手柄是什么材质",
+                    requested_fields=["材质"],
+                    is_single_field_sufficient=False,
+                ),
+                original_question="炊墨套锅手柄是什么材质",
+            )
+        finally:
+            customer_agent_intent_service._llm_compose_answer = original_llm_compose
+
+        self.assertEqual(result["answer_type"], "product_detail")
+        self.assertTrue(result["skip_polish"])
+        self.assertIn("材质", result["answer"])
+
+    async def test_usage_care_reply_answer_hides_raw_qa_labels(self):
+        self._seed_usage_care_knowledge()
+
+        result = await customer_service_service.ask_customer_service(
+            self.db,
+            user_id="user-1",
+            question="用户说不粘锅不好清洗，客服怎么回复",
+        )
+
+        self.assertNotIn("Q:", result["answer"])
+        self.assertNotIn("A:", result["answer"])
+
+    async def test_usage_care_debug_contains_cleaning_pipeline_snapshots(self):
+        self._seed_usage_care_knowledge()
+
+        result = await customer_service_service.ask_customer_service(
+            self.db,
+            user_id="user-1",
+            question="不粘锅不好清洗，怎么办",
+        )
+
+        debug = result["debug"]
+        self.assertIn("raw_used_sources_text", debug)
+        self.assertIn("answer_before_usage_care_clean", debug)
+        self.assertIn("answer_after_usage_care_clean", debug)
+        self.assertIn("final_answer_before_sse", debug)
+        self.assertIn("final_answer_after_sse_clean", debug)
+
+    async def test_purchase_channel_question_still_uses_purchase_fast_path(self):
+        result = await customer_service_service.ask_customer_service(
+            self.db,
+            user_id="user-1",
+            question="你们产品在哪里可以买到",
+        )
+
+        self.assertEqual(result["intent"], "purchase_channel")
+        self.assertEqual(result["debug"]["agent_mode"], "customer_faq_fast_path")
+
     async def test_aftersales_phone_question_uses_faq_fast_path_without_phone_number(self):
         result = await customer_service_service.ask_customer_service(
             self.db,
@@ -2552,7 +2808,7 @@ class CustomerServiceServiceTest(unittest.IsolatedAsyncioTestCase):
             question="\u552e\u540e\u7535\u8bdd\u662f\u591a\u5c11",
         )
 
-        self.assertEqual(result["intent"], "aftersales")
+        self.assertEqual(result["intent"], "customer_faq")
         self.assertEqual(result["answer_type"], "faq")
         self.assertEqual(result["debug"]["agent_mode"], "customer_faq_fast_path")
         self.assertIn("\u552e\u540e", result["answer"])
@@ -2570,7 +2826,7 @@ class CustomerServiceServiceTest(unittest.IsolatedAsyncioTestCase):
                     question=question,
                 )
 
-                self.assertEqual(result["intent"], "aftersales")
+                self.assertEqual(result["intent"], "customer_faq")
                 self.assertEqual(result["answer_type"], "faq")
                 self.assertEqual(result["debug"]["agent_mode"], "customer_faq_fast_path")
                 self.assertIn("\u552e\u540e", result["answer"])
@@ -2741,6 +2997,298 @@ class CustomerServiceServiceTest(unittest.IsolatedAsyncioTestCase):
         review = customer_service_service.review_samples(self.db, "user-1", limit=10)
         self.assertIn("quality", review["summary"])
         self.assertEqual(review["summary"]["quality"]["levels"]["high"], 1)
+
+    async def test_deterministic_intent_runs_before_runtime_for_recommendation(self):
+        calls = []
+        original_runtime = customer_agent_runtime_service.process_agent_request
+        original_intent = customer_agent_intent_service.process_intent_request
+
+        async def fake_runtime(*args, **kwargs):
+            calls.append(("runtime", kwargs["question"]))
+            return None
+
+        async def fake_intent(*args, **kwargs):
+            calls.append(("intent", kwargs["question"]))
+            return {
+                "answer": "先走确定性意图链路。",
+                "intent": "recommend_products",
+                "answer_type": "recommendation",
+                "confidence": "high",
+                "uncertainty": "confirmed",
+                "sources": [{"type": "product_search", "label": "产品检索", "count": 1}],
+                "actions": [],
+                "results": [{"sku": "CW-C93"}],
+                "steps": [],
+                "warnings": [],
+                "evidence": [],
+                "debug": {"agent_mode": "deterministic_intent"},
+                "skip_polish": True,
+                "sku": "CW-C93",
+            }
+
+        customer_agent_runtime_service.process_agent_request = fake_runtime
+        customer_agent_intent_service.process_intent_request = fake_intent
+        try:
+            result = await customer_service_service.ask_customer_service(
+                self.db,
+                user_id="user-1",
+                question="推荐一款适合三个人做饭的锅",
+            )
+        finally:
+            customer_agent_runtime_service.process_agent_request = original_runtime
+            customer_agent_intent_service.process_intent_request = original_intent
+
+        self.assertEqual(result["answer"], "先走确定性意图链路。")
+        self.assertEqual([item[0] for item in calls], ["intent"])
+        self.assertEqual(result["debug"]["agent_mode"], "deterministic_intent")
+
+    async def test_usage_care_fast_path_still_precedes_runtime(self):
+        self._seed_usage_care_knowledge()
+        original_runtime = customer_agent_runtime_service.process_agent_request
+
+        async def fail_runtime(*args, **kwargs):
+            raise AssertionError("usage-care 命中后不应进入 runtime")
+
+        customer_agent_runtime_service.process_agent_request = fail_runtime
+        try:
+            result = await customer_service_service.ask_customer_service(
+                self.db,
+                user_id="user-1",
+                question="不粘锅怎么清洗",
+            )
+        finally:
+            customer_agent_runtime_service.process_agent_request = original_runtime
+
+        self.assertEqual(result["intent"], "product_usage_care")
+        self.assertEqual(result["debug"]["agent_mode"], "product_usage_care_fast_path")
+
+    async def test_process_intent_request_usage_care_question_does_not_fall_into_query_products(self):
+        self._seed_usage_care_knowledge()
+
+        result = await customer_agent_intent_service.process_intent_request(
+            self.db,
+            user_id="user-1",
+            question="不粘锅怎么清洗",
+            sku=None,
+            previous_result_skus=[],
+            allow_llm_fallback=False,
+        )
+
+        self.assertIsNotNone(result)
+        self.assertEqual(result["intent"], "product_usage_care")
+        self.assertEqual(result["debug"]["agent_mode"], "product_usage_care_fast_path")
+        self.assertNotEqual(result["answer_type"], "product_query")
+        self.assertTrue(any(source.get("type") in {"product_qa", "usage_care_knowledge", "knowledge_base"} for source in result["sources"]))
+
+    async def test_process_intent_request_purchase_question_does_not_fall_into_query_products(self):
+        result = await customer_agent_intent_service.process_intent_request(
+            self.db,
+            user_id="user-1",
+            question="你们产品在哪里买",
+            sku=None,
+            previous_result_skus=[],
+            allow_llm_fallback=False,
+        )
+
+        self.assertIsNone(result)
+
+    async def test_process_intent_request_aftersales_question_does_not_fall_into_query_products(self):
+        result = await customer_agent_intent_service.process_intent_request(
+            self.db,
+            user_id="user-1",
+            question="退换货怎么处理",
+            sku=None,
+            previous_result_skus=[],
+            allow_llm_fallback=False,
+        )
+
+        self.assertIsNone(result)
+
+    async def test_query_products_empty_result_skips_polish_in_service(self):
+        original_intent = customer_agent_intent_service.process_intent_request
+        original_polish = customer_service_service._polish_customer_answer
+
+        async def fake_intent(*args, **kwargs):
+            return {
+                "answer": "没有找到匹配的产品资料，请换一个 SKU、产品名或筛选条件再试。",
+                "intent": "query_products",
+                "answer_type": "product_query",
+                "confidence": "low",
+                "uncertainty": "insufficient_data",
+                "sources": [{"type": "product_search", "label": "意图解析查询", "count": 0}],
+                "actions": [],
+                "results": [],
+                "steps": [],
+                "warnings": ["missing_product_results"],
+                "evidence": [],
+                "debug": {"agent_mode": "deterministic_intent"},
+                "skip_polish": False,
+                "sku": None,
+            }
+
+        async def fail_polish(*args, **kwargs):
+            raise AssertionError("empty query_products result should not trigger polish")
+
+        customer_agent_intent_service.process_intent_request = fake_intent
+        customer_service_service._polish_customer_answer = fail_polish
+        try:
+            result = await customer_service_service.ask_customer_service(
+                self.db,
+                user_id="user-1",
+                question="没有这个产品吗",
+            )
+        finally:
+            customer_agent_intent_service.process_intent_request = original_intent
+            customer_service_service._polish_customer_answer = original_polish
+
+        self.assertEqual(result["intent"], "query_products")
+        self.assertEqual(result["answer_type"], "product_query")
+
+    async def test_recommendation_result_skips_service_polish(self):
+        original_intent = customer_agent_intent_service.process_intent_request
+        original_polish = customer_service_service._polish_customer_answer
+
+        async def fake_intent(*args, **kwargs):
+            return {
+                "answer": "我优先推荐 CW-C93，容量和场景更匹配两人露营做饭。",
+                "intent": "recommend_products",
+                "answer_type": "recommendation",
+                "confidence": "high",
+                "uncertainty": "confirmed",
+                "sources": [{"type": "product_search", "label": "推荐候选范围", "count": 1}],
+                "actions": [],
+                "results": [{"sku": "CW-C93", "product_name_cn": "行山单锅"}],
+                "steps": [],
+                "warnings": [],
+                "evidence": [{"sku": "CW-C93", "field_label": "容量", "value": "1000ml"}],
+                "debug": {"agent_mode": "deterministic_intent"},
+                "skip_polish": False,
+                "sku": "CW-C93",
+            }
+
+        async def fail_polish(*args, **kwargs):
+            raise AssertionError("recommendation result should not trigger extra polish")
+
+        customer_agent_intent_service.process_intent_request = fake_intent
+        customer_service_service._polish_customer_answer = fail_polish
+        try:
+            result = await customer_service_service.ask_customer_service(
+                self.db,
+                user_id="user-1",
+                question="推荐一款适合2人露营的锅",
+            )
+        finally:
+            customer_agent_intent_service.process_intent_request = original_intent
+            customer_service_service._polish_customer_answer = original_polish
+
+        self.assertEqual(result["intent"], "recommendation")
+        self.assertEqual(result["answer_type"], "recommendation")
+        self.assertIn("推荐：", result["answer"])
+
+    async def test_query_products_structured_result_skips_service_polish(self):
+        original_intent = customer_agent_intent_service.process_intent_request
+        original_polish = customer_service_service._polish_customer_answer
+
+        async def fake_intent(*args, **kwargs):
+            return {
+                "answer": "共找到 1 个候选产品：CW-C93。",
+                "intent": "query_products",
+                "answer_type": "product_query",
+                "confidence": "high",
+                "uncertainty": "confirmed",
+                "sources": [{"type": "product_search", "label": "意图解析查询", "count": 1}],
+                "actions": [],
+                "results": [{"sku": "CW-C93", "product_name_cn": "行山单锅"}],
+                "steps": [],
+                "warnings": [],
+                "evidence": [{"sku": "CW-C93", "field_label": "SKU", "value": "CW-C93"}],
+                "debug": {"agent_mode": "deterministic_intent"},
+                "skip_polish": True,
+                "sku": "CW-C93",
+            }
+
+        async def fail_polish(*args, **kwargs):
+            raise AssertionError("structured query_products result should not trigger service polish")
+
+        customer_agent_intent_service.process_intent_request = fake_intent
+        customer_service_service._polish_customer_answer = fail_polish
+        try:
+            result = await customer_service_service.ask_customer_service(
+                self.db,
+                user_id="user-1",
+                question="列出锅具产品",
+            )
+        finally:
+            customer_agent_intent_service.process_intent_request = original_intent
+            customer_service_service._polish_customer_answer = original_polish
+
+        self.assertEqual(result["intent"], "query_products")
+        self.assertEqual(result["answer_type"], "product_query")
+
+    def test_finalize_answer_marks_single_primary_source(self):
+        finalized = customer_service_service._finalize_answer({
+            "answer": "系统里记录的售后资料如下：请联系店铺客服处理。",
+            "intent": "aftersales",
+            "answer_type": "faq",
+            "confidence": "high",
+            "uncertainty": "resolved",
+            "sources": [
+                {"type": "structured_faq", "label": "售后联系方式未配置"},
+                {"type": "product_search", "label": "意图解析查询", "count": 1},
+            ],
+            "results": [{"sku": "CW-C93"}],
+            "steps": [],
+            "warnings": [],
+            "evidence": [],
+            "debug": {"agent_mode": "customer_faq_fast_path"},
+            "skip_polish": False,
+        })
+
+        roles = [item.get("role") for item in finalized["sources"]]
+        self.assertEqual(roles.count("primary"), 1)
+        self.assertEqual(finalized["answer_metadata"]["final_decision"]["primary_source"], "customer_faq")
+        self.assertTrue(finalized["answer_metadata"]["final_decision"]["single_source_of_truth"])
+        self.assertTrue(finalized["skip_polish"])
+
+    def test_finalize_answer_removes_raw_qa_markers(self):
+        finalized = customer_service_service._finalize_answer({
+            "answer": "Q: 不粘锅怎么清洗\nA: 使用后趁热用温水和软刷清洗。",
+            "intent": "product_usage_care",
+            "answer_type": "product_usage_care",
+            "confidence": "high",
+            "uncertainty": "confirmed",
+            "sources": [{"type": "product_qa", "label": "产品 QA"}],
+            "results": [],
+            "steps": [],
+            "warnings": [],
+            "evidence": [],
+            "debug": {"agent_mode": "product_usage_care_fast_path"},
+            "skip_polish": False,
+        })
+
+        self.assertNotIn("Q:", finalized["answer"])
+        self.assertNotIn("A:", finalized["answer"])
+        self.assertEqual(finalized["answer_metadata"]["final_decision"]["primary_source"], "product_usage_care")
+
+    def test_finalize_answer_disallows_llm_for_structured_detail(self):
+        finalized = customer_service_service._finalize_answer({
+            "answer": "CW-C93 的容量是 1000ml。",
+            "intent": "product_detail",
+            "answer_type": "product_detail",
+            "confidence": "high",
+            "uncertainty": "confirmed",
+            "sources": [{"type": "product", "label": "按意图读取产品字段"}],
+            "results": [{"sku": "CW-C93", "field_values": {"容量": "1000ml"}}],
+            "steps": [],
+            "warnings": [],
+            "evidence": [{"sku": "CW-C93", "field_label": "容量", "value": "1000ml"}],
+            "debug": {"agent_mode": "deterministic_intent"},
+            "skip_polish": False,
+        })
+
+        self.assertEqual(finalized["answer_metadata"]["final_decision"]["primary_source"], "structured_product_detail")
+        self.assertFalse(finalized["answer_metadata"]["final_decision"]["llm_allowed"])
+        self.assertTrue(finalized["skip_polish"])
 
     async def test_ask_customer_service_passes_negative_feedback_lessons(self):
         conversation = CustomerServiceConversation(id="conv-1", user_id="user-1", title="旧会话")

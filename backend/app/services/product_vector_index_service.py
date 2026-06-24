@@ -192,8 +192,16 @@ def index_product(db: Session, sku: str) -> dict[str, int]:
     return {"documents": len(docs), "chunks": len(docs)}
 
 
-async def embed_pending_chunks(db: Session, *, limit: int | None = None, model: str | None = None) -> dict[str, int]:
+async def embed_pending_chunks(
+    db: Session,
+    *,
+    limit: int | None = None,
+    model: str | None = None,
+    document_id: str | None = None,
+) -> dict[str, int]:
     query = db.query(KnowledgeChunk).filter(KnowledgeChunk.embedding_status != "synced")
+    if document_id:
+        query = query.filter(KnowledgeChunk.document_id == document_id)
     chunks = query.order_by(KnowledgeChunk.updated_at.asc()).limit(limit).all() if limit else query.all()
     embedded = 0
     failed = 0
@@ -269,8 +277,14 @@ def should_create_ivfflat_index(dimensions: int | None) -> bool:
     return bool(dimensions and dimensions <= 2000)
 
 
-def run_embed_pending_chunks(db: Session, *, limit: int | None = None, model: str | None = None) -> dict[str, int]:
-    return asyncio.run(embed_pending_chunks(db, limit=limit, model=model))
+def run_embed_pending_chunks(
+    db: Session,
+    *,
+    limit: int | None = None,
+    model: str | None = None,
+    document_id: str | None = None,
+) -> dict[str, int]:
+    return asyncio.run(embed_pending_chunks(db, limit=limit, model=model, document_id=document_id))
 
 
 def _doc(sku: str, section: str, title: str, lines: list[str]) -> dict[str, Any]:

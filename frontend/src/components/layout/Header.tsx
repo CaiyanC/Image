@@ -38,6 +38,7 @@ export default function Header() {
     ...(has('ai.generate') ? [{ path: '/', label: '创作' }] : []),
     ...(has('history.view') ? [{ path: '/history', label: '历史' }] : []),
     ...(has('product.read') ? [{ path: '/products', label: '产品' }] : []),
+    ...(has('product.read') ? [{ path: '/assets', label: '素材库' }] : []),
   ]
   const homePath = navItems[0]?.path || '/no-access'
 

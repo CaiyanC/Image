@@ -115,6 +115,7 @@ def cancel_action(
 async def ask(
     body: CustomerServiceAskRequest,
     request: Request,
+    debug: bool = Query(False),
     current_user: User = Depends(require_permission("ai.customer_service")),
     db: Session = Depends(get_db),
 ):
@@ -151,7 +152,9 @@ async def ask(
         request=request,
     )
     customer_perf_service.log_stage("ask_api.total", request_start, conversation_id=result.get("conversation_id"), intent=result.get("intent"))
-    customer_perf_service.summarize_request(final_answer=result.get("answer"), intent=result.get("intent"), agent_mode=(result.get("debug") or {}).get("agent_mode"))
+    perf_summary = customer_perf_service.summarize_request(final_answer=result.get("answer"), intent=result.get("intent"), agent_mode=(result.get("debug") or {}).get("agent_mode"))
+    if debug or str(request.headers.get("X-Debug-Trace") or "").lower() in {"1", "true", "yes"}:
+        _attach_debug_trace(result, perf_summary)
     return result
 
 
@@ -272,6 +275,58 @@ def _sse(event: str, data: dict) -> str:
     return f"event: {event}\ndata: {json.dumps(data, ensure_ascii=False, default=str)}\n\n"
 
 
+def _attach_debug_trace(result: dict, perf_summary: dict | None) -> None:
+    if not isinstance(result, dict):
+        return
+    debug = result.get("debug") if isinstance(result.get("debug"), dict) else {}
+    metadata = result.get("answer_metadata") if isinstance(result.get("answer_metadata"), dict) else {}
+    final_decision = metadata.get("final_decision") if isinstance(metadata.get("final_decision"), dict) else {}
+    summary_extra = (perf_summary or {}).get("extra") if isinstance(perf_summary, dict) else {}
+    if not isinstance(summary_extra, dict):
+        summary_extra = {}
+    llm_calls = summary_extra.get("llm_calls") if isinstance(summary_extra.get("llm_calls"), list) else []
+    stages = summary_extra.get("stages") if isinstance(summary_extra.get("stages"), list) else []
+
+    routing_stage = ""
+    fallback_stage = ""
+    for stage in stages:
+        if not isinstance(stage, dict):
+            continue
+        stage_name = str(stage.get("stage") or "")
+        if not routing_stage and (
+            "fast_path" in stage_name
+            or stage_name in {"named_product_shortcut", "process_intent_request_pre_runtime", "process_agent_request"}
+        ):
+            routing_stage = stage_name
+        if not fallback_stage and "fallback" in stage_name:
+            fallback_stage = stage_name
+
+    debug_trace = {
+        "trace_id": (perf_summary or {}).get("trace_id") or customer_perf_service.get_trace_id() or "",
+        "intent": result.get("intent") or "",
+        "agent_mode": result.get("agent_mode") or debug.get("agent_mode") or "",
+        "answer_type": result.get("answer_type") or "",
+        "final_decision": final_decision,
+        "llm_call_count": int(summary_extra.get("llm_call_count") or 0),
+        "llm_calls": llm_calls,
+        "skip_polish": bool(debug.get("skip_polish") or result.get("skip_polish") or final_decision.get("llm_allowed") is False),
+        "primary_source": final_decision.get("primary_source") or "",
+        "routing_stage": routing_stage,
+        "fallback_stage": fallback_stage,
+        "stages": stages,
+    }
+    debug["trace"] = debug_trace
+    debug["trace_id"] = debug_trace["trace_id"]
+    debug["llm_call_count"] = debug_trace["llm_call_count"]
+    debug["llm_calls"] = llm_calls
+    result["debug"] = debug
+    metadata["debug"] = debug_trace
+    metadata["trace_id"] = debug_trace["trace_id"]
+    metadata["llm_call_count"] = debug_trace["llm_call_count"]
+    metadata["llm_calls"] = llm_calls
+    result["answer_metadata"] = metadata
+
+
 def _build_trace_payload(db: Session, result: dict, question: str, user_id: str) -> dict:
     state = customer_perf_service.get_state() or {}
     stages = state.get("stages") or []
@@ -289,11 +344,20 @@ def _build_trace_payload(db: Session, result: dict, question: str, user_id: str)
         "conversation_id": result.get("conversation_id") or "",
         "agent_mode": _trace_agent_mode(result, stages),
         "intent": result.get("intent") or debug.get("intent") or "",
+        "usage_care_subtype": debug.get("usage_care_subtype"),
         "result_skus": _trace_result_skus(result),
         "llm_call_count": len(llm_calls),
         "prompt_chars": sum(int(call.get("prompt_chars") or 0) for call in llm_calls),
-        "total_ms": round(float(state.get("done_at") or 0), 2),
-        "first_token_ms": round(float(state.get("first_answer_delta_at") or 0), 2),
+        "total_ms": round(float(state.get("done_at") or debug.get("total_ms") or 0), 2),
+        "first_token_ms": round(float(state.get("first_answer_delta_at") or debug.get("total_ms") or 0), 2),
+        "product_qa_ms": debug.get("product_qa_ms"),
+        "knowledge_search_ms": debug.get("knowledge_search_ms"),
+        "rerank_ms": debug.get("rerank_ms"),
+        "compose_answer_ms": debug.get("compose_answer_ms"),
+        "product_qa_count": debug.get("qa_result_count"),
+        "knowledge_chunk_count": debug.get("knowledge_result_count"),
+        "final_used_sources_count": debug.get("final_used_sources_count"),
+        "filtered_or_downgraded": debug.get("filtered_or_downgraded") or [],
         "hit_faq_fast_path": _trace_stage_hit(stages, "customer_faq_fast_path"),
         "entered_process_agent_request": _trace_stage_seen(stages, "process_agent_request"),
         "entered_process_intent_fallback": _trace_stage_seen(stages, "process_intent_request_fallback"),

@@ -200,8 +200,8 @@ def _strip_size_unit(value: str, unit: str) -> str:
     variants.sort(key=len, reverse=True)
     unit_pattern = "|".join(re.escape(variant) for variant in variants)
     return re.sub(
-        rf"(?P<number>\d+(?:\.\d+)?)\s*(?:{unit_pattern})",
-        r"\g<number>",
+        rf"\s*(?:{unit_pattern})\s*$",
+        "",
         value,
         flags=re.IGNORECASE,
     ).strip()
@@ -225,12 +225,13 @@ def _normalize_size_info(value):
             normalized_items.append(normalized_item)
             continue
 
-        units = {
-            _normalize_size_unit(match.group("unit"))
-            for match in _SIZE_UNIT_PATTERN.finditer(raw_value)
-        }
-        if len(units) == 1:
-            unit = next(iter(units))
+        trailing_unit_match = re.search(
+            r"(?P<unit>毫米|厘米|英寸|inch|mm|cm|in|m|米)\s*$",
+            raw_value,
+            flags=re.IGNORECASE,
+        )
+        if trailing_unit_match:
+            unit = _normalize_size_unit(trailing_unit_match.group("unit"))
             normalized_item["unit"] = unit
             normalized_item["value"] = _strip_size_unit(raw_value, unit)
         else:

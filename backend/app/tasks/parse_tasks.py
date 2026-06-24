@@ -5,6 +5,7 @@ from datetime import datetime, timezone
 from ..core.celery_app import celery_app
 from ..core.database import SessionLocal
 from ..models.knowledge_base import KnowledgeDocument, KnowledgeParseTask
+from ..services import product_vector_index_service
 from ..services.file_ingestion_service import ingest_file
 
 
@@ -43,10 +44,17 @@ def parse_document(document_id: str, task_id: str) -> dict:
 
         task.finished_at = datetime.now(timezone.utc)
         if parsed_document.parse_status == "done":
+            embedding_result = _embed_parsed_document(db, document_id)
             task.status = "done"
             task.error_message = None
             db.commit()
-            return {"ok": True, "status": "done", "document_id": document_id, "task_id": task_id}
+            return {
+                "ok": True,
+                "status": "done",
+                "document_id": document_id,
+                "task_id": task_id,
+                "embedding": embedding_result,
+            }
 
         task.status = "error"
         task.error_message = parsed_document.parse_error or "File parsing failed"
@@ -90,3 +98,19 @@ def _load_related_skus(value: str | None) -> list[str]:
             seen.add(sku)
             result.append(sku)
     return result
+
+
+def _embed_parsed_document(db, document_id: str) -> dict:
+    if not _should_auto_embed_document(db):
+        return {"skipped": True, "reason": "unsupported_database"}
+    try:
+        return product_vector_index_service.run_embed_pending_chunks(db, document_id=document_id)
+    except Exception as exc:
+        return {"skipped": False, "error": str(exc)[:2000]}
+
+
+def _should_auto_embed_document(db) -> bool:
+    try:
+        return db.get_bind().dialect.name == "postgresql"
+    except Exception:
+        return False

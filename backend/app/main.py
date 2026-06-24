@@ -11,7 +11,7 @@ from .core.database import init_db, SessionLocal
 from .core.permission_constants import MANAGEMENT_GROUP_NAME
 from .core.security import get_password_hash
 from .models.user import User
-from .api import auth, users, generation, history, admin, products, groups, categories, drafts, customer_service, knowledge_base, files
+from .api import auth, users, generation, history, admin, products, groups, categories, drafts, customer_service, knowledge_base, files, assets
 from .services import knowledge_service
 
 def _configure_error_logging() -> None:
@@ -54,6 +54,7 @@ app.include_router(history.router)
 app.include_router(admin.router)
 app.include_router(drafts.router)
 app.include_router(products.router)
+app.include_router(assets.router)
 app.include_router(groups.router)
 app.include_router(categories.router)
 app.include_router(customer_service.router)

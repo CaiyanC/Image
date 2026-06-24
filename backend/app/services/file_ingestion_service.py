@@ -113,16 +113,25 @@ async def ingest_file(
         )
 
         for item in chunks_payload:
-            db.add(
-                KnowledgeChunk(
-                    document_id=document.id,
-                    sku=related_skus_clean[0] if related_skus_clean else None,
-                    source_type="file",
-                    chunk_index=item["chunk_index"],
-                    content=item["content"],
-                    metadata_json=json.dumps(item["metadata"], ensure_ascii=False),
-                    embedding_status="pending",
-                )
+            chunk = KnowledgeChunk(
+                document_id=document.id,
+                sku=related_skus_clean[0] if related_skus_clean else None,
+                source_type="file",
+                chunk_index=item["chunk_index"],
+                content=item["content"],
+                metadata_json="{}",
+                embedding_status="pending",
+            )
+            db.add(chunk)
+            db.flush()
+            chunk.metadata_json = json.dumps(
+                {
+                    **item["metadata"],
+                    "document_id": document.id,
+                    "chunk_id": chunk.id,
+                    "related_skus": related_skus_clean,
+                },
+                ensure_ascii=False,
             )
         db.commit()
         db.refresh(document)

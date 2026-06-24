@@ -1,5 +1,7 @@
 ﻿import json
+import os
 import re
+import sys
 from time import perf_counter
 from typing import Awaitable, Callable
 
@@ -193,6 +195,19 @@ async def ask_customer_service(
     conversation_id: str | None = None,
     answer_delta_callback: Callable[[str], Awaitable[None]] | None = None,
 ) -> dict:
+    print("ENTER ask_customer_service", flush=True)
+    print(
+        "RUNNING VERSION CHECK",
+        {
+            "func": "ask_customer_service",
+            "pid": os.getpid(),
+            "file_path": __file__,
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "sys_executable": sys.executable,
+            "cwd": os.getcwd(),
+        },
+        flush=True,
+    )
     user_id = str(user_id)
     question = question.strip()
     if not question:
@@ -202,6 +217,84 @@ async def ask_customer_service(
     request_start = perf_counter()
 
     named_products = _products_named_in_question(db, question)
+    usage_care_start = perf_counter()
+    usage_care_result = None
+    if _is_product_usage_care_question(question):
+        usage_care_result = await customer_agent_intent_service.answer_product_usage_care_request(
+            db,
+            question=question,
+            named_products=named_products,
+        )
+    customer_perf_service.log_stage(
+        "product_usage_care_fast_path",
+        usage_care_start,
+        hit=bool(usage_care_result),
+        intent=usage_care_result.get("intent") if usage_care_result else None,
+        agent_mode=(usage_care_result.get("debug") or {}).get("agent_mode") if usage_care_result else None,
+    )
+    if usage_care_result:
+        usage_care_result = _finalize_answer(usage_care_result)
+        usage_care_result = _shape_answer_for_output(usage_care_result)
+        stage_start = perf_counter()
+        conversation = _get_or_create_conversation(db, user_id, question, usage_care_result.get("sku"), conversation_id)
+        db.add(CustomerServiceMessage(
+            conversation_id=conversation.id,
+            role="user",
+            content=question,
+            sku=usage_care_result.get("sku"),
+        ))
+        assistant_turn_index = _assistant_turn_index(db, conversation.id)
+        sources_with_context = _sources_with_result_context(
+            usage_care_result,
+            turn_index=assistant_turn_index,
+            user_question=question,
+        )
+        assistant_message = CustomerServiceMessage(
+            conversation_id=conversation.id,
+            role="assistant",
+            content=usage_care_result["answer"],
+            sku=usage_care_result.get("sku"),
+            sources_json=json.dumps(sources_with_context, ensure_ascii=False, default=str),
+        )
+        db.add(assistant_message)
+        _touch_conversation(conversation, usage_care_result.get("sku"))
+        conversation_id_value = conversation.id
+        message_id_value = assistant_message.id
+        db.commit()
+        customer_perf_service.log_stage("save_messages_and_commit", stage_start, branch="product_usage_care_fast_path", intent=usage_care_result.get("intent"))
+        customer_perf_service.log_stage("ask_customer_service.total", request_start, branch="product_usage_care_fast_path", intent=usage_care_result.get("intent"), agent_mode=(usage_care_result.get("debug") or {}).get("agent_mode"))
+        customer_perf_service.summarize_request(
+            final_answer=usage_care_result.get("answer"),
+            intent=usage_care_result.get("intent"),
+            agent_mode=(usage_care_result.get("debug") or {}).get("agent_mode"),
+        )
+        release_session_connection(db)
+        public_intent = _public_intent_name(usage_care_result.get("intent"), usage_care_result.get("answer_type"))
+        return {
+            "conversation_id": conversation_id_value,
+            "message_id": message_id_value,
+            "intent": public_intent,
+            "answer_type": usage_care_result.get("answer_type"),
+            "confidence": usage_care_result.get("confidence"),
+            "uncertainty": usage_care_result.get("uncertainty"),
+            "needs_clarification": usage_care_result.get("needs_clarification", False),
+            "anomalies": usage_care_result.get("anomalies") or [],
+            "suggested_followups": usage_care_result.get("suggested_followups") or [],
+            "followups": usage_care_result.get("followups") or usage_care_result.get("suggested_followups") or [],
+            "warnings": usage_care_result.get("warnings") or [],
+            "evidence": usage_care_result.get("evidence") or [],
+            "agent_quality": usage_care_result.get("agent_quality") or {},
+            "answer_metadata": usage_care_result.get("answer_metadata") or {},
+            "debug": usage_care_result.get("debug") or {},
+            "sku": usage_care_result.get("sku"),
+            "answer": usage_care_result["answer"],
+            "sources": sources_with_context,
+            "actions": usage_care_result.get("actions") or [],
+            "results": usage_care_result.get("results") or [],
+            "steps": usage_care_result.get("steps") or [],
+            "result_skus": usage_care_result.get("result_skus") or [],
+            "agent_mode": (usage_care_result.get("debug") or {}).get("agent_mode"),
+        }
     faq_start = perf_counter()
     faq_intent = None if named_products else _classify_customer_faq_intent(question)
     faq_result = None
@@ -215,6 +308,8 @@ async def ask_customer_service(
         agent_mode=(faq_result.get("debug") or {}).get("agent_mode") if faq_result else None,
     )
     if faq_result:
+        faq_result = _finalize_answer(faq_result)
+        faq_result = _shape_answer_for_output(faq_result)
         stage_start = perf_counter()
         conversation = _get_or_create_conversation(db, user_id, question, faq_result.get("sku"), conversation_id)
         db.add(CustomerServiceMessage(
@@ -249,10 +344,11 @@ async def ask_customer_service(
             agent_mode=(faq_result.get("debug") or {}).get("agent_mode"),
         )
         release_session_connection(db)
+        public_intent = _public_intent_name(faq_result.get("intent"), faq_result.get("answer_type"))
         return {
             "conversation_id": conversation_id_value,
             "message_id": message_id_value,
-            "intent": faq_result.get("intent"),
+            "intent": public_intent,
             "answer_type": faq_result.get("answer_type"),
             "confidence": faq_result.get("confidence"),
             "uncertainty": faq_result.get("uncertainty"),
@@ -263,6 +359,7 @@ async def ask_customer_service(
             "warnings": faq_result.get("warnings") or [],
             "evidence": faq_result.get("evidence") or [],
             "agent_quality": faq_result.get("agent_quality") or {},
+            "answer_metadata": faq_result.get("answer_metadata") or {},
             "debug": faq_result.get("debug") or {},
             "sku": faq_result.get("sku"),
             "answer": faq_result["answer"],
@@ -279,7 +376,8 @@ async def ask_customer_service(
     customer_perf_service.log_stage("guardrail.evaluate_question", stage_start, matched=bool(agent_result))
     if agent_result:
         stage_start = perf_counter()
-        agent_result = _normalize_agent_result(agent_result)
+        agent_result = _finalize_answer(agent_result)
+        agent_result = _shape_answer_for_output(agent_result)
         agent_result = _attach_agent_quality(agent_result, question)
         conversation = _get_or_create_conversation(db, user_id, question, agent_result.get("sku"), conversation_id)
         db.add(CustomerServiceMessage(
@@ -310,10 +408,11 @@ async def ask_customer_service(
         customer_perf_service.log_stage("ask_customer_service.total", request_start, branch="guardrail", intent=agent_result.get("intent"))
         customer_perf_service.summarize_request(final_answer=agent_result.get("answer"), intent=agent_result.get("intent"), agent_mode=(agent_result.get("debug") or {}).get("agent_mode"))
         release_session_connection(db)
+        public_intent = _public_intent_name(agent_result.get("intent"), agent_result.get("answer_type"))
         return {
             "conversation_id": conversation_id_value,
             "message_id": message_id_value,
-            "intent": agent_result.get("intent"),
+            "intent": public_intent,
             "answer_type": agent_result.get("answer_type"),
             "confidence": agent_result.get("confidence"),
             "uncertainty": agent_result.get("uncertainty"),
@@ -334,24 +433,48 @@ async def ask_customer_service(
             "steps": agent_result.get("steps") or [],
         }
 
-    context_start = perf_counter()
-    entity_stack = _latest_entity_stack(db, conversation_id, user_id)
-    conversation_history = _build_conversation_history(db, conversation_id, user_id)
-    recommendation_context = None
-    customer_perf_service.log_stage(
-        "context_read",
-        context_start,
-        entity_stack_count=len(entity_stack or []),
-        conversation_history_count=len(conversation_history or []),
-        previous_result_skus_count=0,
-        recommendation_context_present=bool(recommendation_context),
-    )
-    contextual_conversation_history = conversation_history
-
     shortcut_start = perf_counter()
     agent_result = await _try_named_product_shortcut(db, user_id=user_id, question=question)
     customer_perf_service.log_stage("named_product_shortcut", shortcut_start, hit=bool(agent_result), agent_mode=(agent_result.get("debug") or {}).get("agent_mode") if agent_result else None)
     if not agent_result:
+        print("ENTER intent pipeline", flush=True)
+        stage_start = perf_counter()
+        agent_result = await customer_agent_intent_service.process_intent_request(
+            db,
+            user_id=user_id,
+            question=question,
+            sku=None,
+            previous_result_skus=[],
+            allow_llm_fallback=False,
+        )
+        customer_perf_service.log_stage("process_intent_request_pre_runtime", stage_start, hit=bool(agent_result), intent=agent_result.get("intent") if agent_result else None)
+    if not agent_result:
+        stage_start = perf_counter()
+        agent_result = customer_agent_service.try_numeric_english_name_query(db, question)
+        customer_perf_service.log_stage("legacy_rule_agent_fallback", stage_start, hit=bool(agent_result), intent=agent_result.get("intent") if agent_result else None)
+    if not agent_result:
+        stage_start = perf_counter()
+        agent_result = customer_agent_service.process_agent_request(
+            db,
+            user_id=user_id,
+            question=question,
+            sku=None,
+        )
+        customer_perf_service.log_stage("legacy_rule_agent_total", stage_start, hit=bool(agent_result), intent=agent_result.get("intent") if agent_result else None)
+    if not agent_result:
+        context_start = perf_counter()
+        entity_stack = _latest_entity_stack(db, conversation_id, user_id)
+        conversation_history = _build_conversation_history(db, conversation_id, user_id)
+        recommendation_context = None
+        customer_perf_service.log_stage(
+            "context_read",
+            context_start,
+            entity_stack_count=len(entity_stack or []),
+            conversation_history_count=len(conversation_history or []),
+            previous_result_skus_count=0,
+            recommendation_context_present=bool(recommendation_context),
+        )
+        contextual_conversation_history = conversation_history
         stage_start = perf_counter()
         recognized_intent = _recognized_intent_for_agent_fast_path(db, question, conversation_id)
         feedback_lessons = _build_feedback_lessons(db, user_id)
@@ -378,6 +501,7 @@ async def ask_customer_service(
             question=question,
             sku=None,
             previous_result_skus=[],
+            allow_llm_fallback=False,
         )
         customer_perf_service.log_stage("process_intent_request_retry", stage_start, hit=bool(retry_result), intent=retry_result.get("intent") if retry_result else None)
         if retry_result and retry_result.get("results"):
@@ -392,28 +516,18 @@ async def ask_customer_service(
             previous_result_skus=[],
         )
         customer_perf_service.log_stage("process_intent_request_fallback", stage_start, hit=bool(agent_result), intent=agent_result.get("intent") if agent_result else None)
-    if not agent_result:
-        stage_start = perf_counter()
-        agent_result = customer_agent_service.try_numeric_english_name_query(db, question)
-        customer_perf_service.log_stage("legacy_rule_agent_fallback", stage_start, hit=bool(agent_result), intent=agent_result.get("intent") if agent_result else None)
-    if not agent_result:
-        stage_start = perf_counter()
-        agent_result = customer_agent_service.process_agent_request(
-            db,
-            user_id=user_id,
-            question=question,
-            sku=None,
-        )
-        customer_perf_service.log_stage("legacy_rule_agent_total", stage_start, hit=bool(agent_result), intent=agent_result.get("intent") if agent_result else None)
     if agent_result:
         stage_start = perf_counter()
-        agent_result = _normalize_agent_result(agent_result)
+        agent_result = _finalize_answer(agent_result)
         answer_metadata = agent_result.get("answer_metadata") if isinstance(agent_result.get("answer_metadata"), dict) else {}
         skip_polish = bool(agent_result.get("skip_polish"))
+        if _should_skip_polish_for_agent_result(agent_result):
+            skip_polish = True
         if answer_metadata.get("evidence_insufficient") is True or answer_metadata.get("answer_policy") == "insufficient_evidence":
             skip_polish = True
         if not skip_polish:
             agent_result["answer"] = await _polish_customer_answer(db, question, agent_result)
+        agent_result = _shape_answer_for_output(agent_result)
         agent_result["skip_polish"] = skip_polish
         agent_result = _attach_agent_quality(agent_result, question)
         conversation = _get_or_create_conversation(db, user_id, question, agent_result.get("sku"), conversation_id)
@@ -450,10 +564,11 @@ async def ask_customer_service(
         customer_perf_service.log_stage("ask_customer_service.total", request_start, branch="agent", intent=agent_result.get("intent"), agent_mode=(agent_result.get("debug") or {}).get("agent_mode"))
         customer_perf_service.summarize_request(final_answer=agent_result.get("answer"), intent=agent_result.get("intent"), agent_mode=(agent_result.get("debug") or {}).get("agent_mode"))
         release_session_connection(db)
+        public_intent = _public_intent_name(agent_result.get("intent"), agent_result.get("answer_type"))
         return {
             "conversation_id": conversation_id_value,
             "message_id": message_id_value,
-            "intent": agent_result.get("intent"),
+            "intent": public_intent,
             "answer_type": agent_result.get("answer_type"),
             "confidence": agent_result.get("confidence"),
             "uncertainty": agent_result.get("uncertainty"),
@@ -571,6 +686,40 @@ async def ask_customer_service(
         "results": [],
         "steps": [],
     }
+
+
+def _finalize_answer(agent_result: dict) -> dict:
+    print(
+        "RUNNING VERSION CHECK",
+        {
+            "func": "_finalize_answer",
+            "pid": os.getpid(),
+            "file_path": __file__,
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "sys_executable": sys.executable,
+            "cwd": os.getcwd(),
+        },
+        flush=True,
+    )
+    result = _normalize_agent_result(agent_result)
+    primary = _pick_primary_answer_source(result)
+    sources = _tag_and_order_sources(result.get("sources") or [], primary)
+    result["sources"] = sources
+    result["answer"] = _sanitize_final_answer_text(str(result.get("answer") or ""), primary)
+    answer_metadata = result.get("answer_metadata") if isinstance(result.get("answer_metadata"), dict) else {}
+    answer_metadata["final_decision"] = {
+        "primary_source": primary.get("type"),
+        "priority": primary.get("priority"),
+        "single_source_of_truth": True,
+        "llm_allowed": _llm_allowed_for_final_answer(result, primary),
+    }
+    result["answer_metadata"] = answer_metadata
+    debug = result.get("debug") if isinstance(result.get("debug"), dict) else {}
+    debug["final_answer"] = answer_metadata["final_decision"]
+    result["debug"] = debug
+    if not answer_metadata["final_decision"]["llm_allowed"]:
+        result["skip_polish"] = True
+    return result
 
 
 def build_product_context(db: Session, sku: str, question: str) -> tuple[str, list[dict]]:
@@ -975,18 +1124,42 @@ def _prepare_deterministic_retry_result(retry_result: dict) -> dict:
 
 _FAQ_PURCHASE_TERMS = (
     "哪里买",
+    "哪儿买",
+    "在哪买",
     "在哪里买",
     "可以买到",
     "怎么买",
+    "想买",
+    "去哪里",
+    "小程序",
+    "商城",
     "购买链接",
     "购买渠道",
+    "官方渠道",
+    "哪个平台",
+    "平台可以买",
+    "店铺",
+    "店铺入口",
+    "下单",
     "官网吗",
+    "官方店",
     "旗舰店",
     "淘宝",
     "天猫",
     "京东",
     "拼多多",
     "抖音",
+    "亚马逊",
+    "Amazon",
+    "amazon",
+    "独立站",
+    "线下",
+    "速卖通",
+    "eBay",
+    "ebay",
+    "阿里国际站",
+    "B2C",
+    "b2c",
 )
 _FAQ_AFTERSALES_TERMS = (
     "售后",
@@ -996,11 +1169,24 @@ _FAQ_AFTERSALES_TERMS = (
     "保修",
     "质保",
     "客服",
+    "人工客服",
+    "发票",
+    "物流",
+    "快递",
+    "订单",
+    "发错货",
+    "少发",
+    "补寄",
+    "维修",
+    "七天无理由",
+    "买错",
+    "不喜欢",
+    "开发票",
     "坏了怎么办",
     "有瑕疵怎么办",
 )
 _FAQ_AFTERSALES_PROBLEM_TERMS = ("问题", "质量", "坏了", "瑕疵", "破损")
-_FAQ_AFTERSALES_HELP_TERMS = ("怎么办", "怎么处理", "找谁", "谁处理", "联系谁")
+_FAQ_AFTERSALES_HELP_TERMS = ("怎么办", "咋办", "怎么处理", "找谁", "谁处理", "联系谁")
 _FAQ_COMPANY_TERMS = (
     "公司在哪里",
     "公司地址",
@@ -1012,6 +1198,49 @@ _FAQ_COMPANY_TERMS = (
     "上班时间",
 )
 _FAQ_GREETING_TERMS = ("你好", "您好", "谢谢", "再见", "拜拜", "hello", "hi")
+_USAGE_CARE_TERMS = (
+    "清洗",
+    "保养",
+    "护理",
+    "清洁",
+    "怎么洗",
+    "怎么清洗",
+    "怎么保养",
+    "怎么护理",
+    "怎么处理",
+    "咋办",
+    "不好洗",
+    "洗碗机",
+    "收拾",
+    "擦干",
+    "烘干",
+    "泡水",
+    "浸泡",
+    "洗洁精",
+    "钢丝球",
+    "硬刷",
+    "硬物",
+    "刮擦",
+    "水垢",
+    "积碳",
+    "异味",
+    "第一次使用",
+    "首次使用",
+    "用完",
+    "使用后",
+    "收纳前",
+    "不好清洗",
+    "糊锅",
+    "烧糊",
+    "糊了",
+    "焦",
+    "粘锅",
+    "不粘",
+    "不沾",
+    "涂层",
+)
+_USAGE_CARE_PRODUCT_TERMS = ("锅", "锅具", "套锅", "炒锅", "煎锅", "单锅", "烤盘", "煎盘", "盘", "壶", "杯", "炉", "炉具", "酒精炉", "气炉")
+_PURE_AFTERSALES_FLOW_TERMS = ("退换货", "退货", "换货", "售后电话", "保修多久", "质保多久", "联系客服", "售后联系方式")
 
 
 def _is_customer_faq_question(question: str) -> bool:
@@ -1022,10 +1251,12 @@ def _classify_customer_faq_intent(question: str) -> str | None:
     text = str(question or "").strip()
     if not text:
         return None
+    if _is_product_usage_care_question(text):
+        return None
     normalized = customer_cache_service.normalize_text(text)
     if any(term in normalized for term in _FAQ_GREETING_TERMS):
         return "greeting"
-    if any(term in text for term in _FAQ_PURCHASE_TERMS):
+    if any(term in text for term in _FAQ_PURCHASE_TERMS) and not _looks_like_recommendation_request(text):
         return "purchase_channel"
     if any(term in text for term in _FAQ_AFTERSALES_TERMS):
         return "aftersales"
@@ -1036,12 +1267,54 @@ def _classify_customer_faq_intent(question: str) -> str | None:
     return None
 
 
+def _looks_like_recommendation_request(text: str) -> bool:
+    value = str(text or "").strip()
+    if not value:
+        return False
+    explicit_recommendation_terms = ("推荐", "哪款", "选什么", "用什么", "帮我选", "帮我挑", "合适", "适合")
+    if any(term in value for term in _FAQ_PURCHASE_TERMS) and not any(term in value for term in explicit_recommendation_terms):
+        return False
+    recommendation_terms = (*explicit_recommendation_terms, "哪个")
+    product_terms = ("锅", "套锅", "单锅", "炉", "炉具", "酒精炉", "壶", "水壶", "餐具", "套装")
+    return any(term in value for term in recommendation_terms) and any(term in value for term in product_terms)
+
+
 def _is_unscoped_aftersales_help_request(text: str) -> bool:
     if not text or SKU_RE.search(text):
+        return False
+    if _is_product_usage_care_question(text):
         return False
     has_problem_signal = any(term in text for term in _FAQ_AFTERSALES_PROBLEM_TERMS)
     has_help_signal = any(term in text for term in _FAQ_AFTERSALES_HELP_TERMS)
     return has_problem_signal and has_help_signal
+
+
+def _is_product_usage_care_question(question: str) -> bool:
+    text = str(question or "").strip()
+    if not text:
+        return False
+    if any(term in text for term in _PURE_AFTERSALES_FLOW_TERMS):
+        return False
+    if _looks_like_product_detail_field_question(text):
+        return False
+    matched_usage_terms = [term for term in _USAGE_CARE_TERMS if term in text]
+    if not matched_usage_terms:
+        return False
+    has_product_context = any(term in text for term in _USAGE_CARE_PRODUCT_TERMS)
+    has_script_context = "客服怎么回复" in text or "怎么回复客户" in text or "客户说" in text
+    return has_product_context or has_script_context or len(matched_usage_terms) >= 2
+
+
+def _looks_like_product_detail_field_question(text: str) -> bool:
+    value = str(text or "")
+    if not value:
+        return False
+    product_terms = ("套锅", "单锅", "酒精炉", "小方锅", "炊墨", "行山", "旋焰", "烽宴", "CW-", "CS-", "TW-")
+    field_terms = ("有没有不粘涂层", "有涂层吗", "有没有涂层", "是不是304", "是不是不锈钢", "是不是木头", "手柄", "锅体", "材质", "尺寸", "容量", "重量", "净重")
+    if not any(term in value for term in product_terms) or not any(term in value for term in field_terms):
+        return False
+    usage_action_terms = ("清洗", "清洁", "保养", "护理", "怎么洗", "怎么清洗", "糊锅", "糊了", "烧糊", "刮擦", "钢丝球", "泡水", "浸泡", "洗碗机")
+    return not any(term in value for term in usage_action_terms)
 
 
 async def _answer_customer_faq_fast_path(db: Session, question: str, intent: str) -> dict | None:
@@ -1190,6 +1463,7 @@ def _build_customer_faq_result(
 ) -> dict:
     result_skus = result_skus or []
     warnings = warnings or []
+    answer = _shape_faq_answer(answer)
     result = {
         "answer": answer,
         "intent": intent,
@@ -1235,6 +1509,104 @@ def _build_customer_faq_result(
     result["agent_quality"] = quality
     result["debug"]["agent_quality"] = quality
     return result
+
+
+def _shape_faq_answer(answer: str) -> str:
+    value = str(answer or "").strip()
+    if not value:
+        return ""
+    value = re.sub(r"我也可以继续帮你.*$", "", value).strip()
+    value = re.sub(r"\s+", " ", value).strip()
+    sentences = [part.strip(" 。；;") for part in re.split(r"[。！？!?；;]+", value) if part.strip()]
+    kept: list[str] = []
+    for sentence in sentences:
+        if any(term in sentence for term in ("产品材质", "规格", "适用场景", "推荐")):
+            continue
+        kept.append(sentence)
+        if len(kept) >= 2:
+            break
+    if not kept and sentences:
+        kept = sentences[:2]
+    return "。".join(kept) + "。"
+
+
+def _shape_answer_for_output(result: dict) -> dict:
+    answer_type = str(result.get("answer_type") or "").strip()
+    if answer_type == "recommendation":
+        result["answer"] = _shape_recommendation_output(
+            result.get("answer"),
+            result.get("results") or [],
+            result.get("evidence") or [],
+        )
+    elif answer_type == "product_detail":
+        result["answer"] = _shape_product_detail_output(
+            result.get("answer"),
+            result.get("results") or [],
+        )
+    return result
+
+
+def _shape_recommendation_output(answer: str | None, results: list[dict], evidence: list[dict]) -> str:
+    picks: list[dict[str, str]] = []
+    evidence_by_sku: dict[str, list[str]] = {}
+    for item in evidence:
+        if not isinstance(item, dict):
+            continue
+        sku = str(item.get("sku") or "").strip()
+        if not sku:
+            continue
+        field_label = str(item.get("field_label") or "").strip()
+        value = str(item.get("value") or "").strip()
+        if field_label and value:
+            evidence_by_sku.setdefault(sku, []).append(f"{field_label} {value}")
+    for row in results[:3]:
+        sku = str(row.get("sku") or "").strip()
+        if not sku:
+            continue
+        name = str(row.get("product_name_cn") or row.get("product_name_en") or sku).strip()
+        reasons = evidence_by_sku.get(sku) or []
+        reason = "；".join(reasons[:2]).strip()
+        if not reason:
+            raw = str(answer or "").strip()
+            if sku in raw:
+                reason = "更贴合当前使用场景。"
+            else:
+                reason = "更贴合当前需求。"
+        picks.append({"sku": sku, "name": name, "reason": reason.rstrip("。；; ") + "。"})
+    if not picks:
+        return str(answer or "").strip()
+    lines = ["推荐：" + " / ".join(f"{item['name']}（{item['sku']}）" for item in picks), "理由："]
+    for item in picks:
+        lines.append(f"{item['sku']}：{item['reason']}")
+    return "\n".join(lines)
+
+
+def _shape_product_detail_output(answer: str | None, results: list[dict]) -> str:
+    if results and isinstance(results[0], dict):
+        row = results[0]
+        sku = str(row.get("sku") or "").strip()
+        name = str(row.get("product_name_cn") or row.get("product_name_en") or "").strip()
+        field_values = row.get("field_values") or {}
+        if isinstance(field_values, dict) and field_values:
+            detail = "；".join(f"{key}：{value}" for key, value in field_values.items())
+            prefix = f"{name}（{sku}）" if name else sku
+            return f"{prefix}：{detail}。"
+    text = str(answer or "").strip()
+    sentence = re.split(r"[。！？!?]", text)[0].strip()
+    return sentence + ("。" if sentence and not sentence.endswith("。") else "")
+
+
+def _public_intent_name(intent: str | None, answer_type: str | None = None) -> str | None:
+    value = str(intent or "").strip()
+    if not value:
+        return value or None
+    if answer_type == "product_detail":
+        return "product_detail"
+    if value in {"aftersales", "company_info", "greeting"} and answer_type == "faq":
+        return "customer_faq"
+    if value == "recommend_products":
+        return "recommendation"
+    return value
 
 
 async def _try_named_product_shortcut(db: Session, *, user_id: str, question: str) -> dict | None:
@@ -1431,6 +1803,8 @@ async def _polish_customer_answer(db: Session, question: str, agent_result: dict
         "你是产品客服话术润色器。只能依据输入的 draft_answer、evidence、uncertainty 和 followups 改写，"
         "不得新增事实、参数、认证、价格、库存或承诺。"
         "如果 uncertainty 不是 confirmed，必须保留“资料未标注/不能确认/需要人工确认”的含义。"
+        "如果 draft_answer 已经明确表达“当前知识库没有维护/现有资料不足以确认”，不要改写成产品列表、规格介绍或新的结论。"
+        "如果输入内容是在回答“能不能承诺/能不能宣传/有没有禁用话术”这一类问题，且 evidence 里没有专门的负向或限制性资料，不要把正向卖点改写成禁用内容；应继续保留资料不足或未维护的结论。"
         "输出纯中文客服回答，不要输出 JSON，不要出现意图、置信度、Agent、调试、异常提示等工程词。"
         "不要逐字分析或引用用户问题中的措辞（如人数、场景词），用户问题只提供上下文。"
     )
@@ -1456,6 +1830,113 @@ async def _polish_customer_answer(db: Session, question: str, agent_result: dict
     if agent_result.get("uncertainty") != "confirmed" and not any(item in polished for item in ("未标注", "不能确认", "人工确认", "资料不足", "暂不能确认")):
         return answer
     return polished
+
+
+def _should_skip_polish_for_agent_result(agent_result: dict) -> bool:
+    answer_type = str(agent_result.get("answer_type") or "").strip().lower()
+    intent = str(agent_result.get("intent") or "").strip().lower()
+    results = agent_result.get("results") or []
+    warnings = agent_result.get("warnings") or []
+    sources = agent_result.get("sources") or []
+
+    if answer_type in {"faq", "product_usage_care", "recommendation", "comparison", "clarification", "product_detail"}:
+        return True
+    if intent in {"purchase_channel", "aftersales", "company_info", "greeting", "product_usage_care", "recommend_products", "compare_products", "clarify", "product_detail"}:
+        return True
+    if answer_type == "product_query" and not results:
+        return True
+    if answer_type == "product_query" and any(source.get("type") == "product_qa" for source in sources if isinstance(source, dict)):
+        return True
+    if "missing_product_results" in warnings:
+        return True
+    return False
+
+
+_FINAL_SOURCE_PRIORITY = {
+    "product_usage_care": 1,
+    "customer_faq": 2,
+    "product_qa": 3,
+    "structured_product_detail": 3,
+    "knowledge_chunks": 4,
+    "query_products": 5,
+    "llm_fallback": 6,
+}
+
+
+def _pick_primary_answer_source(agent_result: dict) -> dict:
+    intent = str(agent_result.get("intent") or "").strip().lower()
+    answer_type = str(agent_result.get("answer_type") or "").strip().lower()
+    sources = agent_result.get("sources") or []
+
+    if intent == "product_usage_care" or answer_type == "product_usage_care":
+        return {"type": "product_usage_care", "priority": 1}
+    if answer_type == "faq" or intent in {"purchase_channel", "aftersales", "company_info", "greeting"}:
+        return {"type": "customer_faq", "priority": 2}
+    if answer_type in {"product_detail", "comparison"}:
+        return {"type": "structured_product_detail", "priority": 3}
+    if answer_type == "recommendation" and (agent_result.get("results") or []):
+        return {"type": "query_products", "priority": 5}
+    if (intent == "query_products" or answer_type == "product_query") and (agent_result.get("results") or []):
+        return {"type": "query_products", "priority": 5}
+    if answer_type == "knowledge_base_answer":
+        return {"type": "knowledge_chunks", "priority": 4}
+    if any(isinstance(source, dict) and source.get("type") == "product_qa" for source in sources):
+        return {"type": "product_qa", "priority": 3}
+    if any(isinstance(source, dict) and source.get("type") in {"knowledge_base", "usage_care_knowledge", "faq_knowledge"} for source in sources):
+        return {"type": "knowledge_chunks", "priority": 4}
+    if intent == "query_products" or answer_type == "product_query":
+        return {"type": "query_products", "priority": 5}
+    return {"type": "llm_fallback", "priority": 6}
+
+
+def _tag_and_order_sources(sources: list[dict], primary: dict) -> list[dict]:
+    tagged: list[dict] = []
+    for source in sources:
+        if not isinstance(source, dict):
+            continue
+        item = dict(source)
+        item["role"] = "primary" if _source_matches_primary(item, primary.get("type")) else "supporting"
+        tagged.append(item)
+    tagged.sort(key=lambda item: 0 if item.get("role") == "primary" else 1)
+    return tagged
+
+
+def _source_matches_primary(source: dict, primary_type: str | None) -> bool:
+    source_type = str(source.get("type") or "").strip().lower()
+    if primary_type == "product_usage_care":
+        return source_type in {"product_qa", "usage_care_knowledge"}
+    if primary_type == "customer_faq":
+        return source_type in {"faq", "structured_faq", "faq_knowledge"}
+    if primary_type == "product_qa":
+        return source_type == "product_qa"
+    if primary_type == "structured_product_detail":
+        return source_type in {"product", "product_compare", "product_search"}
+    if primary_type == "knowledge_chunks":
+        return source_type in {"knowledge_base", "usage_care_knowledge", "faq_knowledge"}
+    if primary_type == "query_products":
+        return source_type == "product_search"
+    if primary_type == "llm_fallback":
+        return source_type == "agent_meta"
+    return False
+
+
+def _llm_allowed_for_final_answer(agent_result: dict, primary: dict) -> bool:
+    primary_type = primary.get("type")
+    if primary_type in {"product_usage_care", "customer_faq", "product_qa", "structured_product_detail", "knowledge_chunks"}:
+        return False
+    if primary_type == "query_products" and (agent_result.get("results") or agent_result.get("sources")):
+        return False
+    return primary_type == "llm_fallback"
+
+
+def _sanitize_final_answer_text(answer: str, primary: dict) -> str:
+    text = str(answer or "").strip()
+    if not text:
+        return text
+    text = re.sub(r"(^|\n)\s*Q:\s*", r"\1", text, flags=re.I)
+    text = re.sub(r"(^|\n)\s*A:\s*", r"\1", text, flags=re.I)
+    text = re.sub(r"\n{3,}", "\n\n", text).strip()
+    return text
 
 
 def _answer_type_from_intent(intent: str | None) -> str:

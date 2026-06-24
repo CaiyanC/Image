@@ -32,7 +32,7 @@ function parseDate(raw) {
 
 function parseMultilineToArray(raw) {
   if (!raw) return []
-  return String(raw).split(/\n+/).map(l => l.replace(/^\d+[\.\、\)]\s*/, '').trim()).filter(Boolean)
+  return String(raw).split(/\n+/).map(l => l.replace(/^(?:\d+[、)]\s*|\d+\.\s+)/, '').trim()).filter(Boolean)
 }
 
 function parseCommaSeparated(raw) {
@@ -44,22 +44,26 @@ function parseDimensionLines(raw) {
   if (!raw) return []
   const lines = String(raw).split(/\n+/).filter(Boolean)
   const result = []
+  const splitUnit = (value) => {
+    const unitMatch = value.match(/^(.+?)\s*(cm|mm|英寸|inch)$/i)
+    return unitMatch ? { value: unitMatch[1].trim(), unit: unitMatch[2] } : null
+  }
   for (const line of lines) {
     const trimmed = line.trim()
     const labelMatch = trimmed.match(/^([^:：]+)[：:]\s*(.+)/)
     if (labelMatch) {
       const label = labelMatch[1].trim()
       const rest = labelMatch[2].trim()
-      const unitMatch = rest.match(/^(.+?)\s+(cm|mm|英寸|inch)$/i)
+      const unitMatch = splitUnit(rest)
       if (unitMatch) {
-        result.push({ label, value: unitMatch[1].trim(), unit: unitMatch[2] })
+        result.push({ label, value: unitMatch.value, unit: unitMatch.unit })
       } else {
         result.push({ label, value: rest, unit: '' })
       }
     } else {
-      const unitMatch = trimmed.match(/^(.+?)\s+(cm|mm|英寸|inch)$/i)
+      const unitMatch = splitUnit(trimmed)
       if (unitMatch) {
-        result.push({ label: '', value: unitMatch[1].trim(), unit: unitMatch[2] })
+        result.push({ label: '', value: unitMatch.value, unit: unitMatch.unit })
       } else {
         result.push({ label: '', value: trimmed, unit: '' })
       }
@@ -332,6 +336,14 @@ const dimResult = parseDimensionLines('14*28.5 cm\n14*16.5 cm\n12.5*10 cm')
 console.log(`  Parsed ${dimResult.length} lines:`)
 dimResult.forEach(d => console.log(`    label="${d.label}" value="${d.value}" unit="${d.unit}"`))
 console.log(`  ${dimResult.length === 3 ? '✅ PASS' : '❌ FAIL'}`)
+
+console.log('\n' + '='.repeat(60))
+console.log('TEST 5b: parseDimensionLines keeps decimals with attached units')
+console.log('='.repeat(60))
+const dimDecimalResult = parseDimensionLines('8.2x23cm\n2.2L锅18.5*11cm')
+console.log(`  Parsed ${dimDecimalResult.length} lines:`)
+dimDecimalResult.forEach(d => console.log(`    label="${d.label}" value="${d.value}" unit="${d.unit}"`))
+console.log(`  ${dimDecimalResult[0].value === '8.2x23' && dimDecimalResult[0].unit === 'cm' && dimDecimalResult[1].value === '2.2L锅18.5*11' ? '✅ PASS' : '❌ FAIL'}`)
 
 console.log('\n' + '='.repeat(60))
 console.log('TEST 6: parseDimensionLines with plain values')

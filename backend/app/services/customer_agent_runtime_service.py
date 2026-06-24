@@ -711,21 +711,26 @@ async def _build_result_async(
                         "results": knowledge_rows,
                     },
                 ]
-    final_response = await _finalize_answer(
-        db,
-        question,
-        sku,
-        active_tool_results,
-        conversation_history or [],
-        conversation_id=conversation_id,
-        user_id=user_id,
-        intent_hint=effective_intent,
-        entity_stack=entity_stack or [],
-        route_hints=route_hints,
-        answer_delta_callback=answer_delta_callback,
-    )
-    answer = final_response.get("answer") if isinstance(final_response, dict) else final_response
-    answer_metadata_override = final_response.get("answer_metadata") if isinstance(final_response, dict) else None
+    answer_metadata_override = None
+    if inferred_intent == "recommend_products" and enriched_results:
+        answer = _compose_recommendation_answer(recommendation_question or question, enriched_results)
+        active_preserve_llm_answer = True
+    else:
+        final_response = await _finalize_answer(
+            db,
+            question,
+            sku,
+            active_tool_results,
+            conversation_history or [],
+            conversation_id=conversation_id,
+            user_id=user_id,
+            intent_hint=effective_intent,
+            entity_stack=entity_stack or [],
+            route_hints=route_hints,
+            answer_delta_callback=answer_delta_callback,
+        )
+        answer = final_response.get("answer") if isinstance(final_response, dict) else final_response
+        answer_metadata_override = final_response.get("answer_metadata") if isinstance(final_response, dict) else None
     if enriched_results and answer and not _should_replace_recommendation_answer(answer, recommendation_question, enriched_results):
         active_preserve_llm_answer = True
     return _build_result(

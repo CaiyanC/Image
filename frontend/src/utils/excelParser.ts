@@ -84,7 +84,7 @@ export function parseMultilineToArray(raw: string): string[] {
   if (!raw) return []
   return String(raw)
     .split(/\n+/)
-    .map((line) => line.replace(/^\d+[\.\、\)]\s*/, '').trim())
+    .map((line) => line.replace(/^(?:\d+[、)]\s*|\d+\.\s+)/, '').trim())
     .filter(Boolean)
 }
 
@@ -100,22 +100,26 @@ export function parseDimensionLines(raw: string): DimensionLine[] {
   if (!raw) return []
   const lines = String(raw).split(/\n+/).filter(Boolean)
   const result: DimensionLine[] = []
+  const splitUnit = (value: string): { value: string; unit: string } | null => {
+    const unitMatch = value.match(/^(.+?)\s*(cm|mm|英寸|inch)$/i)
+    return unitMatch ? { value: unitMatch[1].trim(), unit: unitMatch[2] } : null
+  }
   for (const line of lines) {
     const trimmed = line.trim()
     const labelMatch = trimmed.match(/^([^:：]+)[：:]\s*(.+)/)
     if (labelMatch) {
       const label = labelMatch[1].trim()
       const rest = labelMatch[2].trim()
-      const unitMatch = rest.match(/^(.+?)\s+(cm|mm|英寸|inch)$/i)
+      const unitMatch = splitUnit(rest)
       if (unitMatch) {
-        result.push({ label, value: unitMatch[1].trim(), unit: unitMatch[2] })
+        result.push({ label, value: unitMatch.value, unit: unitMatch.unit })
       } else {
         result.push({ label, value: rest, unit: '' })
       }
     } else {
-      const unitMatch = trimmed.match(/^(.+?)\s+(cm|mm|英寸|inch)$/i)
+      const unitMatch = splitUnit(trimmed)
       if (unitMatch) {
-        result.push({ label: '', value: unitMatch[1].trim(), unit: unitMatch[2] })
+        result.push({ label: '', value: unitMatch.value, unit: unitMatch.unit })
       } else {
         result.push({ label: '', value: trimmed, unit: '' })
       }

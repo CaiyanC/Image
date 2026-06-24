@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState, type ChangeEvent, type DragEvent } from 'react'
 import type { ProductListItem } from '../types'
+import type { KnowledgeFileRecord } from '../services/api'
 import { api } from '../services/api'
 import {
   getSelectedSkuSet,
@@ -32,8 +33,29 @@ export default function FileKnowledgeBase() {
   const [skuSuggestions, setSkuSuggestions] = useState<ProductListItem[]>([])
   const [skuSearchError, setSkuSearchError] = useState('')
   const [dragging, setDragging] = useState(false)
+  const [records, setRecords] = useState<KnowledgeFileRecord[]>([])
+  const [recordsLoading, setRecordsLoading] = useState(false)
+  const [recordsError, setRecordsError] = useState('')
+  const [deletingDocumentId, setDeletingDocumentId] = useState('')
 
   const selectedSkuSet = useMemo(() => getSelectedSkuSet(selectedSkus), [selectedSkus])
+
+  async function loadRecords() {
+    setRecordsLoading(true)
+    setRecordsError('')
+    try {
+      const response = await api.knowledgeBase.files(100)
+      setRecords(response.items || [])
+    } catch (err) {
+      setRecordsError(err instanceof Error ? err.message : '文件列表加载失败')
+    } finally {
+      setRecordsLoading(false)
+    }
+  }
+
+  useEffect(() => {
+    void loadRecords()
+  }, [])
 
   useEffect(() => {
     const query = skuQuery.trim()
@@ -145,10 +167,25 @@ export default function FileKnowledgeBase() {
         selectedSkus.map((item) => item.sku),
       )
       setResults(response.items || [])
+      await loadRecords()
     } catch (err) {
       setError(err instanceof Error ? err.message : '上传失败，请稍后重试')
     } finally {
       setUploading(false)
+    }
+  }
+
+  async function handleDeleteRecord(documentId: string) {
+    if (!window.confirm('确定删除这个文件知识库文档吗？相关向量也会一起删除。')) return
+    setDeletingDocumentId(documentId)
+    setRecordsError('')
+    try {
+      await api.knowledgeBase.deleteFile(documentId)
+      await loadRecords()
+    } catch (err) {
+      setRecordsError(err instanceof Error ? err.message : '删除失败')
+    } finally {
+      setDeletingDocumentId('')
     }
   }
 
@@ -417,6 +454,101 @@ export default function FileKnowledgeBase() {
           )}
         </aside>
       </div>
+
+      <section className="mt-5 glass rounded-3xl p-5">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div>
+            <h2 className="text-lg font-black text-apple-text">已入库文件</h2>
+            <p className="mt-1 text-sm text-apple-gray-medium">查看文件解析、向量化进度和关联产品。</p>
+          </div>
+          <button
+            type="button"
+            onClick={() => void loadRecords()}
+            disabled={recordsLoading}
+            className="rounded-full bg-white/70 px-4 py-2 text-xs font-bold text-apple-gray-dark hover:bg-white disabled:opacity-50"
+          >
+            {recordsLoading ? '刷新中...' : '刷新'}
+          </button>
+        </div>
+
+        {recordsError && (
+          <div className="mt-4 rounded-2xl border border-red-100 bg-red-50 px-4 py-3 text-sm text-red-700">
+            {recordsError}
+          </div>
+        )}
+
+        <div className="mt-4 overflow-hidden rounded-2xl border border-black/10 bg-white/65">
+          <div className="hidden grid-cols-[1.5fr_0.8fr_1fr_1.4fr_0.5fr] gap-3 border-b border-black/5 px-4 py-3 text-xs font-black uppercase tracking-[0.12em] text-apple-gray-medium lg:grid">
+            <div>文件</div>
+            <div>状态</div>
+            <div>向量</div>
+            <div>关联产品</div>
+            <div className="text-right">操作</div>
+          </div>
+          {recordsLoading && records.length === 0 && (
+            <div className="px-4 py-6 text-sm text-apple-gray-medium">正在加载文件...</div>
+          )}
+          {!recordsLoading && records.length === 0 && (
+            <div className="px-4 py-6 text-sm text-apple-gray-medium">暂无文件知识库文档。</div>
+          )}
+          {records.map((record) => (
+            <div
+              key={record.document_id}
+              className="grid grid-cols-1 gap-3 border-b border-black/5 px-4 py-4 text-sm last:border-b-0 lg:grid-cols-[1.5fr_0.8fr_1fr_1.4fr_0.5fr]"
+            >
+              <div className="min-w-0">
+                <p className="truncate font-semibold text-apple-text">{record.file_name}</p>
+                <p className="mt-1 text-xs text-apple-gray-medium">
+                  {record.file_type || '-'} · {record.chunk_count} chunks
+                </p>
+              </div>
+              <div>
+                <span className={`rounded-full px-2.5 py-1 text-xs font-bold ${recordStatusClass(record.parse_status)}`}>
+                  {recordStatusText(record.parse_status)}
+                </span>
+                {record.task_status && (
+                  <p className="mt-2 text-xs text-apple-gray-medium">任务：{record.task_status}</p>
+                )}
+              </div>
+              <div className="text-xs leading-5 text-apple-gray-dark">
+                <div>已同步：{record.embedding_synced_count}</div>
+                <div>等待：{record.embedding_pending_count}</div>
+                <div>失败：{record.embedding_failed_count}</div>
+              </div>
+              <div className="space-y-1">
+                {record.related_products.length > 0 ? (
+                  record.related_products.map((product) => (
+                    <div key={product.sku} className="rounded-xl bg-white/70 px-3 py-2">
+                      <p className="truncate text-xs font-bold text-apple-text">
+                        {product.product_name_cn || product.product_name_en || (product.exists ? product.sku : '未找到产品')}
+                      </p>
+                      <p className="mt-0.5 text-[11px] text-apple-gray-medium">SKU: {product.sku}</p>
+                    </div>
+                  ))
+                ) : (
+                  <span className="text-xs text-apple-gray-medium">未关联产品</span>
+                )}
+              </div>
+              <div className="flex items-start justify-end gap-2">
+                <a
+                  href={api.files.knowledgeDownloadUrl(record.document_id)}
+                  className="rounded-full bg-white/70 px-3 py-1.5 text-xs font-bold text-teal-700 hover:bg-white"
+                >
+                  下载
+                </a>
+                <button
+                  type="button"
+                  onClick={() => void handleDeleteRecord(record.document_id)}
+                  disabled={deletingDocumentId === record.document_id}
+                  className="rounded-full bg-red-50 px-3 py-1.5 text-xs font-bold text-red-600 hover:bg-red-100 disabled:opacity-50"
+                >
+                  {deletingDocumentId === record.document_id ? '删除中' : '删除'}
+                </button>
+              </div>
+            </div>
+          ))}
+        </div>
+      </section>
     </div>
   )
 }
@@ -452,6 +584,20 @@ function uploadResultMessage(item: { parse_status: string }): string {
   if (item.parse_status === 'processing') return '该文件正在处理中'
   if (item.parse_status === 'error') return '文件解析失败，请查看错误信息'
   return '文件已存在，已复用'
+}
+
+function recordStatusText(status: string): string {
+  if (status === 'processing') return '解析中'
+  if (status === 'error') return '解析失败'
+  if (status === 'done') return '已解析'
+  return status || '-'
+}
+
+function recordStatusClass(status: string): string {
+  if (status === 'processing') return 'bg-blue-50 text-blue-700'
+  if (status === 'error') return 'bg-red-50 text-red-700'
+  if (status === 'done') return 'bg-emerald-50 text-emerald-700'
+  return 'bg-gray-50 text-gray-700'
 }
 
 function InfoRow({

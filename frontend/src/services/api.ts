@@ -1,7 +1,7 @@
 const BASE_URL = import.meta.env.VITE_API_BASE_URL || '/api'
 const TRACE_CUSTOMER_AGENT = import.meta.env.VITE_TRACE_CUSTOMER_AGENT === 'true'
 
-import type { Product, ProductListResponse, ProductDraft } from '../types'
+import type { AssetGrouped, AssetTags, AssetUploadResponse, Product, ProductAsset, ProductListResponse, ProductDraft } from '../types'
 import { NO_PERMISSION_MESSAGE, showNoPermissionToast } from './permissionFeedback'
 
 const ERROR_MESSAGES: Record<string, string> = {
@@ -240,6 +240,34 @@ export interface KnowledgeFileUploadResult {
 
 export interface KnowledgeFileUploadResponse {
   items: KnowledgeFileUploadResult[]
+}
+
+export interface KnowledgeFileRecord {
+  document_id: string
+  file_name: string
+  file_type?: string | null
+  parse_status: string
+  parse_error?: string | null
+  chunk_count: number
+  embedding_synced_count: number
+  embedding_pending_count: number
+  embedding_failed_count: number
+  related_skus: string[]
+  related_products: Array<{
+    sku: string
+    product_name_cn?: string | null
+    product_name_en?: string | null
+    exists: boolean
+  }>
+  task_id?: string | null
+  task_status?: string | null
+  created_at?: string | null
+  updated_at?: string | null
+}
+
+export interface KnowledgeFileListResponse {
+  items: KnowledgeFileRecord[]
+  total: number
 }
 
 export interface KnowledgeRecoverStuckResponse {
@@ -768,6 +796,85 @@ export const api = {
       ),
   },
 
+  assets: {
+    list: (sku: string, params: {
+      category?: string
+      sub_category?: string
+      asset_type?: 'image' | 'video'
+      grouped?: false
+    } = {}) => {
+      const query = new URLSearchParams()
+      if (params.category) query.set('category', params.category)
+      if (params.sub_category) query.set('sub_category', params.sub_category)
+      if (params.asset_type) query.set('asset_type', params.asset_type)
+      const suffix = query.toString() ? `?${query.toString()}` : ''
+      return request<ProductAsset[]>(`/products/${encodeURIComponent(sku)}/assets${suffix}`)
+    },
+    grouped: (sku: string, params: {
+      category?: string
+      sub_category?: string
+      asset_type?: 'image' | 'video'
+    } = {}) => {
+      const query = new URLSearchParams()
+      query.set('grouped', 'true')
+      if (params.category) query.set('category', params.category)
+      if (params.sub_category) query.set('sub_category', params.sub_category)
+      if (params.asset_type) query.set('asset_type', params.asset_type)
+      return request<AssetGrouped[]>(`/products/${encodeURIComponent(sku)}/assets?${query.toString()}`)
+    },
+    get: (sku: string, assetId: string) =>
+      request<ProductAsset>(`/products/${encodeURIComponent(sku)}/assets/${assetId}`),
+    create: (sku: string, data: Partial<ProductAsset>) =>
+      request<ProductAsset>(`/products/${encodeURIComponent(sku)}/assets`, {
+        method: 'POST',
+        body: JSON.stringify(data),
+      }),
+    update: (sku: string, assetId: string, data: Partial<ProductAsset>) =>
+      request<ProductAsset>(`/products/${encodeURIComponent(sku)}/assets/${assetId}`, {
+        method: 'PUT',
+        body: JSON.stringify(data),
+      }),
+    updateTags: (sku: string, assetId: string, tags: AssetTags) =>
+      request<ProductAsset>(`/products/${encodeURIComponent(sku)}/assets/${assetId}/tags`, {
+        method: 'PATCH',
+        body: JSON.stringify(tags),
+      }),
+    delete: (sku: string, assetId: string) =>
+      request<{ ok: boolean }>(`/products/${encodeURIComponent(sku)}/assets/${assetId}`, {
+        method: 'DELETE',
+      }),
+    upload: (sku: string, data: {
+      files: File[]
+      category_code: string
+      category_name: string
+      sub_category?: string | null
+      material_type?: string | null
+      angle_scene?: string | null
+      channel?: string | null
+      language_tag?: string | null
+      version_tag?: string | null
+      status_tag?: string | null
+      notes?: string | null
+    }) => {
+      const formData = new FormData()
+      for (const file of data.files) formData.append('files', file)
+      formData.append('category_code', data.category_code)
+      formData.append('category_name', data.category_name)
+      if (data.sub_category) formData.append('sub_category', data.sub_category)
+      if (data.material_type) formData.append('material_type', data.material_type)
+      if (data.angle_scene) formData.append('angle_scene', data.angle_scene)
+      if (data.channel) formData.append('channel', data.channel)
+      if (data.language_tag) formData.append('language_tag', data.language_tag)
+      if (data.version_tag) formData.append('version_tag', data.version_tag)
+      if (data.status_tag) formData.append('status_tag', data.status_tag)
+      if (data.notes) formData.append('notes', data.notes)
+      return request<AssetUploadResponse>(`/products/${encodeURIComponent(sku)}/assets/upload`, {
+        method: 'POST',
+        body: formData,
+      }, 300000)
+    },
+  },
+
   customerService: {
     ask: (data: { question: string; conversation_id?: string | null }) =>
       request<CustomerServiceAskResult>('/customer-service/ask', { method: 'POST', body: JSON.stringify(data) }, 150000),
@@ -799,6 +906,10 @@ export const api = {
   },
 
   knowledgeBase: {
+    files: (limit = 50) =>
+      request<KnowledgeFileListResponse>(`/knowledge-base/files?limit=${limit}`),
+    deleteFile: (documentId: string) =>
+      request<{ ok: boolean; document_id: string }>(`/knowledge-base/files/${documentId}`, { method: 'DELETE' }),
     uploadFiles: (files: File[], relatedSkus: string[] | string = []) =>
       uploadKnowledgeFilesRequest(files, relatedSkus),
     uploadFile: (file: File, relatedSkus: string[] | string = []) =>
