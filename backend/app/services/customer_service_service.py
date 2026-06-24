@@ -14,6 +14,7 @@ from ..core.database import release_session_connection
 from ..models.knowledge_base import CustomerServiceConversation, CustomerServiceMessage
 from ..models.product import Product
 from ..models.product_qa import ProductQa, ProductQaNegative
+from ..internal.experience_layer.tone_shaping import shape_answer_tone
 from . import (
     customer_enterprise_guardrail_service,
     customer_agent_intent_service,
@@ -1560,6 +1561,12 @@ def _shape_answer_for_output(result: dict) -> dict:
             result.get("answer"),
             result.get("results") or [],
         )
+    elif answer_type == "clarification" or str(result.get("intent") or "").strip() == "clarify":
+        result["answer"] = shape_answer_tone(
+            str(result.get("answer") or ""),
+            intent=result.get("intent"),
+            answer_type=answer_type,
+        )
     return result
 
 
@@ -2176,7 +2183,11 @@ def _should_use_conversation_history(question: str) -> bool:
 
 def _save_and_return_guidance(db: Session, user_id: str, question: str, conversation_id: str | None) -> dict:
     conversation = _get_or_create_conversation(db, user_id, question, None, conversation_id)
-    answer = "先说结论：我还不能可靠回答这个问题，因为当前没有识别到明确的产品范围。\n下一步建议：请先输入 SKU，或者先让我查一批产品，再继续追问。"
+    answer = shape_answer_tone(
+        "我还不能可靠回答这个问题，因为当前没有识别到明确的产品范围。请先输入 SKU，或者先让我查一批产品，再继续追问。",
+        intent="clarify",
+        answer_type="clarification",
+    )
     agent_quality = customer_agent_quality_service.evaluate_agent_response(
         question,
         answer=answer,

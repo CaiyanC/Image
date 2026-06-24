@@ -105,6 +105,7 @@ pause
 exit /b 0
 
 :load_env_prod
+set "CAIYAN_ENV_FILE=%~dp0backend\.env"
 for /f "usebackq eol=# tokens=1,* delims==" %%a in ("%~dp0backend\.env") do (
     if not "%%a"=="" set "%%a=%%b"
 )
@@ -117,6 +118,7 @@ call :load_env_prod
 set "LOG_DIR_WIN=%LOG_DIR:/=\%"
 if "%COMPUTERNAME%"=="" set "COMPUTERNAME=localhost"
 if not exist "..\%LOG_DIR_WIN%" mkdir "..\%LOG_DIR_WIN%"
+echo Production backend env: APP_ENV=%APP_ENV% PORT=%BACKEND_PORT% ENV_FILE=%CAIYAN_ENV_FILE%
 if not exist "venv\Scripts\activate.bat" (
     python -m venv venv
 )

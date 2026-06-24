@@ -9,7 +9,11 @@ from dotenv import load_dotenv
 ROOT_DIR = Path(__file__).resolve().parents[1]
 BACKEND_DIR = ROOT_DIR / "backend"
 sys.path.insert(0, str(BACKEND_DIR))
-load_dotenv(BACKEND_DIR / ".env")
+app_env = os.getenv("APP_ENV", "dev").strip().lower()
+default_env_file = BACKEND_DIR / (".env" if app_env == "prod" else ".env.dev")
+env_file = Path(os.getenv("CAIYAN_ENV_FILE") or default_env_file)
+os.environ.setdefault("CAIYAN_ENV_FILE", str(env_file))
+load_dotenv(env_file, override=False)
 os.environ["DEBUG"] = "false"
 
 from app.core.database import SessionLocal  # noqa: E402

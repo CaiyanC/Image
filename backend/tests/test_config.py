@@ -1,6 +1,9 @@
 import importlib
 import os
+import subprocess
+import sys
 import unittest
+from pathlib import Path
 from unittest.mock import patch
 
 from app.core import config
@@ -173,3 +176,42 @@ class SettingsConfigTest(unittest.TestCase):
 
         self.assertEqual(summary["database"], "product_knowledge")
         self.assertNotIn("secret", str(summary))
+
+    def test_project_root_script_import_loads_dev_env_instead_of_sqlite_default(self):
+        repo_root = Path(__file__).resolve().parents[2]
+        env = os.environ.copy()
+        for key in (
+            "APP_ENV",
+            "DATABASE_URL",
+            "BACKEND_PORT",
+            "REDIS_URL",
+            "CELERY_QUEUE",
+            "CELERY_WORKER_NAME",
+            "UPLOAD_DIR",
+            "LOG_DIR",
+            "CAIYAN_ENV_FILE",
+            "ENV_FILE",
+        ):
+            env.pop(key, None)
+        code = (
+            "import sys;"
+            "sys.path.insert(0, 'backend');"
+            "from app.core.config import settings;"
+            "print(settings.APP_ENV);"
+            "print(settings.BACKEND_PORT);"
+            "print(settings.DATABASE_URL)"
+        )
+        result = subprocess.run(
+            [sys.executable, "-c", code],
+            cwd=repo_root,
+            env=env,
+            text=True,
+            capture_output=True,
+            check=True,
+        )
+
+        lines = result.stdout.strip().splitlines()
+        self.assertEqual(lines[0], "dev")
+        self.assertEqual(lines[1], "8001")
+        self.assertIn("product_knowledge_dev", lines[2])
+        self.assertNotIn("sqlite", lines[2].lower())

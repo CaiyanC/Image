@@ -35,9 +35,14 @@ if "%REDIS_EXISTS%"=="" (
 
 echo Starting development backend, worker, and frontend...
 set "BACKEND_RUNNING="
-for /f "tokens=*" %%i in ('netstat -ano ^| findstr /R /C:":8001 .*LISTENING"') do set "BACKEND_RUNNING=1"
+set "BACKEND_PID="
+for /f "tokens=5" %%p in ('netstat -ano ^| findstr /R /C:":8001 .*LISTENING"') do (
+    set "BACKEND_RUNNING=1"
+    set "BACKEND_PID=%%p"
+)
 if defined BACKEND_RUNNING (
-    echo Dev backend port 8001 is already listening. Skipping backend start.
+    echo Dev backend port 8001 is already listening on PID !BACKEND_PID!. Skipping backend start.
+    powershell -NoProfile -Command "Get-CimInstance Win32_Process -Filter \"ProcessId=!BACKEND_PID!\" | Select-Object ProcessId,ExecutablePath,CommandLine | Format-List"
 ) else (
     start "CaiYan Dev Backend - 8001" cmd /k ""%~f0" backend"
     timeout /t 2 /nobreak >nul
@@ -68,6 +73,7 @@ pause
 exit /b 0
 
 :load_env_dev
+set "CAIYAN_ENV_FILE=%~dp0backend\.env.dev"
 for /f "usebackq eol=# tokens=1,* delims==" %%a in ("%~dp0backend\.env.dev") do (
     if not "%%a"=="" set "%%a=%%b"
 )
@@ -80,6 +86,7 @@ call :load_env_dev
 set "LOG_DIR_WIN=%LOG_DIR:/=\%"
 if "%COMPUTERNAME%"=="" set "COMPUTERNAME=localhost"
 if not exist "..\%LOG_DIR_WIN%" mkdir "..\%LOG_DIR_WIN%"
+echo Dev backend env: APP_ENV=%APP_ENV% PORT=%BACKEND_PORT% ENV_FILE=%CAIYAN_ENV_FILE%
 if not exist "venv\Scripts\activate.bat" (
     python -m venv venv
 )

@@ -2,10 +2,50 @@ import os
 from dotenv import load_dotenv
 from sqlalchemy.engine import make_url
 
-load_dotenv()
-
 
 PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", ".."))
+BACKEND_ROOT = os.path.join(PROJECT_ROOT, "backend")
+
+
+def _resolve_env_path(path: str) -> str:
+    if os.path.isabs(path):
+        return path
+    return os.path.abspath(os.path.join(PROJECT_ROOT, path))
+
+
+def _load_runtime_env() -> str:
+    """Load the intended backend env file regardless of the current cwd.
+
+    Batch launchers still set env vars explicitly. This fallback mainly protects
+    Python scripts run from the project root, where python-dotenv would otherwise
+    miss backend/.env.dev and silently fall back to sqlite defaults.
+    """
+    explicit = (os.getenv("CAIYAN_ENV_FILE") or os.getenv("ENV_FILE") or "").strip()
+    if explicit:
+        resolved = _resolve_env_path(explicit)
+        load_dotenv(resolved, override=False)
+        return resolved
+
+    app_env = os.getenv("APP_ENV", "").strip().lower()
+    if app_env == "prod":
+        candidates = [os.path.join(BACKEND_ROOT, ".env")]
+    elif app_env == "dev":
+        candidates = [os.path.join(BACKEND_ROOT, ".env.dev")]
+    else:
+        candidates = [
+            os.path.join(BACKEND_ROOT, ".env.dev"),
+            os.path.join(BACKEND_ROOT, ".env"),
+        ]
+
+    for candidate in candidates:
+        if os.path.exists(candidate):
+            load_dotenv(candidate, override=False)
+            return candidate
+    load_dotenv(override=False)
+    return ""
+
+
+LOADED_ENV_FILE = _load_runtime_env()
 
 
 class Settings:

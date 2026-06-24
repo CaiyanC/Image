@@ -11,6 +11,8 @@ from ..models.product_business import ProductBusiness
 from ..models.product_content import ProductContent
 from ..models.product_qa import ProductQa
 from ..models.product_specs import ProductSpecs
+from ..internal.experience_layer.implicit_intent import infer_secondary_intents
+from ..internal.experience_layer.query_rewrite import build_retrieval_query
 from . import agent_action_service, customer_agent_service, customer_agent_tool_service, customer_cache_service, customer_llm_service, customer_perf_service, customer_recommendation_ranker, knowledge_service, product_service
 
 
@@ -176,6 +178,14 @@ async def process_intent_request(
                         intent.requested_fields.append(f)
     if intent:
         intent = _sanitize_intent(intent)
+        experience_hints = infer_secondary_intents(question, primary_intent=intent.intent)
+        if experience_hints.get("secondary_intents"):
+            customer_perf_service.log_stage(
+                "process_intent_request.experience_hints",
+                request_start,
+                primary_intent=intent.intent,
+                secondary_intents=experience_hints.get("secondary_intents"),
+            )
     if not intent and allow_llm_fallback:
         # Last resort: try LLM with no extra context
         llm_start = perf_counter()
@@ -2579,7 +2589,7 @@ def _normalize_knowledge_query(question: str) -> str:
     if cached is not None:
         return cached
 
-    normalized = query
+    normalized = build_retrieval_query(query)
     replacements = (
         ("咋办", "怎么处理"),
         ("咋", "怎么"),
