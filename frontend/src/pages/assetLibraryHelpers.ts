@@ -1,7 +1,16 @@
 import type { AssetTags, ProductAsset } from '../types'
 import { ASSET_SUB_CATEGORIES, STATUS_TO_EN } from './assetLibraryConfig'
 
-const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || '/api'
+const API_BASE_ENV = import.meta.env.VITE_API_BASE_URL || '/api'
+const API_BASE_URL = resolveApiBaseUrl(API_BASE_ENV)
+
+function resolveApiBaseUrl(value: string) {
+  if (value !== 'auto') return value
+  if (typeof window === 'undefined') return '/api'
+  const protocol = window.location.protocol || 'http:'
+  const hostname = window.location.hostname || 'localhost'
+  return `${protocol}//${hostname}:8000/api`
+}
 
 export function formatDate(date = new Date()) {
   const year = date.getFullYear()

@@ -1,4 +1,5 @@
-const BASE_URL = import.meta.env.VITE_API_BASE_URL || '/api'
+const API_BASE_ENV = import.meta.env.VITE_API_BASE_URL || '/api'
+const BASE_URL = resolveApiBaseUrl(API_BASE_ENV)
 const TRACE_CUSTOMER_AGENT = import.meta.env.VITE_TRACE_CUSTOMER_AGENT === 'true'
 
 import type { AssetGrouped, AssetTags, AssetUploadResponse, Product, ProductAsset, ProductListResponse, ProductDraft } from '../types'
@@ -72,6 +73,14 @@ function parseTraceBody(body: BodyInit | null | undefined) {
   } catch {
     return body
   }
+}
+
+function resolveApiBaseUrl(value: string) {
+  if (value !== 'auto') return value
+  if (typeof window === 'undefined') return '/api'
+  const protocol = window.location.protocol || 'http:'
+  const hostname = window.location.hostname || 'localhost'
+  return `${protocol}//${hostname}:8000/api`
 }
 
 function toBackendUrl(path: string) {
