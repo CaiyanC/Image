@@ -32,6 +32,21 @@ from . import (
 SKU_RE = re.compile(r"\b[A-Za-z]{1,6}[-_][A-Za-z0-9][A-Za-z0-9_-]{1,40}\b")
 
 
+async def _attach_debug_supporting_knowledge(db: Session, result: dict, question: str) -> dict:
+    """Attach QA/KB evidence for dev observability without changing the chosen answer."""
+    if not isinstance(result, dict):
+        return result
+    try:
+        return await customer_agent_intent_service.attach_supporting_knowledge_evidence(
+            db,
+            result,
+            question,
+            primary_source=(result.get("answer_metadata") or {}).get("final_decision", {}).get("primary_source") or "existing_route",
+        )
+    except Exception:
+        return result
+
+
 def list_conversations(db: Session, user_id: str, skip: int = 0, limit: int = 30) -> dict:
     user_id = str(user_id)
     query = db.query(CustomerServiceConversation).filter(
@@ -310,6 +325,7 @@ async def ask_customer_service(
     if faq_result:
         faq_result = _finalize_answer(faq_result)
         faq_result = _shape_answer_for_output(faq_result)
+        faq_result = await _attach_debug_supporting_knowledge(db, faq_result, question)
         stage_start = perf_counter()
         conversation = _get_or_create_conversation(db, user_id, question, faq_result.get("sku"), conversation_id)
         db.add(CustomerServiceMessage(
@@ -378,6 +394,7 @@ async def ask_customer_service(
         stage_start = perf_counter()
         agent_result = _finalize_answer(agent_result)
         agent_result = _shape_answer_for_output(agent_result)
+        agent_result = await _attach_debug_supporting_knowledge(db, agent_result, question)
         agent_result = _attach_agent_quality(agent_result, question)
         conversation = _get_or_create_conversation(db, user_id, question, agent_result.get("sku"), conversation_id)
         db.add(CustomerServiceMessage(

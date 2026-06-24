@@ -204,7 +204,7 @@ async def process_intent_request(
         if regex_final and regex_final.intent in ("query_products", "recommend_products") and (regex_final.filters or regex_final.term or regex_final.semantic_query):
             intent = regex_final
     if intent.intent == "clarify":
-        return _clarify_result(intent)
+        return await attach_supporting_knowledge_evidence(db, _clarify_result(intent), question)
     if intent.intent == "product_usage_care":
         return await answer_product_usage_care_request(db, question=question)
     if intent.intent == "product_detail":
@@ -1118,6 +1118,17 @@ async def _compare_result(db: Session, intent: CustomerIntent, original_question
         anomalies=anomalies,
         suggested_followups=followups,
     )
+    supporting = await _semantic_supporting_evidence(
+        db,
+        original_question,
+        skus=intent.target_skus,
+        limit=5,
+        query_limit=2,
+    )
+    if supporting.get("qa") or supporting.get("kb"):
+        response["sources"] = [*(response.get("sources") or []), *supporting.get("sources", [])]
+        response["evidence"] = supporting.get("evidence")
+        _attach_knowledge_enrichment(response, primary_source="product_db", supporting=supporting)
     response["skip_polish"] = True
     return response
 
@@ -1396,6 +1407,22 @@ async def _recommend_result(db: Session, user_id: str, intent: CustomerIntent) -
         suggested_followups=followups,
         answer_type="recommendation",
     )
+    recommended_skus = [
+        str(item.get("sku") or "").strip().upper()
+        for item in result_rows[:3]
+        if str(item.get("sku") or "").strip()
+    ]
+    supporting = await _semantic_supporting_evidence(
+        db,
+        query_text,
+        skus=recommended_skus,
+        limit=5,
+        query_limit=2,
+    )
+    if supporting.get("qa") or supporting.get("kb"):
+        response["sources"] = [*(response.get("sources") or []), *supporting.get("sources", [])]
+        response["evidence"] = supporting.get("evidence")
+        _attach_knowledge_enrichment(response, primary_source="product_db", supporting=supporting)
     response["skip_polish"] = True
     customer_cache_service.recommendation_candidate_cache.set(cache_key, response)
     return response
@@ -1645,6 +1672,38 @@ def _clarify_result(intent: CustomerIntent) -> dict:
         anomalies=[],
         suggested_followups=[],
     )
+
+
+async def attach_supporting_knowledge_evidence(
+    db: Session,
+    response: dict,
+    question: str,
+    *,
+    primary_source: str = "existing_route",
+) -> dict:
+    """Attach QA/KB supporting evidence without changing the route or answer."""
+    if not isinstance(response, dict):
+        return response
+    if response.get("answer_metadata", {}).get("knowledge_enrichment"):
+        return response
+    query = str(question or "").strip()
+    if not query:
+        return response
+    try:
+        supporting = await _semantic_supporting_evidence(db, query, skus=None, limit=5, query_limit=2)
+    except Exception:
+        return response
+    if not (supporting.get("qa") or supporting.get("kb")):
+        return response
+    sources = response.get("sources") if isinstance(response.get("sources"), list) else []
+    response["sources"] = [*sources, *supporting.get("sources", [])]
+    evidence = response.get("evidence") if isinstance(response.get("evidence"), list) else []
+    response["evidence"] = [*evidence, *supporting.get("evidence", [])[1:]]
+    _attach_knowledge_enrichment(response, primary_source=primary_source, supporting=supporting)
+    debug = response.get("debug") if isinstance(response.get("debug"), dict) else {}
+    debug["supporting_knowledge_attached"] = True
+    response["debug"] = debug
+    return response
 
 
 def _parse_english_name_filter(text: str) -> CustomerIntent | None:
@@ -2510,14 +2569,193 @@ def _evidence_identity(item: dict[str, Any]) -> str:
     ])
 
 
+def _normalize_knowledge_query(question: str) -> str:
+    """Normalize customer phrasing before QA/KB retrieval without changing intent."""
+    query = re.sub(r"\s+", " ", str(question or "").strip())
+    if not query:
+        return ""
+    cache_key = customer_cache_service.make_key("knowledge_query_normalize", query)
+    cached = customer_cache_service.recommendation_candidate_cache.get(cache_key)
+    if cached is not None:
+        return cached
+
+    normalized = query
+    replacements = (
+        ("咋办", "怎么处理"),
+        ("咋", "怎么"),
+        ("啥", "什么"),
+        ("哪儿", "哪里"),
+        ("不沾", "不粘"),
+        ("锅糊", "糊锅"),
+        ("烧糊", "烧焦"),
+        ("在哪买", "在哪里买"),
+        ("什么材料", "什么材质"),
+    )
+    for old, new in replacements:
+        normalized = normalized.replace(old, new)
+    normalized = re.sub(r"\s+", " ", normalized).strip() or query
+    customer_cache_service.recommendation_candidate_cache.set(cache_key, normalized)
+    return normalized
+
+
+def _expanded_knowledge_queries(question: str, *, limit: int = 5) -> list[str]:
+    """Generate lightweight non-LLM query variants for QA/KB semantic retrieval."""
+    query = _normalize_knowledge_query(question)
+    if not query:
+        return []
+    cache_key = customer_cache_service.make_key("knowledge_query_expansion", query, limit)
+    cached = customer_cache_service.recommendation_candidate_cache.get(cache_key)
+    if cached is not None:
+        return cached
+
+    variants = [query]
+    replacements = [
+        ("怎么办", "怎么处理"),
+        ("好不好", "怎么样"),
+        ("能不能", "是否可以"),
+        ("可不可以", "是否可以"),
+        ("在哪里买", "购买渠道"),
+        ("糊了", "烧焦 清洗"),
+        ("糊锅", "锅底烧焦 清洁"),
+        ("不粘", "涂层 防粘"),
+        ("钢丝球", "硬物刮擦 涂层损伤"),
+        ("水垢", "水壶 清洗 水垢处理"),
+        ("积碳", "炉具 清洁 积碳处理"),
+        ("保养", "使用后护理 存放"),
+        ("清洗", "清洁 温水 软刷"),
+        ("适合", "使用场景 目标人群"),
+        ("推荐", "适合 哪款 选择"),
+        ("售后", "退换货 联系客服"),
+        ("发票", "开票 订单"),
+    ]
+    for old, new in replacements:
+        if old in query:
+            variants.append(f"{query} {new}")
+            break
+
+    if len(variants) == 1:
+        if any(term in query for term in USAGE_CARE_TERMS):
+            variants.append(f"{query} 清洗 保养 注意事项 禁止事项")
+        elif any(term in query for term in ("适合", "推荐", "场景", "人群")):
+            variants.append(f"{query} 适用场景 目标人群 推荐理由")
+        elif any(term in query for term in ("哪里买", "购买", "淘宝", "京东", "旗舰店", "渠道")):
+            variants.append(f"{query} 官方渠道 购买方式 店铺")
+        elif any(term in query for term in ("锅", "壶", "炉", "杯", "餐具", "套装")):
+            variants.append(f"{query} 产品QA 使用说明 规格参数")
+
+    compacted: list[str] = []
+    seen: set[str] = set()
+    for item in variants:
+        normalized = re.sub(r"\s+", " ", str(item or "").strip())
+        if not normalized or normalized in seen:
+            continue
+        seen.add(normalized)
+        compacted.append(normalized)
+        if len(compacted) >= limit:
+            break
+    customer_cache_service.recommendation_candidate_cache.set(cache_key, compacted)
+    return compacted
+
+
+def _knowledge_query_terms(query: str) -> set[str]:
+    text = _normalize_knowledge_query(query)
+    terms = {item.upper() for item in re.findall(r"[A-Za-z]{1,8}-?[A-Za-z0-9]{1,12}", text)}
+    for token in re.split(r"[\s，。！？、/（）()：:；;,.!?]+", text):
+        token = token.strip()
+        if len(token) >= 2:
+            terms.add(token)
+    for keyword in (
+        "材质", "容量", "重量", "尺寸", "手柄", "涂层", "配件", "颜色", "品牌",
+        "清洗", "清洁", "保养", "糊锅", "烧焦", "快递", "物流", "质保", "场景",
+        "推荐", "适合", "购买", "旗舰店", "官方",
+    ):
+        if keyword in text:
+            terms.add(keyword)
+    return terms
+
+
+def _adjust_semantic_score(row: dict[str, Any], *, base_score: float, query: str, query_index: int, sku: str | None = None) -> float:
+    content = str(row.get("content") or "")
+    metadata = row.get("metadata") if isinstance(row.get("metadata"), dict) else {}
+    row_sku = str(row.get("sku") or metadata.get("sku") or "").strip().upper()
+    score = base_score + max(0.0, 0.05 - query_index * 0.01)
+    if sku and row_sku == str(sku).strip().upper():
+        score += 0.08
+    if _is_semantic_qa_chunk(row):
+        score += 0.025
+    terms = _knowledge_query_terms(query)
+    if row_sku and row_sku in terms:
+        score += 0.04
+    return round(score, 4)
+
+
+def _semantic_row_identity(row: dict[str, Any]) -> str:
+    metadata = row.get("metadata") if isinstance(row.get("metadata"), dict) else {}
+    return "|".join([
+        str(row.get("source_type") or ""),
+        str(row.get("sku") or ""),
+        str(metadata.get("section") or metadata.get("source_id") or metadata.get("title") or ""),
+        str(row.get("content") or "")[:160],
+    ])
+
+
+async def _multi_query_semantic_retrieve(
+    db: Session,
+    question: str,
+    *,
+    sku: str | None = None,
+    limit: int = 5,
+    query_limit: int = 5,
+) -> list[dict[str, Any]]:
+    normalized_question = _normalize_knowledge_query(question)
+    cache_key = customer_cache_service.make_key(
+        "multi_query_semantic_retrieve",
+        id(db),
+        normalized_question,
+        sku,
+        limit,
+        query_limit,
+    )
+    cached = customer_cache_service.recommendation_candidate_cache.get(cache_key)
+    if cached is not None:
+        return cached
+
+    queries = _expanded_knowledge_queries(normalized_question, limit=query_limit)
+    merged: dict[str, dict[str, Any]] = {}
+    for query_index, query in enumerate(queries):
+        try:
+            rows = await knowledge_service.semantic_retrieve(db, query, sku=sku, limit=max(limit, 5))
+        except Exception:
+            rows = knowledge_service.keyword_retrieve(db, query, sku=sku, limit=max(limit, 5))
+        for row in rows:
+            if not isinstance(row, dict) or not str(row.get("content") or "").strip():
+                continue
+            key = _semantic_row_identity(row)
+            score = float(row.get("score") or 0)
+            adjusted_score = _adjust_semantic_score(row, base_score=score, query=query, query_index=query_index, sku=sku)
+            existing = merged.get(key)
+            if existing is None or adjusted_score > float(existing.get("_expanded_score") or 0):
+                item = dict(row)
+                item["_matched_query"] = query
+                item["_query_index"] = query_index
+                item["_expanded_score"] = round(adjusted_score, 4)
+                merged[key] = item
+    ranked = sorted(merged.values(), key=lambda item: float(item.get("_expanded_score") or item.get("score") or 0), reverse=True)
+    result = ranked[:limit]
+    customer_cache_service.recommendation_candidate_cache.set(cache_key, result)
+    return result
+
+
 async def _semantic_supporting_evidence(
     db: Session,
     question: str,
     *,
     skus: list[str] | None = None,
     limit: int = 5,
+    query_limit: int = 2,
 ) -> dict[str, Any]:
     query = str(question or "").strip()
+    queries = _expanded_knowledge_queries(query, limit=query_limit)
     if not query:
         return {
             "qa": [],
@@ -2533,10 +2771,7 @@ async def _semantic_supporting_evidence(
     search_skus = [str(sku or "").strip().upper() for sku in (skus or []) if str(sku or "").strip()]
     scopes = search_skus[:3] or [None]
     for sku in scopes:
-        try:
-            rows = await knowledge_service.semantic_retrieve(db, query, sku=sku, limit=limit)
-        except Exception:
-            rows = []
+        rows = await _multi_query_semantic_retrieve(db, query, sku=sku, limit=max(limit * 2, 8), query_limit=query_limit)
         for row in rows:
             if not isinstance(row, dict):
                 continue
@@ -2597,6 +2832,7 @@ async def _semantic_supporting_evidence(
         "evidence": evidence,
         "sources": sources,
         "supporting_sources": supporting_sources,
+        "query_expansion": queries,
     }
 
 
@@ -2770,10 +3006,7 @@ async def _search_usage_care_knowledge(db: Session, question: str, target_skus: 
     scoped_hits: list[dict] = []
     search_skus = target_skus[:1] if target_skus else [None]
     for sku in search_skus:
-        try:
-            rows = await knowledge_service.semantic_retrieve(db, question, sku=sku, limit=limit)
-        except Exception:
-            rows = knowledge_service.keyword_retrieve(db, question, sku=sku, limit=limit)
+        rows = await _multi_query_semantic_retrieve(db, question, sku=sku, limit=max(limit * 2, 8), query_limit=2)
         for row in rows:
             content = str(row.get("content") or "").strip()
             if not content:
