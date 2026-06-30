@@ -56,19 +56,201 @@ async def process_agent_request(
     conversation_history = conversation_history or []
     last_turn_summary = _last_turn_summary(db, conversation_id, user_id)
     recommendation_context = _latest_recommendation_context(db, conversation_id, user_id)
+    candidate_context = _latest_candidate_context(db, conversation_id, user_id)
+    recommendation_context_skus = (
+        recommendation_context.get("ordered_result_skus")
+        or recommendation_context.get("candidate_skus")
+        or recommendation_context.get("recommended_skus")
+        or []
+    )
     recommendation_summary = (
         {
             "intent": "recommend_products",
-            "result_skus": recommendation_context.get("recommended_skus") or [],
+            "result_skus": recommendation_context_skus,
+            "recommended_skus": recommendation_context.get("recommended_skus") or [],
+            "candidate_skus": recommendation_context.get("candidate_skus") or recommendation_context_skus,
+            "ordered_result_skus": recommendation_context.get("ordered_result_skus") or recommendation_context_skus,
             "user_question": recommendation_context.get("user_question"),
             "product_scope": recommendation_context.get("product_scope"),
+            "assistant_answer": last_turn_summary.get("assistant_answer"),
         }
-        if recommendation_context.get("recommended_skus")
+        if recommendation_context_skus
         else last_turn_summary
     )
-    if _is_explanation_followup(question, last_turn_summary):
+    explanation_summary = (
+        recommendation_summary
+        if recommendation_summary.get("intent") == "recommend_products"
+        and (recommendation_summary.get("result_skus") or [])
+        else last_turn_summary
+    )
+    empty_subset_context = recommendation_context if recommendation_context.get("empty_subset") else candidate_context
+    if empty_subset_context.get("empty_subset") and _is_empty_subset_followup(question):
+        return _scoped_candidate_context_result(
+            question,
+            sku,
+            [],
+            "\u4e0a\u4e00\u8f6e\u5728\u8fd9\u4e9b\u5019\u9009\u4e2d\u5df2\u7ecf\u6ca1\u6709\u7b5b\u5230\u660e\u786e\u7b26\u5408\u6761\u4ef6\u7684\u4ea7\u54c1\uff0c\u56e0\u6b64\u65e0\u6cd5\u7ee7\u7eed\u5728\u8be5\u7a7a\u7ed3\u679c\u91cc\u6bd4\u8f83\u6700\u8f7b\u6216\u63a8\u8350\u66ff\u4ee3\u3002\u53ef\u4ee5\u653e\u5bbd\u4e0a\u4e00\u8f6e\u6761\u4ef6\uff0c\u6216\u91cd\u65b0\u6307\u5b9a\u8303\u56f4\u3002",
+            empty_subset_context,
+            conversation_history=conversation_history,
+        )
+    scoped_candidate_result = await _handle_scoped_candidate_followup(
+        db,
+        user_id=user_id,
+        question=question,
+        sku=sku,
+        candidate_context=candidate_context,
+        conversation_history=conversation_history,
+    )
+    if scoped_candidate_result:
+        return scoped_candidate_result
+    ordinal_compare_targets = _ordinal_compare_targets_from_context(
+        question,
+        recommendation_context,
+        candidate_context,
+    )
+    if ordinal_compare_targets:
+        compare_fields = _ordinal_compare_detail_fields(question)
+        arguments = {"skus": ordinal_compare_targets[:2], "fields": compare_fields}
+        result = await customer_agent_tool_service.execute_tool_async(
+            db,
+            user_id=user_id,
+            name="get_product_detail",
+            arguments=arguments,
+        )
+        deterministic_compare_answer = _compose_deterministic_ordinal_compare_answer(question, _collect_results([result]))
+        return _build_result(
+            question,
+            None,
+            [result],
+            deterministic_compare_answer,
+            [_step_from_tool_result("get_product_detail", arguments, result)],
+            conversation_history=conversation_history,
+            intent_override="compare_products",
+            preserve_llm_answer=True,
+        )
+    early_followup_domain = [
+        str(item or "").strip().upper()
+        for item in (
+            recommendation_summary.get("candidate_skus")
+            or recommendation_summary.get("ordered_result_skus")
+            or recommendation_summary.get("result_skus")
+            or []
+        )
+        if str(item or "").strip()
+    ]
+    if early_followup_domain and _is_recommendation_change_followup_text(question):
+        excluded_followup_skus = [
+            str(item or "").strip().upper()
+            for item in (
+                recommendation_summary.get("recommended_skus")
+                or recommendation_summary.get("ordered_result_skus")
+                or []
+            )[:1]
+            if str(item or "").strip()
+        ]
+        scoped_followup_domain = [
+            sku_code
+            for sku_code in early_followup_domain
+            if sku_code not in set(excluded_followup_skus)
+        ] or early_followup_domain
+        deterministic_followup = await customer_agent_intent_service.process_intent_request(
+            db,
+            user_id=user_id,
+            question=question,
+            sku=sku,
+            previous_result_skus=scoped_followup_domain,
+            allow_llm_fallback=False,
+        )
+        if deterministic_followup and deterministic_followup.get("intent") in {"recommend_products", "query_products"}:
+            return deterministic_followup
+    explicit_product_detection = _detect_explicit_product_mention(db, question, entity_stack)
+    route_hints = _build_route_hints(question, explicit_product_detection, entity_stack)
+    dialogue_state = customer_dialogue_state.build_dialogue_state(question, conversation_history)
+    local_resolved_skus: list[str] = []
+    direct_detail_skus = (
+        _ordinal_skus_from_conversation_history(question, conversation_history)
+        or _entity_stack_direct_detail_skus(question, entity_stack)
+    )
+    if (
+        direct_detail_skus
+        and not _is_explanation_followup(question, explanation_summary)
+        and _can_use_entity_stack_direct_detail(
+            question,
+            route_hints,
+            recommendation_summary,
+            direct_detail_skus,
+        )
+    ):
+        fields = (
+            _context_detail_fields(question, conversation_history)
+            or _context_requested_fields_from_intent(question, direct_detail_skus)
+            or (_safety_detail_fields() if _is_safety_usage_followup(question) else [])
+        )
+        arguments = {"skus": direct_detail_skus[:1], "fields": fields}
+        result = await customer_agent_tool_service.execute_tool_async(
+            db,
+            user_id=user_id,
+            name="get_product_detail",
+            arguments=arguments,
+        )
+        direct_route_hints = dict(route_hints or {})
+        direct_route_hints["entity_stack_direct_detail"] = True
+        direct_route_hints["resolved_skus"] = direct_detail_skus[:1]
+        if fields:
+            direct_answer = _direct_heat_source_support_answer(question, result)
+            if direct_answer is None and any(term in str(question or "") for term in ("酒精炉", "酒精")) and any(
+                term in str(question or "") for term in ("能用", "可以用", "支持", "适合", "能不能", "是否支持")
+            ):
+                inline_rows = _collect_results([result])
+                if len(inline_rows) == 1 and isinstance(inline_rows[0], dict):
+                    inline_item = inline_rows[0]
+                    inline_field_values = inline_item.get("field_values") if isinstance(inline_item.get("field_values"), dict) else {}
+                    inline_heat_source = str(inline_field_values.get("热源") or inline_field_values.get("燃料") or "").strip()
+                    if not inline_heat_source:
+                        inline_heat_source = str(((inline_item.get("specs") or {}).get("heat_source") or "")).strip()
+                    inline_name = inline_item.get("product_name_cn") or inline_item.get("product_name_en") or ""
+                    inline_prefix = f"{inline_name}（{inline_item.get('sku')}）" if inline_name else str(inline_item.get("sku") or "").strip()
+                    if inline_heat_source and inline_heat_source != "暂无":
+                        if "酒精炉" in inline_heat_source or "酒精" in inline_heat_source:
+                            direct_answer = f"{inline_prefix}：支持酒精炉。当前资料显示适用热源为{inline_heat_source}。"
+                        else:
+                            direct_answer = f"{inline_prefix}：当前资料未显示支持酒精炉。当前资料显示适用热源为{inline_heat_source}。"
+                    else:
+                        direct_answer = f"{inline_prefix}：当前资料暂未提供是否支持酒精炉。"
+            deterministic_result = _build_result(
+                question,
+                direct_detail_skus[0],
+                [result],
+                direct_answer,
+                [_step_from_tool_result("get_product_detail", arguments, result)],
+                conversation_history=conversation_history,
+                intent_override="product_detail",
+                preserve_llm_answer=bool(direct_answer),
+            )
+            debug = dict(deterministic_result.get("debug") or {})
+            debug["agent_mode"] = "deterministic_entity_stack_detail"
+            deterministic_result["debug"] = debug
+            return deterministic_result
+        return await _build_result_async(
+            db,
+            question,
+            direct_detail_skus[0],
+            [result],
+            None,
+            [_step_from_tool_result("get_product_detail", arguments, result)],
+            conversation_history=conversation_history,
+            conversation_id=conversation_id,
+            user_id=user_id,
+            intent_override="product_detail",
+            intent_hint="product_detail",
+            entity_stack=entity_stack,
+            route_hints=direct_route_hints,
+            answer_delta_callback=answer_delta_callback,
+        )
+    if _is_explanation_followup(question, explanation_summary):
+        explanation_skus = _explanation_followup_skus(question, explanation_summary)
         detail_results = []
-        for sku_item in (last_turn_summary.get("result_skus") or [])[:5]:
+        for sku_item in explanation_skus[:5]:
             result = await customer_agent_tool_service.execute_tool_async(
                 db,
                 user_id=user_id,
@@ -90,7 +272,7 @@ async def process_agent_request(
             )
             detail_results.append(result)
         if detail_results:
-            return await _build_result_async(
+            result = await _build_result_async(
                 db,
                 question,
                 None,
@@ -102,60 +284,36 @@ async def process_agent_request(
                 user_id=user_id,
                 intent_override="product_detail",
                 preserve_llm_answer=True,
-                route_hints={"explanation_followup": True},
+                route_hints={"explanation_followup": True, "followup_target_skus": explanation_skus[:5]},
                 answer_delta_callback=answer_delta_callback,
             )
-    explicit_product_detection = _detect_explicit_product_mention(db, question, entity_stack)
-    route_hints = _build_route_hints(question, explicit_product_detection, entity_stack)
-    dialogue_state = customer_dialogue_state.build_dialogue_state(question, conversation_history)
-    local_resolved_skus: list[str] = []
-    direct_detail_skus = _entity_stack_direct_detail_skus(question, entity_stack)
-    if (
-        direct_detail_skus
-        and _can_use_entity_stack_direct_detail(
-            question,
-            route_hints,
-            recommendation_summary,
-            direct_detail_skus,
-        )
-    ):
-        fields = (
-            _context_detail_fields(question, conversation_history)
-            or _context_requested_fields_from_intent(question, direct_detail_skus)
-            or (_safety_detail_fields() if _is_safety_or_certification_followup(question) else [])
-        )
-        arguments = {"skus": direct_detail_skus[:1], "fields": fields}
-        result = await customer_agent_tool_service.execute_tool_async(
-            db,
-            user_id=user_id,
-            name="get_product_detail",
-            arguments=arguments,
-        )
-        direct_route_hints = dict(route_hints or {})
-        direct_route_hints["entity_stack_direct_detail"] = True
-        direct_route_hints["resolved_skus"] = direct_detail_skus[:1]
-        return await _build_result_async(
-            db,
-            question,
-            direct_detail_skus[0],
-            [result],
-            None,
-            [_step_from_tool_result("get_product_detail", arguments, result)],
-            conversation_history=conversation_history,
-            conversation_id=conversation_id,
-            user_id=user_id,
-            intent_override="product_detail",
-            intent_hint="product_detail",
-            entity_stack=entity_stack,
-            route_hints=direct_route_hints,
-            answer_delta_callback=answer_delta_callback,
-        )
+            explanation_rows = _collect_results(detail_results) or []
+            if _is_plural_recommendation_explanation(question) and len(explanation_rows) > 1:
+                followup_answer = _compose_multi_recommendation_explanation_answer(
+                    question,
+                    explanation_rows,
+                    explanation_summary,
+                )
+            else:
+                followup_row = explanation_rows[0] if explanation_rows else {}
+                followup_answer = _compose_recommendation_explanation_answer(
+                    question,
+                    followup_row,
+                    explanation_summary,
+                )
+            if followup_answer:
+                result["answer"] = followup_answer
+                result["intent"] = "recommendation"
+                result["answer_type"] = "recommendation"
+            return result
     if explicit_product_detection["has_new_product"]:
         detected_skus = [
             str(item or "").strip().upper()
             for item in (explicit_product_detection.get("new_skus") or [])
             if str(item or "").strip()
         ]
+        if _should_defer_explicit_product_to_intent_pipeline(question, detected_skus):
+            return None
         if detected_skus:
             arguments = {"skus": detected_skus[:5], "fields": []}
             result = await customer_agent_tool_service.execute_tool_async(
@@ -196,6 +354,8 @@ async def process_agent_request(
             for item in candidate_rows
             if isinstance(item, dict) and str(item.get("sku") or "").strip()
         ]
+        if _should_defer_explicit_product_to_intent_pipeline(question, candidate_skus):
+            return None
         if _is_compare_like_question(question, candidate_skus=candidate_skus) and 2 <= len(candidate_skus) <= 5:
             arguments = {"skus": candidate_skus[:5], "fields": []}
             result = await customer_agent_tool_service.execute_tool_async(
@@ -229,11 +389,23 @@ async def process_agent_request(
         ):
             fast_start = perf_counter()
             semantic_query = _recommendation_question_with_context(question, conversation_history)
+            parsed_intent = customer_agent_intent_service.parse_intent(question, previous_result_skus=[])
+            fast_path_filters = (
+                dict(parsed_intent.filters or {})
+                if parsed_intent and parsed_intent.intent == "recommend_products"
+                else {}
+            )
+            fast_path_term = (
+                str(parsed_intent.term or "").strip()
+                if parsed_intent and parsed_intent.intent == "recommend_products"
+                else ""
+            )
             arguments = _enrich_recommendation_tool_arguments(
                 "hybrid_search_products",
                 {
+                    "term": fast_path_term,
                     "semantic_query": semantic_query,
-                    "filters": {},
+                    "filters": fast_path_filters,
                     "limit": 20,
                 },
                 question,
@@ -284,7 +456,7 @@ async def process_agent_request(
                 "fields": [
                     "specs.capacity",
                     "specs.body_material",
-                    "specs.weight",
+                    "specs.gross_weight_g",
                     "business.top_selling_points",
                     "business.usage_scenarios",
                     "business.target_audience",
@@ -346,7 +518,7 @@ async def process_agent_request(
             _ordinal_skus_from_entity_stack(question, entity_stack)
             or _category_reference_skus_from_entity_stack(question, entity_stack)
         )
-        if not local_resolved_skus and _is_safety_or_certification_followup(question) and entity_stack:
+        if not local_resolved_skus and _is_contextual_safety_or_certification_followup(question) and entity_stack:
             local_resolved_skus = _latest_entity_skus_from_stack(entity_stack, limit=1)
         if local_resolved_skus:
             route_plan = dict(route_plan or {})
@@ -354,6 +526,16 @@ async def process_agent_request(
             route_plan["context_mode"] = route_plan.get("context_mode") or "inherit_results"
             route_plan["reason"] = (route_plan.get("reason") or "") + "；本地实体栈回溯命中"
     previous_result_skus = _resolved_skus_from_route_plan(route_plan)
+    recommendation_domain_skus = [
+        str(item or "").strip().upper()
+        for item in (
+            recommendation_summary.get("candidate_skus")
+            or recommendation_summary.get("ordered_result_skus")
+            or recommendation_summary.get("result_skus")
+            or []
+        )
+        if str(item or "").strip()
+    ]
     resolved_from_entity_stack = bool(
         not explicit_product_detection.get("has_new_product")
         and local_resolved_skus
@@ -369,12 +551,10 @@ async def process_agent_request(
             str(route_plan.get("product_name") or "").strip(),
             route_plan,
         )
-    if not previous_result_skus and _is_recommendation_change_followup(question, recommendation_summary):
-        previous_result_skus = [
-            str(item or "").strip().upper()
-            for item in (recommendation_summary.get("result_skus") or [])
-            if str(item or "").strip()
-        ]
+    if recommendation_domain_skus and _is_recommendation_change_followup(question, recommendation_summary):
+        previous_result_skus = recommendation_domain_skus
+    if recommendation_domain_skus and _is_candidate_scope_followup(question):
+        previous_result_skus = recommendation_domain_skus
     if (
         dialogue_state.needs_clarification
         and not previous_result_skus
@@ -413,6 +593,104 @@ async def process_agent_request(
         result["agent_quality"] = quality
         result["debug"]["agent_quality"] = quality
         return result
+    context_followup_seed_skus = [
+        str(item or "").strip().upper()
+        for item in (
+            previous_result_skus
+            or recommendation_summary.get("candidate_skus")
+            or recommendation_summary.get("ordered_result_skus")
+            or recommendation_summary.get("result_skus")
+            or []
+        )
+        if str(item or "").strip()
+    ]
+    context_followup_intent = (
+        customer_agent_intent_service.parse_intent(
+            question,
+            sku=sku,
+            previous_result_skus=context_followup_seed_skus,
+        )
+        if context_followup_seed_skus
+        else None
+    )
+    empty_subset_context = recommendation_context if recommendation_context.get("empty_subset") else candidate_context
+    if empty_subset_context.get("empty_subset") and _is_empty_subset_followup(question):
+        return _build_result(
+            question,
+            sku,
+            [{"tool": "recommend_products", "results": [], "sources": []}],
+            "上一轮“这些里面”的筛选结果为空，所以我不能再从更早的候选里直接推荐。你可以放宽上一轮条件，或重新给我一个产品范围。",
+            [],
+            conversation_history=conversation_history,
+            intent_override="recommend_products",
+            preserve_llm_answer=True,
+        )
+    if (
+        context_followup_seed_skus
+        and context_followup_intent
+        and context_followup_intent.intent == "query_products"
+        and getattr(context_followup_intent, "source_context", "") == "previous_results"
+        and _has_specs_field_filter(context_followup_intent)
+        and not _looks_like_recommendation_text(question)
+    ):
+        return await customer_agent_intent_service.process_intent_request(
+            db,
+            user_id=user_id,
+            question=question,
+            sku=sku,
+            previous_result_skus=context_followup_seed_skus,
+            allow_llm_fallback=False,
+        )
+    followup_recommendation_domain = context_followup_seed_skus
+    recommendation_change_followup = _is_recommendation_change_followup(question, recommendation_summary) or _is_recommendation_change_followup_text(question)
+    if (
+        followup_recommendation_domain
+        and not _requires_write_tool(question)
+        and (
+            recommendation_change_followup
+            or (
+                context_followup_intent
+                and context_followup_intent.intent == "recommend_products"
+                and getattr(context_followup_intent, "source_context", "") == "previous_results"
+            )
+        )
+    ):
+        deterministic_followup_recommendation = await customer_agent_intent_service.process_intent_request(
+            db,
+            user_id=user_id,
+            question=question,
+            sku=sku,
+            previous_result_skus=followup_recommendation_domain,
+            allow_llm_fallback=False,
+        )
+        if deterministic_followup_recommendation and deterministic_followup_recommendation.get("intent") in {
+            "recommend_products",
+            "query_products",
+        }:
+            return deterministic_followup_recommendation
+        arguments = {"skus": followup_recommendation_domain[:10], "fields": []}
+        result = await customer_agent_tool_service.execute_tool_async(
+            db,
+            user_id=user_id,
+            name="get_product_detail",
+            arguments=arguments,
+        )
+        return await _build_result_async(
+            db,
+            question,
+            None,
+            [result],
+            None,
+            [_step_from_tool_result("get_product_detail", arguments, result)],
+            conversation_history=conversation_history,
+            conversation_id=conversation_id,
+            user_id=user_id,
+            intent_override="recommend_products",
+            intent_hint="recommend_products",
+            entity_stack=entity_stack,
+            route_hints={"followup_candidate_domain": True},
+            answer_delta_callback=answer_delta_callback,
+        )
     context_fields = _context_detail_fields(question, conversation_history)
     if (
         previous_result_skus
@@ -420,9 +698,10 @@ async def process_agent_request(
         and not _requires_write_tool(question)
         and not _is_compare_like_question(question, context_skus=previous_result_skus)
         and not _is_recommendation_change_followup(question, recommendation_summary)
+        and not _is_candidate_scope_followup(question)
     ):
         inherited_fields = context_fields or _context_requested_fields_from_intent(question, previous_result_skus)
-        if inherited_fields or _is_safety_or_certification_followup(question):
+        if inherited_fields or _is_safety_usage_followup(question):
             arguments = {
                 "skus": previous_result_skus[:5],
                 "fields": inherited_fields or _safety_detail_fields(),
@@ -433,6 +712,41 @@ async def process_agent_request(
                 name="get_product_detail",
                 arguments=arguments,
             )
+            if inherited_fields:
+                direct_answer = _direct_heat_source_support_answer(question, result)
+                if direct_answer is None and any(term in str(question or "") for term in ("酒精炉", "酒精")) and any(
+                    term in str(question or "") for term in ("能用", "可以用", "支持", "适合", "能不能", "是否支持")
+                ):
+                    inline_rows = _collect_results([result])
+                    if len(inline_rows) == 1 and isinstance(inline_rows[0], dict):
+                        inline_item = inline_rows[0]
+                        inline_field_values = inline_item.get("field_values") if isinstance(inline_item.get("field_values"), dict) else {}
+                        inline_heat_source = str(inline_field_values.get("热源") or inline_field_values.get("燃料") or "").strip()
+                        if not inline_heat_source:
+                            inline_heat_source = str(((inline_item.get("specs") or {}).get("heat_source") or "")).strip()
+                        inline_name = inline_item.get("product_name_cn") or inline_item.get("product_name_en") or ""
+                        inline_prefix = f"{inline_name}（{inline_item.get('sku')}）" if inline_name else str(inline_item.get("sku") or "").strip()
+                        if inline_heat_source and inline_heat_source != "暂无":
+                            if "酒精炉" in inline_heat_source or "酒精" in inline_heat_source:
+                                direct_answer = f"{inline_prefix}：支持酒精炉。当前资料显示适用热源为{inline_heat_source}。"
+                            else:
+                                direct_answer = f"{inline_prefix}：当前资料未显示支持酒精炉。当前资料显示适用热源为{inline_heat_source}。"
+                        else:
+                            direct_answer = f"{inline_prefix}：当前资料暂未提供是否支持酒精炉。"
+                deterministic_result = _build_result(
+                    question,
+                    previous_result_skus[0] if len(previous_result_skus) == 1 else sku,
+                    [result],
+                    direct_answer,
+                    [_step_from_tool_result("get_product_detail", arguments, result)],
+                    conversation_history=conversation_history,
+                    intent_override="product_detail",
+                    preserve_llm_answer=bool(direct_answer),
+                )
+                debug = dict(deterministic_result.get("debug") or {})
+                debug["agent_mode"] = "deterministic_entity_stack_detail"
+                deterministic_result["debug"] = debug
+                return deterministic_result
             return await _build_result_async(
                 db,
                 question,
@@ -457,6 +771,7 @@ async def process_agent_request(
         and not _has_explicit_product_reference(question)
         and not _has_specs_filter(question)
         and not resolved_from_entity_stack
+        and not _is_candidate_scope_followup(question)
     ):
         arguments = {"skus": previous_result_skus[:5], "fields": context_fields}
         result = await customer_agent_tool_service.execute_tool_async(
@@ -636,6 +951,8 @@ async def _build_result_async(
     active_preserve_llm_answer = preserve_llm_answer
     recommendation_question = ""
     enriched_results: list[dict] = []
+    recommendation_change_followup = False
+    excluded_skus: set[str] = set()
     collected_results = _collect_results(tool_results)
     inferred_intent = effective_intent or _infer_intent(
         question,
@@ -650,6 +967,23 @@ async def _build_result_async(
         exclusion_context = _latest_recommendation_context(db, conversation_id, user_id)
         excluded_skus = _excluded_previous_skus(question, conversation_history or [], exclusion_context)
         ranked_results = _filter_excluded_recommendations(question, collected_results, conversation_history or [], exclusion_context)
+        candidate_scope_followup = _is_candidate_scope_followup(question) and bool((exclusion_context or {}).get("candidate_skus"))
+        recommendation_change_followup = _is_recommendation_change_followup(
+            question,
+            {
+                "intent": "recommend_products",
+                "result_skus": list(
+                    (exclusion_context or {}).get("recommended_skus")
+                    or (exclusion_context or {}).get("ordered_result_skus")
+                    or (exclusion_context or {}).get("candidate_skus")
+                    or []
+                ),
+            },
+        )
+        if recommendation_change_followup or candidate_scope_followup:
+            ranked_results = _filter_followup_candidate_domain(ranked_results, exclusion_context)
+        if recommendation_change_followup:
+            ranked_results = _filter_followup_recommendation_scope(ranked_results, exclusion_context)
         ranked_results = _rank_recommendation_results(recommendation_question, ranked_results)
         enriched_results = _recommendation_products_for_finalizer(db, recommendation_question, ranked_results)
         if excluded_skus:
@@ -712,8 +1046,14 @@ async def _build_result_async(
                     },
                 ]
     answer_metadata_override = None
-    if inferred_intent == "recommend_products" and enriched_results:
-        answer = _compose_recommendation_answer(recommendation_question or question, enriched_results)
+    if inferred_intent == "recommend_products" and (enriched_results or excluded_skus) and (
+        excluded_skus or recommendation_change_followup
+    ):
+        answer = _compose_recommendation_answer(
+            recommendation_question or question,
+            enriched_results,
+            excluded_skus=excluded_skus,
+        )
         active_preserve_llm_answer = True
     else:
         final_response = await _finalize_answer(
@@ -760,6 +1100,8 @@ def _build_result(
 ) -> dict:
     actions = _collect_actions(tool_results)
     raw_results = _collect_results(tool_results)
+    raw_results = _enrich_load_capacity_results(question, raw_results)
+    raw_results = _rewrite_heat_source_support_results(question, raw_results)
     warnings = _warnings_from_tool_results(tool_results, direct_answer=direct_answer)
     provisional_answer = _clean_customer_answer(answer or "")
     provisional_needs_clarification = _needs_clarification(provisional_answer, raw_results, warnings)
@@ -767,13 +1109,20 @@ def _build_result(
     if _requires_lookup_tool(question) and not raw_results and not actions:
         provisional_answer = _fallback_answer(tool_results)
     if _has_field_values(raw_results) and not preserve_llm_answer:
-        field_answer = _compose_field_values_answer(raw_results)
-        if field_answer and (not provisional_answer or _field_answer_should_replace(provisional_answer, raw_results)):
+        field_answer = _compose_field_values_answer(question, raw_results)
+        if field_answer and (not provisional_answer or _field_answer_should_replace(question, provisional_answer, raw_results)):
             provisional_answer = field_answer
+    if intent == "compare_products":
+        compare_answer = _compose_context_compare_answer(question, raw_results)
+        if compare_answer:
+            provisional_answer = compare_answer
     elif raw_results and not preserve_llm_answer and _answer_conflicts_with_current_results(provisional_answer, question, raw_results):
         warnings.append("LLM 原始回答与本轮问题或工具结果不一致，已改用工具结果兜底回答。")
         provisional_answer = _fallback_answer(tool_results)
     clean_answer = _clean_customer_answer(provisional_answer or _fallback_answer(tool_results))
+    heat_source_support_answer = _rewrite_heat_source_support_answer(question, raw_results)
+    if heat_source_support_answer:
+        clean_answer = heat_source_support_answer
     needs_clarification = _needs_clarification(clean_answer, raw_results, warnings)
     display_results = _merge_results_for_display(question, raw_results)
     suggested_followups = _suggested_followups(question, display_results, needs_clarification)
@@ -1095,7 +1444,7 @@ def _category_reference_skus_from_entity_stack(question: str, entity_stack: list
         return []
     ordered = _entity_stack_by_conversation_order(entity_stack)
     for term in requested:
-        for entity in reversed(ordered):
+        for entity in ordered:
             name = str(entity.get("name") or "")
             sku = str(entity.get("sku") or "").strip().upper()
             if sku and (term in name or (term == "炉" and "炉" in name) or (term == "锅" and "锅" in name)):
@@ -1121,7 +1470,7 @@ def _entity_stack_direct_detail_skus(question: str, entity_stack: list[dict]) ->
     )
     if len(explicit_reference) == 1:
         return explicit_reference
-    if not entity_stack or not (_needs_previous_context(question) or _is_safety_or_certification_followup(question)):
+    if not entity_stack or not (_needs_previous_context(question) or _is_contextual_safety_or_certification_followup(question)):
         return []
     top_turn = entity_stack[0].get("turn")
     top_skus: list[str] = []
@@ -1132,6 +1481,35 @@ def _entity_stack_direct_detail_skus(question: str, entity_stack: list[dict]) ->
         if sku and sku not in top_skus:
             top_skus.append(sku)
     return top_skus if len(top_skus) == 1 else []
+
+
+def _ordinal_skus_from_conversation_history(question: str, conversation_history: list[dict] | None) -> list[str]:
+    text = str(question or "")
+    if not any(term in text for term in ("最开始", "第一个", "第一款", "最后一个", "最后一款", "最后那个", "上一个", "第二个", "第三个", "第四个")):
+        return []
+    history = conversation_history or []
+    ordered_skus: list[str] = []
+    for item in history:
+        if str(item.get("role") or "") != "user":
+            continue
+        content = str(item.get("content") or "")
+        for match in SKU_RE.findall(content):
+            sku = str(match or "").strip().upper()
+            if sku and sku not in ordered_skus:
+                ordered_skus.append(sku)
+    if not ordered_skus:
+        return []
+    if any(term in text for term in ("最开始", "第一个", "第一款")):
+        return [ordered_skus[0]]
+    if any(term in text for term in ("最后一个", "最后一款", "最后那个", "上一个")):
+        return [ordered_skus[-1]]
+    match = re.search(r"第\s*(\d+|[一二三四五六七八九十两])\s*(?:个|款|种)?", text)
+    if not match:
+        return []
+    index = _chinese_ordinal_to_int(match.group(1))
+    if index <= 0 or index > len(ordered_skus):
+        return []
+    return [ordered_skus[index - 1]]
 
 
 def _can_use_entity_stack_direct_detail(
@@ -1153,6 +1531,10 @@ def _can_use_entity_stack_direct_detail(
         return False
     if _requires_write_tool(question):
         return False
+    if customer_agent_tool_service.query_fields_from_text(question):
+        return True
+    if _context_requested_fields_from_intent(question, direct_detail_skus):
+        return True
     intent = str(hints.get("intent") or "")
     return intent in {"product_detail", "query_products", "clarify", "unknown", ""}
 
@@ -1490,6 +1872,9 @@ def _context_compare_fast_path_skus(
         return []
     if len(candidates) < 2:
         return []
+    text = str(question or "")
+    if any(term in text for term in ("\u7b2c\u4e00\u4e2a", "\u7b2c\u4e8c\u4e2a", "\u7b2c\u4e00\u6b3e", "\u7b2c\u4e8c\u6b3e")):
+        return candidates[:2]
     if _asks_high_vs_entry(question):
         return _pick_high_and_entry_skus(db, candidates)
     if len(candidates) == 2:
@@ -1499,6 +1884,14 @@ def _context_compare_fast_path_skus(
 
 def _context_candidate_skus(entity_stack: list[dict], recommendation_summary: dict | None) -> list[str]:
     skus: list[str] = []
+    for sku in (recommendation_summary or {}).get("candidate_skus") or []:
+        sku_text = str(sku or "").strip().upper()
+        if sku_text and sku_text not in skus:
+            skus.append(sku_text)
+    for sku in (recommendation_summary or {}).get("ordered_result_skus") or []:
+        sku_text = str(sku or "").strip().upper()
+        if sku_text and sku_text not in skus:
+            skus.append(sku_text)
     for sku in (recommendation_summary or {}).get("result_skus") or []:
         sku_text = str(sku or "").strip().upper()
         if sku_text and sku_text not in skus:
@@ -1605,18 +1998,44 @@ def _context_requested_fields_from_intent(question: str, previous_result_skus: l
     return fields
 
 
-def _is_safety_or_certification_followup(question: str) -> bool:
+def _is_safety_usage_followup(question: str) -> bool:
     text = str(question or "")
+    if any(term in text for term in ("认证", "认证信息", "FDA", "LFGB", "食品级", "304", "不锈钢", "材质", "耐腐蚀")):
+        return False
     return any(term in text for term in (
-        "\u98df\u54c1\u7ea7",
         "\u5b89\u5168\u5417",
         "\u5b89\u5168\u6027",
         "\u5b89\u5168",
+        "\u6ce8\u610f\u4e8b\u9879",
+        "\u7981\u5fcc",
+        "\u5e10\u7bf7",
+        "\u5bc6\u95ed",
+        "\u5ba4\u5185",
+        "\u66b4\u6652",
+        "\u660e\u706b",
+        "\u5b58\u653e",
+        "\u50a8\u5b58",
+        "\u901a\u98ce",
         "\u80fd\u4e0d\u80fd",
         "\u80fd\u5426",
         "\u53ef\u4ee5\u4e0d\u53ef\u4ee5",
+    ))
+
+
+def _is_contextual_safety_or_certification_followup(question: str) -> bool:
+    text = str(question or "")
+    if _is_safety_usage_followup(text):
+        return True
+    return any(term in text for term in (
+        "\u98df\u54c1\u7ea7",
         "\u8ba4\u8bc1",
         "\u8ba4\u8bc1\u4fe1\u606f",
+        "FDA",
+        "LFGB",
+        "304",
+        "\u4e0d\u9508\u94a2",
+        "\u6750\u8d28",
+        "\u8010\u8150\u8680",
     ))
 
 
@@ -2187,6 +2606,12 @@ def _is_compare_like_question(
     context_skus: list[str] | None = None,
 ) -> bool:
     text = str(question or "")
+    if (
+        any(term in text for term in ("\u7b2c\u4e00\u4e2a", "\u7b2c\u4e8c\u4e2a", "\u7b2c\u4e00\u6b3e", "\u7b2c\u4e8c\u6b3e"))
+        and any(term in text for term in ("\u6bd4", "\u66f4"))
+        and any(term in text for term in ("\u8f7b", "\u91cd", "\u91cd\u91cf"))
+    ):
+        return len(_unique_skus(context_skus or [])) >= 2 or len(_unique_skus(candidate_skus or [])) >= 2
     if not any(word in text for word in COMPARE_LIKE_TERMS):
         return False
 
@@ -2259,6 +2684,30 @@ def _is_explanation_followup(question: str, last_turn_summary: dict) -> bool:
     return any(word in text for word in ("为什么", "理由", "解释", "依据", "第一个", "第一個", "首个", "首個"))
 
 
+def _explanation_followup_skus(question: str, last_turn_summary: dict) -> list[str]:
+    ordered_skus = [
+        str(item or "").strip().upper()
+        for item in (
+            last_turn_summary.get("ordered_result_skus")
+            or last_turn_summary.get("recommended_skus")
+            or last_turn_summary.get("result_skus")
+            or []
+        )
+        if str(item or "").strip()
+    ]
+    skus = ordered_skus or [
+        str(item or "").strip().upper()
+        for item in (last_turn_summary.get("result_skus") or [])
+        if str(item or "").strip()
+    ]
+    if not skus:
+        return []
+    text = str(question or "")
+    if any(word in text for word in ("绗竴涓?", "绗竴鍊?", "棣栦釜", "棣栧€?")):
+        return skus[:1]
+    return skus[:5]
+
+
 def _is_recommendation_change_followup(question: str, last_turn_summary: dict) -> bool:
     if not last_turn_summary or last_turn_summary.get("intent") != "recommend_products":
         return False
@@ -2269,7 +2718,7 @@ def _is_recommendation_change_followup(question: str, last_turn_summary: dict) -
 
 
 def _last_turn_summary(db: Session, conversation_id: str | None, user_id: str | None) -> dict:
-    default_summary = {"intent": None, "result_skus": [], "user_question": None}
+    default_summary = {"intent": None, "result_skus": [], "user_question": None, "assistant_answer": None}
     if not conversation_id or not user_id:
         return default_summary
     conversation = db.query(CustomerServiceConversation).filter(
@@ -2327,6 +2776,7 @@ def _last_turn_summary(db: Session, conversation_id: str | None, user_id: str | 
         "intent": meta.get("intent") if isinstance(meta, dict) else None,
         "result_skus": result_skus,
         "user_question": previous_user.content if previous_user else None,
+        "assistant_answer": assistant_message.content if assistant_message else None,
     }
 
 
@@ -2356,18 +2806,61 @@ def _latest_recommendation_context(db: Session, conversation_id: str | None, use
             (item for item in sources if isinstance(item, dict) and item.get("type") == "agent_meta"),
             {},
         )
+        candidate_context = meta.get("candidate_context") if isinstance(meta, dict) else None
         context = meta.get("recommendation_context") if isinstance(meta, dict) else None
         if isinstance(context, dict) and context.get("recommended_skus"):
             user_question = str(context.get("user_question") or "").strip()
+            candidate_skus = [
+                str(sku).strip().upper()
+                for sku in (context.get("candidate_skus") or (candidate_context or {}).get("candidate_skus") or context.get("recommended_skus") or [])
+                if str(sku or "").strip()
+            ]
+            ordered_result_skus = [
+                str(sku).strip().upper()
+                for sku in (context.get("ordered_result_skus") or context.get("recommended_skus") or (candidate_context or {}).get("ordered_result_skus") or candidate_skus or [])
+                if str(sku or "").strip()
+            ]
+            product_scope = str(context.get("product_scope") or "").strip() or customer_dialogue_state.product_scope_from_text(user_question)
+            candidate_skus = _refine_followup_candidate_skus_for_scope(db, candidate_skus, product_scope, user_question)
+            ordered_result_skus = _refine_followup_candidate_skus_for_scope(db, ordered_result_skus, product_scope, user_question)
             return {
                 "recommended_skus": [
                     str(sku).strip().upper()
                     for sku in context.get("recommended_skus") or []
                     if str(sku or "").strip()
                 ],
+                "candidate_skus": candidate_skus,
+                "ordered_result_skus": ordered_result_skus,
                 "user_question": user_question,
-                "product_scope": str(context.get("product_scope") or "").strip()
-                or customer_dialogue_state.product_scope_from_text(user_question),
+                "product_scope": product_scope,
+            }
+        if isinstance(candidate_context, dict) and (candidate_context.get("candidate_skus") or candidate_context.get("empty_subset")):
+            user_question = str(candidate_context.get("user_question") or "").strip()
+            candidate_skus = [
+                str(sku).strip().upper()
+                for sku in candidate_context.get("candidate_skus") or []
+                if str(sku or "").strip()
+            ]
+            ordered_result_skus = [
+                str(sku).strip().upper()
+                for sku in (candidate_context.get("ordered_result_skus") or candidate_skus)
+                if str(sku or "").strip()
+            ]
+            recommended_skus = [
+                str(sku).strip().upper()
+                for sku in candidate_context.get("recommended_skus") or []
+                if str(sku or "").strip()
+            ]
+            product_scope = str(candidate_context.get("product_scope") or "").strip() or customer_dialogue_state.product_scope_from_text(user_question)
+            candidate_skus = _refine_followup_candidate_skus_for_scope(db, candidate_skus, product_scope, user_question)
+            ordered_result_skus = _refine_followup_candidate_skus_for_scope(db, ordered_result_skus, product_scope, user_question)
+            return {
+                "recommended_skus": recommended_skus,
+                "candidate_skus": candidate_skus,
+                "ordered_result_skus": ordered_result_skus,
+                "user_question": user_question,
+                "product_scope": product_scope,
+                "empty_subset": bool(candidate_context.get("empty_subset")),
             }
         if not isinstance(meta, dict) or meta.get("intent") != "recommend_products":
             continue
@@ -2395,10 +2888,453 @@ def _latest_recommendation_context(db: Session, conversation_id: str | None, use
         user_question = previous_user.content if previous_user else ""
         return {
             "recommended_skus": skus,
+            "candidate_skus": skus,
+            "ordered_result_skus": skus,
             "user_question": user_question,
             "product_scope": customer_dialogue_state.product_scope_from_text(user_question),
         }
     return {}
+
+
+def _latest_candidate_context(db: Session, conversation_id: str | None, user_id: str | None) -> dict:
+    if not conversation_id or not user_id:
+        return {}
+    conversation = db.query(CustomerServiceConversation).filter(
+        CustomerServiceConversation.id == conversation_id,
+        CustomerServiceConversation.user_id == str(user_id),
+    ).first()
+    if not conversation:
+        return {}
+    messages = (
+        db.query(CustomerServiceMessage)
+        .filter(
+            CustomerServiceMessage.conversation_id == conversation.id,
+            CustomerServiceMessage.role == "assistant",
+        )
+        .order_by(CustomerServiceMessage.created_at.desc(), CustomerServiceMessage.id.desc())
+        .limit(20)
+        .all()
+    )
+    for message in messages:
+        sources = _safe_json_loads(message.sources_json, [])
+        if not isinstance(sources, list):
+            continue
+        meta = next(
+            (item for item in sources if isinstance(item, dict) and item.get("type") == "agent_meta"),
+            {},
+        )
+        candidate_context = meta.get("candidate_context") if isinstance(meta, dict) else None
+        if not isinstance(candidate_context, dict) or not (candidate_context.get("candidate_skus") or candidate_context.get("empty_subset")):
+            continue
+        return {
+            "candidate_skus": [
+                str(sku).strip().upper()
+                for sku in candidate_context.get("candidate_skus") or []
+                if str(sku or "").strip()
+            ],
+            "ordered_result_skus": [
+                str(sku).strip().upper()
+                for sku in (candidate_context.get("ordered_result_skus") or candidate_context.get("candidate_skus") or [])
+                if str(sku or "").strip()
+            ],
+            "recommended_skus": [
+                str(sku).strip().upper()
+                for sku in candidate_context.get("recommended_skus") or []
+                if str(sku or "").strip()
+            ],
+            "user_question": str(candidate_context.get("user_question") or "").strip(),
+            "product_scope": str(candidate_context.get("product_scope") or "").strip(),
+            "empty_subset": bool(candidate_context.get("empty_subset")),
+        }
+    return {}
+
+
+async def _handle_scoped_candidate_followup(
+    db: Session,
+    *,
+    user_id: str,
+    question: str,
+    sku: str | None,
+    candidate_context: dict[str, Any] | None,
+    conversation_history: list[dict] | None = None,
+) -> dict | None:
+    domain_skus = [
+        str(item or "").strip().upper()
+        for item in (
+            (candidate_context or {}).get("ordered_result_skus")
+            or (candidate_context or {}).get("candidate_skus")
+            or []
+        )
+        if str(item or "").strip()
+    ]
+    if not domain_skus:
+        return None
+    if _looks_like_scoped_people_filter_followup(question):
+        target_people = _people_count_from_question(question)
+        if not target_people:
+            return None
+        details_result = await customer_agent_tool_service.execute_tool_async(
+            db,
+            user_id=user_id,
+            name="get_product_detail",
+            arguments={"skus": domain_skus, "fields": []},
+        )
+        detail_rows = _collect_results([details_result])
+        detail_by_sku = {
+            str(row.get("sku") or "").strip().upper(): row
+            for row in detail_rows
+            if isinstance(row, dict) and str(row.get("sku") or "").strip()
+        }
+        filtered_rows = [
+            detail_by_sku[domain_sku]
+            for domain_sku in domain_skus
+            if domain_sku in detail_by_sku and _row_matches_people_count(detail_by_sku[domain_sku], target_people)
+        ]
+        filtered_skus = [str(row.get("sku") or "").strip().upper() for row in filtered_rows if str(row.get("sku") or "").strip()]
+        if not filtered_rows:
+            original_candidate_skus = [
+                str(item or "").strip().upper()
+                for item in (
+                    (candidate_context or {}).get("original_candidate_skus")
+                    or (candidate_context or {}).get("ordered_result_skus")
+                    or (candidate_context or {}).get("candidate_skus")
+                    or []
+                )
+                if str(item or "").strip()
+            ]
+            return _scoped_candidate_context_result(
+                question,
+                sku,
+                [],
+                (
+                    f"\u5728\u4e0a\u4e00\u8f6e\u8fd9\u4e9b\u5019\u9009\u91cc\uff0c\u6ca1\u6709\u627e\u5230\u660e\u786e\u9002\u5408 {target_people} \u4e2a\u4eba\u4f7f\u7528\u7684\u4ea7\u54c1\u8d44\u6599\u3002"
+                    "\u6211\u4e0d\u4f1a\u56de\u5230\u5168\u5e93\u91cd\u65b0\u63a8\u8350\uff1b\u4f60\u53ef\u4ee5\u653e\u5bbd\u4eba\u6570\u6761\u4ef6\u6216\u91cd\u65b0\u7ed9\u4e00\u4e2a\u4ea7\u54c1\u8303\u56f4\u3002"
+                ),
+                {
+                    **(candidate_context or {}),
+                    "candidate_skus": original_candidate_skus,
+                    "original_candidate_skus": original_candidate_skus,
+                    "ordered_result_skus": [],
+                    "filtered_skus": [],
+                    "empty_subset": True,
+                    "applied_filter": {"type": "people", "people": target_people},
+                    "user_question": question,
+                },
+                conversation_history=conversation_history,
+            )
+        answer = _compose_scoped_people_filter_answer(target_people, filtered_rows)
+        return _scoped_candidate_context_result(
+            question,
+            sku,
+            filtered_rows,
+            answer,
+            {
+                **(candidate_context or {}),
+                "candidate_skus": filtered_skus,
+                "ordered_result_skus": filtered_skus,
+                "filtered_skus": filtered_skus,
+                "empty_subset": False,
+                "user_question": question,
+            },
+            conversation_history=conversation_history,
+        )
+    if _looks_like_scoped_lightest_followup(question):
+        details_result = await customer_agent_tool_service.execute_tool_async(
+            db,
+            user_id=user_id,
+            name="get_product_detail",
+            arguments={"skus": domain_skus, "fields": ["specs.gross_weight_g"]},
+        )
+        detail_rows = _collect_results([details_result])
+        detail_by_sku = {
+            str(row.get("sku") or "").strip().upper(): row
+            for row in detail_rows
+            if isinstance(row, dict) and str(row.get("sku") or "").strip()
+        }
+        ordered_rows = [detail_by_sku[domain_sku] for domain_sku in domain_skus if domain_sku in detail_by_sku]
+        weighted_rows = [(row, _detail_weight_g(row)) for row in ordered_rows]
+        known_weight_rows = [(row, weight) for row, weight in weighted_rows if weight is not None]
+        if not known_weight_rows:
+            return _scoped_candidate_context_result(
+                question,
+                sku,
+                ordered_rows,
+                "当前候选里缺少明确重量数据，无法准确判断最轻的是哪个。",
+                {
+                    **(candidate_context or {}),
+                    "candidate_skus": domain_skus,
+                    "ordered_result_skus": domain_skus,
+                    "user_question": question,
+                },
+                conversation_history=conversation_history,
+                intent_override="compare_products",
+            )
+        lightest_row, lightest_weight = min(known_weight_rows, key=lambda item: item[1])
+        lightest_sku = str(lightest_row.get("sku") or "").strip().upper()
+        answer = _compose_scoped_lightest_answer(lightest_row, lightest_weight, ordered_rows)
+        return _scoped_candidate_context_result(
+            question,
+            sku,
+            [lightest_row, *[row for row in ordered_rows if str(row.get("sku") or "").strip().upper() != lightest_sku]],
+            answer,
+            {
+                **(candidate_context or {}),
+                "candidate_skus": domain_skus,
+                "ordered_result_skus": domain_skus,
+                "user_question": question,
+            },
+            conversation_history=conversation_history,
+            intent_override="compare_products",
+        )
+    return None
+
+
+def _scoped_candidate_context_result(
+    question: str,
+    sku: str | None,
+    rows: list[dict],
+    answer: str,
+    candidate_context: dict[str, Any],
+    *,
+    conversation_history: list[dict] | None = None,
+    intent_override: str = "query_products",
+) -> dict:
+    tool_result = {
+        "ok": True,
+        "tool": "get_product_detail",
+        "count": len(rows),
+        "details": rows,
+        "results": rows,
+        "sources": [],
+    }
+    result = _build_result(
+        question,
+        sku,
+        [tool_result],
+        answer,
+        [{"type": "candidate_context_followup", "label": "候选域追问筛选", "ok": True}],
+        conversation_history=conversation_history,
+        intent_override=intent_override,
+        preserve_llm_answer=True,
+    )
+    result["answer"] = answer
+    result["needs_clarification"] = False
+    meta = {
+        "type": "agent_meta",
+        "label": "候选域追问上下文",
+        "intent": result.get("intent"),
+        "answer_type": result.get("answer_type"),
+        "candidate_context": {
+            "candidate_skus": [
+                str(item or "").strip().upper()
+                for item in candidate_context.get("candidate_skus") or []
+                if str(item or "").strip()
+            ],
+            "ordered_result_skus": [
+                str(item or "").strip().upper()
+                for item in (candidate_context.get("ordered_result_skus") if "ordered_result_skus" in candidate_context else candidate_context.get("candidate_skus") or [])
+                if str(item or "").strip()
+            ],
+            "filtered_skus": [
+                str(item or "").strip().upper()
+                for item in candidate_context.get("filtered_skus") or []
+                if str(item or "").strip()
+            ],
+            "original_candidate_skus": [
+                str(item or "").strip().upper()
+                for item in candidate_context.get("original_candidate_skus") or []
+                if str(item or "").strip()
+            ],
+            "recommended_skus": [
+                str(item or "").strip().upper()
+                for item in candidate_context.get("recommended_skus") or []
+                if str(item or "").strip()
+            ],
+            "user_question": str(candidate_context.get("user_question") or question or "").strip(),
+            "product_scope": str(candidate_context.get("product_scope") or "").strip(),
+            "empty_subset": bool(candidate_context.get("empty_subset")),
+            "applied_filter": candidate_context.get("applied_filter") if isinstance(candidate_context.get("applied_filter"), dict) else None,
+        },
+    }
+    result["sources"] = [*(result.get("sources") or []), meta]
+    debug = dict(result.get("debug") or {})
+    debug["agent_mode"] = "candidate_context_followup"
+    result["debug"] = debug
+    return result
+
+
+def _looks_like_scoped_people_filter_followup(question: str) -> bool:
+    text = str(question or "")
+    if any(term in text for term in ("\u54ea\u4e2a", "\u54ea\u4e00\u4e2a", "\u54ea\u6b3e", "\u54ea\u4e00\u6b3e", "\u66f4\u9002\u5408", "\u66f4\u63a8\u8350")):
+        return False
+    if not any(term in text for term in ("\u6709\u54ea\u4e9b", "\u54ea\u4e9b", "\u54ea\u51e0\u6b3e", "\u5217\u51fa")):
+        return False
+    return (
+        _is_candidate_scope_followup(text)
+        and _people_count_from_question(text) is not None
+        and any(term in text for term in ("适合", "用", "人"))
+    )
+
+
+def _looks_like_scoped_lightest_followup(question: str) -> bool:
+    text = str(question or "")
+    return (
+        any(term in text for term in ("最轻", "哪个最轻", "哪款最轻"))
+        and not any(term in text for term in ("第一个", "第二个", "第三个"))
+    )
+
+
+def _people_count_from_question(question: str) -> int | None:
+    text = str(question or "")
+    match = re.search(r"(\d+)\s*(?:个)?人", text)
+    if match:
+        return int(match.group(1))
+    mapping = {
+        "一人": 1,
+        "一个人": 1,
+        "单人": 1,
+        "两人": 2,
+        "两个人": 2,
+        "二人": 2,
+        "二个人": 2,
+        "双人": 2,
+        "三人": 3,
+        "三个人": 3,
+        "四人": 4,
+        "四个人": 4,
+        "五人": 5,
+        "五个人": 5,
+    }
+    for term, value in mapping.items():
+        if term in text:
+            return value
+    return None
+
+
+def _row_matches_people_count(row: dict, people_count: int) -> bool:
+    haystack = _row_text(row)
+    if people_count == 1 and any(term in haystack for term in ("单人", "1人", "1 人", "一人", "一个人", "1-2人", "1－2人")):
+        return True
+    if people_count == 2 and any(term in haystack for term in ("双人", "两人", "两个人", "2人", "2 人", "二人", "1-2人", "1－2人", "2-3人", "2－3人")):
+        return True
+    if people_count == 3 and any(term in haystack for term in ("三人", "3人", "3 人", "三个人", "2-3人", "2－3人", "3-4人", "3－4人")):
+        return True
+    if people_count == 4 and any(term in haystack for term in ("四人", "4人", "4 人", "四个人", "3-4人", "3－4人", "2-4人", "2－4人")):
+        return True
+    if people_count == 5 and any(term in haystack for term in ("五人", "5人", "5 人", "五个人", "4-5人", "4－5人", "5-6人", "5－6人")):
+        return True
+    return False
+
+
+def _compose_scoped_people_filter_answer(people_count: int, rows: list[dict]) -> str:
+    lines = [f"上一轮候选里，明确更适合 {people_count} 人使用的有："]
+    for row in rows[:5]:
+        sku = str(row.get("sku") or "").strip().upper()
+        name = str(row.get("product_name_cn") or row.get("product_name_en") or sku).strip()
+        scenes = str(row.get("usage_scenarios") or row.get("target_audience") or row.get("features") or "").strip()
+        suffix = f"：{scenes}" if scenes else ""
+        lines.append(f"- {sku} {name}{suffix}")
+    return "\n".join(lines)
+
+
+def _compose_scoped_lightest_answer(lightest_row: dict, lightest_weight: float, rows: list[dict]) -> str:
+    sku = str(lightest_row.get("sku") or "").strip().upper()
+    name = str(lightest_row.get("product_name_cn") or lightest_row.get("product_name_en") or sku).strip()
+    lines = [f"在上一轮筛选结果里，当前资料显示最轻的是 {sku} {name}，重量约 {int(lightest_weight)}g。"]
+    missing_weight = [
+        str(row.get("sku") or "").strip().upper()
+        for row in rows
+        if _detail_weight_g(row) is None and str(row.get("sku") or "").strip()
+    ]
+    if missing_weight:
+        lines.append(f"另外，{', '.join(missing_weight)} 缺少明确重量数据，所以这个结论只基于已有重量字段。")
+    return "\n".join(lines)
+
+
+def _refine_followup_candidate_skus_for_scope(
+    db: Session,
+    skus: list[str],
+    product_scope: str,
+    user_question: str,
+) -> list[str]:
+    normalized_skus = [
+        str(sku or "").strip().upper()
+        for sku in skus
+        if str(sku or "").strip()
+    ]
+    if not normalized_skus or not _is_pot_cookware_scope(product_scope, user_question):
+        return normalized_skus
+    products = (
+        db.query(Product)
+        .filter(Product.sku.in_(normalized_skus))
+        .all()
+    )
+    product_by_sku = {str(product.sku or "").strip().upper(): product for product in products}
+    if _looks_like_cookset_scope(product_scope, user_question):
+        cookset_refined = [
+            sku
+            for sku in normalized_skus
+            if _looks_like_cookset_product(product_by_sku.get(sku))
+        ]
+        if cookset_refined:
+            return cookset_refined
+    refined = [
+        sku
+        for sku in normalized_skus
+        if _is_pot_cookware_product(product_by_sku.get(sku))
+    ]
+    return refined or normalized_skus
+
+
+def _looks_like_cookset_scope(product_scope: str, user_question: str) -> bool:
+    scope_text = str(product_scope or "")
+    question_text = str(user_question or "")
+    cookset_terms = ("套锅", "锅具套装", "炊具套装", "套装锅")
+    return any(term in scope_text or term in question_text for term in cookset_terms)
+
+
+def _is_pot_cookware_scope(product_scope: str, user_question: str) -> bool:
+    scope_text = str(product_scope or "")
+    question_text = str(user_question or "")
+    if any(term in question_text for term in ("水壶", "茶壶", "烧水壶", "壶类")):
+        return False
+    return any(term in scope_text or term in question_text for term in ("锅具", "锅", "套锅", "炒锅", "煎锅", "单锅"))
+
+
+def _is_pot_cookware_product(product: Product | None) -> bool:
+    if product is None:
+        return True
+    name_text = " ".join(
+        str(value or "")
+        for value in (
+            product.product_name_cn,
+            product.product_name_en,
+            product.sub_category,
+        )
+    )
+    cookware_terms = ("套锅", "炒锅", "煎锅", "单锅", "汤锅", "锅具", "锅", "煎盘", "烤盘")
+    if any(term in name_text for term in cookware_terms):
+        return True
+    kettle_terms = ("水壶", "茶壶", "烧水壶", "壶")
+    if any(term in name_text for term in kettle_terms):
+        return False
+    return True
+
+
+def _looks_like_cookset_product(product: Product | None) -> bool:
+    if product is None:
+        return False
+    text = " ".join(
+        str(value or "")
+        for value in (
+            product.product_name_cn,
+            product.product_name_en,
+            product.sub_category,
+            product.category,
+        )
+    )
+    cookset_terms = ("套锅", "锅具套装", "炊具套装", "套装锅", "野营锅", "野餐锅", "件套")
+    return any(term in text for term in cookset_terms)
 
 
 def _safe_json_loads(value: str | None, fallback: Any) -> Any:
@@ -2663,6 +3599,8 @@ def _merge_results_for_display(question: str, results: list[dict]) -> list[dict]
 
 def _requested_display_fields(question: str) -> list[tuple[str, str]]:
     fields: list[tuple[str, str]] = []
+    if _looks_like_load_capacity_question(question):
+        fields.append(("最大承重", "virtual.load_capacity"))
     intent = customer_agent_intent_service.parse_intent(question, previous_result_skus=[])
     for raw_label in (getattr(intent, "requested_fields", None) or []):
         label = str(raw_label or "").strip()
@@ -2679,6 +3617,8 @@ def _requested_display_fields(question: str) -> list[tuple[str, str]]:
 
 
 def _display_field_value(item: dict, field_path: str) -> Any:
+    if field_path == "virtual.load_capacity":
+        return None
     if field_path == "certifications":
         return [
             row.get("certification_name") or row.get("name") or row.get("certification_code")
@@ -2686,6 +3626,11 @@ def _display_field_value(item: dict, field_path: str) -> Any:
             if isinstance(row, dict)
         ]
     return customer_agent_tool_service._value_from_detail(item, field_path)
+
+
+def _looks_like_load_capacity_question(question: str) -> bool:
+    text = str(question or "")
+    return any(term in text for term in ("最大承重", "承重能力", "能承重", "能承受多重", "承载多少", "承重量", "负重"))
 
 
 def _dedupe_knowledge_matches(rows: list[dict]) -> list[dict]:
@@ -2751,6 +3696,13 @@ def _infer_intent(question: str, tool_results: list[dict], actions: list[dict], 
     if actions or any(name.startswith(WRITE_TOOL_PREFIXES) for name in tool_names):
         return "propose_update"
     if any(word in question for word in ("对比", "比较", "区别", "差异")):
+        return "compare_products"
+    result_skus = [
+        str(item.get("sku") or "").strip().upper()
+        for item in results
+        if isinstance(item, dict) and str(item.get("sku") or "").strip()
+    ]
+    if _is_compare_like_question(question, context_skus=result_skus):
         return "compare_products"
     if _is_single_product_fact_followup(question, results):
         return "product_detail"
@@ -3083,7 +4035,431 @@ def _has_field_values(results: list[dict]) -> bool:
     return any(isinstance(item.get("field_values"), dict) and item.get("field_values") for item in results if isinstance(item, dict))
 
 
-def _compose_field_values_answer(results: list[dict]) -> str:
+def _ordinal_compare_targets_from_context(
+    question: str,
+    recommendation_context: dict[str, Any] | None,
+    candidate_context: dict[str, Any] | None,
+) -> list[str]:
+    if not _looks_like_ordinal_compare_question(question):
+        return []
+    ordered_skus = [
+        str(item or "").strip().upper()
+        for item in (
+            (recommendation_context or {}).get("ordered_result_skus")
+            or (recommendation_context or {}).get("recommended_skus")
+            or (candidate_context or {}).get("ordered_result_skus")
+            or (candidate_context or {}).get("candidate_skus")
+            or (candidate_context or {}).get("recommended_skus")
+            or []
+        )
+        if str(item or "").strip()
+    ]
+    if len(ordered_skus) < 2:
+        return []
+    ordinal_indexes = _ordinal_indexes_from_question(question)
+    if len(ordinal_indexes) < 2:
+        return []
+    resolved: list[str] = []
+    for idx in ordinal_indexes[:2]:
+        if idx < 0 or idx >= len(ordered_skus):
+            return []
+        sku = ordered_skus[idx]
+        if sku not in resolved:
+            resolved.append(sku)
+    return resolved if len(resolved) == 2 else []
+
+
+def _looks_like_ordinal_compare_question(question: str) -> bool:
+    text = str(question or "")
+    if not any(term in text for term in ("第一个", "第二个", "第三个", "第一款", "第二款", "第三款")):
+        return False
+    if not any(term in text for term in ("比", "更", "哪个")):
+        return False
+    if not any(term in text for term in ("轻", "重", "重量", "容量", "大", "小", "价格", "贵", "便宜")):
+        return False
+    if any(term in text for term in ("推荐理由", "为什么推荐", "理由是什么", "解释一下为什么")):
+        return False
+    return True
+
+
+def _ordinal_indexes_from_question(question: str) -> list[int]:
+    text = str(question or "")
+    mapping = {
+        "第一个": 0,
+        "第一款": 0,
+        "第二个": 1,
+        "第二款": 1,
+        "第三个": 2,
+        "第三款": 2,
+    }
+    indexes: list[int] = []
+    for token in ("第一个", "第一款", "第二个", "第二款", "第三个", "第三款"):
+        if token in text:
+            idx = mapping[token]
+            if idx not in indexes:
+                indexes.append(idx)
+    return indexes
+
+
+def _ordinal_compare_detail_fields(question: str) -> list[str]:
+    text = str(question or "")
+    if any(term in text for term in ("轻", "重", "重量")):
+        return ["specs.gross_weight_g", "specs.capacity", "business.price_positioning", "business.positioning"]
+    if any(term in text for term in ("容量", "大", "小")):
+        return ["specs.capacity", "specs.gross_weight_g", "business.positioning"]
+    if any(term in text for term in ("价格", "贵", "便宜")):
+        return ["business.price_positioning", "business.positioning", "specs.capacity", "specs.gross_weight_g"]
+    return ["specs.gross_weight_g", "specs.capacity", "business.price_positioning", "business.positioning"]
+
+
+def _compose_deterministic_ordinal_compare_answer(question: str, results: list[dict]) -> str:
+    rows = [item for item in results if isinstance(item, dict)]
+    if len(rows) < 2:
+        return "前面推荐结果不足，暂时无法完成这两个产品的比较。"
+    left, right = rows[:2]
+    left_sku = str(left.get("sku") or "").strip().upper()
+    right_sku = str(right.get("sku") or "").strip().upper()
+    left_name = str(left.get("product_name_cn") or left.get("product_name_en") or left_sku).strip()
+    right_name = str(right.get("product_name_cn") or right.get("product_name_en") or right_sku).strip()
+    left_label = f"第一个（{left_sku}）"
+    right_label = f"第二个（{right_sku}）"
+    text = str(question or "")
+    if any(term in text for term in ("轻", "重", "重量")):
+        left_weight = _detail_weight_g(left)
+        right_weight = _detail_weight_g(right)
+        if left_weight is None or right_weight is None:
+            return (
+                f"{left_label}是{left_name}，{right_label}是{right_name}。"
+                "当前资料缺少其中一个或两个产品的重量数据，无法准确判断谁更轻。"
+            )
+        if left_weight == right_weight:
+            return (
+                f"{left_label}是{left_name}，重量约{int(left_weight)}g；"
+                f"{right_label}是{right_name}，重量约{int(right_weight)}g。"
+                "按当前重量数据看，两者重量相同，暂时看不出谁更轻。"
+            )
+        if left_weight < right_weight:
+            return (
+                f"{left_label}是{left_name}，重量约{int(left_weight)}g；"
+                f"{right_label}是{right_name}，重量约{int(right_weight)}g。"
+                f"按当前重量数据看，第一个（{left_sku}）更轻。"
+            )
+        return (
+            f"{left_label}是{left_name}，重量约{int(left_weight)}g；"
+            f"{right_label}是{right_name}，重量约{int(right_weight)}g。"
+            f"按当前重量数据看，第二个（{right_sku}）更轻。"
+        )
+    if any(term in text for term in ("容量", "大", "小")):
+        left_capacity = _detail_capacity_text(left)
+        right_capacity = _detail_capacity_text(right)
+        if not left_capacity or not right_capacity:
+            return (
+                f"{left_label}是{left_name}，{right_label}是{right_name}。"
+                "当前资料缺少其中一个或两个产品的容量数据，无法准确比较哪个更大。"
+            )
+        return (
+            f"{left_label}是{left_name}，容量信息为{left_capacity}；"
+            f"{right_label}是{right_name}，容量信息为{right_capacity}。"
+            "当前资料里的容量多为组合描述，如果你要，我可以继续按大锅容量或整套容量帮你细比。"
+        )
+    if any(term in text for term in ("价格", "贵", "便宜")):
+        left_price = _detail_price_positioning_text(left)
+        right_price = _detail_price_positioning_text(right)
+        if not left_price or not right_price:
+            return (
+                f"{left_label}是{left_name}，{right_label}是{right_name}。"
+                "当前资料缺少其中一个或两个产品的价格或价格定位数据，无法准确比较谁更贵或更便宜。"
+            )
+        return (
+            f"{left_label}是{left_name}，价格定位为{left_price}；"
+            f"{right_label}是{right_name}，价格定位为{right_price}。"
+            "当前只有价格定位信息，没有实时价格时，我不能进一步确认谁一定更贵或更便宜。"
+        )
+    return "前面两款产品我已经定位到了，但当前问题的比较维度还不够明确。"
+
+
+def _compose_context_compare_answer(question: str, results: list[dict]) -> str:
+    rows = [item for item in results if isinstance(item, dict)]
+    if len(rows) < 2:
+        return ""
+    compare_kind = _compare_followup_kind(question)
+    if not compare_kind:
+        return ""
+    left, right = rows[:2]
+    left_sku = str(left.get("sku") or "").strip().upper()
+    right_sku = str(right.get("sku") or "").strip().upper()
+    if not left_sku or not right_sku:
+        return ""
+    left_name = str(left.get("product_name_cn") or left.get("product_name_en") or left_sku).strip()
+    right_name = str(right.get("product_name_cn") or right.get("product_name_en") or right_sku).strip()
+    left_label = f"第一个（{left_sku}）"
+    right_label = f"第二个（{right_sku}）"
+    if compare_kind == "weight":
+        return _compose_weight_compare_answer(left_label, left_name, left, right_label, right_name, right)
+    if compare_kind == "capacity":
+        return _compose_capacity_compare_answer(left_label, left_name, left, right_label, right_name, right)
+    if compare_kind == "price":
+        return _compose_price_compare_answer(left_label, left_name, left, right_label, right_name, right)
+    return ""
+
+
+def _compare_followup_kind(question: str) -> str:
+    text = str(question or "")
+    if any(term in text for term in ("轻", "重", "重量")) and any(term in text for term in ("比", "更", "哪个")):
+        return "weight"
+    if any(term in text for term in ("容量", "大", "小")) and any(term in text for term in ("比", "更", "哪个")):
+        return "capacity"
+    if any(term in text for term in ("价格", "贵", "便宜")) and any(term in text for term in ("比", "更", "哪个")):
+        return "price"
+    return ""
+
+
+def _compose_weight_compare_answer(
+    left_label: str,
+    left_name: str,
+    left: dict,
+    right_label: str,
+    right_name: str,
+    right: dict,
+) -> str:
+    left_weight = _detail_weight_g(left)
+    right_weight = _detail_weight_g(right)
+    if left_weight is None or right_weight is None:
+        return (
+            f"{left_label}是{left_name}，{right_label}是{right_name}。"
+            "当前资料里缺少其中一个或两个产品的重量数据，无法准确判断谁更轻。"
+        )
+    if left_weight == right_weight:
+        return (
+            f"{left_label}是{left_name}，重量约 {int(left_weight)}g；"
+            f"{right_label}是{right_name}，重量约 {int(right_weight)}g。"
+            "当前可见重量数据相同，暂时看不出谁更轻。"
+        )
+    lighter_label, lighter_name, lighter_weight = (
+        (left_label, left_name, left_weight) if left_weight < right_weight else (right_label, right_name, right_weight)
+    )
+    heavier_label, heavier_name, heavier_weight = (
+        (right_label, right_name, right_weight) if left_weight < right_weight else (left_label, left_name, left_weight)
+    )
+    return (
+        f"{left_label}是{left_name}，重量约 {int(left_weight)}g；"
+        f"{right_label}是{right_name}，重量约 {int(right_weight)}g。"
+        f"按当前重量数据看，{lighter_label}更轻；{heavier_label}更重。"
+    )
+
+
+def _compose_capacity_compare_answer(
+    left_label: str,
+    left_name: str,
+    left: dict,
+    right_label: str,
+    right_name: str,
+    right: dict,
+) -> str:
+    left_capacity = _detail_capacity_text(left)
+    right_capacity = _detail_capacity_text(right)
+    if not left_capacity or not right_capacity:
+        return (
+            f"{left_label}是{left_name}，{right_label}是{right_name}。"
+            "当前资料里缺少其中一个或两个产品的容量数据，无法准确比较哪个更大。"
+        )
+    return (
+        f"{left_label}是{left_name}，容量信息为 {left_capacity}；"
+        f"{right_label}是{right_name}，容量信息为 {right_capacity}。"
+        "当前资料里容量多为组合描述，我可以继续按你更关心的大锅容量或整套容量帮你细看。"
+    )
+
+
+def _compose_price_compare_answer(
+    left_label: str,
+    left_name: str,
+    left: dict,
+    right_label: str,
+    right_name: str,
+    right: dict,
+) -> str:
+    left_price = _detail_price_positioning_text(left)
+    right_price = _detail_price_positioning_text(right)
+    if not left_price or not right_price:
+        return (
+            f"{left_label}是{left_name}，{right_label}是{right_name}。"
+            "当前资料里缺少其中一个或两个产品的价格或价格定位数据，无法准确比较谁更贵或更便宜。"
+        )
+    return (
+        f"{left_label}是{left_name}，价格定位为 {left_price}；"
+        f"{right_label}是{right_name}，价格定位为 {right_price}。"
+        "当前只有价格定位信息，没有实时价格时，我不能进一步确认谁一定更贵或更便宜。"
+    )
+
+
+def _detail_weight_g(item: dict) -> float | None:
+    specs = item.get("specs") if isinstance(item.get("specs"), dict) else {}
+    value = (specs or {}).get("gross_weight_g")
+    if value in (None, "", "暂无"):
+        value = (item.get("field_values") or {}).get("重量")
+    if value in (None, "", "暂无"):
+        value = item.get("gross_weight_g")
+    missing_literals = {None, "", "/", "-", "0", "0.0", 0, 0.0}
+    if value in missing_literals:
+        return None
+    number = _extract_number(value)
+    if number in (0, 0.0):
+        return None
+    return float(number) if number is not None else None
+
+
+def _detail_capacity_text(item: dict) -> str:
+    specs = item.get("specs") if isinstance(item.get("specs"), dict) else {}
+    value = (specs or {}).get("capacity")
+    if value in (None, "", "暂无"):
+        value = (item.get("field_values") or {}).get("容量")
+    if value in (None, "", "暂无"):
+        value = item.get("capacity")
+    return _format_capacity_value_for_compare(value)
+
+
+def _detail_price_positioning_text(item: dict) -> str:
+    business = item.get("business") if isinstance(item.get("business"), dict) else {}
+    value = item.get("price_positioning") or (business or {}).get("price_positioning") or (item.get("field_values") or {}).get("价格定位")
+    return str(value or "").strip()
+
+
+def _format_capacity_value_for_compare(value: Any) -> str:
+    if value in (None, "", "暂无"):
+        return ""
+    if isinstance(value, dict):
+        label = str(value.get("label") or "").strip()
+        raw_value = str(value.get("value") or "").strip()
+        unit = str(value.get("unit") or "").strip()
+        if raw_value:
+            return f"{label}：{raw_value}{unit}" if label else f"{raw_value}{unit}"
+        return label
+    if isinstance(value, list):
+        parts = [_format_capacity_value_for_compare(item) for item in value]
+        return "，".join(part for part in parts if part)
+    return str(value).strip()
+
+
+def _extract_number(value: Any) -> float | None:
+    if isinstance(value, (int, float)):
+        return float(value)
+    text = str(value or "").strip()
+    if not text:
+        return None
+    match = re.search(r"(\d+(?:\.\d+)?)", text)
+    if not match:
+        return None
+    try:
+        return float(match.group(1))
+    except ValueError:
+        return None
+
+
+def _direct_heat_source_support_answer(question: str, tool_result: dict | None) -> str | None:
+    question_text = str(question or "")
+    if not any(term in question_text for term in ("酒精炉", "酒精")):
+        return None
+    if not any(term in question_text for term in ("能用", "可以用", "支持", "适合", "能不能", "是否支持")):
+        return None
+    rows = _collect_results([tool_result] if isinstance(tool_result, dict) else [])
+    if len(rows) != 1 or not isinstance(rows[0], dict):
+        return None
+    item = rows[0]
+    field_values = item.get("field_values") if isinstance(item.get("field_values"), dict) else {}
+    heat_source = str(field_values.get("热源") or field_values.get("燃料") or "").strip()
+    product_name = item.get("product_name_cn") or item.get("product_name_en") or ""
+    prefix = f"{product_name}（{item.get('sku')}）" if product_name else str(item.get("sku") or "").strip()
+    if heat_source and heat_source != "暂无":
+        if "酒精炉" in heat_source or "酒精" in heat_source:
+            return f"{prefix}：支持酒精炉。当前资料显示适用热源为{heat_source}。"
+        return f"{prefix}：当前资料未显示支持酒精炉。当前资料显示适用热源为{heat_source}。"
+    return f"{prefix}：当前资料暂未提供是否支持酒精炉。"
+
+
+def _rewrite_heat_source_support_answer(question: str, results: list[dict]) -> str | None:
+    question_text = str(question or "")
+    if not any(term in question_text for term in ("酒精炉", "酒精")):
+        return None
+    if not any(term in question_text for term in ("能用", "可以用", "支持", "适合", "能不能", "是否支持")):
+        return None
+    if len(results) != 1 or not isinstance(results[0], dict):
+        return None
+    item = results[0]
+    field_values = item.get("field_values") if isinstance(item.get("field_values"), dict) else {}
+    heat_source = str(field_values.get("热源") or field_values.get("燃料") or "").strip()
+    if not heat_source:
+        heat_source = str(((item.get("specs") or {}).get("heat_source") or "")).strip()
+    product_name = item.get("product_name_cn") or item.get("product_name_en") or ""
+    prefix = f"{product_name}（{item.get('sku')}）" if product_name else str(item.get("sku") or "").strip()
+    if heat_source and heat_source != "暂无":
+        if "酒精炉" in heat_source or "酒精" in heat_source:
+            return f"{prefix}：支持酒精炉。当前资料显示适用热源为{heat_source}。"
+        return f"{prefix}：当前资料未显示支持酒精炉。当前资料显示适用热源为{heat_source}。"
+    return f"{prefix}：当前资料暂未提供是否支持酒精炉。"
+
+
+def _rewrite_heat_source_support_results(question: str, results: list[dict]) -> list[dict]:
+    question_text = str(question or "")
+    if not any(term in question_text for term in ("酒精炉", "酒精")):
+        return results
+    if not any(term in question_text for term in ("能用", "可以用", "支持", "适合", "能不能", "是否支持")):
+        return results
+    rewritten: list[dict] = []
+    for item in results:
+        if not isinstance(item, dict):
+            rewritten.append(item)
+            continue
+        field_values = item.get("field_values") if isinstance(item.get("field_values"), dict) else {}
+        heat_source = str(field_values.get("热源") or field_values.get("燃料") or "").strip()
+        if not heat_source:
+            rewritten.append(item)
+            continue
+        new_item = dict(item)
+        new_fields = dict(field_values)
+        if "酒精炉" in heat_source or "酒精" in heat_source:
+            new_fields["是否支持酒精炉"] = f"支持酒精炉；适用热源：{heat_source}"
+        else:
+            new_fields["是否支持酒精炉"] = f"当前资料未显示支持酒精炉；适用热源：{heat_source}"
+        new_fields.pop("热源", None)
+        new_fields.pop("燃料", None)
+        new_item["field_values"] = new_fields
+        rewritten.append(new_item)
+    return rewritten
+
+
+def _enrich_load_capacity_results(question: str, results: list[dict]) -> list[dict]:
+    if not _looks_like_load_capacity_question(question):
+        return results
+    enriched: list[dict] = []
+    for item in results:
+        if not isinstance(item, dict):
+            enriched.append(item)
+            continue
+        row = dict(item)
+        field_values = dict(row.get("field_values") or {})
+        if not any(_is_load_capacity_label(str(label)) for label in field_values):
+            field_values["最大承重"] = "暂无"
+        row["field_values"] = field_values
+        enriched.append(row)
+    return enriched
+
+
+def _compose_field_values_answer(question: str, results: list[dict]) -> str:
+    question_text = str(question or "")
+    if len(results) == 1 and any(term in question_text for term in ("酒精炉", "酒精")) and any(
+        term in question_text for term in ("能用", "可以用", "支持", "适合", "能不能", "是否支持")
+    ):
+        item = results[0]
+        if isinstance(item, dict):
+            field_values = item.get("field_values") if isinstance(item.get("field_values"), dict) else {}
+            heat_source = str(field_values.get("热源") or field_values.get("燃料") or "").strip()
+            product_name = item.get("product_name_cn") or item.get("product_name_en") or ""
+            prefix = f"{product_name}（{item.get('sku')}）" if product_name else str(item.get("sku") or "").strip()
+            if heat_source and heat_source != "暂无":
+                if "酒精炉" in heat_source or "酒精" in heat_source:
+                    return f"{prefix}：支持酒精炉。当前资料显示适用热源为{heat_source}。"
+                return f"{prefix}：当前资料未显示支持酒精炉。当前资料显示适用热源为{heat_source}。"
+            return f"{prefix}：当前资料暂未提供是否支持酒精炉。"
     rows = []
     for item in results[:10]:
         if not isinstance(item, dict):
@@ -3092,8 +4468,44 @@ def _compose_field_values_answer(results: list[dict]) -> str:
         if not isinstance(field_values, dict) or not field_values:
             continue
         product_name = item.get("product_name_cn") or item.get("product_name_en") or ""
-        fields = "，".join(f"{key}：{value}" for key, value in field_values.items())
-        rows.append(f"{item.get('sku')}，{product_name}，{fields}")
+        formatted_fields = []
+        for key, value in field_values.items():
+            key_text = str(key)
+            value_text = str(value)
+            if key_text in {"热源", "燃料"} and any(term in question_text for term in ("酒精炉", "酒精")) and any(
+                term in question_text for term in ("能用", "可以用", "支持", "适合", "能不能", "是否支持")
+            ):
+                if "酒精炉" in value_text or "酒精" in value_text:
+                    formatted_fields.append(f"支持酒精炉。当前资料显示适用热源为{value_text}")
+                else:
+                    formatted_fields.append(f"当前资料未显示支持酒精炉。当前资料显示适用热源为{value_text}")
+                continue
+            if _is_load_capacity_label(key_text) and _is_missing_field_value(value_text):
+                load_capacity = _extract_load_capacity_from_item(item)
+                if load_capacity:
+                    formatted_fields.append(
+                        f"{key}：当前结构化字段里未见独立承重字段（最大承重），但同 SKU 资料中写有“{load_capacity}”。建议以该资料为参考"
+                    )
+                    continue
+            if key_text in {"材质", "主体材质"} and "、" in value_text and any(term in value_text for term in ("木", "白蜡木")):
+                primary_material, handle_material = [part.strip() for part in value_text.split("、", 1)]
+                if primary_material:
+                    formatted_fields.append(f"主体材质：{primary_material}")
+                if handle_material:
+                    formatted_fields.append(f"手柄材质：{handle_material}（手柄{handle_material}）")
+                continue
+            if key_text == "手柄材质" and value_text and "手柄" not in value_text:
+                formatted_fields.append(f"手柄材质：{value_text}（手柄{value_text}）")
+                continue
+            formatted_fields.append(f"{key}：{value}")
+        fields = "，".join(formatted_fields)
+        if (
+            any(term in question_text for term in ("最开始", "第一个", "最后一个", "最后那个", "上一个"))
+            and any(label in fields for label in ("主体材质", "手柄材质", "材质："))
+        ):
+            rows.append(f"{item.get('sku')}，{product_name}，其材质：{fields}")
+        else:
+            rows.append(f"{item.get('sku')}，{product_name}，{fields}")
     if not rows:
         return ""
     prefix = "查到以下资料："
@@ -3102,10 +4514,100 @@ def _compose_field_values_answer(results: list[dict]) -> str:
     return "\n".join([prefix, *rows])
 
 
-def _field_answer_should_replace(answer: str, results: list[dict]) -> bool:
+def _is_load_capacity_label(label: str) -> bool:
+    return any(term in str(label or "") for term in ("承重", "承载", "最大负重", "负重", "load_capacity", "maximum_load"))
+
+
+def _is_missing_field_value(value: str) -> bool:
+    text = str(value or "").strip()
+    return not text or text in {"暂无", "无", "未标注", "未注明", "None", "null"}
+
+
+def _extract_load_capacity_from_item(item: dict) -> str:
+    sku = str(item.get("sku") or "").strip().upper()
+    for text in _same_sku_load_capacity_texts(item, sku):
+        extracted = _extract_load_capacity_phrase(text)
+        if extracted:
+            return extracted
+    return ""
+
+
+def _same_sku_load_capacity_texts(item: dict, sku: str) -> list[str]:
+    texts: list[str] = []
+
+    def add_text(value: Any) -> None:
+        if value in (None, "", [], {}):
+            return
+        if isinstance(value, dict):
+            for nested in value.values():
+                add_text(nested)
+            return
+        if isinstance(value, list):
+            for nested in value:
+                add_text(nested)
+            return
+        texts.append(str(value))
+
+    for key in (
+        "content",
+        "evidence_text",
+        "features",
+        "usage_instruction",
+        "top_selling_points",
+        "technical_advantages",
+        "long_description_cn",
+        "long_description_en",
+        "listing_cn",
+        "listing_en",
+    ):
+        add_text(item.get(key))
+    for section in ("specs", "business", "content"):
+        nested = item.get(section)
+        if isinstance(nested, dict):
+            add_text(nested)
+    for value in (item.get("field_values") or {}).values():
+        add_text(value)
+    for match in item.get("knowledge_matches") or []:
+        if not isinstance(match, dict):
+            continue
+        match_sku = str(match.get("sku") or item.get("sku") or "").strip().upper()
+        if sku and match_sku and match_sku != sku:
+            continue
+        add_text(match.get("content"))
+        add_text(match.get("evidence_text"))
+    return texts
+
+
+def _extract_load_capacity_phrase(text: str) -> str:
+    compact = re.sub(r"\s+", "", str(text or ""))
+    patterns = (
+        r"(最大承重|承重|承载|承重量|最大负重|负重)(?:能力|重量)?[:：为是可达约]*([0-9]+(?:\.[0-9]+)?)(KG|kg|Kg|公斤|千克)",
+        r"([0-9]+(?:\.[0-9]+)?)(KG|kg|Kg|公斤|千克)(?:承重|承载|负重)",
+    )
+    for pattern in patterns:
+        match = re.search(pattern, compact)
+        if not match:
+            continue
+        groups = match.groups()
+        if len(groups) == 3:
+            label, number, unit = groups
+            return f"{label}{number}{unit.upper() if unit.lower() == 'kg' else unit}"
+        number, unit = groups
+        return f"承重{number}{unit.upper() if unit.lower() == 'kg' else unit}"
+    return ""
+
+
+def _field_answer_should_replace(question: str, answer: str, results: list[dict]) -> bool:
     if not answer:
         return True
+    question_text = str(question or "")
+    if any(term in question_text for term in ("酒精炉", "酒精")) and any(
+        term in question_text for term in ("能用", "可以用", "支持", "适合", "能不能", "是否支持")
+    ):
+        return True
     text = str(answer)
+    if any(_has_load_capacity_evidence(row) for row in results if isinstance(row, dict)):
+        return any(word in text for word in ("暂无", "暂未", "未提供", "未注明", "未标注", "资料"))
     if any("暂无" in str(value) for row in results if isinstance(row, dict) for value in (row.get("field_values") or {}).values()):
         return not any(word in text for word in ("暂无", "未记录", "未标注", "资料"))
     labels = [
@@ -3115,6 +4617,13 @@ def _field_answer_should_replace(answer: str, results: list[dict]) -> bool:
         for label in (row.get("field_values") or {}).keys()
     ]
     return bool(labels) and not any(label in text for label in labels)
+
+
+def _has_load_capacity_evidence(item: dict) -> bool:
+    field_values = item.get("field_values") if isinstance(item.get("field_values"), dict) else {}
+    if not any(_is_load_capacity_label(str(label)) for label in field_values):
+        return False
+    return bool(_extract_load_capacity_from_item(item))
 
 
 def _rank_recommendation_results(question: str, results: list[dict]) -> list[dict]:
@@ -3135,6 +4644,10 @@ def _rank_recommendation_results(question: str, results: list[dict]) -> list[dic
     if compatible or len(compatible) != len(ranked):
         return compatible[:5]
     return ranked[:5]
+
+
+def _augment_cooking_set_recommendation_candidates(db: Session, question: str, results: list[dict]) -> list[dict]:
+    return results
 
 
 def _recommendation_products_for_finalizer(db: Session, question: str, results: list[dict]) -> list[dict]:
@@ -3183,6 +4696,44 @@ def _filter_excluded_recommendations(
             continue
         kept.append(row)
     return kept
+
+
+def _filter_followup_recommendation_scope(
+    results: list[dict],
+    recommendation_context: dict | None = None,
+) -> list[dict]:
+    scope = str((recommendation_context or {}).get("product_scope") or "").strip()
+    if not scope:
+        return results
+    normalized_scope = scope.lower()
+    filtered = []
+    for row in results:
+        scope_text = " ".join(
+            str(row.get(key) or "")
+            for key in ("category", "sub_category", "product_name_cn", "product_name_en")
+        ).lower()
+        if normalized_scope and normalized_scope in scope_text:
+            filtered.append(row)
+    return filtered
+
+
+def _filter_followup_candidate_domain(
+    results: list[dict],
+    recommendation_context: dict | None = None,
+) -> list[dict]:
+    candidate_skus = {
+        str(sku).strip().upper()
+        for sku in (recommendation_context or {}).get("candidate_skus") or []
+        if str(sku or "").strip()
+    }
+    if not candidate_skus:
+        return results
+    filtered = [
+        row
+        for row in results
+        if str(row.get("sku") or "").strip().upper() in candidate_skus
+    ]
+    return filtered
 
 
 def _without_excluded_skus(results: list[dict], excluded_skus: set[str]) -> list[dict]:
@@ -3285,6 +4836,9 @@ def _compose_recommendation_answer(question: str, results: list[dict]) -> str:
 
 
 def _recommendation_reason(question: str, row: dict) -> str:
+    evidence_reason = _recommendation_evidence_reason(row)
+    if evidence_reason:
+        return evidence_reason
     parts = []
     capacity = row.get("capacity")
     if capacity:
@@ -3325,6 +4879,403 @@ def _row_text(row: dict) -> str:
     if isinstance(field_values, dict):
         values.extend(str(value) for value in field_values.values())
     return " ".join(values)
+
+
+def _recommendation_evidence_reason(row: dict) -> str:
+    match = row.get("recommendation_match") if isinstance(row.get("recommendation_match"), dict) else {}
+    candidates: list[str] = []
+    for raw in match.get("matched") or []:
+        text = str(raw or "").strip("。；; ")
+        if not text or any(noisy in text for noisy in ("有可用", "基础信息", "信息可供判断", "有卖点/场景资料可引用", "排序分数")):
+            continue
+        candidates.append(text)
+    for key in ("features", "top_selling_points", "usage_scenarios", "target_audience", "positioning", "semantic_match"):
+        value = str(row.get(key) or "").strip()
+        if value:
+            candidates.append(value)
+    seen: set[str] = set()
+    cleaned: list[str] = []
+    for item in candidates:
+        item = re.sub(r"\s+", " ", item).strip("。；; ")
+        if not item or item in seen:
+            continue
+        seen.add(item)
+        cleaned.append(item)
+        if len(cleaned) >= 2:
+            break
+    if not cleaned:
+        return ""
+    return "；".join(cleaned)[:90].rstrip("；;，,") + "。"
+
+
+def _explanation_followup_skus(question: str, last_turn_summary: dict) -> list[str]:
+    skus = [
+        str(item or "").strip().upper()
+        for item in (last_turn_summary.get("result_skus") or [])
+        if str(item or "").strip()
+    ]
+    if not skus:
+        skus = [
+            str(item or "").strip().upper()
+            for item in (
+                last_turn_summary.get("ordered_result_skus")
+                or last_turn_summary.get("recommended_skus")
+                or []
+            )
+            if str(item or "").strip()
+        ]
+    if not skus:
+        return []
+    text = str(question or "")
+    if any(
+        term in text
+        for term in (
+            "\u7b2c\u4e00\u4e2a",
+            "\u7b2c\u4e00\u6b3e",
+            "\u9996\u4e2a",
+            "\u9996\u6b3e",
+        )
+    ):
+        first_from_answer = _extract_skus_in_order(str(last_turn_summary.get("assistant_answer") or ""))
+        if first_from_answer:
+            return first_from_answer[:1]
+        return skus[:1]
+    return skus[:5]
+
+
+def _is_explanation_followup(question: str, last_turn_summary: dict) -> bool:
+    available_skus = (
+        last_turn_summary.get("result_skus")
+        or last_turn_summary.get("ordered_result_skus")
+        or last_turn_summary.get("recommended_skus")
+        or last_turn_summary.get("candidate_skus")
+        or []
+    )
+    if not last_turn_summary or not available_skus:
+        return False
+    if last_turn_summary.get("intent") != "recommend_products":
+        return False
+    if _is_compare_like_question(question, context_skus=available_skus):
+        return False
+    text = str(question or "")
+    return any(
+        term in text
+        for term in (
+            "\u4e3a\u4ec0\u4e48\u63a8\u8350",
+            "\u63a8\u8350\u7406\u7531",
+            "\u7406\u7531",
+            "\u89e3\u91ca",
+            "\u4f9d\u636e",
+            "\u7b2c\u4e00\u4e2a",
+            "\u7b2c\u4e00\u6b3e",
+            "\u9996\u4e2a",
+            "\u9996\u6b3e",
+            "\u524d\u9762\u63a8\u8350\u7684",
+            "\u521a\u624d\u63a8\u8350\u7684",
+        )
+    )
+
+
+def _is_candidate_scope_followup(question: str) -> bool:
+    text = str(question or "")
+    return any(
+        term in text
+        for term in (
+            "\u8fd9\u4e9b\u91cc",
+            "\u8fd9\u4e9b\u91cc\u9762",
+            "\u8fd9\u4e9b\u91cc\u54ea\u4e2a",
+            "\u91cc\u9762\u54ea\u4e9b",
+            "\u91cc\u9762\u54ea\u4e2a",
+            "\u4e0a\u9762\u8fd9\u4e9b",
+            "\u5176\u4e2d\u54ea\u4e2a",
+            "\u54ea\u4e2a\u66f4\u9002\u5408",
+            "\u54ea\u4e9b\u652f\u6301",
+        )
+    )
+
+
+def _is_recommendation_change_followup(question: str, last_turn_summary: dict) -> bool:
+    if not last_turn_summary or last_turn_summary.get("intent") != "recommend_products":
+        return False
+    available_skus = (
+        last_turn_summary.get("result_skus")
+        or last_turn_summary.get("ordered_result_skus")
+        or last_turn_summary.get("recommended_skus")
+        or last_turn_summary.get("candidate_skus")
+        or []
+    )
+    if not available_skus:
+        return False
+    text = str(question or "")
+    return any(
+        term in text
+        for term in (
+            "\u6362\u4e00\u4e2a",
+            "\u6362\u4e00\u6b3e",
+            "\u6362\u4e2a",
+            "\u53e6\u4e00\u4e2a",
+            "\u518d\u63a8\u8350",
+            "\u4e0d\u8981\u521a\u624d",
+            "\u522b\u8981\u521a\u624d",
+            "\u5176\u4ed6\u63a8\u8350",
+            "\u66ff\u4ee3",
+            "\u66f4\u4fbf\u5b9c",
+            "\u66f4\u8f7b",
+        )
+    )
+
+
+def _is_recommendation_change_followup_text(question: str) -> bool:
+    text = str(question or "")
+    return any(
+        term in text
+        for term in (
+            "换一个",
+            "换一款",
+            "换个",
+            "另外一个",
+            "再推荐",
+            "不要刚才",
+            "别要刚才",
+            "其他推荐",
+            "替代",
+            "更便宜",
+            "更轻",
+        )
+    )
+
+
+def _is_empty_subset_followup(question: str) -> bool:
+    text = str(question or "")
+    readable_followup_terms = (
+        "\u8fd9\u4e9b", "\u91cc\u9762", "\u4e0a\u9762\u8fd9\u4e9b",
+        "\u4e3a\u4ec0\u4e48\u63a8\u8350", "\u63a8\u8350\u7406\u7531",
+        "\u7b2c\u4e00\u4e2a", "\u7b2c\u4e8c\u4e2a", "\u4e0a\u4e00\u4e2a",
+        "\u6700\u8f7b", "\u54ea\u4e2a\u6700\u8f7b", "\u54ea\u6b3e\u6700\u8f7b",
+        "\u66f4\u8f7b", "\u66f4\u4fbf\u5b9c", "\u66ff\u4ee3", "\u6362\u4e00\u4e2a",
+        "\u6362\u4e00\u6b3e", "\u8fd8\u6709\u6ca1\u6709", "\u6709\u6ca1\u6709",
+        "\u54ea\u4e2a\u66f4\u9002\u5408", "\u54ea\u6b3e\u66f4\u9002\u5408",
+    )
+    return (
+        any(term in text for term in readable_followup_terms)
+        or _is_candidate_scope_followup(question)
+        or _is_recommendation_change_followup_text(question)
+        or _is_recommendation_change_followup(question, {"intent": "recommend_products", "result_skus": [1]})
+    )
+
+
+def _excluded_previous_skus(
+    question: str,
+    conversation_history: list[dict],
+    recommendation_context: dict | None = None,
+) -> set[str]:
+    text = str(question or "")
+    readable_terms = (
+        "\u6362\u4e00\u4e2a", "\u6362\u4e00\u6b3e", "\u6362\u4e2a", "\u6362\u522b\u7684",
+        "\u53e6\u4e00\u4e2a", "\u518d\u63a8\u8350\u4e00\u4e2a", "\u53e6\u5916\u63a8\u8350",
+        "\u8fd8\u6709\u522b\u7684", "\u8fd8\u6709\u5176\u4ed6", "\u5176\u4ed6\u63a8\u8350",
+        "\u4e0d\u8981\u521a\u624d", "\u522b\u8981\u521a\u624d", "\u4e0d\u559c\u6b22",
+        "\u4e0d\u8003\u8651", "\u4e0d\u592a\u6ee1\u610f", "\u90fd\u4e0d\u559c\u6b22",
+        "\u4e0d\u548b\u559c\u6b22", "\u66ff\u4ee3", "\u66f4\u4fbf\u5b9c", "\u66f4\u8f7b",
+    )
+    if not any(word in text for word in readable_terms):
+        return set()
+    context_skus = {
+        str(sku).strip().upper()
+        for sku in (recommendation_context or {}).get("recommended_skus") or []
+        if str(sku or "").strip()
+    }
+    if context_skus:
+        return context_skus
+    for item in reversed(conversation_history[-6:]):
+        if item.get("role") != "assistant":
+            continue
+        skus = _extract_skus(str(item.get("content") or ""))
+        if skus:
+            return skus
+    return set()
+
+
+def _is_cheaper_alternative_question(question: str) -> bool:
+    text = str(question or "")
+    return any(
+        term in text
+        for term in (
+            "\u66f4\u4fbf\u5b9c",
+            "\u4fbf\u5b9c\u4e00\u70b9",
+            "\u4f4e\u4e00\u70b9",
+            "\u7701\u4e00\u70b9",
+            "\u66ff\u4ee3",
+        )
+    )
+
+
+def _followup_price_reason(row: dict) -> str:
+    price_positioning = str(row.get("price_positioning") or "").strip()
+    positioning = str(row.get("positioning") or "").strip()
+    features = str(row.get("features") or row.get("top_selling_points") or "").strip()
+    if price_positioning:
+        return f"\u5f53\u524d\u8d44\u6599\u91cc\u8fd9\u6b3e\u7684\u4ef7\u683c\u5b9a\u4f4d\u662f{price_positioning}\uff0c\u5982\u679c\u4f60\u73b0\u5728\u4f18\u5148\u770b\u95e8\u69db\u66f4\u4f4e\u7684\u66ff\u4ee3\uff0c\u5b83\u4f1a\u6bd4\u4e0a\u4e00\u8f6e\u66f4\u503c\u5f97\u5148\u770b\u3002"
+    lower_signal = next(
+        (term for term in ("\u9ad8\u6027\u4ef7\u6bd4", "\u5165\u95e8", "\u57fa\u7840", "\u8f7b\u91cf\u5316") if term in positioning or term in features),
+        "",
+    )
+    if lower_signal:
+        return f"\u5f53\u524d\u8d44\u6599\u91cc\u6ca1\u6709\u660e\u786e\u4ef7\u683c\u6570\u5b57\uff0c\u4f46\u4ece\u201c{lower_signal}\u201d\u8fd9\u7c7b\u5b9a\u4f4d\u6765\u770b\uff0c\u5b83\u66f4\u9002\u5408\u4f5c\u4e3a\u76f8\u5bf9\u66f4\u4f4e\u95e8\u69db\u7684\u66ff\u4ee3\u65b9\u6848\u3002"
+    return ""
+
+
+def _recommendation_reason(question: str, row: dict, *, followup: bool = False) -> str:
+    evidence_reason = _recommendation_evidence_reason(row)
+    if evidence_reason:
+        return evidence_reason
+    parts: list[str] = []
+    capacity = row.get("capacity")
+    if capacity:
+        parts.append(f"\u5bb9\u91cf {capacity}")
+    if row.get("body_material"):
+        parts.append(f"\u6750\u8d28 {row.get('body_material')}")
+    features = row.get("features") or row.get("top_selling_points") or row.get("semantic_match")
+    if features:
+        parts.append(f"\u5356\u70b9 {features}")
+    if row.get("price_positioning"):
+        parts.append(f"\u4ef7\u683c\u5b9a\u4f4d {row.get('price_positioning')}")
+    scenes = row.get("usage_scenarios") or row.get("usage_scene") or ""
+    if scenes:
+        parts.append(f"\u573a\u666f {scenes}")
+    audience = row.get("target_audience")
+    if audience:
+        parts.append(f"\u4eba\u7fa4 {audience}")
+    positioning = row.get("positioning")
+    if positioning:
+        parts.append(f"\u5b9a\u4f4d {positioning}")
+    if any(word in question for word in ("\u5496\u5561", "\u6ce1\u5496\u5561", "\u5c0f\u9505")) and _capacity_ml(capacity) and _capacity_ml(capacity) > 2000:
+        parts.append("\u4f46\u5bb9\u91cf\u504f\u5927\uff0c\u4e0d\u9002\u5408\u5355\u4eba\u5c0f\u9505\u6ce1\u5496\u5561")
+    reason = "\uff1b".join(str(part) for part in parts[:4] if part)
+    if reason:
+        return reason
+    if customer_price_signal.is_high_price_query(question):
+        return "\u66f4\u7b26\u5408\u672c\u8f6e\u504f\u9ad8\u7aef\u4e00\u70b9\u7684\u7b5b\u9009\u65b9\u5411\u3002"
+    if followup:
+        return "\u6211\u5148\u5728\u4fdd\u7559\u4e0a\u4e00\u8f6e\u9700\u6c42\u8303\u56f4\u7684\u524d\u63d0\u4e0b\uff0c\u7ed9\u4f60\u6362\u6210\u76f8\u5bf9\u66f4\u5408\u9002\u7684\u5907\u9009\u3002"
+    return "\u4e0e\u672c\u8f6e\u9700\u6c42\u5339\u914d\u3002"
+
+
+def _compose_recommendation_explanation_answer(
+    question: str,
+    row: dict,
+    recommendation_summary: dict | None = None,
+) -> str:
+    sku = str(row.get("sku") or "").strip().upper()
+    name = str(row.get("product_name_cn") or row.get("product_name_en") or sku).strip()
+    if not sku and not name:
+        return ""
+    base_question = str((recommendation_summary or {}).get("user_question") or question or "")
+    reason = _recommendation_reason(base_question, row)
+    scenes = str(
+        row.get("usage_scenarios")
+        or row.get("usage_scene")
+        or row.get("target_audience")
+        or row.get("positioning")
+        or row.get("features")
+        or row.get("top_selling_points")
+        or ""
+    ).strip()
+    scenes = re.sub(r"\s+", " ", scenes).strip("；;，,。 ")
+    if len(scenes) > 120:
+        scenes = scenes[:120].rstrip("；;，,。 ") + "…"
+    lines = [f"\u4e0a\u4e00\u8f6e\u7b2c\u4e00\u4e2a\u63a8\u8350\u7684\u662f{name}\uff08{sku}\uff09\u3002"]
+    if reason:
+        lines.append(f"\u63a8\u8350\u5b83\u4e3b\u8981\u662f\u56e0\u4e3a{reason}\u3002")
+    if scenes:
+        lines.append(f"\u4ece\u73b0\u6709\u8d44\u6599\u770b\uff0c\u5b83\u66f4\u5e38\u89c1\u7684\u4f7f\u7528\u573a\u666f\u662f\uff1a{scenes}\u3002")
+    return "\n".join(line for line in lines if line.strip())
+
+
+def _is_plural_recommendation_explanation(question: str) -> bool:
+    text = str(question or "")
+    return any(term in text for term in ("\u8fd9\u4e9b", "\u8fd9\u4e9b\u4ea7\u54c1", "\u4e0a\u9762\u8fd9\u4e9b", "\u4e3a\u4ec0\u4e48\u63a8\u8350\u8fd9\u4e9b"))
+
+
+def _compose_multi_recommendation_explanation_answer(
+    question: str,
+    rows: list[dict],
+    recommendation_summary: dict | None = None,
+) -> str:
+    if not rows:
+        return ""
+    lines = ["\u4e0a\u4e00\u8f6e\u63a8\u8350\u7684\u4ea7\u54c1\u4e3b\u8981\u6709\uff1a"]
+    for row in rows[:5]:
+        sku = str(row.get("sku") or "").strip().upper()
+        name = str(row.get("product_name_cn") or row.get("product_name_en") or sku).strip()
+        if not sku and not name:
+            continue
+        reason = _recommendation_reason(
+            str((recommendation_summary or {}).get("user_question") or question or ""),
+            row,
+        )
+        if reason:
+            lines.append(f"- {name}\uff08{sku}\uff09\uff1a{reason}")
+        else:
+            lines.append(f"- {name}\uff08{sku}\uff09")
+    return "\n".join(line for line in lines if line.strip())
+
+
+def _compose_recommendation_answer(
+    question: str,
+    results: list[dict],
+    *,
+    excluded_skus: set[str] | None = None,
+) -> str:
+    if not results:
+        if any(term in question for term in ("\u8fd8\u6709\u522b\u7684", "\u8fd8\u6709\u5176\u4ed6", "\u6362\u4e00\u4e2a", "\u6362\u4e00\u6b3e", "\u6362\u4e2a", "\u6362\u522b\u7684", "\u518d\u63a8\u8350", "\u5176\u4ed6\u63a8\u8350", "\u66ff\u4ee3", "\u66f4\u4fbf\u5b9c", "\u66f4\u8f7b")):
+            return "\u9664\u4e86\u4e0a\u4e00\u8f6e\u5df2\u7ecf\u63a8\u8350\u7684\u4ea7\u54c1\uff0c\u6682\u65f6\u6ca1\u6709\u627e\u5230\u5176\u4ed6\u8db3\u591f\u5339\u914d\u7684\u540c\u7c7b\u4ea7\u54c1\u3002\u4f60\u53ef\u4ee5\u653e\u5bbd\u54c1\u7c7b\u3001\u5bb9\u91cf\u6216\u4f7f\u7528\u573a\u666f\uff0c\u6211\u518d\u5e2e\u4f60\u91cd\u65b0\u7b5b\u9009\u3002"
+        return "\u6ca1\u6709\u627e\u5230\u8db3\u591f\u5339\u914d\u7684\u4ea7\u54c1\u8d44\u6599\u3002\u4f60\u53ef\u4ee5\u8865\u5145\u4eba\u6570\u3001\u573a\u666f\u6216\u5bb9\u91cf\u8981\u6c42\uff0c\u6211\u518d\u5e2e\u4f60\u7f29\u5c0f\u8303\u56f4\u3002"
+
+    best = results[0]
+    excluded_skus = {str(sku or "").strip().upper() for sku in (excluded_skus or set()) if str(sku or "").strip()}
+    is_change_followup = any(
+        term in str(question or "")
+        for term in (
+            "\u6362\u4e00\u4e2a",
+            "\u6362\u4e00\u6b3e",
+            "\u6362\u4e2a",
+            "\u4e0d\u8981\u521a\u624d\u90a3\u4e2a",
+            "\u522b\u8981\u521a\u624d\u90a3\u4e2a",
+            "\u66ff\u4ee3",
+            "\u66f4\u4fbf\u5b9c",
+            "\u66f4\u8f7b",
+        )
+    )
+    reason = _recommendation_reason(question, best, followup=is_change_followup)
+    lines: list[str] = []
+    if is_change_followup:
+        avoided = ""
+        if excluded_skus:
+            avoided = "\uff0c\u5df2\u907f\u5f00\u521a\u624d\u90a3\u6b3e" if len(excluded_skus) == 1 else "\uff0c\u5df2\u907f\u5f00\u4e0a\u4e00\u8f6e\u63d0\u8fc7\u7684\u51e0\u6b3e"
+        lines.append(f"\u8fd9\u6b21\u53ef\u4ee5\u6539\u770b {best.get('product_name_cn') or best.get('product_name_en') or best.get('sku')}\uff08{best.get('sku')}\uff09{avoided}\u3002")
+        if _is_cheaper_alternative_question(question):
+            price_reason = _followup_price_reason(best)
+            if price_reason:
+                lines.append(price_reason)
+            else:
+                lines.append("\u5f53\u524d\u8d44\u6599\u91cc\u6ca1\u6709\u660e\u786e\u4ef7\u683c\u5b57\u6bb5\uff0c\u6211\u4e0d\u80fd\u76f4\u63a5\u5224\u65ad\u5b83\u4e00\u5b9a\u66f4\u4fbf\u5b9c\uff1b\u5982\u679c\u4f60\u613f\u610f\uff0c\u6211\u53ef\u4ee5\u7ee7\u7eed\u6309\u66f4\u57fa\u7840\u914d\u7f6e\u6216\u66f4\u5c11\u4ef6\u6570\u5e2e\u4f60\u7f29\u5c0f\u8303\u56f4\u3002")
+        elif reason:
+            lines.append(reason)
+        else:
+            lines.append("\u6211\u5148\u6309\u4e0a\u4e00\u8f6e\u540c\u7c7b\u9700\u6c42\u5e2e\u4f60\u6362\u4e86\u4e00\u6b3e\u5019\u9009\uff1b\u5982\u679c\u4f60\u60f3\u7ee7\u7eed\u7f29\u5c0f\u5230\u66f4\u8f7b\u3001\u66f4\u5c0f\u4f53\u79ef\u6216\u66f4\u9002\u5408\u67d0\u4e2a\u573a\u666f\uff0c\u6211\u53ef\u4ee5\u518d\u7ec6\u5316\u3002")
+    else:
+        lines.append(f"\u9996\u9009 {best.get('sku')}\uff0c{best.get('product_name_cn') or best.get('product_name_en') or ''}\u3002")
+        if reason:
+            lines.append(f"\u7406\u7531\uff1a{reason}")
+    if len(results) > 1:
+        lines.append("\u5907\u9009\uff1a")
+        for item in results[1:3]:
+            item_reason = _recommendation_reason(question, item, followup=is_change_followup)
+            lines.append(f"{item.get('sku')}\uff0c{item.get('product_name_cn') or item.get('product_name_en') or ''}\uff1a{item_reason}")
+    if any(word in question for word in ("\u5496\u5561", "\u6ce1\u5496\u5561", "\u5c0f\u9505")):
+        lines.append("\u6211\u5df2\u7ecf\u628a\u7092\u9505\u3001\u714e\u9505\u8fd9\u7c7b\u5bb9\u91cf\u504f\u5927\u6216\u5668\u578b\u4e0d\u9002\u5408\u6ce1\u5496\u5561\u7684\u4ea7\u54c1\u964d\u6743\uff0c\u4e0d\u4f5c\u4e3a\u4f18\u5148\u63a8\u8350\u3002")
+    return "\\n".join(line for line in lines if line.strip())
 
 
 def _capacity_ml(value: Any) -> float | None:
@@ -3653,6 +5604,18 @@ def _extract_skus(text: str) -> set[str]:
     }
 
 
+def _extract_skus_in_order(text: str) -> list[str]:
+    seen: set[str] = set()
+    ordered: list[str] = []
+    for match in re.findall(r"\b[A-Z]{1,6}(?:-[A-Z0-9]{1,8}){1,4}\b", str(text or ""), flags=re.IGNORECASE):
+        sku = str(match or "").strip().upper()
+        if not sku or sku in seen:
+            continue
+        seen.add(sku)
+        ordered.append(sku)
+    return ordered
+
+
 def _latest_search_skus(tool_results: list[dict]) -> list[str]:
     for result in reversed(tool_results):
         if result.get("tool") in {"search_products", "hybrid_search_products"}:
@@ -3686,3 +5649,156 @@ def _step_from_tool_result(name: str, arguments: dict[str, Any], result: dict) -
         "detail": detail,
         "ok": bool(result.get("ok", True)),
     }
+
+
+# Clean overrides for compare/context helpers whose older literals became mojibake.
+COMPARE_LIKE_TERMS = (
+    "对比",
+    "比较",
+    "区别",
+    "差异",
+    "是否一样",
+    "哪个更",
+    "差多少",
+    "不同",
+    "分别介绍",
+    "各自介绍",
+)
+
+
+def _is_compare_like_question(
+    question: str,
+    *,
+    candidate_skus: list[str] | None = None,
+    context_skus: list[str] | None = None,
+) -> bool:
+    text = str(question or "")
+    if (
+        any(term in text for term in ("\u7b2c\u4e00\u4e2a", "\u7b2c\u4e8c\u4e2a", "\u7b2c\u4e00\u6b3e", "\u7b2c\u4e8c\u6b3e"))
+        and any(term in text for term in ("\u6bd4", "\u66f4"))
+        and any(term in text for term in ("\u8f7b", "\u91cd", "\u91cd\u91cf"))
+    ):
+        return len(_unique_skus(context_skus or [])) >= 2 or len(_unique_skus(candidate_skus or [])) >= 2
+    if not any(word in text for word in COMPARE_LIKE_TERMS):
+        return False
+    explicit_skus = _unique_skus(COMPARE_SKU_RE.findall(text))
+    if len(explicit_skus) >= 2:
+        return True
+    if len(_unique_skus(candidate_skus or [])) >= 2:
+        return True
+    if len(_unique_skus(context_skus or [])) >= 2 and _references_context_compare_targets(text):
+        return True
+    intent = customer_agent_intent_service.parse_intent(question, previous_result_skus=[])
+    return bool(
+        intent
+        and getattr(intent, "intent", "") == "compare_products"
+        and len(_unique_skus(getattr(intent, "target_skus", []) or [])) >= 2
+    )
+
+
+def _ordinal_skus_from_entity_stack(question: str, entity_stack: list[dict]) -> list[str]:
+    if not entity_stack:
+        return []
+    text = str(question or "")
+    if not any(term in text for term in ("最开始", "第一个", "第一款", "最后一个", "最后一款", "最后那个", "上一个", "第二个", "第三个", "第四个", "第")):
+        return []
+    if any(term in text for term in ("最后一个问的", "最后问的那个", "最后一个问过的", "最后问过的那个")):
+        latest = _latest_entity_skus_from_stack(entity_stack, limit=1)
+        if latest:
+            return latest
+    # Resolve ordinals against conversation chronology, not raw recency order.
+    # `_latest_entity_stack` is built from newest assistant message backwards, so
+    # "最后一个问的" should map to the last product the user asked about in time,
+    # not the last item in that reverse-recency stack.
+    ordered = _entity_stack_by_conversation_order(entity_stack)
+    if not ordered:
+        return []
+    if any(term in text for term in ("最后一个", "最后一款", "最后那个", "上一个")):
+        return [ordered[-1]["sku"]]
+    if any(term in text for term in ("最开始", "第一个", "第一款")):
+        return [ordered[0]["sku"]]
+    match = re.search(r"第\s*(\d+|[一二三四五六七八九十两])\s*(?:个|款|套|只|把|口)?", text)
+    if not match:
+        return []
+    index = _chinese_ordinal_to_int(match.group(1))
+    if index <= 0 or index > len(ordered):
+        return []
+    return [ordered[index - 1]["sku"]]
+
+
+def _category_reference_skus_from_entity_stack(question: str, entity_stack: list[dict]) -> list[str]:
+    if not entity_stack:
+        return []
+    text = str(question or "")
+    if not any(term in text for term in ("刚才", "之前", "前面", "上次")):
+        return []
+    type_terms = ("酒精炉", "气炉", "炉", "套锅", "炒锅", "煎锅", "单锅", "锅", "杯套装", "杯", "水壶", "壶", "锅具")
+    requested = [term for term in type_terms if term in text]
+    if not requested:
+        return []
+    ordered = _entity_stack_by_conversation_order(entity_stack)
+    for term in requested:
+        for entity in reversed(ordered):
+            name = str(entity.get("name") or "")
+            sku = str(entity.get("sku") or "").strip().upper()
+            if sku and (term in name or (term == "炉" and "炉" in name) or (term == "锅" and "锅" in name)):
+                return [sku]
+    return []
+
+
+def _entity_stack_by_conversation_order(entity_stack: list[dict]) -> list[dict]:
+    deduped: dict[str, dict] = {}
+    for entity in entity_stack:
+        sku = str(entity.get("sku") or "").strip().upper()
+        if not sku or sku in deduped:
+            continue
+        item = dict(entity)
+        item["sku"] = sku
+        deduped[sku] = item
+    return sorted(
+        deduped.values(),
+        key=lambda item: int(item.get("turn") if item.get("turn") is not None else 0),
+        reverse=True,
+    )
+
+
+def _chinese_ordinal_to_int(value: str) -> int:
+    text = str(value or "").strip()
+    if text.isdigit():
+        return int(text)
+    mapping = {"一": 1, "二": 2, "两": 2, "三": 3, "四": 4, "五": 5, "六": 6, "七": 7, "八": 8, "九": 9, "十": 10}
+    if text in mapping:
+        return mapping[text]
+    if text.startswith("十") and len(text) == 2:
+        return 10 + mapping.get(text[1], 0)
+    if len(text) == 3 and text[1] == "十":
+        return mapping.get(text[0], 0) * 10 + mapping.get(text[2], 0)
+    return 0
+
+
+def _should_defer_explicit_product_to_intent_pipeline(question: str, detected_skus: list[str]) -> bool:
+    text = str(question or "")
+    skus = [str(sku or "").strip().upper() for sku in detected_skus if str(sku or "").strip()]
+    if not text or not skus:
+        return False
+    if len(skus) >= 2 and (
+        _is_compare_like_question(text, candidate_skus=skus)
+        or any(term in text for term in ("分别介绍", "分别说说", "各自介绍"))
+    ):
+        return True
+    if len(skus) == 1 and any(
+        term in text
+        for term in (
+            "适合哪些人群",
+            "适用人群",
+            "爆炒",
+            "耐摔",
+            "单独用",
+            "单独使用",
+            "有没有手柄",
+            "锅盖",
+            "盖子",
+        )
+    ):
+        return True
+    return False
