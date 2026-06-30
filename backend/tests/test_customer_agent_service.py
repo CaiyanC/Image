@@ -3567,6 +3567,7 @@ class CustomerAgentEndToEndBehaviorRegressionTest(unittest.IsolatedAsyncioTestCa
         self.assertTrue(customer_agent_runtime_service._is_empty_subset_followup("\u6709\u6ca1\u6709\u66f4\u8f7b\u7684\u66ff\u4ee3"))
         self.assertTrue(customer_agent_runtime_service._is_empty_subset_followup("\u6709\u6ca1\u6709\u66f4\u4fbf\u5b9c\u7684\u66ff\u4ee3"))
         self.assertTrue(customer_agent_runtime_service._is_empty_subset_followup("\u4e3a\u4ec0\u4e48\u63a8\u8350\u8fd9\u4e2a"))
+        self.assertTrue(customer_agent_runtime_service._is_empty_subset_followup("\u8fd9\u4e9b\u91cc\u6700\u9002\u5408\u4e24\u4e2a\u4eba\u7528\u7684\u662f\u54ea\u6b3e"))
 
     async def test_live_equivalent_pot_followup_does_not_collapse_to_kettle_marked_as_cookware(self):
         dmxapi_service.chat_completion = self._fake_chat_completion
@@ -3733,15 +3734,55 @@ class CustomerAgentEndToEndBehaviorRegressionTest(unittest.IsolatedAsyncioTestCa
             question="这些里最适合两个人用的是哪款",
             conversation_id=conversation_id,
         )
+        explain = await customer_service_service.ask_customer_service(
+            self.db,
+            user_id="empty-subset-user",
+            question="为什么推荐这个",
+            conversation_id=conversation_id,
+        )
+        lighter = await customer_service_service.ask_customer_service(
+            self.db,
+            user_id="empty-subset-user",
+            question="有没有更轻的替代",
+            conversation_id=conversation_id,
+        )
 
         self.assertEqual(subset["intent"], "query_products")
         self.assertEqual(subset["answer_type"], "product_query")
         self.assertFalse(subset.get("results"))
-        self.assertIn(followup["intent"], {"recommendation", "clarify"})
-        self.assertFalse(followup.get("results"))
-        self.assertNotIn("CW-NOALC-1", followup["answer"])
-        self.assertNotIn("CW-NOALC-2", followup["answer"])
-        self.assertRegex(followup["answer"], r"(筛选结果为空|没有|未找到|放宽)")
+        subset_meta = next(
+            (item for item in (subset.get("sources") or []) if isinstance(item, dict) and item.get("type") == "agent_meta" and item.get("candidate_context")),
+            {},
+        )
+        subset_context = subset_meta.get("candidate_context") if isinstance(subset_meta, dict) else {}
+        subset_context = subset_context if isinstance(subset_context, dict) else {}
+        self.assertEqual(subset_context.get("candidate_skus"), [])
+        self.assertEqual(subset_context.get("ordered_result_skus"), [])
+        self.assertEqual(subset_context.get("filtered_skus"), [])
+        self.assertEqual(subset_context.get("original_candidate_skus"), ["CW-NOALC-1", "CW-NOALC-2"])
+        self.assertEqual(subset_context.get("parent_candidate_skus"), ["CW-NOALC-1", "CW-NOALC-2"])
+        self.assertTrue(subset_context.get("empty_subset"))
+        for result in (followup, explain, lighter):
+            self.assertFalse(result.get("results"))
+            self.assertNotIn("CW-NOALC-1", result["answer"])
+            self.assertNotIn("CW-NOALC-2", result["answer"])
+            self.assertRegex(result["answer"], r"(筛选结果为空|没有|未找到|放宽)")
+            self.assertEqual((result.get("debug") or {}).get("agent_mode"), "candidate_context_followup")
+            trace_stages = ((result.get("debug") or {}).get("trace") or {}).get("stages") or []
+            context_stage = next((stage for stage in trace_stages if stage.get("stage") == "context_read"), {})
+            self.assertGreater((context_stage.get("extra") or {}).get("previous_result_skus_count") or 0, 0)
+            result_meta = next(
+                (
+                    item for item in (result.get("sources") or [])
+                    if isinstance(item, dict) and item.get("type") == "agent_meta" and item.get("candidate_context")
+                ),
+                {},
+            )
+            result_context = result_meta.get("candidate_context") if isinstance(result_meta, dict) else {}
+            result_context = result_context if isinstance(result_context, dict) else {}
+            self.assertEqual(result_context.get("original_candidate_skus"), ["CW-NOALC-1", "CW-NOALC-2"])
+            self.assertEqual(result_context.get("parent_candidate_skus"), ["CW-NOALC-1", "CW-NOALC-2"])
+            self.assertTrue(result_context.get("empty_subset"))
 
     def test_composite_recommendation_normalization_keeps_comparison_followup_shape(self):
         self.assertEqual(
@@ -6366,6 +6407,34 @@ class CustomerServiceServiceTest(unittest.IsolatedAsyncioTestCase):
             meta["candidate_context"]["product_scope"],
             customer_dialogue_state.product_scope_from_text("你们有哪些锅具类产品"),
         )
+
+    def test_sources_with_result_context_preserves_original_candidate_domain_for_empty_subset(self):
+        sources = customer_service_service._sources_with_result_context(
+            {
+                "intent": "query_products",
+                "answer_type": "product_query",
+                "confidence": "medium",
+                "results": [],
+                "steps": [{"type": "filter_previous_results.heat_source", "ok": True}],
+                "debug": {"parsed_intent": {"source_context": "previous_results"}},
+                "sources": [],
+            },
+            user_question="里面哪些支持酒精炉",
+            inherited_candidate_context={
+                "candidate_skus": ["CW-C69-1", "CW-C06PRO", "CW-C47-37"],
+                "ordered_result_skus": ["CW-C69-1", "CW-C06PRO", "CW-C47-37"],
+                "product_scope": "锅具",
+            },
+        )
+
+        meta = next(item for item in sources if item.get("type") == "agent_meta")
+        self.assertEqual(meta["candidate_context"]["candidate_skus"], [])
+        self.assertEqual(meta["candidate_context"]["ordered_result_skus"], [])
+        self.assertEqual(meta["candidate_context"]["filtered_skus"], [])
+        self.assertEqual(meta["candidate_context"]["original_candidate_skus"], ["CW-C69-1", "CW-C06PRO", "CW-C47-37"])
+        self.assertEqual(meta["candidate_context"]["parent_candidate_skus"], ["CW-C69-1", "CW-C06PRO", "CW-C47-37"])
+        self.assertTrue(meta["candidate_context"]["empty_subset"])
+        self.assertEqual(meta["candidate_context"]["product_scope"], "锅具")
 
     def test_latest_candidate_context_reads_agent_meta_before_agent_context(self):
         conversation = CustomerServiceConversation(id="conv-candidate-context-order", user_id="user-1", title="候选集会话")

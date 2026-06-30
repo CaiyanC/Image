@@ -807,10 +807,24 @@ async def ask_customer_service(
             or _has_followup_result_context(candidate_followup_context)
         )
     )
+    force_runtime_empty_subset_followup = bool(
+        not agent_result
+        and _should_force_runtime_empty_subset_followup(
+            question,
+            explicit_sku=sku,
+            named_products=named_products,
+            candidate_context=candidate_followup_context,
+        )
+    )
     force_runtime_followup = bool(
         not agent_result
-        and _is_recommendation_followup_question(question)
-        and (recommendation_followup_context or candidate_followup_context)
+        and (
+            force_runtime_empty_subset_followup
+            or (
+                _is_recommendation_followup_question(question)
+                and (recommendation_followup_context or candidate_followup_context)
+            )
+        )
     )
     bypass_stateless_pre_runtime = bool(
         (recommendation_followup_context or candidate_followup_context) and not force_runtime_followup
@@ -830,6 +844,7 @@ async def ask_customer_service(
         not agent_result
         and not followup_runtime_bypass
         and (not bypass_stateless_pre_runtime or force_runtime_followup)
+        and not force_runtime_empty_subset_followup
         and not force_runtime_ordinal_compare_followup
         and not category_reference_detail
         and not bypass_pre_runtime_for_detail_context
@@ -851,11 +866,11 @@ async def ask_customer_service(
             allow_llm_fallback=False,
         )
         customer_perf_service.log_stage("process_intent_request_pre_runtime", stage_start, hit=bool(agent_result), intent=agent_result.get("intent") if agent_result else None)
-    if not agent_result and not followup_runtime_bypass and (not bypass_stateless_pre_runtime or force_runtime_followup) and not force_runtime_ordinal_compare_followup and not bypass_pre_runtime_for_detail_context and not category_reference_detail:
+    if not agent_result and not followup_runtime_bypass and (not bypass_stateless_pre_runtime or force_runtime_followup) and not force_runtime_empty_subset_followup and not force_runtime_ordinal_compare_followup and not bypass_pre_runtime_for_detail_context and not category_reference_detail:
         stage_start = perf_counter()
         agent_result = customer_agent_service.try_numeric_english_name_query(db, question)
         customer_perf_service.log_stage("legacy_rule_agent_fallback", stage_start, hit=bool(agent_result), intent=agent_result.get("intent") if agent_result else None)
-    if not agent_result and not followup_runtime_bypass and (not bypass_stateless_pre_runtime or force_runtime_followup) and not force_runtime_ordinal_compare_followup and not bypass_pre_runtime_for_detail_context and not category_reference_detail:
+    if not agent_result and not followup_runtime_bypass and (not bypass_stateless_pre_runtime or force_runtime_followup) and not force_runtime_empty_subset_followup and not force_runtime_ordinal_compare_followup and not bypass_pre_runtime_for_detail_context and not category_reference_detail:
         stage_start = perf_counter()
         agent_result = customer_agent_service.process_agent_request(
             db,
@@ -874,14 +889,22 @@ async def ask_customer_service(
             if preloaded_conversation_history is not None
             else _build_conversation_history(db, conversation_id, user_id)
         )
-        recommendation_context = None
+        recommendation_context = _latest_recommendation_context_for_sources(db, conversation_id)
+        candidate_context = _latest_candidate_context_for_sources(db, conversation_id)
+        previous_result_skus = _previous_result_skus_for_pre_runtime(
+            db,
+            user_id=user_id,
+            conversation_id=conversation_id,
+            question=question,
+        )
         customer_perf_service.log_stage(
             "context_read",
             context_start,
             entity_stack_count=len(entity_stack or []),
             conversation_history_count=len(conversation_history or []),
-            previous_result_skus_count=0,
+            previous_result_skus_count=len(previous_result_skus or []),
             recommendation_context_present=bool(recommendation_context),
+            candidate_context_present=bool(candidate_context),
         )
         contextual_conversation_history = conversation_history
         stage_start = perf_counter()
@@ -894,12 +917,18 @@ async def ask_customer_service(
             conversation_id=conversation_id,
             question=question,
             sku=None,
-            previous_result_skus=[],
+            previous_result_skus=previous_result_skus,
             entity_stack=entity_stack,
             conversation_history=contextual_conversation_history,
             feedback_lessons=feedback_lessons,
             recognized_intent=recognized_intent,
             answer_delta_callback=answer_delta_callback,
+        )
+        agent_result = _synchronize_context_read_trace(
+            agent_result,
+            previous_result_skus=previous_result_skus,
+            recommendation_context=recommendation_context,
+            candidate_context=candidate_context,
         )
         customer_perf_service.log_stage("process_agent_request", stage_start, hit=bool(agent_result), intent=agent_result.get("intent") if agent_result else None, agent_mode=(agent_result.get("debug") or {}).get("agent_mode") if agent_result else None)
     if _should_retry_with_deterministic_agent(agent_result):
@@ -927,13 +956,30 @@ async def ask_customer_service(
         customer_perf_service.log_stage("process_intent_request_fallback", stage_start, hit=bool(agent_result), intent=agent_result.get("intent") if agent_result else None)
     if force_runtime_followup and not agent_result:
         stage_start = perf_counter()
+        context_start = perf_counter()
         entity_stack = preloaded_entity_stack if preloaded_entity_stack is not None else _latest_entity_stack(db, conversation_id, user_id)
         conversation_history = (
             preloaded_conversation_history
             if preloaded_conversation_history is not None
             else _build_conversation_history(db, conversation_id, user_id)
         )
-        recommendation_context = None
+        recommendation_context = _latest_recommendation_context_for_sources(db, conversation_id)
+        candidate_context = _latest_candidate_context_for_sources(db, conversation_id)
+        previous_result_skus = _previous_result_skus_for_pre_runtime(
+            db,
+            user_id=user_id,
+            conversation_id=conversation_id,
+            question=question,
+        )
+        customer_perf_service.log_stage(
+            "context_read",
+            context_start,
+            entity_stack_count=len(entity_stack or []),
+            conversation_history_count=len(conversation_history or []),
+            previous_result_skus_count=len(previous_result_skus or []),
+            recommendation_context_present=bool(recommendation_context),
+            candidate_context_present=bool(candidate_context),
+        )
         recognized_intent = _recognized_intent_for_agent_fast_path(db, question, conversation_id)
         feedback_lessons = _build_feedback_lessons(db, user_id)
         release_session_connection(db)
@@ -943,12 +989,18 @@ async def ask_customer_service(
             conversation_id=conversation_id,
             question=question,
             sku=None,
-            previous_result_skus=[],
+            previous_result_skus=previous_result_skus,
             entity_stack=entity_stack,
             conversation_history=conversation_history,
             feedback_lessons=feedback_lessons,
             recognized_intent=recognized_intent,
             answer_delta_callback=answer_delta_callback,
+        )
+        agent_result = _synchronize_context_read_trace(
+            agent_result,
+            previous_result_skus=previous_result_skus,
+            recommendation_context=recommendation_context,
+            candidate_context=candidate_context,
         )
         customer_perf_service.log_stage("process_agent_request_followup", stage_start, hit=bool(agent_result), intent=agent_result.get("intent") if agent_result else None, agent_mode=(agent_result.get("debug") or {}).get("agent_mode") if agent_result else None)
     if agent_result:
@@ -1722,13 +1774,34 @@ def _sources_with_result_context(
     inherited_candidate_context: dict | None = None,
 ) -> list[dict]:
     sources = list(agent_result.get("sources") or [])
+    existing_meta_entry = next(
+        (
+            item
+            for item in sources
+            if isinstance(item, dict)
+            and item.get("type") == "agent_meta"
+        ),
+        None,
+    )
     entities = _entities_from_agent_result(agent_result)
     result_skus = [item["sku"] for item in entities]
     recommendation_context = None
     candidate_context = None
+    existing_candidate_context = next(
+        (
+            item.get("candidate_context")
+            for item in sources
+            if isinstance(item, dict)
+            and item.get("type") == "agent_meta"
+            and isinstance(item.get("candidate_context"), dict)
+        ),
+        {},
+    )
     product_scope = customer_dialogue_state.product_scope_from_text(str(user_question or ""))
     if not product_scope and isinstance(inherited_recommendation_context, dict):
         product_scope = str(inherited_recommendation_context.get("product_scope") or "").strip()
+    if not product_scope and isinstance(inherited_candidate_context, dict):
+        product_scope = str(inherited_candidate_context.get("product_scope") or "").strip()
     inherited_candidate_skus = [
         str(sku).strip().upper()
         for sku in ((inherited_candidate_context or {}).get("candidate_skus") or [])
@@ -1738,6 +1811,19 @@ def _sources_with_result_context(
         str(sku).strip().upper()
         for sku in (
             (inherited_candidate_context or {}).get("ordered_result_skus")
+            or inherited_candidate_skus
+            or []
+        )
+        if str(sku or "").strip()
+    ]
+    inherited_original_candidate_skus = [
+        str(sku).strip().upper()
+        for sku in (
+            (existing_candidate_context or {}).get("original_candidate_skus")
+            or (existing_candidate_context or {}).get("parent_candidate_skus")
+            or (inherited_candidate_context or {}).get("original_candidate_skus")
+            or (inherited_candidate_context or {}).get("parent_candidate_skus")
+            or inherited_ordered_skus
             or inherited_candidate_skus
             or []
         )
@@ -1767,10 +1853,44 @@ def _sources_with_result_context(
         candidate_context = {
             "candidate_skus": [],
             "ordered_result_skus": [],
+            "filtered_skus": [],
+            "original_candidate_skus": inherited_original_candidate_skus,
+            "parent_candidate_skus": inherited_original_candidate_skus,
             "recommended_skus": [],
             "user_question": str(user_question or "").strip(),
             "product_scope": product_scope,
             "empty_subset": True,
+            "applied_filter": (
+                (existing_candidate_context or {}).get("applied_filter")
+                if isinstance((existing_candidate_context or {}).get("applied_filter"), dict)
+                else None
+            ),
+        }
+    elif (
+        not result_skus
+        and isinstance(existing_candidate_context, dict)
+        and existing_candidate_context.get("empty_subset")
+        and inherited_original_candidate_skus
+    ):
+        candidate_context = {
+            "candidate_skus": [],
+            "ordered_result_skus": [],
+            "filtered_skus": [
+                str(sku).strip().upper()
+                for sku in (existing_candidate_context.get("filtered_skus") or [])
+                if str(sku or "").strip()
+            ],
+            "original_candidate_skus": inherited_original_candidate_skus,
+            "parent_candidate_skus": inherited_original_candidate_skus,
+            "recommended_skus": [],
+            "user_question": str(user_question or "").strip(),
+            "product_scope": product_scope,
+            "empty_subset": True,
+            "applied_filter": (
+                (existing_candidate_context or {}).get("applied_filter")
+                if isinstance((existing_candidate_context or {}).get("applied_filter"), dict)
+                else None
+            ),
         }
     if agent_result.get("intent") == "recommend_products" and result_skus:
         recommendation_context = {
@@ -1809,6 +1929,40 @@ def _sources_with_result_context(
             "user_question": str(inherited_recommendation_context.get("user_question") or "").strip(),
             "product_scope": str(inherited_recommendation_context.get("product_scope") or "").strip(),
         }
+    if candidate_context and candidate_context.get("empty_subset") and isinstance(existing_candidate_context, dict):
+        if not candidate_context.get("candidate_skus"):
+            candidate_context["candidate_skus"] = [
+                str(sku).strip().upper()
+                for sku in existing_candidate_context.get("candidate_skus") or []
+                if str(sku or "").strip()
+            ]
+        if not candidate_context.get("original_candidate_skus"):
+            candidate_context["original_candidate_skus"] = [
+                str(sku).strip().upper()
+                for sku in (
+                    existing_candidate_context.get("original_candidate_skus")
+                    or existing_candidate_context.get("parent_candidate_skus")
+                    or []
+                )
+                if str(sku or "").strip()
+            ]
+        if not candidate_context.get("parent_candidate_skus"):
+            candidate_context["parent_candidate_skus"] = [
+                str(sku).strip().upper()
+                for sku in (
+                    existing_candidate_context.get("parent_candidate_skus")
+                    or existing_candidate_context.get("original_candidate_skus")
+                    or candidate_context.get("original_candidate_skus")
+                    or []
+                )
+                if str(sku or "").strip()
+            ]
+        if not candidate_context.get("applied_filter") and isinstance(existing_candidate_context.get("applied_filter"), dict):
+            candidate_context["applied_filter"] = existing_candidate_context.get("applied_filter")
+    if candidate_context and isinstance(existing_meta_entry, dict):
+        existing_meta_entry["candidate_context"] = dict(candidate_context)
+    if recommendation_context and isinstance(existing_meta_entry, dict):
+        existing_meta_entry["recommendation_context"] = dict(recommendation_context)
     meta_entry = {
         "type": "agent_meta",
         "label": "客服回复元数据",
@@ -1923,9 +2077,33 @@ def _latest_candidate_context_for_sources(db: Session, conversation_id: str | No
                         for sku in context.get("recommended_skus") or []
                         if str(sku or "").strip()
                     ],
+                    "original_candidate_skus": [
+                        str(sku).strip().upper()
+                        for sku in (
+                            context.get("original_candidate_skus")
+                            or context.get("parent_candidate_skus")
+                            or []
+                        )
+                        if str(sku or "").strip()
+                    ],
+                    "parent_candidate_skus": [
+                        str(sku).strip().upper()
+                        for sku in (
+                            context.get("parent_candidate_skus")
+                            or context.get("original_candidate_skus")
+                            or []
+                        )
+                        if str(sku or "").strip()
+                    ],
+                    "filtered_skus": [
+                        str(sku).strip().upper()
+                        for sku in context.get("filtered_skus") or []
+                        if str(sku or "").strip()
+                    ],
                     "user_question": str(context.get("user_question") or "").strip(),
                     "product_scope": str(context.get("product_scope") or "").strip(),
                     "empty_subset": bool(context.get("empty_subset")),
+                    "applied_filter": context.get("applied_filter") if isinstance(context.get("applied_filter"), dict) else None,
                 }
     return {}
 
@@ -1958,6 +2136,8 @@ def _previous_result_skus_for_pre_runtime(
             candidate_context.get("candidate_skus")
             or candidate_context.get("ordered_result_skus")
             or candidate_context.get("recommended_skus")
+            or candidate_context.get("original_candidate_skus")
+            or candidate_context.get("parent_candidate_skus")
             or []
         )
         scoped_skus = [
@@ -1968,6 +2148,27 @@ def _previous_result_skus_for_pre_runtime(
         if scoped_skus:
             return scoped_skus[:10]
     return _latest_active_product_skus(db, conversation_id, user_id)
+
+
+def _should_force_runtime_empty_subset_followup(
+    question: str,
+    *,
+    explicit_sku: str | None,
+    named_products: list[dict] | None,
+    candidate_context: dict[str, Any] | None,
+) -> bool:
+    if explicit_sku or (named_products or []):
+        return False
+    if not isinstance(candidate_context, dict) or not candidate_context.get("empty_subset"):
+        return False
+    preserved_domain = (
+        candidate_context.get("original_candidate_skus")
+        or candidate_context.get("parent_candidate_skus")
+        or []
+    )
+    if not any(str(item or "").strip() for item in preserved_domain):
+        return False
+    return bool(customer_agent_runtime_service._is_empty_subset_followup(question))
 
 
 def _asks_for_alternative_recommendation(question: str) -> bool:
@@ -2130,6 +2331,60 @@ def _message_meta(sources_json: str | None) -> dict:
         if isinstance(source, dict) and source.get("type") == "agent_meta":
             return source
     return {}
+
+
+def _synchronize_context_read_trace(
+    agent_result: dict | None,
+    *,
+    previous_result_skus: list[str] | None,
+    recommendation_context: dict | None,
+    candidate_context: dict | None,
+) -> dict | None:
+    if not isinstance(agent_result, dict):
+        return agent_result
+    debug = dict(agent_result.get("debug") or {})
+    trace = dict(debug.get("trace") or {})
+    stages = trace.get("stages")
+    if not isinstance(stages, list):
+        perf_state = customer_perf_service.get_state() or {}
+        perf_stages = perf_state.get("stages")
+        stages = list(perf_stages) if isinstance(perf_stages, list) else []
+        trace["stages"] = stages
+
+    updated = False
+    synced_stages: list[dict] = []
+    for stage in stages:
+        if isinstance(stage, dict) and stage.get("stage") == "context_read" and not updated:
+            merged_stage = dict(stage)
+            merged_extra = dict(merged_stage.get("extra") or {})
+            merged_extra.update(
+                {
+                    "previous_result_skus_count": len(previous_result_skus or []),
+                    "recommendation_context_present": bool(recommendation_context),
+                    "candidate_context_present": bool(candidate_context),
+                }
+            )
+            merged_stage["extra"] = merged_extra
+            synced_stages.append(merged_stage)
+            updated = True
+            continue
+        synced_stages.append(stage)
+    if not updated:
+        synced_stages.append(
+            {
+                "stage": "context_read",
+                "elapsed_ms": None,
+                "extra": {
+                    "previous_result_skus_count": len(previous_result_skus or []),
+                    "recommendation_context_present": bool(recommendation_context),
+                    "candidate_context_present": bool(candidate_context),
+                },
+            }
+        )
+    trace["stages"] = synced_stages
+    debug["trace"] = trace
+    agent_result["debug"] = debug
+    return agent_result
 
 
 def _normalize_agent_result(agent_result: dict) -> dict:

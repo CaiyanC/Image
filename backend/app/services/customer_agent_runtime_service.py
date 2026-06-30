@@ -2942,9 +2942,33 @@ def _latest_candidate_context(db: Session, conversation_id: str | None, user_id:
                 for sku in candidate_context.get("recommended_skus") or []
                 if str(sku or "").strip()
             ],
+            "original_candidate_skus": [
+                str(sku).strip().upper()
+                for sku in (
+                    candidate_context.get("original_candidate_skus")
+                    or candidate_context.get("parent_candidate_skus")
+                    or []
+                )
+                if str(sku or "").strip()
+            ],
+            "parent_candidate_skus": [
+                str(sku).strip().upper()
+                for sku in (
+                    candidate_context.get("parent_candidate_skus")
+                    or candidate_context.get("original_candidate_skus")
+                    or []
+                )
+                if str(sku or "").strip()
+            ],
+            "filtered_skus": [
+                str(sku).strip().upper()
+                for sku in candidate_context.get("filtered_skus") or []
+                if str(sku or "").strip()
+            ],
             "user_question": str(candidate_context.get("user_question") or "").strip(),
             "product_scope": str(candidate_context.get("product_scope") or "").strip(),
             "empty_subset": bool(candidate_context.get("empty_subset")),
+            "applied_filter": candidate_context.get("applied_filter") if isinstance(candidate_context.get("applied_filter"), dict) else None,
         }
     return {}
 
@@ -3014,6 +3038,7 @@ async def _handle_scoped_candidate_followup(
                     **(candidate_context or {}),
                     "candidate_skus": original_candidate_skus,
                     "original_candidate_skus": original_candidate_skus,
+                    "parent_candidate_skus": original_candidate_skus,
                     "ordered_result_skus": [],
                     "filtered_skus": [],
                     "empty_subset": True,
@@ -3143,6 +3168,15 @@ def _scoped_candidate_context_result(
             "original_candidate_skus": [
                 str(item or "").strip().upper()
                 for item in candidate_context.get("original_candidate_skus") or []
+                if str(item or "").strip()
+            ],
+            "parent_candidate_skus": [
+                str(item or "").strip().upper()
+                for item in (
+                    candidate_context.get("parent_candidate_skus")
+                    or candidate_context.get("original_candidate_skus")
+                    or []
+                )
                 if str(item or "").strip()
             ],
             "recommended_skus": [
@@ -5058,6 +5092,11 @@ def _is_empty_subset_followup(question: str) -> bool:
     )
     return (
         any(term in text for term in readable_followup_terms)
+        or (
+            _is_candidate_scope_followup(text)
+            and _people_count_from_question(text) is not None
+            and any(term in text for term in ("\u9002\u5408", "\u63a8\u8350", "\u54ea\u6b3e", "\u54ea\u4e2a"))
+        )
         or _is_candidate_scope_followup(question)
         or _is_recommendation_change_followup_text(question)
         or _is_recommendation_change_followup(question, {"intent": "recommend_products", "result_skus": [1]})
