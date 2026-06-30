@@ -3857,6 +3857,119 @@ class CustomerAgentEndToEndBehaviorRegressionTest(unittest.IsolatedAsyncioTestCa
         self.assertIn("CW-K03-37", result["answer"])
         self.assertTrue(any(sku in result["answer"] for sku in ["CW-K02-37", "CW-C82"]))
 
+    async def test_explicit_sku_cold_water_capability_question_prefers_detail_over_usage_care(self):
+        self._add_product(
+            "CW-K03-37", "1.4升户外水壶", "水壶", "1400ml", "硬质氧化铝合金",
+            "酒精炉, 燃气炉", "夏天户外补水", "夏天户外补水", 360,
+            price_positioning="中端",
+        )
+        specs = self.db.query(ProductSpecs).filter(ProductSpecs.product_id == "e2e-CW-K03-37").first()
+        specs.usage_instruction = "可装冷水"
+        self.db.commit()
+
+        result = await customer_service_service.ask_customer_service(
+            self.db,
+            user_id="n012-capability-direct",
+            question="CW-K03-37 能不能装冷水？",
+        )
+
+        self.assertEqual(result["intent"], "product_detail")
+        self.assertEqual(result["answer_type"], "product_detail")
+        self.assertNotEqual((result.get("debug") or {}).get("agent_mode"), "product_usage_care_fast_path")
+        self.assertIn("CW-K03-37", result["answer"])
+        self.assertIn("可装冷水", result["answer"])
+
+    async def test_multi_intent_explicit_sku_cold_water_capability_plus_recommendation_answers_capability(self):
+        dmxapi_service.chat_completion = self._fake_chat_completion
+        self._add_product(
+            "CW-K03-37", "1.4升户外水壶", "水壶", "1400ml", "硬质氧化铝合金",
+            "酒精炉, 燃气炉", "夏天户外补水", "夏天户外补水", 360,
+            price_positioning="中端",
+        )
+        self._add_product(
+            "CW-K02-37", "0.8L户外小水壶", "水壶", "800ml", "硬质氧化铝合金",
+            "酒精炉, 燃气炉", "极致小巧便携", "夏天户外补水", 280,
+            price_positioning="中端",
+        )
+        self._add_product(
+            "CW-C82", "时谷水壶", "水壶", "1L", "硬质氧化铝合金",
+            "酒精炉", "适合随身补水", "轻量徒步", 360,
+            price_positioning="中端",
+        )
+        specs = self.db.query(ProductSpecs).filter(ProductSpecs.product_id == "e2e-CW-K03-37").first()
+        specs.usage_instruction = "可装冷水"
+        self.db.commit()
+
+        result = await customer_service_service.ask_customer_service(
+            self.db,
+            user_id="n012-capability-composite",
+            question="CW-K03-37 能不能装冷水？再推荐一个夏天户外补水的水壶。",
+        )
+
+        self.assertEqual(result["intent"], "recommendation")
+        composite_debug = (result.get("debug") or {}).get("composite_question") or {}
+        self.assertEqual(composite_debug.get("fact_part"), "CW-K03-37 能不能装冷水")
+        self.assertIn("CW-K03-37", result["answer"])
+        self.assertIn("可装冷水", result["answer"])
+        self.assertTrue(any(sku in result["answer"] for sku in ["CW-K02-37", "CW-C82"]))
+        self.assertFalse("product_usage_care_fast_path" in json.dumps(result.get("debug") or {}, ensure_ascii=False))
+
+    async def test_explicit_sku_cleaning_question_still_prefers_usage_care_fast_path(self):
+        self._add_product(
+            "CW-K03-37", "1.4升户外水壶", "水壶", "1400ml", "硬质氧化铝合金",
+            "酒精炉, 燃气炉", "夏天户外补水", "夏天户外补水", 360,
+            price_positioning="中端",
+        )
+        product = self.db.query(Product).filter(Product.sku == "CW-K03-37").first()
+        self.db.add(ProductQa(
+            id="usage-care-qa-cw-k03-cleaning",
+            product_id=product.id,
+            question="CW-K03-37 怎么清洗？",
+            answer="建议用温水和软刷清洗，清洗后及时擦干收纳。",
+            tags=json.dumps(["清洗", "保养"], ensure_ascii=False),
+            priority=10,
+        ))
+        self.db.commit()
+
+        result = await customer_service_service.ask_customer_service(
+            self.db,
+            user_id="n012-cleaning-protect",
+            question="CW-K03-37 怎么清洗？",
+        )
+
+        self.assertEqual(result["intent"], "product_usage_care")
+        self.assertEqual(result["answer_type"], "product_usage_care")
+        self.assertEqual((result.get("debug") or {}).get("agent_mode"), "product_usage_care_fast_path")
+        self.assertRegex(result["answer"], r"(温水|软刷|擦干)")
+
+    async def test_explicit_sku_cold_shock_question_still_prefers_usage_care_fast_path(self):
+        self._add_product(
+            "CW-K03-37", "1.4升户外水壶", "水壶", "1400ml", "硬质氧化铝合金",
+            "酒精炉, 燃气炉", "夏天户外补水", "夏天户外补水", 360,
+            price_positioning="中端",
+        )
+        product = self.db.query(Product).filter(Product.sku == "CW-K03-37").first()
+        self.db.add(ProductQa(
+            id="usage-care-qa-cw-k03-cold-shock",
+            product_id=product.id,
+            question="CW-K03-37 能不能用冷水冲洗刚烧热的壶？",
+            answer="不建议热壶马上用冷水冲洗，建议先自然冷却后再清洗，避免骤冷骤热影响壶体状态。",
+            tags=json.dumps(["清洗", "保养", "骤冷骤热"], ensure_ascii=False),
+            priority=10,
+        ))
+        self.db.commit()
+
+        result = await customer_service_service.ask_customer_service(
+            self.db,
+            user_id="n012-cold-shock-protect",
+            question="CW-K03-37 能不能用冷水冲洗刚烧热的壶？",
+        )
+
+        self.assertEqual(result["intent"], "product_usage_care")
+        self.assertEqual(result["answer_type"], "product_usage_care")
+        self.assertEqual((result.get("debug") or {}).get("agent_mode"), "product_usage_care_fast_path")
+        self.assertRegex(result["answer"], r"(不建议|避免).*(冷水冲|骤冷骤热)")
+
     async def test_multi_intent_comparison_plus_recommendation_executes_both_parts(self):
         dmxapi_service.chat_completion = self._fake_chat_completion
         self._add_product(

@@ -1536,6 +1536,8 @@ def _sku_identity_subject(question: str) -> str:
 def _try_product_qa_shortcut(db: Session, question: str) -> dict | None:
     if len(_products_named_in_question(db, question)) >= 2:
         return None
+    if customer_agent_intent_service._looks_like_usage_care_question(question):
+        return None
     product = _explicit_product_from_question(db, question)
     if not product:
         return None
@@ -2537,6 +2539,11 @@ _USAGE_CARE_TERMS = (
     "烘干",
     "泡水",
     "浸泡",
+    "冷水",
+    "冲洗",
+    "冷水冲",
+    "热锅骤冷",
+    "骤冷骤热",
     "洗洁精",
     "钢丝球",
     "硬刷",
@@ -2627,6 +2634,8 @@ def _is_product_usage_care_question(question: str) -> bool:
     if not text:
         return False
     if any(term in text for term in _PURE_AFTERSALES_FLOW_TERMS):
+        return False
+    if customer_agent_intent_service._looks_like_water_container_capability_question(text):
         return False
     if _looks_like_product_detail_field_question(text):
         return False

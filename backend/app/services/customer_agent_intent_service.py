@@ -94,6 +94,8 @@ USAGE_CARE_MAINTENANCE_WEAK_TERMS = ("能用多久", "使用多年", "耐用", "
 USAGE_CARE_BURNT_ACTION_TERMS = ("糊锅", "烧焦", "焦糊", "粘底", "残渍", "锅底", "清洗", "浸泡", "软刷", "钢丝球", "不粘涂层", "涂层保护")
 USAGE_CARE_COOKWARE_TERMS = ("锅", "锅具", "不粘锅", "涂层锅", "烤盘", "煎盘", "套锅", "炒锅")
 USAGE_CARE_NON_COOKWARE_TERMS = ("杯", "水杯", "保温杯", "户外杯", "壶", "水壶")
+WATER_CONTAINER_CAPABILITY_TERMS = ("装冷水", "装凉水", "装热水", "装饮用水", "装水", "盛冷水", "盛热水", "盛水")
+WATER_CONTAINER_CAPABILITY_EXCLUDE_TERMS = ("冲洗", "冷水冲", "洗完", "清洗", "怎么洗", "怎么清洗", "保养", "护理", "骤冷骤热", "热锅骤冷", "刚烧热")
 FAQ_PURCHASE_TERMS = ("哪里买", "哪儿买", "在哪买", "在哪里买", "可以买到", "购买渠道", "购买链接", "怎么买", "想买", "去哪里", "小程序", "商城", "官方店", "店铺", "店铺入口", "旗舰店", "淘宝", "天猫", "京东", "拼多多", "亚马逊", "Amazon", "amazon", "独立站", "线下", "速卖通", "eBay", "ebay", "阿里国际站", "官方渠道", "哪个平台", "平台可以买", "B2C", "b2c", "下单")
 FAQ_AFTERSALES_TERMS = ("售后", "退换", "退货", "换货", "售后电话", "联系方式", "人工客服", "发票", "开发票", "物流", "快递", "订单", "发错货", "少发", "补寄", "维修", "七天无理由", "买错", "不喜欢")
 FAQ_AFTERSALES_PROBLEM_TERMS = ("问题", "质量", "坏了", "瑕疵", "破损")
@@ -327,6 +329,8 @@ async def answer_product_usage_care_request(
     text = str(question or "").strip()
     named_products = named_products or []
     if not _looks_like_usage_care_question(text):
+        return None
+    if _looks_like_water_container_capability_question(text):
         return None
     if _looks_like_product_detail_question(text) and not named_products:
         return None
@@ -1106,6 +1110,20 @@ def _looks_like_product_detail_question(text: str) -> bool:
     return product_hint and field_hint
 
 
+def _looks_like_water_container_capability_question(text: str) -> bool:
+    value = str(text or "").strip()
+    if not value:
+        return False
+    if any(term in value for term in WATER_CONTAINER_CAPABILITY_EXCLUDE_TERMS):
+        return False
+    if not any(term in value for term in WATER_CONTAINER_CAPABILITY_TERMS):
+        return False
+    product_hint = bool(_extract_skus(value) or _detail_subject_from_question(value))
+    if not product_hint:
+        return False
+    return any(term in value for term in ("能不能", "能否", "是否", "可以", "可不可以", "能装", "装"))
+
+
 def _requested_fields_for_detail_question(text: str) -> list[str]:
     fields = _requested_fields(text)
     value = str(text or "")
@@ -1126,6 +1144,8 @@ def _requested_fields_for_detail_question(text: str) -> list[str]:
     for label, aliases in additions:
         if any(alias in value for alias in aliases) and label not in fields:
             fields.append(label)
+    if _looks_like_water_container_capability_question(value) and "适配情况" not in fields:
+        fields.append("适配情况")
     return fields
 
 
@@ -4375,7 +4395,20 @@ def _compose_detail_answer(
     sku_val = row["sku"]
     prefix = f"{title}（{sku_val}）" if title else sku_val
     question_text = str(question or "")
+    usage_instruction_value = str(
+        (row.get("field_values") or {}).get("适配情况")
+        or (row.get("field_values") or {}).get("使用说明")
+        or ""
+    ).strip()
     heat_source_value = str((row.get("field_values") or {}).get("热源") or (row.get("field_values") or {}).get("燃料") or "").strip()
+    if len(rows) == 1 and _looks_like_water_container_capability_question(question_text):
+        if usage_instruction_value and usage_instruction_value != "暂无":
+            if any(term in usage_instruction_value for term in ("装冷水", "装凉水", "装热水", "装饮用水", "装水", "盛水")):
+                return f"{prefix}：当前资料显示{usage_instruction_value}。"
+            capability_label = "装冷水" if any(term in question_text for term in ("冷水", "凉水")) else ("装热水" if "热水" in question_text else ("装饮用水" if "饮用水" in question_text else "装水"))
+            return f"{prefix}：当前资料未直接标明是否可以{capability_label}。当前资料里的使用说明为{usage_instruction_value}。"
+        capability_label = "装冷水" if any(term in question_text for term in ("冷水", "凉水")) else ("装热水" if "热水" in question_text else ("装饮用水" if "饮用水" in question_text else "装水"))
+        return f"{prefix}：当前资料未直接标明是否可以{capability_label}。"
     if (
         len(rows) == 1
         and any(term in question_text for term in ("酒精炉", "酒精"))
@@ -4988,6 +5021,8 @@ def _field_evidence_terms(requested_fields: list[str]) -> set[str]:
             terms.update(("材质", "材料", "主体材质", "304", "不锈钢", "stainless steel", "corrosion resistant", "耐腐蚀"))
         elif label == "认证":
             terms.update(("认证", "食品级", "FDA", "LFGB", "food grade", "food-grade", "certification", "certified", "检测"))
+        elif label == "适配情况":
+            terms.update(("使用说明", "适配", "可装", "装冷水", "装凉水", "装热水", "装饮用水", "装水", "冷水", "热水", "饮用水"))
         else:
             terms.add(label)
     return {term for term in terms if term}
@@ -6685,6 +6720,8 @@ def _requested_fields(text: str) -> list[str]:
             continue
         if any(alias in text for alias in aliases) and label not in fields:
             fields.append(label)
+    if _looks_like_water_container_capability_question(value) and "适配情况" not in fields:
+        fields.append("适配情况")
     if (
         "热源" not in fields
         and any(term in text for term in ("支持", "适配", "能用", "可以用", "能不能用", "能否用"))
