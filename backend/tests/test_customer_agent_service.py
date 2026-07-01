@@ -4039,6 +4039,113 @@ class CustomerAgentEndToEndBehaviorRegressionTest(unittest.IsolatedAsyncioTestCa
         self.assertTrue(any(sku in result["answer"] for sku in recommended_skus))
         self.assertNotEqual((result.get("debug") or {}).get("agent_mode"), "product_qa_fast_path")
 
+    async def test_reverse_multi_intent_cookware_recommendation_excludes_griddle_candidate(self):
+        dmxapi_service.chat_completion = self._fake_chat_completion
+        self._add_product(
+            "CW-C70", "时谷锅", "锅具", "4L", "硬质氧化铝合金",
+            "明火直烧, 卡式炉", "轻量化便携", "轻量徒步，单人露营，户外小份烹饪", 1300,
+            price_positioning="高端",
+        )
+        self._add_product(
+            "CF-PG19", "瓦片烤盘", "锅具", "/", "铝合金",
+            "明火直烧, 燃气炉, 卡式炉, 电磁炉", "露营烤盘", "双人露营烧烤", 1000,
+            price_positioning="高端",
+        )
+        self.db.commit()
+
+        result = await customer_service_service.ask_customer_service(
+            self.db,
+            user_id="n065-cookware-filter",
+            question="先长篇描述行程，最后同时问：推荐锅具，并说明 CW-C83 能不能用酒精炉。",
+        )
+
+        self.assertEqual(result["intent"], "recommendation")
+        self.assertEqual(result["answer_type"], "recommendation")
+        composite_debug = (result.get("debug") or {}).get("composite_question") or {}
+        self.assertEqual(composite_debug.get("fact_part"), "CW-C83 能不能用酒精炉")
+        self.assertIn("推荐锅具", composite_debug.get("recommendation_part") or "")
+        self.assertIn("CW-C83", result["answer"])
+        self.assertIn("酒精炉", result["answer"])
+        recommended_skus = [
+            str(item.get("sku") or "").strip().upper()
+            for item in result.get("results") or []
+            if str(item.get("sku") or "").strip()
+        ]
+        self.assertTrue(recommended_skus)
+        self.assertNotIn("CF-PG19", recommended_skus)
+        self.assertNotRegex(result["answer"], r"(CF-PG19|瓦片烤盘|camping griddle)")
+
+    async def test_explicit_griddle_request_is_not_filtered_by_cookware_recommendation_guard(self):
+        dmxapi_service.chat_completion = self._fake_chat_completion
+        self._add_product(
+            "CF-PG19", "瓦片烤盘", "锅具", "/", "铝合金",
+            "明火直烧, 燃气炉, 卡式炉, 电磁炉", "露营烤盘", "双人露营烧烤", 1000,
+            price_positioning="高端",
+        )
+        self._add_product(
+            "CW-C70", "时谷锅", "锅具", "4L", "硬质氧化铝合金",
+            "明火直烧, 卡式炉", "轻量化便携", "轻量徒步，单人露营，户外小份烹饪", 1300,
+            price_positioning="高端",
+        )
+        self.db.commit()
+
+        result = await customer_agent_intent_service._recommend_result(
+            self.db,
+            user_id="n065-griddle-protect",
+            intent=customer_agent_intent_service.CustomerIntent(
+                intent="recommend_products",
+                target_skus=["CF-PG19", "CW-C70"],
+                recommendation_query="推荐一个烤盘",
+                semantic_query="推荐一个烤盘",
+                term="推荐一个烤盘",
+                source_context="previous_results",
+            ),
+        )
+
+        self.assertEqual(result["answer_type"], "recommendation")
+        returned_skus = [
+            str(item.get("sku") or "").strip().upper()
+            for item in result.get("results") or []
+            if str(item.get("sku") or "").strip()
+        ]
+        self.assertIn("CF-PG19", returned_skus)
+        self.assertRegex(result["answer"], r"(CF-PG19|瓦片烤盘)")
+
+    async def test_cookware_recommendation_scope_excludes_griddle_candidate_from_scoped_results(self):
+        dmxapi_service.chat_completion = self._fake_chat_completion
+        self._add_product(
+            "CF-PG19", "瓦片烤盘", "锅具", "/", "铝合金",
+            "明火直烧, 燃气炉, 卡式炉, 电磁炉", "露营烤盘", "双人露营烧烤", 1000,
+            price_positioning="高端",
+        )
+        self._add_product(
+            "CW-C70", "时谷锅", "锅具", "4L", "硬质氧化铝合金",
+            "明火直烧, 卡式炉", "轻量化便携", "轻量徒步，单人露营，户外小份烹饪", 1300,
+            price_positioning="高端",
+        )
+        self.db.commit()
+
+        result = await customer_agent_intent_service._recommend_result(
+            self.db,
+            user_id="n065-cookware-scope",
+            intent=customer_agent_intent_service.CustomerIntent(
+                intent="recommend_products",
+                target_skus=["CW-C70", "CF-PG19"],
+                recommendation_query="推荐锅具",
+                semantic_query="推荐锅具",
+                term="推荐锅具",
+                source_context="previous_results",
+            ),
+        )
+
+        returned_skus = [
+            str(item.get("sku") or "").strip().upper()
+            for item in result.get("results") or []
+            if str(item.get("sku") or "").strip()
+        ]
+        self.assertIn("CW-C70", returned_skus)
+        self.assertNotIn("CF-PG19", returned_skus)
+
     async def test_comparison_selection_prefers_scoped_candidate_covering_people_count(self):
         dmxapi_service.chat_completion = self._fake_chat_completion
 

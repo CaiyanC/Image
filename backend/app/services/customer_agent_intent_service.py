@@ -2547,6 +2547,9 @@ async def _recommend_result(
             ],
         )
 
+    if _is_explicit_cookware_recommendation_query(intent, query_text):
+        rows = _filter_cookware_recommendation_candidate_rows(rows)
+
     ranked = _fallback_rank(rows, query_text)
     ranked, people_constraint_warnings = _apply_people_capacity_constraint_to_ranked(
         ranked,
@@ -2840,6 +2843,60 @@ def _extract_recommendation_scenario_scope(intent: CustomerIntent, query_text: s
             "semantic_queries": _long_prompt_cookware_recall_queries(text),
         }
     return {}
+
+
+def _is_explicit_cookware_recommendation_query(intent: CustomerIntent, query_text: str) -> bool:
+    if not intent or intent.intent != "recommend_products":
+        return False
+    text = " ".join(
+        part
+        for part in (
+            str(query_text or "").strip(),
+            str(intent.recommendation_query or "").strip(),
+            str(intent.semantic_query or "").strip(),
+            str(intent.term or "").strip(),
+        )
+        if part
+    ).lower()
+    if not text:
+        return False
+    if any(term in text for term in ("烤盘", "烧烤盘", "griddle", "grill plate", "camping griddle", "配件", "accessory")):
+        return False
+    has_recommendation_intent = any(term in text for term in ("推荐", "买哪套", "该买哪套", "选哪套", "哪款适合"))
+    has_cookware_scope = any(term in text for term in ("锅具", "套锅", "炊具", "锅"))
+    return has_recommendation_intent and has_cookware_scope
+
+
+def _filter_cookware_recommendation_candidate_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    filtered = [row for row in (rows or []) if not _looks_like_non_target_cookware_boundary_candidate(row)]
+    return filtered or list(rows or [])
+
+
+def _looks_like_non_target_cookware_boundary_candidate(row: dict[str, Any]) -> bool:
+    text = " ".join(
+        str(row.get(key) or "")
+        for key in (
+            "sku",
+            "product_name_cn",
+            "product_name_en",
+            "name",
+            "title",
+            "sub_category",
+            "category",
+            "features",
+            "usage_scenarios",
+            "target_audience",
+            "selling_points",
+            "positioning",
+        )
+    ).lower()
+    if not text:
+        return False
+    strong_boundary_terms = ("烤盘", "烧烤盘", "griddle", "grill plate", "camping griddle", "配件", "accessory")
+    if not any(term in text for term in strong_boundary_terms):
+        return False
+    cookware_positive_terms = ("套锅", "锅具套装", "炊具套装", "炊具组合", "野餐锅", "cookware set", "cook set")
+    return not any(term in text for term in cookware_positive_terms)
 
 
 def _is_cooking_set_scope_query(text: str) -> bool:
