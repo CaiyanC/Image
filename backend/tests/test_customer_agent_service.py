@@ -7208,6 +7208,44 @@ class CustomerServiceServiceTest(unittest.IsolatedAsyncioTestCase):
         self.assertIn("CW-C06PRO", result["answer"])
         self.assertIn("CW-C47-37", result["answer"])
 
+    def test_latest_recommendation_context_prefers_full_candidate_order_for_plural_explanation(self):
+        conversation = CustomerServiceConversation(id="conv-recommendation-context-full-order", user_id="user-1", title="full order")
+        self.db.add(conversation)
+        self.db.add(CustomerServiceMessage(
+            conversation_id=conversation.id,
+            role="assistant",
+            content="推荐 CW-C69-1、CW-C06PRO、CW-C47-37。",
+            sources_json=json.dumps([
+                {
+                    "type": "agent_meta",
+                    "intent": "recommend_products",
+                    "answer_type": "recommendation",
+                    "recommendation_context": {
+                        "recommended_skus": ["CW-C69-1"],
+                        "user_question": "三个人长线徒步，需要耐用轻量的锅，有什么适合的",
+                        "product_scope": "锅",
+                    },
+                    "candidate_context": {
+                        "candidate_skus": ["CW-C69-1", "CW-C06PRO", "CW-C47-37"],
+                        "ordered_result_skus": ["CW-C69-1", "CW-C06PRO", "CW-C47-37"],
+                        "recommended_skus": ["CW-C69-1"],
+                        "user_question": "三个人长线徒步，需要耐用轻量的锅，有什么适合的",
+                        "product_scope": "锅",
+                    },
+                },
+            ], ensure_ascii=False),
+        ))
+        self.db.commit()
+
+        context = customer_agent_runtime_service._latest_recommendation_context(
+            self.db,
+            conversation.id,
+            "user-1",
+        )
+
+        self.assertEqual(context["recommended_skus"], ["CW-C69-1"])
+        self.assertEqual(context["ordered_result_skus"], ["CW-C69-1", "CW-C06PRO", "CW-C47-37"])
+
     def test_followup_candidate_scope_filters_within_previous_candidate_domain(self):
         results = [
             {"sku": "TW-139CS", "product_name_cn": "城市出逃饭盒", "category": "餐具"},

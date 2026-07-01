@@ -2817,7 +2817,14 @@ def _latest_recommendation_context(db: Session, conversation_id: str | None, use
             ]
             ordered_result_skus = [
                 str(sku).strip().upper()
-                for sku in (context.get("ordered_result_skus") or context.get("recommended_skus") or (candidate_context or {}).get("ordered_result_skus") or candidate_skus or [])
+                for sku in (
+                    context.get("ordered_result_skus")
+                    or (candidate_context or {}).get("ordered_result_skus")
+                    or (candidate_context or {}).get("candidate_skus")
+                    or candidate_skus
+                    or context.get("recommended_skus")
+                    or []
+                )
                 if str(sku or "").strip()
             ]
             product_scope = str(context.get("product_scope") or "").strip() or customer_dialogue_state.product_scope_from_text(user_question)
