@@ -4944,6 +4944,10 @@ class CustomerAgentEndToEndBehaviorRegressionTest(unittest.IsolatedAsyncioTestCa
             {},
         )
         self.assertNotIn("candidate_context", agent_meta)
+        self.assertEqual(
+            (agent_meta.get("pending_clarification_context") or {}).get("requested_field"),
+            "price",
+        )
 
     async def test_vague_price_guard_preserves_explicit_products_and_candidate_context(self):
         explicit_sku = await customer_service_service.ask_customer_service(
@@ -4975,6 +4979,137 @@ class CustomerAgentEndToEndBehaviorRegressionTest(unittest.IsolatedAsyncioTestCa
             )
         self.assertNotEqual(explicit_sku["answer_type"], "clarification")
         self.assertNotEqual(explicit_name["answer_type"], "clarification")
+
+    async def test_clarification_price_slot_carryover_by_product_name(self):
+        turn1 = await customer_service_service.ask_customer_service(
+            self.db,
+            user_id="clarify-price-name-user",
+            question="你们那个锅多少钱？",
+        )
+        turn2 = await customer_service_service.ask_customer_service(
+            self.db,
+            user_id="clarify-price-name-user",
+            question="炊墨套锅",
+            conversation_id=turn1.get("conversation_id"),
+        )
+
+        self.assertEqual(turn1["answer_type"], "clarification")
+        self.assertEqual(turn2["intent"], "product_detail")
+        self.assertEqual(turn2["answer_type"], "product_detail")
+        self.assertEqual((turn2.get("debug") or {}).get("agent_mode"), "clarification_slot_carryover")
+        self.assertIn("CW-C83", turn2["answer"])
+        self.assertRegex(turn2["answer"], r"(860|价格定位|售价|价格)")
+        self.assertNotIn("你想问什么", turn2["answer"])
+        self.assertNotEqual(turn2["answer_type"], "product_query")
+
+    async def test_clarification_price_slot_carryover_by_sku(self):
+        self._add_product(
+            "CW-K03-37", "1.4升户外水壶", "水壶", "1400ml", "硬质氧化铝合金",
+            "酒精炉, 燃气炉", "夏天户外补水", "夏天户外补水", 360,
+            price_positioning="中端",
+        )
+        self.db.commit()
+
+        turn1 = await customer_service_service.ask_customer_service(
+            self.db,
+            user_id="clarify-price-sku-user",
+            question="那个水壶多少钱？",
+        )
+        turn2 = await customer_service_service.ask_customer_service(
+            self.db,
+            user_id="clarify-price-sku-user",
+            question="CW-K03-37",
+            conversation_id=turn1.get("conversation_id"),
+        )
+
+        self.assertEqual(turn1["answer_type"], "clarification")
+        self.assertEqual(turn2["intent"], "product_detail")
+        self.assertEqual(turn2["answer_type"], "product_detail")
+        self.assertEqual((turn2.get("debug") or {}).get("agent_mode"), "clarification_slot_carryover")
+        self.assertIn("CW-K03-37", turn2["answer"])
+        self.assertRegex(turn2["answer"], r"(360|价格定位|售价|价格)")
+        self.assertNotEqual(turn2["answer_type"], "product_query")
+
+    async def test_clarification_fact_slot_carryover_for_heat_source(self):
+        turn1 = await customer_service_service.ask_customer_service(
+            self.db,
+            user_id="clarify-heat-user",
+            question="这个锅能不能用酒精炉？",
+        )
+        turn2 = await customer_service_service.ask_customer_service(
+            self.db,
+            user_id="clarify-heat-user",
+            question="CW-C83",
+            conversation_id=turn1.get("conversation_id"),
+        )
+
+        self.assertEqual(turn1["answer_type"], "clarification")
+        self.assertEqual(turn2["intent"], "product_detail")
+        self.assertEqual(turn2["answer_type"], "product_detail")
+        self.assertEqual((turn2.get("debug") or {}).get("agent_mode"), "clarification_slot_carryover")
+        self.assertIn("CW-C83", turn2["answer"])
+        self.assertIn("酒精炉", turn2["answer"])
+        self.assertNotEqual(turn2["answer_type"], "product_query")
+
+    async def test_clarification_followup_new_question_does_not_inherit_price(self):
+        turn1 = await customer_service_service.ask_customer_service(
+            self.db,
+            user_id="clarify-new-question-user",
+            question="你们那个锅多少钱？",
+        )
+        turn2 = await customer_service_service.ask_customer_service(
+            self.db,
+            user_id="clarify-new-question-user",
+            question="推荐一个水壶",
+            conversation_id=turn1.get("conversation_id"),
+        )
+
+        self.assertNotEqual((turn2.get("debug") or {}).get("agent_mode"), "clarification_slot_carryover")
+        self.assertEqual(turn2["answer_type"], "recommendation")
+
+    async def test_clarification_followup_pure_sku_is_not_new_question(self):
+        turn1 = await customer_service_service.ask_customer_service(
+            self.db,
+            user_id="clarify-pure-sku-user",
+            question="那个水壶多少钱？",
+        )
+        turn2 = await customer_service_service.ask_customer_service(
+            self.db,
+            user_id="clarify-pure-sku-user",
+            question="CW-K03-37",
+            conversation_id=turn1.get("conversation_id"),
+        )
+
+        self.assertNotEqual(turn2["answer_type"], "product_query")
+        self.assertNotEqual((turn2.get("debug") or {}).get("agent_mode"), "vague_single_product_price_clarification")
+
+    async def test_clarification_followup_scope_mismatch_reclarifies_instead_of_product_intro(self):
+        self._add_product(
+            "CW-K03-37", "1.4升户外水壶", "水壶", "1400ml", "硬质氧化铝合金",
+            "酒精炉, 燃气炉", "夏天户外补水", "夏天户外补水", 360,
+            price_positioning="中端",
+        )
+        self.db.commit()
+
+        turn1 = await customer_service_service.ask_customer_service(
+            self.db,
+            user_id="clarify-scope-mismatch-user",
+            question="你们那个锅多少钱？",
+        )
+        turn2 = await customer_service_service.ask_customer_service(
+            self.db,
+            user_id="clarify-scope-mismatch-user",
+            question="CW-K03-37",
+            conversation_id=turn1.get("conversation_id"),
+        )
+
+        self.assertEqual(turn2["intent"], "clarify")
+        self.assertEqual(turn2["answer_type"], "clarification")
+        self.assertEqual((turn2.get("debug") or {}).get("agent_mode"), "clarification_scope_mismatch")
+        self.assertIn("锅", turn2["answer"])
+        self.assertIn("CW-K03-37", turn2["answer"])
+        self.assertNotIn("适用场景", turn2["answer"])
+        self.assertNotEqual(turn2["answer_type"], "product_query")
 
     async def test_product_qa_exact_question_beats_customer_faq_fast_path(self):
         self._add_product(

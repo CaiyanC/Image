@@ -772,6 +772,23 @@ async def ask_customer_service(
         agent_mode=(qa_result.get("debug") or {}).get("agent_mode") if qa_result else None,
     )
 
+    clarification_followup_start = perf_counter()
+    clarification_followup_result = None
+    if not agent_result:
+        clarification_followup_result = await _try_pending_clarification_followup(
+            db,
+            user_id=user_id,
+            conversation_id=conversation_id,
+            question=question,
+        )
+        agent_result = clarification_followup_result
+    customer_perf_service.log_stage(
+        "clarification_followup_guard",
+        clarification_followup_start,
+        hit=bool(clarification_followup_result),
+        agent_mode=(clarification_followup_result.get("debug") or {}).get("agent_mode") if clarification_followup_result else None,
+    )
+
     shortcut_start = perf_counter()
     if not agent_result:
         agent_result = await _try_named_product_shortcut(db, user_id=user_id, question=question)
@@ -1515,6 +1532,40 @@ def _vague_single_product_price_clarification_result() -> dict:
     }
 
 
+def _pending_clarification_context_for_result(agent_result: dict, user_question: str | None = None) -> dict | None:
+    if agent_result.get("answer_type") != "clarification" or not agent_result.get("needs_clarification"):
+        return None
+    text = str(user_question or "").strip()
+    if not text:
+        return None
+    normalized = customer_agent_service.normalize_search_text(text)
+    product_scope = customer_dialogue_state.product_scope_from_text(text)
+    price_terms = ("多少钱", "价格", "售价", "什么价", "几块", "几元")
+    if any(term in text for term in price_terms):
+        return {
+            "intent": "product_detail",
+            "requested_field": "price",
+            "product_scope": product_scope,
+            "original_question": text,
+        }
+    if "酒精炉" in text and any(term in text for term in ("能不能", "能否", "是否", "可不可以", "支持", "适用")):
+        return {
+            "intent": "product_detail",
+            "requested_field": "heat_source",
+            "capability_question": "能不能用酒精炉",
+            "product_scope": product_scope,
+            "original_question": text,
+        }
+    if normalized in {"这个锅", "那个锅", "这个水壶", "那个水壶"}:
+        return {
+            "intent": "product_detail",
+            "requested_field": "",
+            "product_scope": product_scope,
+            "original_question": text,
+        }
+    return None
+
+
 def _sku_identity_subject(question: str) -> str:
     text = str(question or "").strip()
     if not text:
@@ -1982,6 +2033,9 @@ def _sources_with_result_context(
         "debug": agent_result.get("debug") or {},
         "feedback": agent_result.get("feedback") or None,
     }
+    pending_clarification_context = _pending_clarification_context_for_result(agent_result, user_question)
+    if pending_clarification_context:
+        meta_entry["pending_clarification_context"] = pending_clarification_context
     if recommendation_context:
         meta_entry["recommendation_context"] = recommendation_context
     if candidate_context:
@@ -2108,6 +2162,227 @@ def _latest_candidate_context_for_sources(db: Session, conversation_id: str | No
                     "applied_filter": context.get("applied_filter") if isinstance(context.get("applied_filter"), dict) else None,
                 }
     return {}
+
+
+def _latest_pending_clarification_context_for_sources(db: Session, conversation_id: str | None) -> dict:
+    if not conversation_id:
+        return {}
+    messages = (
+        db.query(CustomerServiceMessage)
+        .filter(
+            CustomerServiceMessage.conversation_id == conversation_id,
+            CustomerServiceMessage.role == "assistant",
+        )
+        .order_by(CustomerServiceMessage.created_at.desc(), CustomerServiceMessage.id.desc())
+        .limit(5)
+        .all()
+    )
+    for message in messages:
+        for source in _safe_json(message.sources_json, []):
+            if not isinstance(source, dict) or source.get("type") != "agent_meta":
+                continue
+            context = source.get("pending_clarification_context")
+            if isinstance(context, dict) and context.get("intent") == "product_detail":
+                return dict(context)
+    return {}
+
+
+def _is_clarification_followup_product_only_text(question: str) -> bool:
+    text = str(question or "").strip()
+    if not text or len(text) > 40:
+        return False
+    if any(punct in text for punct in "？?！!。.,，；;：:"):
+        return False
+    if any(term in text for term in ("推荐", "怎么", "为何", "为什么", "可以吗", "能不能", "能否", "是否", "可不可以", "清洗", "保养", "质保", "售后", "购买", "渠道")):
+        return False
+    return True
+
+
+def _clarification_followup_target_products(db: Session, question: str) -> list[Product]:
+    exact_skus = [
+        str(sku or "").strip().upper()
+        for sku in customer_agent_service._extract_skus(question)
+        if str(sku or "").strip()
+    ]
+    if exact_skus:
+        rows = db.query(Product).filter(Product.sku.in_(exact_skus[:3])).all()
+        by_sku = {str(item.sku or "").strip().upper(): item for item in rows}
+        matched = [by_sku[sku] for sku in exact_skus if sku in by_sku]
+        if matched:
+            return matched[:3]
+    products = _products_named_in_question(db, question)
+    if products:
+        return products[:3]
+    explicit_rows = _question_entities_for_entity_stack(db, question)
+    skus = [
+        str(item.get("sku") or "").strip().upper()
+        for item in explicit_rows
+        if str(item.get("sku") or "").strip()
+    ]
+    if not skus:
+        return []
+    rows = db.query(Product).filter(Product.sku.in_(skus[:3])).all()
+    by_sku = {str(item.sku or "").strip().upper(): item for item in rows}
+    return [by_sku[sku] for sku in skus if sku in by_sku]
+
+
+def _clarification_scope_matches_product(scope: str, product: Product | None) -> bool:
+    normalized_scope = str(scope or "").strip()
+    if not normalized_scope or not product:
+        return True
+    category = str(getattr(product, "category", "") or "")
+    name = str(getattr(product, "product_name_cn", "") or getattr(product, "product_name_en", "") or "")
+    if "锅" in normalized_scope:
+        return "锅" in category or "锅" in name or "炊具" in name
+    if "水壶" in normalized_scope or "壶" in normalized_scope:
+        return ("壶" in category) or ("壶" in name) or ("杯" in name)
+    return True
+
+
+def _clarification_scope_mismatch_result(context: dict, product: Product) -> dict:
+    scope = str(context.get("product_scope") or "上一轮产品范围").strip()
+    name = str(product.product_name_cn or product.product_name_en or product.sku or "").strip()
+    sku = str(product.sku or "").strip().upper()
+    answer = f"你上一轮问的是{scope}，这次提供的是{name}（{sku}）。请确认是要查这个产品，还是继续查{scope}。"
+    steps = [{
+        "type": "clarify",
+        "label": "clarification 类目错配保护",
+        "detail": f"{scope} vs {sku}",
+        "ok": True,
+    }]
+    return {
+        "answer": answer,
+        "intent": "clarify",
+        "answer_type": "clarification",
+        "confidence": "low",
+        "uncertainty": "ambiguous_product_scope",
+        "needs_clarification": True,
+        "anomalies": [],
+        "suggested_followups": [f"请确认是否查询 {sku}。"],
+        "followups": [f"请确认是否查询 {sku}。"],
+        "evidence": [],
+        "sources": [{"type": "agent_clarification", "label": "clarification 类目错配保护"}],
+        "actions": [],
+        "results": [],
+        "steps": steps,
+        "warnings": ["clarification_scope_mismatch"],
+        "sku": None,
+        "result_skus": [],
+        "debug": {
+            "agent_mode": "clarification_scope_mismatch",
+            "intent": "clarify",
+            "steps": steps,
+            "warnings": ["clarification_scope_mismatch"],
+            "anomalies": [],
+            "raw_results": [],
+            "pending_clarification_context": context,
+        },
+        "skip_polish": True,
+    }
+
+
+def _is_new_question(question: str) -> bool:
+    text = str(question or "").strip()
+    if not text:
+        return False
+    if any(term in text for term in ("推荐", "建议", "清洗", "保养", "质保", "售后", "购买", "渠道", "能不能", "是否", "可不可以", "可以吗", "怎么", "为什么", "为何")):
+        return False
+    if len(text) <= 30 and not any(punct in text for punct in "？?！!。.,，；;：:"):
+        return True
+    return False
+
+
+def _compose_clarification_followup_question(context: dict, product: Product) -> str | None:
+    requested_field = str(context.get("requested_field") or "").strip()
+    capability_question = str(context.get("capability_question") or "").strip()
+    name_or_sku = str(product.sku or product.product_name_cn or product.product_name_en or "").strip()
+    if not name_or_sku:
+        return None
+    if requested_field == "price":
+        return f"{name_or_sku} 多少钱？"
+    if requested_field == "heat_source" and capability_question:
+        return f"{name_or_sku} {capability_question}"
+    return None
+
+
+async def _deterministic_clarification_followup_result(
+    db: Session,
+    *,
+    product: Product,
+    pending_context: dict,
+    synthesized_question: str,
+) -> dict | None:
+    requested_field = str(pending_context.get("requested_field") or "").strip()
+    field_label = ""
+    if requested_field == "price":
+        field_label = "价格定位"
+    elif requested_field == "heat_source":
+        field_label = "热源"
+    if not field_label:
+        return None
+    intent = customer_agent_intent_service.CustomerIntent(
+        intent="product_detail",
+        target_skus=[str(product.sku or "").strip().upper()],
+        requested_fields=[field_label],
+        semantic_query=synthesized_question,
+        term="",
+        source_context="clarification_followup",
+        is_single_field_sufficient=True,
+    )
+    return await customer_agent_intent_service._product_detail_result(
+        db,
+        intent,
+        original_question=synthesized_question,
+    )
+
+
+async def _try_pending_clarification_followup(
+    db: Session,
+    *,
+    user_id: str,
+    conversation_id: str | None,
+    question: str,
+) -> dict | None:
+    if not conversation_id:
+        return None
+    if not _is_clarification_followup_product_only_text(question):
+        return None
+    pending_context = _latest_pending_clarification_context_for_sources(db, conversation_id)
+    if not pending_context:
+        return None
+    requested_field = str(pending_context.get("requested_field") or "").strip()
+    product_scope = str(pending_context.get("product_scope") or "").strip()
+    if requested_field not in {"price", "heat_source"}:
+        return None
+    if _is_recommendation_followup_question(question):
+        return None
+    if customer_agent_intent_service._looks_like_usage_care_question(question) or _classify_customer_faq_intent(question):
+        return None
+    products = _clarification_followup_target_products(db, question)
+    if len(products) != 1:
+        if _is_new_question(question):
+            return None
+        return None
+    product = products[0]
+    if not _clarification_scope_matches_product(product_scope, product):
+        return _clarification_scope_mismatch_result(pending_context, product)
+    synthesized_question = _compose_clarification_followup_question(pending_context, product)
+    if not synthesized_question:
+        return None
+    result = await _deterministic_clarification_followup_result(
+        db,
+        product=product,
+        pending_context=pending_context,
+        synthesized_question=synthesized_question,
+    )
+    if not result:
+        return None
+    debug = dict(result.get("debug") or {})
+    debug["agent_mode"] = "clarification_slot_carryover"
+    debug["pending_clarification_context"] = pending_context
+    debug["synthesized_question"] = synthesized_question
+    result["debug"] = debug
+    return result
 
 
 def _recognized_intent_for_agent_fast_path(db: Session, question: str, conversation_id: str | None) -> str | None:
