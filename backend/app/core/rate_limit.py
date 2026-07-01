@@ -37,6 +37,10 @@ def enforce_rate_limit(
         count = int(client.incr(key))
         if count == 1:
             client.expire(key, int(window_seconds))
+        else:
+            ttl = int(client.ttl(key))
+            if ttl == -1:
+                client.expire(key, int(window_seconds))
     except RedisError as exc:
         _warn_redis_unavailable(f"Redis rate limit check failed: {exc}")
         return
