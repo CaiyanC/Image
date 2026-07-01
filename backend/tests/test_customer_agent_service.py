@@ -20,7 +20,7 @@ from app.models import (
     ProductSalesRegion, ProductSpecs, SalesRegion, CustomerServiceConversation,
     CustomerServiceMessage, KnowledgeChunk, KnowledgeDocument,
 )
-from app.services import agent_trace_service, customer_agent_intent_service, customer_agent_runtime_service, customer_agent_service, customer_agent_tool_service, customer_dialogue_state, customer_enterprise_guardrail_service, customer_service_service, dmxapi_service, knowledge_service
+from app.services import agent_trace_service, customer_agent_intent_service, customer_agent_runtime_service, customer_agent_service, customer_agent_tool_service, customer_dialogue_state, customer_enterprise_guardrail_service, customer_recommendation_ranker, customer_service_service, dmxapi_service, knowledge_service
 
 
 class CustomerEnterpriseGuardrailServiceTest(unittest.TestCase):
@@ -7859,6 +7859,93 @@ class CustomerServiceServiceTest(unittest.IsolatedAsyncioTestCase):
         self.assertIn("CW-C83-1", result["answer"])
         self.assertNotIn("推荐行山单锅", result["answer"])
         self.assertGreater(len(result["answer"]), 30)
+
+    def test_recommendation_rank_prefers_two_person_picnic_mid_budget_set_over_small_entry_level_set(self):
+        query = "两个人周末野餐，想要轻便一点的套装，预算中等，推荐哪款"
+        rows = [
+            {
+                "sku": "CW-C01-37",
+                "product_name_cn": "1－2人野营锅7件套",
+                "category": "锅具",
+                "capacity": "锅：900ML，碗：450ML",
+                "features": "轻量化套娃收纳，全包围防风，两种燃料可选",
+                "target_audience": "单人背包客，1-2人同行露营伴侣，轻量化徒步者",
+                "usage_scenarios": "轻量徒步，双人露营，机车旅行，荒野求生，极简野炊",
+                "positioning": "入门轻量小套装，适合短途野营",
+                "price_positioning": "中端",
+            },
+            {
+                "sku": "CW-C19T-37",
+                "product_name_cn": "旅伴2-3人野餐锅5件套",
+                "category": "锅具",
+                "capacity": "2升锅，7.5英寸煎盘，1.4升水壶",
+                "features": "高性价比，2-3 人容量，全套收纳便携",
+                "target_audience": "2-3 人露营玩家，家庭周末野餐用户，入门级露营用户，学生露营群体",
+                "usage_scenarios": "入门级露营，家庭野餐，公园野餐，短途露营",
+                "positioning": "高性价比入门套锅，2-3 人容量满足小家庭基础烹饪需求。全套收纳便携易带，适合两个人周末野餐。",
+                "price_positioning": "高端",
+            },
+            {
+                "sku": "CW-C06PRO",
+                "product_name_cn": "轻途套锅",
+                "category": "锅具",
+                "capacity": "大锅约3.0L，小锅约1.7L，水壶约0.8L",
+                "features": "极致轻量化，套娃式收纳，硬质氧化工艺",
+                "target_audience": "轻量徒步爱好者，1-2 人露营者，背包旅行者",
+                "usage_scenarios": "轻量徒步，背包旅行，极简露营",
+                "positioning": "偏高端的轻量徒步套锅",
+                "price_positioning": "高端价格带",
+            },
+            {
+                "sku": "CW-C05-37",
+                "product_name_cn": "2-4人野餐锅10件套",
+                "category": "锅具",
+                "capacity": "7L锅，4L浅锅，5英寸煎盘",
+                "features": "多功能户外一体式锅具，煎炸煮炒一套搞定",
+                "target_audience": "家庭户外野餐群体，3-4 人自驾旅行者",
+                "usage_scenarios": "多人露营烹饪，郊外野餐聚餐",
+                "positioning": "大容量多人野餐套装",
+                "price_positioning": "高端价格带",
+            },
+        ]
+
+        ranked = customer_recommendation_ranker.fallback_rank(rows, query)
+        top = ranked[0]
+        top_match = customer_recommendation_ranker.explain_match(query, top["row"], top["score"])
+
+        self.assertEqual(top["row"]["sku"], "CW-C19T-37")
+        self.assertNotEqual(top["row"]["sku"], "CW-C01-37")
+        self.assertRegex(" ".join(top_match["matched"]), r"(2-3人|两个人|周末野餐|家庭野餐|便携|收纳|套装|套锅|预算|价格)")
+
+    def test_picnic_mid_budget_set_bias_does_not_leak_to_plain_two_person_lightweight_cookware_query(self):
+        query = "两个人露营，想要轻便一点的锅，推荐哪款"
+        rows = [
+            {
+                "sku": "CW-C01-37",
+                "product_name_cn": "1－2人野营锅7件套",
+                "category": "锅具",
+                "capacity": "锅：900ML，碗：450ML",
+                "features": "轻量化套娃收纳，全包围防风，两种燃料可选",
+                "target_audience": "单人背包客，1-2人同行露营伴侣，轻量化徒步者",
+                "usage_scenarios": "轻量徒步，双人露营，机车旅行，极简野炊",
+                "positioning": "入门轻量小套装，适合短途露营",
+                "price_positioning": "中端",
+            },
+            {
+                "sku": "CW-C19T-37",
+                "product_name_cn": "旅伴2-3人野餐锅5件套",
+                "category": "锅具",
+                "capacity": "2升锅，7.5英寸煎盘，1.4升水壶",
+                "features": "高性价比，2-3 人容量，全套收纳便携",
+                "target_audience": "2-3 人露营玩家，家庭周末野餐用户",
+                "usage_scenarios": "家庭野餐，公园野餐，短途露营",
+                "positioning": "常规价格带套锅，适合两个人周末野餐",
+                "price_positioning": "常规价格带",
+            },
+        ]
+
+        ranked = customer_recommendation_ranker.fallback_rank(rows, query)
+        self.assertEqual(ranked[0]["row"]["sku"], "CW-C01-37")
 
     def test_recommendation_answer_is_rebuilt_from_ranked_results(self):
         tool_results = [{

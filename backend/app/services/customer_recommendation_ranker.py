@@ -24,12 +24,16 @@ PRODUCT_TYPE_ROW_TERMS = {
     "bag": ("收纳包", "包具", "背包", "包"),
 }
 
-ONE_OR_TWO_PERSON_TERMS = ("1-2", "一到两", "一至两", "一两", "两个人", "两人", "双人", "单人", "1人", "2人")
-TWO_PERSON_TERMS = ("两个人", "两人", "双人", "2人", "1-2", "一到两", "一至两", "一两")
+ONE_OR_TWO_PERSON_TERMS = ("1-2", "1－2", "一到两", "一至两", "一两", "两个人", "两人", "双人", "单人", "1人", "2人", "１-２", "１－２")
+TWO_PERSON_TERMS = ("两个人", "两人", "双人", "2人", "２人", "1-2", "1－2", "一到两", "一至两", "一两")
 LIGHTWEIGHT_TERMS = ("轻量", "轻便", "便携", "徒步", "背包", "极简", "速穿")
 FAMILY_OR_LARGE_TERMS = ("家庭", "多人", "房车", "自驾", "营地大餐", "大容量", "聚餐")
 THREE_FOUR_PERSON_TERMS = ("三人", "三个人", "3人", "2-4", "3-4", "四人", "四个人", "4人", "多人", "家庭")
 COOKING_METHOD_TERMS = ("煎炒煮", "煎", "炒", "煮", "煎炒", "炒菜", "做饭")
+PICNIC_TERMS = ("野餐", "周末野餐", "公园野餐", "家庭野餐", "周末")
+SET_TERMS = ("套装", "套锅", "件套", "炊具套装", "炊具组合", "锅具套装", "野餐锅", "野营锅", "收纳便携")
+MID_BUDGET_TERMS = ("预算中等", "中等预算", "预算适中", "别太贵", "不要太贵", "不要太入门", "别太入门", "预算")
+ENTRY_LEVEL_TERMS = ("入门", "新手", "基础款")
 
 
 def budget_score(query: str, row: dict[str, Any]) -> int:
@@ -39,6 +43,7 @@ def budget_score(query: str, row: dict[str, Any]) -> int:
 def recommendation_score(query: str, row: dict[str, Any]) -> float:
     query_text = str(query or "")
     text = _row_text(row)
+    scene_text = _scene_text(row)
     name = str(row.get("product_name_cn") or "")
     capacity_ml = _capacity_ml(row.get("capacity"))
     desired_type = desired_product_type(query_text)
@@ -112,6 +117,43 @@ def recommendation_score(query: str, row: dict[str, Any]) -> float:
     if _contains_any(query_text, ("送礼", "礼物", "朋友", "精致露营")):
         if _contains_any(text, ("颜值", "精致", "情绪价值", "礼", "高端", "套装")):
             score += 25
+
+    if _is_picnic_lightweight_set_mid_budget_query(query_text):
+        if _row_is_set(row):
+            score += 45
+        else:
+            score -= 35
+        if _contains_any(text, PICNIC_TERMS):
+            score += 40
+        if _contains_any(scene_text, PICNIC_TERMS + ("家庭", "公园野炊")):
+            score += 18
+        if _contains_any(text, ("2-3人", "2-3 人", "两个人", "两人", "双人", "家庭周末野餐", "小家庭")):
+            score += 45
+        if _contains_any(scene_text, ("2-3人", "2-3 人", "小家庭", "家庭周末野餐用户")):
+            score += 18
+        elif _contains_any(text, ("1-2人", "1-2 人", "1-2")):
+            score -= 12
+        if _contains_any(text, ("全套收纳便携", "套娃式收纳", "收纳便携", "轻便", "便携", "轻量化")):
+            score += 25
+        if _contains_any(text, ("常规价格带", "中端", "高性价比")):
+            score += 28
+        if _contains_any(text, ENTRY_LEVEL_TERMS):
+            score -= 18
+        if _contains_any(scene_text, ("单人背包客", "单人露营", "轻量徒步", "背包旅行", "极简野炊", "荒野求生", "机车旅行")) and not _contains_any(scene_text, PICNIC_TERMS + ("家庭", "公园野炊")):
+            score -= 55
+        if _contains_any(text, ("徒步", "背包", "极简", "野宿")) and not _contains_any(text, PICNIC_TERMS):
+            score -= 18
+        if _contains_any(text, ("3-4人", "3-4 人", "2-4人", "2-4 人", "多人", "营地大餐")):
+            score -= 24
+        if capacity_ml:
+            if 1600 <= capacity_ml <= 2600:
+                score += 22
+            elif capacity_ml < 1200:
+                score -= 48
+                if _contains_any(scene_text, ("单人背包客", "轻量徒步", "极简野炊", "荒野求生")):
+                    score -= 24
+            elif capacity_ml >= 3000:
+                score -= 20
 
     if row.get("features"):
         score += 4
@@ -233,6 +275,7 @@ def _row_matches_type(row: dict[str, Any], product_type: str) -> bool:
 def explain_match(query: str, row: dict[str, Any], score: float | None = None, seed_reasons: list[str] | None = None) -> dict[str, Any]:
     query_text = str(query or "")
     text = _row_text(row)
+    scene_text = _scene_text(row)
     matched: list[str] = list(seed_reasons or [])
     missing: list[str] = []
     capacity_ml = _capacity_ml(row.get("capacity"))
@@ -270,6 +313,28 @@ def explain_match(query: str, row: dict[str, Any], score: float | None = None, s
             matched.append("资料包含轻量/便携信息")
         else:
             missing.append("未明确标注轻量便携优势")
+
+    if _is_picnic_lightweight_set_mid_budget_query(query_text):
+        if _row_is_set(row):
+            matched.append("属于套装/套锅组合，更适合野餐整套携带")
+        else:
+            missing.append("不属于明确套装组合")
+        if _contains_any(text, PICNIC_TERMS):
+            matched.append("资料包含周末野餐/家庭野餐场景")
+        else:
+            missing.append("未明确标注野餐场景")
+        if _contains_any(text, ("2-3人", "2-3 人", "两个人", "两人", "双人", "家庭周末野餐", "小家庭")):
+            matched.append("人数更贴近两个人周末野餐")
+        elif _contains_any(text, ("1-2人", "1-2 人", "1-2")):
+            missing.append("容量偏小，更像入门轻量小套装")
+        if _contains_any(text, ("全套收纳便携", "套娃式收纳", "收纳便携", "轻便", "便携", "轻量化")):
+            matched.append("有全套收纳便携证据")
+        if _contains_any(scene_text, ("单人背包客", "单人露营", "轻量徒步", "背包旅行", "极简野炊", "荒野求生", "机车旅行")) and not _contains_any(scene_text, PICNIC_TERMS + ("家庭", "公园野炊")):
+            missing.append("更偏徒步背包小套装，不是更从容的双人野餐套装")
+        if _contains_any(text, ("常规价格带", "中端", "高性价比")):
+            matched.append("价格定位更接近中等预算")
+        elif _contains_any(text, ENTRY_LEVEL_TERMS):
+            missing.append("更偏入门款")
 
     if "硬质氧化铝合金" in query_text:
         if "硬质氧化铝合金" in text:
@@ -346,6 +411,29 @@ def _has_explicit_type_exclusion(text: str, terms: tuple[str, ...]) -> bool:
 
 def _contains_any(text: str, terms: tuple[str, ...]) -> bool:
     return any(term and term.lower() in text.lower() for term in terms)
+
+
+def _is_picnic_lightweight_set_mid_budget_query(query: str) -> bool:
+    text = str(query or "")
+    return (
+        _contains_any(text, PICNIC_TERMS)
+        and _contains_any(text, SET_TERMS)
+        and _contains_any(text, LIGHTWEIGHT_TERMS + ("收纳",))
+        and _contains_any(text, TWO_PERSON_TERMS)
+        and _contains_any(text, MID_BUDGET_TERMS)
+    )
+
+
+def _row_is_set(row: dict[str, Any]) -> bool:
+    text = _row_text(row)
+    return _contains_any(text, SET_TERMS)
+
+
+def _scene_text(row: dict[str, Any]) -> str:
+    return " ".join(
+        str(row.get(key) or "")
+        for key in ("features", "target_audience", "positioning", "price_positioning", "usage_scenarios")
+    )
 
 
 def _row_text(row: dict[str, Any]) -> str:
