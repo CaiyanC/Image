@@ -843,10 +843,56 @@ async def ask_customer_service(
             )
         )
     )
-    bypass_stateless_pre_runtime = bool(
-        (recommendation_followup_context or candidate_followup_context) and not force_runtime_followup
+    keep_preruntime_for_scoped_heat_source = bool(
+        not agent_result
+        and candidate_followup_context
+        and _should_keep_preruntime_for_scoped_heat_source_followup(
+            question,
+            candidate_context=candidate_followup_context,
+        )
     )
     category_reference_detail = _is_category_reference_detail_question(question)
+    if not agent_result and keep_preruntime_for_scoped_heat_source and not category_reference_detail:
+        scoped_previous_result_skus = _refine_scoped_followup_previous_result_skus(
+            db,
+            question=question,
+            candidate_context=candidate_followup_context,
+            previous_result_skus=_previous_result_skus_for_pre_runtime(
+                db,
+                user_id=user_id,
+                conversation_id=conversation_id,
+                question=question,
+            ),
+        )
+        stage_start = perf_counter()
+        scoped_agent_result = await customer_agent_intent_service.process_intent_request(
+            db,
+            user_id=user_id,
+            question=question,
+            sku=None,
+            previous_result_skus=scoped_previous_result_skus,
+            allow_llm_fallback=False,
+        )
+        scoped_agent_result = _normalize_candidate_context_followup_result(
+            scoped_agent_result,
+            db,
+            question=question,
+            candidate_context=candidate_followup_context,
+        )
+        customer_perf_service.log_stage(
+            "process_intent_request_scoped_heat_source_pre_runtime",
+            stage_start,
+            hit=bool(scoped_agent_result),
+            intent=scoped_agent_result.get("intent") if scoped_agent_result else None,
+            previous_result_skus_count=len(scoped_previous_result_skus or []),
+        )
+        if scoped_agent_result:
+            agent_result = scoped_agent_result
+    bypass_stateless_pre_runtime = bool(
+        (recommendation_followup_context or candidate_followup_context)
+        and not force_runtime_followup
+        and not keep_preruntime_for_scoped_heat_source
+    )
     bypass_pre_runtime_for_detail_context = False
     if not agent_result and not bypass_stateless_pre_runtime and not category_reference_detail:
         preloaded_entity_stack = _latest_entity_stack(db, conversation_id, user_id)
@@ -860,7 +906,8 @@ async def ask_customer_service(
     if (
         not agent_result
         and not followup_runtime_bypass
-        and (not bypass_stateless_pre_runtime or force_runtime_followup)
+        and not bypass_stateless_pre_runtime
+        and not force_runtime_followup
         and not force_runtime_empty_subset_followup
         and not force_runtime_ordinal_compare_followup
         and not category_reference_detail
@@ -883,11 +930,11 @@ async def ask_customer_service(
             allow_llm_fallback=False,
         )
         customer_perf_service.log_stage("process_intent_request_pre_runtime", stage_start, hit=bool(agent_result), intent=agent_result.get("intent") if agent_result else None)
-    if not agent_result and not followup_runtime_bypass and (not bypass_stateless_pre_runtime or force_runtime_followup) and not force_runtime_empty_subset_followup and not force_runtime_ordinal_compare_followup and not bypass_pre_runtime_for_detail_context and not category_reference_detail:
+    if not agent_result and not followup_runtime_bypass and not bypass_stateless_pre_runtime and not force_runtime_followup and not force_runtime_empty_subset_followup and not force_runtime_ordinal_compare_followup and not bypass_pre_runtime_for_detail_context and not category_reference_detail:
         stage_start = perf_counter()
         agent_result = customer_agent_service.try_numeric_english_name_query(db, question)
         customer_perf_service.log_stage("legacy_rule_agent_fallback", stage_start, hit=bool(agent_result), intent=agent_result.get("intent") if agent_result else None)
-    if not agent_result and not followup_runtime_bypass and (not bypass_stateless_pre_runtime or force_runtime_followup) and not force_runtime_empty_subset_followup and not force_runtime_ordinal_compare_followup and not bypass_pre_runtime_for_detail_context and not category_reference_detail:
+    if not agent_result and not followup_runtime_bypass and not bypass_stateless_pre_runtime and not force_runtime_followup and not force_runtime_empty_subset_followup and not force_runtime_ordinal_compare_followup and not bypass_pre_runtime_for_detail_context and not category_reference_detail:
         stage_start = perf_counter()
         agent_result = customer_agent_service.process_agent_request(
             db,
@@ -945,6 +992,12 @@ async def ask_customer_service(
             agent_result,
             previous_result_skus=previous_result_skus,
             recommendation_context=recommendation_context,
+            candidate_context=candidate_context,
+        )
+        agent_result = _normalize_candidate_context_followup_result(
+            agent_result,
+            db,
+            question=question,
             candidate_context=candidate_context,
         )
         customer_perf_service.log_stage("process_agent_request", stage_start, hit=bool(agent_result), intent=agent_result.get("intent") if agent_result else None, agent_mode=(agent_result.get("debug") or {}).get("agent_mode") if agent_result else None)
@@ -1017,6 +1070,12 @@ async def ask_customer_service(
             agent_result,
             previous_result_skus=previous_result_skus,
             recommendation_context=recommendation_context,
+            candidate_context=candidate_context,
+        )
+        agent_result = _normalize_candidate_context_followup_result(
+            agent_result,
+            db,
+            question=question,
             candidate_context=candidate_context,
         )
         customer_perf_service.log_stage("process_agent_request_followup", stage_start, hit=bool(agent_result), intent=agent_result.get("intent") if agent_result else None, agent_mode=(agent_result.get("debug") or {}).get("agent_mode") if agent_result else None)
@@ -2668,19 +2727,22 @@ def _normalize_agent_result(agent_result: dict) -> dict:
     result = dict(agent_result)
     results = result.get("results") or []
     warnings = result.get("warnings") or []
+    debug = dict(result.get("debug") or {})
+    debug_intent = debug.get("intent")
+    parsed_intent = debug.get("parsed_intent") if isinstance(debug.get("parsed_intent"), dict) else None
     result.setdefault("answer_type", _answer_type_from_intent(result.get("intent")))
     result.setdefault("uncertainty", _uncertainty_from_answer(result.get("answer") or "", results, warnings, result.get("needs_clarification", False)))
     result.setdefault("evidence", _evidence_from_results(results))
     result.setdefault("followups", result.get("suggested_followups") or [])
     result.setdefault("suggested_followups", result.get("followups") or [])
     result.setdefault("agent_quality", {})
-    result.setdefault("debug", {
-        "intent": result.get("intent"),
-        "steps": result.get("steps") or [],
-        "warnings": warnings,
-        "anomalies": result.get("anomalies") or [],
-        "raw_results": results,
-    })
+    if not isinstance(debug_intent, dict):
+        debug["intent"] = dict(parsed_intent or {"intent": result.get("intent")})
+    debug.setdefault("steps", result.get("steps") or [])
+    debug.setdefault("warnings", warnings)
+    debug.setdefault("anomalies", result.get("anomalies") or [])
+    debug.setdefault("raw_results", results)
+    result["debug"] = debug
     return result
 
 
@@ -4082,6 +4144,163 @@ def _should_use_previous_result_skus(question: str) -> bool:
     if len(text) <= 12 and any(item in text for item in ("容量", "材质", "卖点", "价格", "适合", "好不好")):
         return True
     return False
+
+
+def _should_keep_preruntime_for_scoped_heat_source_followup(
+    question: str,
+    *,
+    candidate_context: dict[str, Any] | None,
+) -> bool:
+    text = str(question or "")
+    if "酒精炉" not in text and "alcohol stove" not in text.lower():
+        return False
+    if not any(term in text for term in ("里面", "这些", "这几款", "这些里", "哪些", "有哪", "支持", "能用", "适合")):
+        return False
+    return bool((candidate_context or {}).get("candidate_skus") or (candidate_context or {}).get("ordered_result_skus"))
+
+
+def _refine_scoped_followup_previous_result_skus(
+    db: Session,
+    *,
+    question: str,
+    candidate_context: dict[str, Any] | None,
+    previous_result_skus: list[str] | None,
+) -> list[str]:
+    normalized = [
+        str(sku or "").strip().upper()
+        for sku in (previous_result_skus or [])
+        if str(sku or "").strip()
+    ]
+    if not normalized:
+        return []
+    if not _should_keep_preruntime_for_scoped_heat_source_followup(question, candidate_context=candidate_context):
+        return normalized
+    product_scope = str((candidate_context or {}).get("product_scope") or "").strip()
+    if not _is_service_pot_cookware_scope(product_scope, str((candidate_context or {}).get("user_question") or "")):
+        return normalized
+    products = db.query(Product).filter(Product.sku.in_(normalized)).all()
+    product_by_sku = {str(product.sku or "").strip().upper(): product for product in products}
+    refined = [
+        sku for sku in normalized
+        if _is_service_pot_cookware_product(product_by_sku.get(sku))
+    ]
+    return refined or normalized
+
+
+def _normalize_candidate_context_followup_result(
+    agent_result: dict | None,
+    db: Session,
+    *,
+    question: str,
+    candidate_context: dict[str, Any] | None,
+) -> dict | None:
+    if not isinstance(agent_result, dict) or not isinstance(candidate_context, dict):
+        return agent_result
+    debug = dict(agent_result.get("debug") or {})
+    if debug.get("agent_mode") == "candidate_context_followup":
+        return agent_result
+    if not _asks_for_alternative_recommendation(question):
+        return agent_result
+    domain_skus = [
+        str(sku or "").strip().upper()
+        for sku in (
+            candidate_context.get("ordered_result_skus")
+            or candidate_context.get("candidate_skus")
+            or candidate_context.get("parent_candidate_skus")
+            or candidate_context.get("original_candidate_skus")
+            or []
+        )
+        if str(sku or "").strip()
+    ]
+    result_skus = [
+        str(item.get("sku") or "").strip().upper()
+        for item in (agent_result.get("results") or [])
+        if isinstance(item, dict) and str(item.get("sku") or "").strip()
+    ]
+    if not domain_skus or not result_skus:
+        return agent_result
+    if not set(result_skus).issubset(set(domain_skus)):
+        return agent_result
+    product_scope = str(candidate_context.get("product_scope") or "").strip()
+    user_question = str(candidate_context.get("user_question") or "").strip()
+    refined_domain = _refine_scoped_followup_previous_result_skus(
+        db,
+        question="里面哪些支持酒精炉",
+        candidate_context=candidate_context,
+        previous_result_skus=domain_skus,
+    ) if _is_service_pot_cookware_scope(product_scope, user_question) else domain_skus
+    if refined_domain and not set(result_skus).issubset(set(refined_domain)):
+        return agent_result
+    debug["agent_mode"] = "candidate_context_followup"
+    agent_result["debug"] = debug
+    sources = list(agent_result.get("sources") or [])
+    meta = next((item for item in sources if isinstance(item, dict) and item.get("type") == "agent_meta"), None)
+    scoped_context = {
+        "candidate_skus": result_skus,
+        "ordered_result_skus": result_skus,
+        "filtered_skus": result_skus,
+        "original_candidate_skus": [
+            str(sku or "").strip().upper()
+            for sku in (
+                candidate_context.get("original_candidate_skus")
+                or candidate_context.get("parent_candidate_skus")
+                or domain_skus
+            )
+            if str(sku or "").strip()
+        ],
+        "parent_candidate_skus": [
+            str(sku or "").strip().upper()
+            for sku in (
+                candidate_context.get("parent_candidate_skus")
+                or candidate_context.get("original_candidate_skus")
+                or domain_skus
+            )
+            if str(sku or "").strip()
+        ],
+        "recommended_skus": [
+            str(sku or "").strip().upper()
+            for sku in candidate_context.get("recommended_skus") or []
+            if str(sku or "").strip()
+        ],
+        "user_question": question,
+        "product_scope": product_scope,
+        "empty_subset": False,
+        "applied_filter": candidate_context.get("applied_filter") if isinstance(candidate_context.get("applied_filter"), dict) else None,
+    }
+    if isinstance(meta, dict):
+        meta["candidate_context"] = scoped_context
+    else:
+        sources.append({"type": "agent_meta", "candidate_context": scoped_context})
+    agent_result["sources"] = sources
+    return agent_result
+
+
+def _is_service_pot_cookware_scope(product_scope: str, user_question: str) -> bool:
+    scope_text = str(product_scope or "")
+    question_text = str(user_question or "")
+    if any(term in question_text for term in ("水壶", "茶壶", "烧水壶", "壶类")):
+        return False
+    return any(term in scope_text or term in question_text for term in ("锅具", "锅", "套锅", "炒锅", "煎锅", "单锅"))
+
+
+def _is_service_pot_cookware_product(product: Product | None) -> bool:
+    if product is None:
+        return True
+    name_text = " ".join(
+        str(value or "")
+        for value in (
+            product.product_name_cn,
+            product.product_name_en,
+            product.sub_category,
+        )
+    )
+    cookware_terms = ("套锅", "炒锅", "煎锅", "单锅", "汤锅", "锅具", "锅", "煎盘", "烤盘")
+    if any(term in name_text for term in cookware_terms):
+        return True
+    kettle_terms = ("水壶", "茶壶", "烧水壶", "壶")
+    if any(term in name_text for term in kettle_terms):
+        return False
+    return True
 
 
 def _should_use_conversation_history(question: str) -> bool:

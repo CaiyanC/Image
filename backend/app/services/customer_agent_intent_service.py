@@ -1178,9 +1178,11 @@ async def _query_products_result(db: Session, user_id: str, intent: CustomerInte
     warnings: list[str] = []
     # Use the original question for QA/KB search for better context
     search_question_text = (original_question or intent.term or intent.semantic_query or "").strip()
+    source_rows_for_context_filter: list[dict] = []
 
     if intent.target_skus:
-        rows = _rows_for_target_skus(db, intent.target_skus)
+        source_rows_for_context_filter = _rows_for_target_skus(db, intent.target_skus)
+        rows = source_rows_for_context_filter
         rows = _filter_rows(
             rows,
             filters=intent.filters,
@@ -1230,6 +1232,14 @@ async def _query_products_result(db: Session, user_id: str, intent: CustomerInte
         rows = tool_result.get("results") or []
         tool_name = tool_result.get("tool", "search_products")
         query = tool_result.get("query") or intent.term or intent.semantic_query
+
+    rows = _narrow_alcohol_stove_cookware_query_rows(
+        db,
+        rows,
+        intent=intent,
+        question=original_question or search_question_text,
+        source_rows=source_rows_for_context_filter,
+    )
 
     if not _has_specs_filter(intent):
         rows = _focus_detail_rows(rows, intent, original_question or search_question_text)
@@ -3574,6 +3584,14 @@ def _ensure_negative_filter(negative_filters: dict[str, Any], field_path: str, v
 def _parse_structured_filters(text: str) -> tuple[dict[str, Any], dict[str, Any]]:
     filters: dict[str, Any] = {}
     negative_filters: dict[str, Any] = {}
+    alcohol_stove_support_pattern = (
+        r"(?:同时)?(?:支持|能用|可以用|可用|适配)\s*酒精炉"
+        r"|(?:可以|可|能)(?:直接)?放在\s*酒精炉上(?:用|使用)(?:吗)?"
+        r"|酒精炉上(?:能用|可以用|可用|适合|使用)"
+        r"|适合\s*酒精炉"
+        r"|酒精炉可用"
+        r"|\balcohol\s*stove\b"
+    )
 
     field_filters = (
         (("主体材质", "炉体材质", "材质", "材料"), "specs.body_material"),
@@ -3616,7 +3634,7 @@ def _parse_structured_filters(text: str) -> tuple[dict[str, Any], dict[str, Any]
             return filters, negative_filters
         positive_text = _positive_category_text(text)
         category_probe_text = re.sub(
-            r"(?:同时)?(?:支持|能用|可以用|可用|适配)\s*酒精炉",
+            alcohol_stove_support_pattern,
             " ",
             positive_text,
             flags=re.I,
@@ -3670,7 +3688,7 @@ def _parse_structured_filters(text: str) -> tuple[dict[str, Any], dict[str, Any]
                 filters["specs.body_material"] = value
     if not filters.get("specs.heat_source"):
         alcohol_support_match = re.search(
-            r"(?:同时)?(?:支持|能用|可以用|可用|适配)\s*酒精炉",
+            alcohol_stove_support_pattern,
             text,
             flags=re.I,
         )
@@ -3967,6 +3985,138 @@ def _filter_rows(rows: list[dict], *, filters: dict[str, Any], negative_filters:
     return filtered
 
 
+def _is_alcohol_stove_cookware_query(intent: CustomerIntent, question: str, *, rows: list[dict] | None = None) -> bool:
+    if not intent or intent.intent != "query_products":
+        return False
+    filters = intent.filters or {}
+    if str(filters.get("specs.heat_source") or "") != "酒精炉":
+        return False
+    text = str(question or "")
+    if not any(term in text for term in ("酒精炉", "alcohol stove")):
+        return False
+    if str(filters.get("product.category") or "") == "锅具":
+        return True
+    if str(intent.source_context or "") != "previous_results":
+        return False
+    candidate_rows = [row for row in (rows or []) if isinstance(row, dict)]
+    cookware_rows = [row for row in candidate_rows if str(row.get("category") or "") == "锅具"]
+    return bool(cookware_rows) and len(cookware_rows) >= max(1, len(candidate_rows) // 2)
+
+
+def _is_griddle_like_cookware_row(row: dict[str, Any]) -> bool:
+    haystack = " ".join(
+        str(row.get(key) or "")
+        for key in ("sku", "product_name_cn", "product_name_en", "category", "sub_category", "features", "usage_scenarios")
+    ).lower()
+    return any(term in haystack for term in ("griddle", "烤盘", "烧烤盘"))
+
+
+def _is_water_container_like_cookware_row(row: dict[str, Any]) -> bool:
+    haystack = " ".join(
+        str(row.get(key) or "")
+        for key in ("sku", "product_name_cn", "product_name_en", "category", "sub_category", "features", "usage_scenarios")
+    ).lower()
+    return any(term in haystack for term in ("水壶", "壶", "kettle", "bottle", "flask", "cup", "杯"))
+
+
+def _alcohol_stove_support_verdict(text: str) -> bool | None:
+    value = str(text or "").strip().lower()
+    if not value or ("酒精炉" not in value and "alcohol stove" not in value):
+        return None
+    if re.search(r"(不支持|未显示支持|不适合|不建议|不能|不可).{0,8}(酒精炉|alcohol stove)", value):
+        return False
+    if re.search(r"(支持|适合|可用|可以用|能用|兼容|适配).{0,8}(酒精炉|alcohol stove)", value):
+        return True
+    if re.search(r"(酒精炉|alcohol stove).{0,8}(可用|适用|适配|兼容|支持)", value):
+        return True
+    if re.search(r"(^|[\s,，、/|\n])(?:酒精炉|alcohol stove)(?=$|[\s,，、/|\n])", value):
+        return True
+    return None
+
+
+def _same_sku_alcohol_stove_support_evidence(db: Session | None, sku: str) -> bool:
+    if db is None:
+        return False
+    evidence_text = _best_same_sku_evidence_text(
+        db,
+        sku=sku,
+        supporting=None,
+        term_groups=[
+            ("酒精炉", "alcohol stove"),
+            ("支持", "适合", "可用", "可以用", "能用", "兼容", "适配"),
+        ],
+    )
+    if not evidence_text:
+        return False
+    verdict = _alcohol_stove_support_verdict(evidence_text)
+    if verdict is not None:
+        return verdict
+    normalized = str(evidence_text or "").lower()
+    return "酒精炉" in normalized or "alcohol stove" in normalized
+
+
+def _row_supports_alcohol_stove(row: dict[str, Any], db: Session | None = None) -> bool:
+    direct_heat_source = str(row.get("heat_source") or "")
+    verdict = _alcohol_stove_support_verdict(direct_heat_source)
+    if verdict is not None:
+        return verdict
+    evidence_text = _same_sku_context_evidence_text(row)
+    verdict = _alcohol_stove_support_verdict(evidence_text)
+    if verdict is True:
+        return True
+    sku = str(row.get("sku") or "").strip().upper()
+    if sku and _same_sku_alcohol_stove_support_evidence(db, sku):
+        return True
+    return False
+
+
+def _case71_eligible_cookware_row(row: dict[str, Any], db: Session | None = None) -> bool:
+    if str(row.get("category") or "") != "锅具":
+        return False
+    if _is_griddle_like_cookware_row(row):
+        return False
+    if _is_water_container_like_cookware_row(row):
+        return False
+    return _row_supports_alcohol_stove(row, db)
+
+
+def _case71_filter_summary_override(intent: CustomerIntent, rows: list[dict[str, Any]]) -> str | None:
+    if not rows:
+        return None
+    if str((intent.filters or {}).get("product.category") or "") != "锅具":
+        return None
+    if str((intent.filters or {}).get("specs.heat_source") or "") != "酒精炉":
+        return None
+    return "已按酒精炉热源字段或同SKU兼容证据收窄到可用于酒精炉的锅具列表。"
+
+
+def _narrow_alcohol_stove_cookware_query_rows(
+    db: Session,
+    rows: list[dict],
+    *,
+    intent: CustomerIntent,
+    question: str,
+    source_rows: list[dict] | None = None,
+) -> list[dict]:
+    if not _is_alcohol_stove_cookware_query(intent, question, rows=source_rows or rows):
+        return rows
+    base_rows = source_rows or rows or []
+    narrowed = [row for row in base_rows if _case71_eligible_cookware_row(row, db)]
+    seen = {str(row.get("sku") or "").strip().upper() for row in narrowed if str(row.get("sku") or "").strip()}
+    supplement_rows = customer_agent_service.search_products(db, "", limit=120, filters={"product.category": "锅具"})
+    for row in supplement_rows:
+        sku = str(row.get("sku") or "").strip().upper()
+        if not sku or sku in seen:
+            continue
+        if not _case71_eligible_cookware_row(row, db):
+            continue
+        narrowed.append(row)
+        seen.add(sku)
+        if len(narrowed) >= 8:
+            break
+    return narrowed or rows
+
+
 def _same_sku_context_evidence_text(row: dict[str, Any]) -> str:
     values = []
     for key in (
@@ -4145,9 +4295,10 @@ def _compose_filter_answer_template(rows: list[dict], intent: CustomerIntent) ->
     condition = "；".join(filter_labels) or "未提供"
     if not rows:
         return f"筛选条件：{condition}。\n当前资料中未检索到符合条件的产品。"
+    summary_override = _case71_filter_summary_override(intent, rows)
     lines = [
         f"筛选条件：{condition}。",
-        *(f"已返回{summary}。" for summary in canonical_summaries),
+        *((summary_override,) if summary_override else tuple(f"已返回{summary}。" for summary in canonical_summaries)),
         "当前资料中检索到以下产品：",
     ]
     for row in rows[:20]:

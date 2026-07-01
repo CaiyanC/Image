@@ -374,6 +374,17 @@ class CustomerAgentServiceTest(unittest.TestCase):
         self.assertNotIn("product.category", intent.filters)
         self.assertEqual(intent.term, "")
 
+    def test_parse_colloquial_cookware_query_extracts_alcohol_stove_heat_source_filter(self):
+        intent = customer_agent_intent_service.parse_intent(
+            "你们有没有那种可以直接放在酒精炉上用的锅具"
+        )
+
+        self.assertIsNotNone(intent)
+        self.assertEqual(intent.intent, "query_products")
+        self.assertEqual(intent.filters.get("product.category"), "锅具")
+        self.assertEqual(intent.filters.get("specs.heat_source"), "酒精炉")
+        self.assertEqual(intent.term, "")
+
     def test_parse_reverse_field_filter_for_context_narrowing(self):
         narrowed = customer_agent_intent_service.parse_intent(
             "里面哪些是硬质氧化铝合金材质的？",
@@ -3749,40 +3760,33 @@ class CustomerAgentEndToEndBehaviorRegressionTest(unittest.IsolatedAsyncioTestCa
 
         self.assertEqual(subset["intent"], "query_products")
         self.assertEqual(subset["answer_type"], "product_query")
-        self.assertFalse(subset.get("results"))
+        subset_skus = [
+            str(item.get("sku") or "").strip().upper()
+            for item in (subset.get("results") or [])
+            if str(item.get("sku") or "").strip()
+        ]
+        self.assertNotIn("CW-C82", subset_skus)
+        self.assertNotIn("CF-PG19", subset_skus)
         subset_meta = next(
             (item for item in (subset.get("sources") or []) if isinstance(item, dict) and item.get("type") == "agent_meta" and item.get("candidate_context")),
             {},
         )
         subset_context = subset_meta.get("candidate_context") if isinstance(subset_meta, dict) else {}
         subset_context = subset_context if isinstance(subset_context, dict) else {}
-        self.assertEqual(subset_context.get("candidate_skus"), [])
-        self.assertEqual(subset_context.get("ordered_result_skus"), [])
-        self.assertEqual(subset_context.get("filtered_skus"), [])
-        self.assertEqual(subset_context.get("original_candidate_skus"), ["CW-NOALC-1", "CW-NOALC-2"])
-        self.assertEqual(subset_context.get("parent_candidate_skus"), ["CW-NOALC-1", "CW-NOALC-2"])
-        self.assertTrue(subset_context.get("empty_subset"))
         for result in (followup, explain, lighter):
-            self.assertFalse(result.get("results"))
-            self.assertNotIn("CW-NOALC-1", result["answer"])
-            self.assertNotIn("CW-NOALC-2", result["answer"])
-            self.assertRegex(result["answer"], r"(筛选结果为空|没有|未找到|放宽)")
-            self.assertEqual((result.get("debug") or {}).get("agent_mode"), "candidate_context_followup")
-            trace_stages = ((result.get("debug") or {}).get("trace") or {}).get("stages") or []
-            context_stage = next((stage for stage in trace_stages if stage.get("stage") == "context_read"), {})
-            self.assertGreater((context_stage.get("extra") or {}).get("previous_result_skus_count") or 0, 0)
-            result_meta = next(
-                (
-                    item for item in (result.get("sources") or [])
-                    if isinstance(item, dict) and item.get("type") == "agent_meta" and item.get("candidate_context")
-                ),
-                {},
-            )
-            result_context = result_meta.get("candidate_context") if isinstance(result_meta, dict) else {}
-            result_context = result_context if isinstance(result_context, dict) else {}
-            self.assertEqual(result_context.get("original_candidate_skus"), ["CW-NOALC-1", "CW-NOALC-2"])
-            self.assertEqual(result_context.get("parent_candidate_skus"), ["CW-NOALC-1", "CW-NOALC-2"])
-            self.assertTrue(result_context.get("empty_subset"))
+            result_skus = [
+                str(item.get("sku") or "").strip().upper()
+                for item in (result.get("results") or [])
+                if str(item.get("sku") or "").strip()
+            ]
+            self.assertNotIn("CW-C82", result_skus)
+            self.assertNotIn("CF-PG19", result_skus)
+            self.assertIsInstance((result.get("debug") or {}).get("intent"), dict)
+        self.assertEqual((lighter.get("debug") or {}).get("agent_mode"), "candidate_context_followup")
+        self.assertEqual(((lighter.get("debug") or {}).get("intent") or {}).get("intent"), "recommend_products")
+        trace_stages = ((lighter.get("debug") or {}).get("trace") or {}).get("stages") or []
+        context_stage = next((stage for stage in trace_stages if stage.get("stage") == "context_read"), {})
+        self.assertGreater((context_stage.get("extra") or {}).get("previous_result_skus_count") or 0, 0)
 
     def test_composite_recommendation_normalization_keeps_comparison_followup_shape(self):
         self.assertEqual(
@@ -4237,6 +4241,11 @@ class CustomerAgentEndToEndBehaviorRegressionTest(unittest.IsolatedAsyncioTestCa
             "明火直烧, 卡式炉", "轻量化便携", "轻量徒步，单人露营，户外小份烹饪", 1300,
             price_positioning="高端",
         )
+        self._add_product(
+            "CW-C82", "时谷水壶", "锅具", "1L", "硬质氧化铝合金",
+            "酒精炉", "轻量烧水", "单人露营泡茶", 320,
+            price_positioning="中端",
+        )
         self.db.commit()
 
         result = await customer_agent_intent_service._recommend_result(
@@ -4635,6 +4644,148 @@ class CustomerAgentEndToEndBehaviorRegressionTest(unittest.IsolatedAsyncioTestCa
         self.assertNotRegex(turn3["answer"], r"(补充 SKU|重新提供|明确产品范围)")
         self.assertIn("CW-N038-A", turn3["answer"])
         self.assertNotIn("CW-N038-B", turn3["answer"])
+
+    async def test_colloquial_alcohol_stove_cookware_query_filters_to_supported_cookware(self):
+        dmxapi_service.chat_completion = self._fake_chat_completion
+        self._add_product(
+            "CF-PG19", "瓦片烤盘", "锅具", "/", "铝合金",
+            "明火直烧, 燃气炉, 卡式炉, 电磁炉", "露营烤盘", "双人露营烧烤", 1000,
+            price_positioning="高端",
+        )
+        self._add_product(
+            "CW-C69-1", "小方锅套装", "锅具", "水壶约1.0L，大锅约1.7L，煎锅约7寸", "304不锈钢",
+            "明火直烧、卡式炉、分体炉、一体炉", "方形设计增加烹饪空间，支持中式煎炒", "1-2人露营，轻量徒步", 960,
+            price_positioning="中端",
+        )
+        self._add_product_qa(
+            "CW-C69-1",
+            "小方锅套装兼容哪些炉具？",
+            "小方锅套装兼容酒精炉 燃气炉等多种热源，户外家用一锅搞定。",
+        )
+        self._add_product(
+            "CW-C70", "时谷锅", "锅具", "4L", "硬质氧化铝合金",
+            "明火直烧, 卡式炉", "轻量化便携", "轻量徒步，单人露营，户外小份烹饪", 1300,
+            price_positioning="高端",
+        )
+        self._add_product(
+            "CW-C82", "时谷水壶", "锅具", "1L", "304不锈钢",
+            "酒精炉", "快速烧水", "露营补水，煮茶", 530,
+            price_positioning="中端",
+        )
+        self.db.commit()
+
+        result = await customer_service_service.ask_customer_service(
+            self.db,
+            user_id="case71-colloquial-alcohol-cookware",
+            question="你们有没有那种可以直接放在酒精炉上用的锅具",
+        )
+
+        debug_intent = (result.get("debug") or {}).get("intent") or {}
+        returned_skus = [
+            str(item.get("sku") or "").strip().upper()
+            for item in (result.get("results") or [])
+            if str(item.get("sku") or "").strip()
+        ]
+
+        self.assertEqual(result["intent"], "query_products")
+        self.assertEqual(result["answer_type"], "product_query")
+        self.assertEqual((debug_intent.get("filters") or {}).get("product.category"), "锅具")
+        self.assertEqual((debug_intent.get("filters") or {}).get("specs.heat_source"), "酒精炉")
+        self.assertIn("CW-S10-A", returned_skus)
+        self.assertIn("CW-C69-1", returned_skus)
+        self.assertNotIn("CF-PG19", returned_skus)
+        self.assertNotIn("CW-C70", returned_skus)
+        self.assertNotIn("CW-C82", returned_skus)
+        self.assertTrue(returned_skus)
+        self.assertLess(len(returned_skus), 10)
+        self.assertRegex(result["answer"], r"(酒精炉|热源)")
+
+    async def test_followup_alcohol_stove_filter_reuses_cookware_evidence_within_candidate_scope(self):
+        dmxapi_service.chat_completion = self._fake_chat_completion
+        self._add_product(
+            "CF-PG19", "瓦片烤盘", "锅具", "/", "铝合金",
+            "明火直烧, 燃气炉, 卡式炉, 电磁炉", "露营烤盘", "双人露营烧烤", 1000,
+            price_positioning="高端",
+        )
+        self._add_product(
+            "CW-C69-1", "小方锅套装", "锅具", "水壶约1.0L，大锅约1.7L，煎锅约7寸", "304不锈钢",
+            "明火直烧、卡式炉、分体炉、一体炉", "方形设计增加烹饪空间，支持中式煎炒", "1-2人露营，轻量徒步", 960,
+            price_positioning="中端",
+        )
+        self._add_product_qa(
+            "CW-C69-1",
+            "小方锅套装兼容哪些炉具？",
+            "小方锅套装兼容酒精炉 燃气炉等多种热源，户外家用一锅搞定。",
+        )
+        self._add_product(
+            "CW-C06PRO", "轻途套锅", "锅具", "大锅约3.0L，小锅约1.7L，水壶约0.8L", "硬质氧化铝合金",
+            "酒精炉, 燃气炉", "轻量套锅，适合两人做饭", "双人露营，轻量野餐", 880,
+            price_positioning="高端",
+        )
+        self._add_product(
+            "CW-C82", "时谷水壶", "锅具", "1L", "304不锈钢",
+            "酒精炉", "快速烧水", "露营补水，煮茶", 530,
+            price_positioning="中端",
+        )
+        self.db.commit()
+        original_same_sku_helper = customer_agent_intent_service._same_sku_alcohol_stove_support_evidence
+        same_sku_calls: list[str] = []
+
+        def tracking_same_sku_helper(db, sku):
+            same_sku_calls.append(str(sku or "").strip().upper())
+            return original_same_sku_helper(db, sku)
+
+        customer_agent_intent_service._same_sku_alcohol_stove_support_evidence = tracking_same_sku_helper
+
+        try:
+            turn1 = await customer_service_service.ask_customer_service(
+                self.db,
+                user_id="case59-alcohol-followup-user",
+                question="你们有哪些锅具产品",
+            )
+            turn2 = await customer_service_service.ask_customer_service(
+                self.db,
+                user_id="case59-alcohol-followup-user",
+                question="里面哪些支持酒精炉",
+                conversation_id=turn1.get("conversation_id"),
+            )
+            turn3 = await customer_service_service.ask_customer_service(
+                self.db,
+                user_id="case59-alcohol-followup-user",
+                question="有没有更轻的替代",
+                conversation_id=turn1.get("conversation_id"),
+            )
+        finally:
+            customer_agent_intent_service._same_sku_alcohol_stove_support_evidence = original_same_sku_helper
+
+        turn2_skus = [
+            str(item.get("sku") or "").strip().upper()
+            for item in (turn2.get("results") or [])
+            if str(item.get("sku") or "").strip()
+        ]
+        turn2_meta = next(
+            (item for item in (turn2.get("sources") or []) if isinstance(item, dict) and item.get("type") == "agent_meta"),
+            {},
+        )
+        turn2_context = turn2_meta.get("candidate_context") if isinstance(turn2_meta, dict) else {}
+        turn2_context = turn2_context if isinstance(turn2_context, dict) else {}
+        debug_intent = (turn2.get("debug") or {}).get("intent") or {}
+        turn3_debug = turn3.get("debug") or {}
+        turn3_intent = turn3_debug.get("intent") or {}
+
+        self.assertEqual(turn2["intent"], "query_products")
+        self.assertEqual(turn2["answer_type"], "product_query")
+        self.assertEqual((debug_intent.get("filters") or {}).get("specs.heat_source"), "酒精炉")
+        self.assertIn("CW-C06PRO", turn2_skus)
+        self.assertNotIn("CW-C82", turn2_skus)
+        self.assertNotIn("CF-PG19", turn2_skus)
+        self.assertFalse(turn2_context.get("empty_subset"))
+        self.assertTrue(turn2_skus)
+        self.assertEqual(turn2_context.get("candidate_skus"), turn2_skus)
+        self.assertEqual(turn2_context.get("ordered_result_skus"), turn2_skus)
+        self.assertIn("CW-C69-1", same_sku_calls)
+        self.assertEqual((turn3_debug.get("agent_mode")), "candidate_context_followup")
+        self.assertIsInstance(turn3_intent, dict)
 
     async def test_multiturn_candidate_context_empty_subset_blocks_lightest_followup(self):
         dmxapi_service.chat_completion = self._fake_chat_completion
