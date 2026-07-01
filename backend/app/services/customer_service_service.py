@@ -3017,7 +3017,14 @@ def _shape_recommendation_output(answer: str | None, results: list[dict], eviden
     return "\n".join(lines)
 def _shape_product_detail_output(answer: str | None, results: list[dict]) -> str:
     answer_text = str(answer or "").strip()
-    if answer_text and "\n" in answer_text and "：" in answer_text:
+    if answer_text and (
+        ("\n" in answer_text and "：" in answer_text)
+        or any(term in answer_text for term in ("当前资料未直接标明", "产品问答显示", "知识库资料显示", "支持酒精炉", "未显示支持酒精炉"))
+        or (
+            any(term in answer_text for term in ("装冷水", "装热水", "装饮用水", "装水", "开水", "沸水"))
+            and any(marker in answer_text for marker in ("可以", "可装", "支持", "不建议", "不能", "避免"))
+        )
+    ):
         return _normalize_handle_material_phrase(answer_text)
     if results and isinstance(results[0], dict):
         row = results[0]

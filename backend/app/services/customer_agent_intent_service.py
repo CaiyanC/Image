@@ -1394,12 +1394,22 @@ async def _query_products_result(db: Session, user_id: str, intent: CustomerInte
             anomaly = _field_anomaly_for_value(sku, label, text)
             if anomaly:
                 anomalies.append(anomaly)
-        answer = _compose_detail_answer(detail_rows, field_paths, warnings, anomalies, [], question=original_question or "")
+        answer = _compose_detail_answer(
+            db,
+            detail_rows,
+            field_paths,
+            warnings,
+            anomalies,
+            [],
+            qa_results=qa_results or supporting.get("qa"),
+            kb_results=supporting.get("kb") or kb_results,
+            question=original_question or "",
+        )
         answer_type = "product_detail"
     elif intent.requested_fields and intent.intent in {"query_products", "product_detail"}:
         field_paths = [_resolve_query_field(f) for f in intent.requested_fields]
         field_paths = [p for p in field_paths if p]
-        answer = _compose_detail_answer([], field_paths, warnings, anomalies, [], question=original_question or "")
+        answer = _compose_detail_answer(db, [], field_paths, warnings, anomalies, [], question=original_question or "")
         answer_type = "product_detail"
     else:
         answer = await _llm_compose_answer(db, search_question_text, rows, intent, qa_results, kb_results, warnings, followups)
@@ -1556,16 +1566,39 @@ async def _product_detail_result(db: Session, intent: CustomerIntent, original_q
             answer = _compose_material_safety_answer(detail, search_question, material)
     elif field_paths:
         if len(rows) == 1 and _all_requested_field_values_missing(rows):
-            evidence_answer = _same_product_evidence_answer(
-                db,
-                sku=rows[0]["sku"],
-                question=search_question,
-                requested_fields=missing_requested_labels or intent.requested_fields,
-                supporting=supporting,
-            )
-            answer = evidence_answer or _missing_field_answer(rows[0], missing_requested_labels or intent.requested_fields)
+            if _looks_like_water_container_capability_question(search_question):
+                answer = _compose_detail_answer(
+                    db,
+                    rows,
+                    field_paths,
+                    warnings,
+                    anomalies,
+                    followups,
+                    qa_results=supporting.get("qa"),
+                    kb_results=supporting.get("kb"),
+                    question=search_question,
+                )
+            else:
+                evidence_answer = _same_product_evidence_answer(
+                    db,
+                    sku=rows[0]["sku"],
+                    question=search_question,
+                    requested_fields=missing_requested_labels or intent.requested_fields,
+                    supporting=supporting,
+                )
+                answer = evidence_answer or _missing_field_answer(rows[0], missing_requested_labels or intent.requested_fields)
         else:
-            answer = _compose_detail_answer(rows, field_paths, warnings, anomalies, followups, question=search_question)
+            answer = _compose_detail_answer(
+                db,
+                rows,
+                field_paths,
+                warnings,
+                anomalies,
+                followups,
+                qa_results=supporting.get("qa"),
+                kb_results=supporting.get("kb"),
+                question=search_question,
+            )
     else:
         if len(rows) == 1:
             evidence_answer = _same_product_evidence_answer(
@@ -4431,6 +4464,7 @@ def _compose_row_answer(
         lines.append(f"下一步建议：{followups[0]}")
     return "\n".join(lines)
 def _compose_detail_answer(
+    db: Session | None,
     rows: list[dict],
     field_paths: list[str],
     warnings: list[str],
@@ -4459,12 +4493,23 @@ def _compose_detail_answer(
     ).strip()
     heat_source_value = str((row.get("field_values") or {}).get("热源") or (row.get("field_values") or {}).get("燃料") or "").strip()
     if len(rows) == 1 and _looks_like_water_container_capability_question(question_text):
+        capability_label = _water_container_capability_label(question_text)
         if usage_instruction_value and usage_instruction_value != "暂无":
             if any(term in usage_instruction_value for term in ("装冷水", "装凉水", "装热水", "装饮用水", "装水", "盛水")):
                 return f"{prefix}：当前资料显示{usage_instruction_value}。"
-            capability_label = "装冷水" if any(term in question_text for term in ("冷水", "凉水")) else ("装热水" if "热水" in question_text else ("装饮用水" if "饮用水" in question_text else "装水"))
+        evidence_answer = _extract_water_container_capability_evidence_from_qa_kb(
+            db=db,
+            sku=row.get("sku") or "",
+            question=question_text,
+            qa_results=qa_results,
+            kb_results=kb_results,
+        )
+        if evidence_answer:
+            if usage_instruction_value and usage_instruction_value != "暂无":
+                return f"{prefix}：{evidence_answer} 当前资料里的使用说明为{usage_instruction_value}。"
+            return f"{prefix}：{evidence_answer}"
+        if usage_instruction_value and usage_instruction_value != "暂无":
             return f"{prefix}：当前资料未直接标明是否可以{capability_label}。当前资料里的使用说明为{usage_instruction_value}。"
-        capability_label = "装冷水" if any(term in question_text for term in ("冷水", "凉水")) else ("装热水" if "热水" in question_text else ("装饮用水" if "饮用水" in question_text else "装水"))
         return f"{prefix}：当前资料未直接标明是否可以{capability_label}。"
     if (
         len(rows) == 1
@@ -4517,6 +4562,104 @@ def _compose_detail_answer(
     if qa_results or kb_results:
         lines.append("依据：以上字段已结合当前 SKU 的 QA / KB 补充资料。")
     return "\n".join(lines)
+
+
+def _water_container_capability_label(question_text: str) -> str:
+    if any(term in question_text for term in ("冷水", "凉水")):
+        return "装冷水"
+    if any(term in question_text for term in ("热水", "开水", "沸水", "保温")):
+        return "装热水"
+    if "饮用水" in question_text:
+        return "装饮用水"
+    return "装水"
+
+
+def _extract_water_container_capability_evidence_from_qa_kb(
+    *,
+    db: Session | None = None,
+    sku: str,
+    question: str,
+    qa_results: list[dict] | None = None,
+    kb_results: list[dict] | None = None,
+) -> str | None:
+    sku_value = str(sku or "").strip().upper()
+    if not sku_value:
+        return None
+    capability_label = _water_container_capability_label(str(question or ""))
+    evidence_candidates: list[tuple[int, str]] = []
+    source_buckets = (
+        ("产品问答", qa_results or []),
+        ("知识库资料", kb_results or []),
+    )
+    for source_label, items in source_buckets:
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            item_sku = str(item.get("sku") or "").strip().upper()
+            if item_sku and item_sku != sku_value:
+                continue
+            content = _strip_qa_answer(str(item.get("answer") or item.get("content") or "")).strip()
+            if not content:
+                continue
+            verdict = _water_container_capability_verdict_from_evidence(content, question)
+            if not verdict:
+                continue
+            score = 10 if source_label == "产品问答" else 5
+            if verdict.startswith(("可以", "支持", "可装")):
+                score += 2
+            if verdict.startswith(("不建议", "不能", "不可以", "禁止", "避免")):
+                score += 2
+            evidence_candidates.append((score, f"{source_label}显示{verdict.rstrip('。')}。"))
+    if not evidence_candidates and db is not None:
+        for item in _search_product_qa(db, sku_value, question, limit=5):
+            if not isinstance(item, dict):
+                continue
+            content = _strip_qa_answer(str(item.get("answer") or item.get("content") or "")).strip()
+            if not content:
+                continue
+            verdict = _water_container_capability_verdict_from_evidence(content, question)
+            if not verdict:
+                continue
+            score = 12
+            if verdict.startswith(("可以", "支持", "可装")):
+                score += 2
+            if verdict.startswith(("不建议", "不能", "不可以", "禁止", "避免")):
+                score += 2
+            evidence_candidates.append((score, f"产品问答显示{verdict.rstrip('。')}。"))
+    if not evidence_candidates:
+        return None
+    evidence_candidates.sort(key=lambda item: item[0], reverse=True)
+    answer = evidence_candidates[0][1]
+    if capability_label not in answer and not any(term in answer for term in ("开水", "沸水", "保温")):
+        return f"{answer}可作为是否可以{capability_label}的依据"
+    return answer
+
+
+def _water_container_capability_verdict_from_evidence(content: str, question: str) -> str | None:
+    text = str(content or "").strip()
+    if not text:
+        return None
+    if any(term in text for term in ("质保", "保修", "售后", "购买渠道", "清洗", "冲洗", "骤冷骤热", "软刷", "温水")):
+        if not any(term in text for term in ("装冷水", "装凉水", "装热水", "装饮用水", "装水", "盛水", "开水", "沸水", "保温")):
+            return None
+    question_text = str(question or "")
+    if any(term in question_text for term in ("冷水", "凉水")):
+        relevant_terms = ("冷水", "凉水", "饮用水", "装水", "盛水")
+    elif any(term in question_text for term in ("热水", "开水", "沸水", "保温")):
+        relevant_terms = ("热水", "开水", "沸水", "保温")
+    elif "饮用水" in question_text:
+        relevant_terms = ("饮用水", "冷水", "装水", "盛水")
+    else:
+        relevant_terms = ("装冷水", "装凉水", "装热水", "装饮用水", "装水", "盛水", "开水", "沸水", "保温")
+    if not any(term in text for term in relevant_terms):
+        return None
+    negative_markers = ("不建议", "不能", "不可以", "禁止", "避免")
+    positive_markers = ("可以", "可装", "能装", "支持", "适合")
+    if any(marker in text for marker in negative_markers):
+        return text
+    if any(marker in text for marker in positive_markers):
+        return text
+    return None
 
 
 def _rewrite_heat_source_support_rows(question: str, rows: list[dict]) -> list[dict]:
