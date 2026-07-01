@@ -3887,6 +3887,15 @@ def _resolve_existing_sku(db: Session, sku: str) -> str:
     product = db.query(Product).filter(Product.sku.ilike(text)).first()
     if product:
         return product.sku
+    if text.upper().startswith("MINT-"):
+        candidate = text[5:].strip()
+        if candidate:
+            product = db.query(Product).filter(Product.sku == candidate).first()
+            if product:
+                return product.sku
+            product = db.query(Product).filter(Product.sku.ilike(candidate)).first()
+            if product:
+                return product.sku
     return text
 
 

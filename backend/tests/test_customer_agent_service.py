@@ -3857,6 +3857,36 @@ class CustomerAgentEndToEndBehaviorRegressionTest(unittest.IsolatedAsyncioTestCa
         self.assertIn("CW-K03-37", result["answer"])
         self.assertTrue(any(sku in result["answer"] for sku in ["CW-K02-37", "CW-C82"]))
 
+    async def test_mint_prefixed_sku_resolves_to_real_sku_for_fact_followup(self):
+        result = await customer_service_service.ask_customer_service(
+            self.db,
+            user_id="mint-prefix-fact-followup",
+            question="MINT-CW-C83 能不能用酒精炉？",
+        )
+
+        self.assertEqual(result["intent"], "product_detail")
+        self.assertEqual(result["answer_type"], "product_detail")
+        self.assertIn("CW-C83", result["answer"])
+        self.assertNotIn("MINT-CW-C83", result["answer"])
+
+    async def test_explicit_sku_heat_source_question_binds_to_same_sku_evidence(self):
+        result = await customer_service_service.ask_customer_service(
+            self.db,
+            user_id="explicit-sku-heat-source-binding",
+            question="CW-C83 能不能用酒精炉？",
+        )
+
+        self.assertIn("CW-C83", result["answer"])
+        self.assertIn("酒精炉", result["answer"])
+        self.assertNotEqual(result["answer_type"], "knowledge_base_answer")
+        self.assertNotEqual((result.get("debug") or {}).get("agent_mode"), "single_sku_knowledge")
+
+    async def test_mint_prefixed_sku_does_not_map_unknown_candidate(self):
+        self.assertEqual(
+            customer_agent_intent_service._resolve_existing_sku(self.db, "MINT-UNKNOWN-SKU"),
+            "MINT-UNKNOWN-SKU",
+        )
+
     async def test_explicit_sku_cold_water_capability_question_prefers_detail_over_usage_care(self):
         self._add_product(
             "CW-K03-37", "1.4升户外水壶", "水壶", "1400ml", "硬质氧化铝合金",
