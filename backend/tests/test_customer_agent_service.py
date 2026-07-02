@@ -4947,6 +4947,16 @@ class CustomerAgentEndToEndBehaviorRegressionTest(unittest.IsolatedAsyncioTestCa
             for item in (result.get("results") or [])
             if str(item.get("sku") or "").strip()
         ]
+        debug_raw_skus = [
+            str(item.get("sku") or "").strip().upper()
+            for item in ((result.get("debug") or {}).get("raw_results") or [])
+            if isinstance(item, dict) and str(item.get("sku") or "").strip()
+        ]
+        candidate_skus = [
+            str(item or "").strip().upper()
+            for item in (result.get("candidate_skus") or [])
+            if str(item or "").strip()
+        ]
 
         self.assertEqual(result["intent"], "query_products")
         self.assertEqual(result["answer_type"], "product_query")
@@ -4958,6 +4968,9 @@ class CustomerAgentEndToEndBehaviorRegressionTest(unittest.IsolatedAsyncioTestCa
         self.assertNotIn("CW-C70", returned_skus)
         self.assertNotIn("CW-C74", returned_skus)
         self.assertNotIn("CW-C82", returned_skus)
+        self.assertNotIn("CF-PG19", debug_raw_skus)
+        self.assertNotIn("CW-C74", debug_raw_skus)
+        self.assertNotIn("CW-C74", candidate_skus)
         self.assertNotRegex(result["answer"], r"(CW-C74|8寸煎盘|煎盘|烤盘|griddle)")
         self.assertTrue(returned_skus)
         self.assertLess(len(returned_skus), 10)
@@ -5031,6 +5044,11 @@ class CustomerAgentEndToEndBehaviorRegressionTest(unittest.IsolatedAsyncioTestCa
             for item in (turn2.get("results") or [])
             if str(item.get("sku") or "").strip()
         ]
+        turn2_debug_raw_skus = [
+            str(item.get("sku") or "").strip().upper()
+            for item in ((turn2.get("debug") or {}).get("raw_results") or [])
+            if isinstance(item, dict) and str(item.get("sku") or "").strip()
+        ]
         turn2_meta = next(
             (item for item in (turn2.get("sources") or []) if isinstance(item, dict) and item.get("type") == "agent_meta"),
             {},
@@ -5048,7 +5066,10 @@ class CustomerAgentEndToEndBehaviorRegressionTest(unittest.IsolatedAsyncioTestCa
         self.assertNotIn("CW-C82", turn2_skus)
         self.assertNotIn("CF-PG19", turn2_skus)
         self.assertNotIn("CW-C74", turn2_skus)
+        self.assertNotIn("CF-PG19", turn2_debug_raw_skus)
+        self.assertNotIn("CW-C74", turn2_debug_raw_skus)
         self.assertEqual(turn2.get("result_skus"), turn2_skus)
+        self.assertEqual(turn2.get("candidate_skus"), turn2_skus)
         self.assertNotRegex(turn2["answer"], r"(CW-C74|8寸煎盘|煎盘|烤盘|griddle)")
         self.assertFalse(turn2_context.get("empty_subset"))
         self.assertTrue(turn2_skus)
@@ -5057,6 +5078,36 @@ class CustomerAgentEndToEndBehaviorRegressionTest(unittest.IsolatedAsyncioTestCa
         self.assertIn("CW-C69-1", same_sku_calls)
         self.assertEqual((turn3_debug.get("agent_mode")), "candidate_context_followup")
         self.assertIsInstance(turn3_intent, dict)
+
+    async def test_explicit_griddle_alcohol_stove_question_is_not_blocked_by_cookware_scope(self):
+        dmxapi_service.chat_completion = self._fake_chat_completion
+        self._add_product(
+            "CF-PG19", "瓦片烤盘", "锅具", "烤盘", "铝合金",
+            "酒精炉, 燃气炉", "露营烤盘，适合煎烤", "双人露营烧烤", 1000,
+            price_positioning="高端",
+        )
+        self._add_product(
+            "CW-C74", "8寸煎盘-享野", "锅具", "煎盘", "硬质氧化铝合金",
+            "酒精炉, 燃气炉", "煎盘烤盘，适合煎烤", "露营煎烤", 420,
+            price_positioning="中端",
+        )
+        self.db.commit()
+
+        result = await customer_service_service.ask_customer_service(
+            self.db,
+            user_id="explicit-griddle-alcohol-user",
+            question="瓦片烤盘能不能用酒精炉",
+        )
+
+        returned_skus = {
+            str(item.get("sku") or "").strip().upper()
+            for item in (result.get("results") or [])
+            if isinstance(item, dict) and str(item.get("sku") or "").strip()
+        }
+
+        self.assertIn("CF-PG19", returned_skus | set(result.get("result_skus") or []))
+        self.assertNotEqual((result.get("debug") or {}).get("alcohol_stove_cookware_scope"), "pot_or_cookware_set_only")
+        self.assertRegex(result["answer"], r"(CF-PG19|瓦片烤盘|酒精炉|适用热源)")
 
     async def test_multiturn_candidate_context_empty_subset_blocks_lightest_followup(self):
         dmxapi_service.chat_completion = self._fake_chat_completion

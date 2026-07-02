@@ -642,40 +642,16 @@ def _phase1_filter_alcohol_stove_cookware_result(
     product_by_sku = {str(product.sku or "").strip().upper(): product for product in products}
     filtered = [
         row for row in rows
-        if _is_service_pot_cookware_product(product_by_sku.get(str(row.get("sku") or "").strip().upper()))
+        if _is_service_pot_or_cookware_set_candidate(row, product_by_sku.get(str(row.get("sku") or "").strip().upper()))
     ]
     if len(filtered) == len(rows):
-        return agent_result
+        result = dict(agent_result)
+        skus = [str(row.get("sku") or "").strip().upper() for row in filtered if str(row.get("sku") or "").strip()]
+        return _sync_alcohol_stove_cookware_scope_metadata(result, skus=skus, rows=filtered, question=question)
     skus = [str(row.get("sku") or "").strip().upper() for row in filtered if str(row.get("sku") or "").strip()]
     result = dict(agent_result)
     result["results"] = filtered
-    result["result_skus"] = skus
-    result["candidate_skus"] = skus
-    sources = list(result.get("sources") or [])
-    meta = next((item for item in sources if isinstance(item, dict) and item.get("type") == "agent_meta"), None)
-    scoped_context = {
-        "candidate_skus": skus,
-        "ordered_result_skus": skus,
-        "filtered_skus": skus,
-        "product_scope": "锅具",
-        "user_question": question,
-        "applied_filter": {"specs.heat_source": "酒精炉", "product.category": "锅具"},
-        "empty_subset": False,
-    }
-    if isinstance(meta, dict):
-        meta["candidate_context"] = scoped_context
-    else:
-        sources.append({"type": "agent_meta", "candidate_context": scoped_context})
-    result["sources"] = sources
-    debug = result.get("debug") if isinstance(result.get("debug"), dict) else {}
-    intent_debug = debug.get("intent") if isinstance(debug.get("intent"), dict) else {}
-    filters = intent_debug.get("filters") if isinstance(intent_debug.get("filters"), dict) else {}
-    filters["product.category"] = "锅具"
-    filters["specs.heat_source"] = "酒精炉"
-    intent_debug["filters"] = filters
-    debug["intent"] = intent_debug
-    debug["alcohol_stove_cookware_scope"] = "exclude_griddle_pan"
-    result["debug"] = debug
+    result = _sync_alcohol_stove_cookware_scope_metadata(result, skus=skus, rows=filtered, question=question)
     lines = ["筛选条件：类目包含 锅具；适用热源包含 酒精炉。", "已排除非锅具候选。"]
     for row in filtered[:10]:
         name = row.get("product_name_cn") or row.get("name") or row.get("sku")
@@ -684,6 +660,55 @@ def _phase1_filter_alcohol_stove_cookware_result(
         lines.append(f"- {name}（{sku}），适用热源：{heat_source or '同SKU资料/问答显示可用于酒精炉'}")
     result["answer"] = "\n".join(lines)
     result["skip_polish"] = True
+    return result
+
+
+def _sync_alcohol_stove_cookware_scope_metadata(
+    result: dict,
+    *,
+    skus: list[str],
+    rows: list[dict[str, Any]],
+    question: str,
+) -> dict:
+    normalized_skus = [
+        str(sku or "").strip().upper()
+        for sku in skus
+        if str(sku or "").strip()
+    ]
+    result["result_skus"] = normalized_skus
+    result["candidate_skus"] = normalized_skus
+    sources = list(result.get("sources") or [])
+    scoped_context = {
+        "candidate_skus": normalized_skus,
+        "ordered_result_skus": normalized_skus,
+        "filtered_skus": normalized_skus,
+        "recommended_skus": [
+            str(sku or "").strip().upper()
+            for sku in (result.get("recommended_skus") or [])
+            if str(sku or "").strip().upper() in set(normalized_skus)
+        ],
+        "product_scope": "锅具",
+        "user_question": question,
+        "applied_filter": {"specs.heat_source": "酒精炉", "product.category": "锅具"},
+        "empty_subset": False,
+    }
+    meta = next((item for item in sources if isinstance(item, dict) and item.get("type") == "agent_meta"), None)
+    if isinstance(meta, dict):
+        meta["candidate_context"] = dict(scoped_context)
+    else:
+        sources.append({"type": "agent_meta", "candidate_context": dict(scoped_context)})
+    result["sources"] = sources
+    debug = result.get("debug") if isinstance(result.get("debug"), dict) else {}
+    intent_debug = debug.get("intent") if isinstance(debug.get("intent"), dict) else {}
+    filters = intent_debug.get("filters") if isinstance(intent_debug.get("filters"), dict) else {}
+    filters["product.category"] = "锅具"
+    filters["specs.heat_source"] = "酒精炉"
+    intent_debug["filters"] = filters
+    debug["intent"] = intent_debug
+    debug["raw_results"] = list(rows)
+    debug["candidate_skus"] = normalized_skus
+    debug["alcohol_stove_cookware_scope"] = "pot_or_cookware_set_only"
+    result["debug"] = debug
     return result
 
 
@@ -1299,6 +1324,11 @@ async def ask_customer_service(
                 for item in (agent_result.get("results") or [])
                 if isinstance(item, dict) and str(item.get("sku") or "").strip()
             ],
+            "candidate_skus": agent_result.get("candidate_skus") or agent_result.get("result_skus") or [
+                str(item.get("sku") or "").strip().upper()
+                for item in (agent_result.get("results") or [])
+                if isinstance(item, dict) and str(item.get("sku") or "").strip()
+            ],
             "agent_mode": (agent_result.get("debug") or {}).get("agent_mode"),
         }
 
@@ -1745,6 +1775,11 @@ async def ask_customer_service(
             "results": agent_result.get("results") or [],
             "steps": agent_result.get("steps") or [],
             "result_skus": agent_result.get("result_skus") or [
+                str(item.get("sku") or "").strip().upper()
+                for item in (agent_result.get("results") or [])
+                if isinstance(item, dict) and str(item.get("sku") or "").strip()
+            ],
+            "candidate_skus": agent_result.get("candidate_skus") or agent_result.get("result_skus") or [
                 str(item.get("sku") or "").strip().upper()
                 for item in (agent_result.get("results") or [])
                 if isinstance(item, dict) and str(item.get("sku") or "").strip()
@@ -4877,30 +4912,117 @@ def _is_service_pot_cookware_scope(product_scope: str, user_question: str) -> bo
     question_text = str(user_question or "")
     if any(term in question_text for term in ("水壶", "茶壶", "烧水壶", "壶类")):
         return False
-    return any(term in scope_text or term in question_text for term in ("锅具", "锅", "套锅", "炒锅", "煎锅", "单锅"))
+    if any(term in question_text.lower() for term in ("煎盘", "烤盘", "煎烤盘", "griddle", "grill pan", "fry pan", "frying pan")):
+        return False
+    return any(term in scope_text or term in question_text for term in ("锅具", "锅", "套锅", "炊具", "单锅"))
+
+
+def _is_service_pot_or_cookware_set_candidate(row: dict[str, Any], product: Product | None = None) -> bool:
+    if not isinstance(row, dict):
+        return False
+    row_text = " ".join(
+        str(row.get(key) or "")
+        for key in (
+            "sku",
+            "product_name_cn",
+            "product_name_en",
+            "name",
+            "title",
+            "category",
+            "sub_category",
+            "capacity",
+            "features",
+            "usage_scenarios",
+            "target_audience",
+            "positioning",
+            "semantic_match",
+            "long_description_cn",
+        )
+    )
+    product_text = ""
+    if product is not None:
+        product_text = " ".join(
+            str(value or "")
+            for value in (
+                product.product_name_cn,
+                product.product_name_en,
+                product.category,
+                product.sub_category,
+            )
+        )
+    text = f"{row_text} {product_text}".lower()
+    if _is_service_pan_or_griddle_candidate_text(text):
+        return False
+    has_positive_cookware_shape = _is_service_pot_or_cookware_set_text(text)
+    if any(term in text for term in ("水壶", "茶壶", "烧水壶", "kettle", "bottle", "flask", "cup", "杯")) and not has_positive_cookware_shape:
+        return False
+    return has_positive_cookware_shape
+
+
+def _is_service_pan_or_griddle_candidate_text(text: str) -> bool:
+    value = str(text or "").lower()
+    positive_set_terms = (
+        "套锅",
+        "锅具套装",
+        "炊具套装",
+        "炊具组合",
+        "野餐锅",
+        "野营锅",
+        "cookware set",
+        "cook set",
+        "pot set",
+    )
+    if any(term in value for term in positive_set_terms):
+        return False
+    excluded_terms = (
+        "煎盘",
+        "烤盘",
+        "煎烤盘",
+        "烧烤盘",
+        "griddle",
+        "grill pan",
+        "grill plate",
+        "fry pan",
+        "frying pan",
+        "pan plate",
+    )
+    return any(term in value for term in excluded_terms)
+
+
+def _is_service_pot_or_cookware_set_text(text: str) -> bool:
+    value = str(text or "").lower()
+    allowed_terms = (
+        "单锅",
+        "套锅",
+        "锅具",
+        "炊具",
+        "炊具套装",
+        "锅具套装",
+        "野餐锅",
+        "野营锅",
+        "cookware set",
+        "cook set",
+        "pot set",
+        " pot",
+    )
+    if any(term in value for term in allowed_terms):
+        return True
+    return "锅" in value
 
 
 def _is_service_pot_cookware_product(product: Product | None) -> bool:
     if product is None:
-        return True
+        return False
     name_text = " ".join(
         str(value or "")
         for value in (
             product.product_name_cn,
             product.product_name_en,
+            product.category,
             product.sub_category,
         )
     )
-    excluded_terms = ("烤盘", "煎盘", "瓦片烤盘", "griddle")
-    if any(term in name_text.lower() for term in excluded_terms):
-        return False
-    kettle_terms = ("水壶", "茶壶", "烧水壶", "壶")
-    if any(term in name_text for term in kettle_terms):
-        return False
-    cookware_terms = ("套锅", "炒锅", "煎锅", "单锅", "汤锅", "锅具", "锅")
-    if any(term in name_text for term in cookware_terms):
-        return True
-    return True
+    return _is_service_pot_or_cookware_set_candidate({}, product) or _is_service_pot_or_cookware_set_text(name_text)
 
 
 def _should_use_conversation_history(question: str) -> bool:

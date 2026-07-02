@@ -3994,6 +3994,9 @@ def _is_alcohol_stove_cookware_query(intent: CustomerIntent, question: str, *, r
     text = str(question or "")
     if not any(term in text for term in ("酒精炉", "alcohol stove")):
         return False
+    lowered = text.lower()
+    if any(term in lowered for term in ("煎盘", "烤盘", "煎烤盘", "griddle", "grill pan", "fry pan", "frying pan", "pan plate")):
+        return False
     if str(filters.get("product.category") or "") == "锅具":
         return True
     if str(intent.source_context or "") != "previous_results":
@@ -4006,9 +4009,47 @@ def _is_alcohol_stove_cookware_query(intent: CustomerIntent, question: str, *, r
 def _is_griddle_like_cookware_row(row: dict[str, Any]) -> bool:
     haystack = " ".join(
         str(row.get(key) or "")
-        for key in ("sku", "product_name_cn", "product_name_en", "category", "sub_category", "features", "usage_scenarios")
+        for key in (
+            "sku",
+            "product_name_cn",
+            "product_name_en",
+            "category",
+            "sub_category",
+            "capacity",
+            "features",
+            "usage_scenarios",
+            "target_audience",
+            "positioning",
+            "semantic_match",
+            "long_description_cn",
+        )
     ).lower()
-    return any(term in haystack for term in ("griddle", "烤盘", "烧烤盘"))
+    excluded_terms = (
+        "griddle",
+        "grill pan",
+        "grill plate",
+        "fry pan",
+        "frying pan",
+        "pan plate",
+        "烤盘",
+        "烧烤盘",
+        "煎烤盘",
+        "煎盘",
+    )
+    if not any(term in haystack for term in excluded_terms):
+        return False
+    positive_set_terms = (
+        "套锅",
+        "锅具套装",
+        "炊具套装",
+        "炊具组合",
+        "野餐锅",
+        "野营锅",
+        "cookware set",
+        "cook set",
+        "pot set",
+    )
+    return not any(term in haystack for term in positive_set_terms)
 
 
 def _is_water_container_like_cookware_row(row: dict[str, Any]) -> bool:
@@ -7457,6 +7498,11 @@ def _build_response(
     uncertainty: str | None = None,
     debug: dict[str, Any] | None = None,
 ) -> dict:
+    response_skus = [
+        str(row.get("sku") or "").strip().upper()
+        for row in (results or [])
+        if isinstance(row, dict) and str(row.get("sku") or "").strip()
+    ]
     contract = CustomerAnswerComposer.build_contract(
         intent=intent,
         answer=answer,
@@ -7486,6 +7532,8 @@ def _build_response(
         "sources": sources,
         "actions": actions or [],
         "results": results,
+        "result_skus": response_skus,
+        "candidate_skus": response_skus,
         "steps": steps,
         "warnings": warnings,
     }
