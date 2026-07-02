@@ -1,8 +1,9 @@
 param(
-    [ValidateSet("Redis", "Backend", "Frontend", "Worker", "All", "Watchdog")]
+    [ValidateSet("Redis", "Backend", "RestartBackend", "DeployBackend", "Frontend", "Worker", "All", "Watchdog")]
     [string]$Action = "All",
     [string]$RepoRoot = "",
-    [string]$LogPath = ""
+    [string]$LogPath = "",
+    [string]$ExpectedCommit = ""
 )
 
 $ErrorActionPreference = "Stop"
@@ -22,6 +23,7 @@ $ProdQueue = "celery_prod"
 $ProdWorkerName = "worker_prod"
 $ProdLogDir = Join-Path $RepoRoot "logs\prod"
 $ProdWorkerPidFile = Join-Path $ProdLogDir "celery.pid"
+$ExpectedBackendRoot = [System.IO.Path]::GetFullPath((Join-Path $RepoRoot "backend"))
 
 function Write-WatchdogLog {
     param([string]$Level, [string]$Message)
@@ -46,6 +48,62 @@ function Test-BackendReady {
     } catch {
         return $false
     }
+}
+
+function Get-BackendListeners {
+    return @(Get-NetTCPConnection -LocalPort $ProdBackendPort -State Listen -ErrorAction SilentlyContinue)
+}
+
+function Get-ProcessById {
+    param([int]$ProcessId)
+    return Get-CimInstance Win32_Process -Filter "ProcessId=$ProcessId" -ErrorAction SilentlyContinue
+}
+
+function Test-BackendListenerIntegrity {
+    $listeners = @(Get-BackendListeners)
+    if ($listeners.Count -ne 1) {
+        Write-WatchdogLog "ERROR" "expected exactly one backend listener on port $ProdBackendPort, found $($listeners.Count)"
+        return $false
+    }
+    $pidValue = [int]$listeners[0].OwningProcess
+    $proc = Get-ProcessById -ProcessId $pidValue
+    if (-not $proc) {
+        Write-WatchdogLog "ERROR" "backend listener pid=$pidValue cannot be resolved"
+        return $false
+    }
+    $cmd = [string]$proc.CommandLine
+    if (-not ($cmd -like "*uvicorn app.main:app*" -and $cmd -like "*--port $ProdBackendPort*")) {
+        Write-WatchdogLog "ERROR" "backend listener pid=$pidValue has unexpected command line: $cmd"
+        return $false
+    }
+    Write-WatchdogLog "INFO" "backend listener verified pid=$pidValue exe=$($proc.ExecutablePath)"
+    return $true
+}
+
+function Test-BackendVersion {
+    param([string]$Commit = "")
+    try {
+        $version = Invoke-RestMethod -Uri "http://127.0.0.1:$ProdBackendPort/api/health/version" -TimeoutSec 5
+    } catch {
+        Write-WatchdogLog "ERROR" "backend version endpoint failed: $($_.Exception.Message)"
+        return $false
+    }
+    $codeRoot = [System.IO.Path]::GetFullPath([string]$version.code_root)
+    $cwd = [System.IO.Path]::GetFullPath([string]$version.cwd)
+    if ($codeRoot -ne $ExpectedBackendRoot) {
+        Write-WatchdogLog "ERROR" "backend code_root mismatch: expected=$ExpectedBackendRoot actual=$codeRoot"
+        return $false
+    }
+    if ($cwd -ne $ExpectedBackendRoot) {
+        Write-WatchdogLog "ERROR" "backend cwd mismatch: expected=$ExpectedBackendRoot actual=$cwd"
+        return $false
+    }
+    if ($Commit -and ([string]$version.commit) -ne $Commit) {
+        Write-WatchdogLog "ERROR" "backend commit mismatch: expected=$Commit actual=$($version.commit)"
+        return $false
+    }
+    Write-WatchdogLog "INFO" "backend version verified commit=$($version.commit) code_root=$codeRoot cwd=$cwd pid=$($version.pid)"
+    return $true
 }
 
 function Test-ProdWorker {
@@ -91,6 +149,15 @@ function Stop-ListenerTree {
         return $false
     }
     return $true
+}
+
+function Stop-Backend {
+    $listeners = @(Get-BackendListeners)
+    if (-not $listeners) {
+        Write-WatchdogLog "INFO" "backend port $ProdBackendPort has no listener"
+        return $true
+    }
+    return Stop-ListenerTree -Port $ProdBackendPort
 }
 
 function Ensure-Docker {
@@ -163,11 +230,12 @@ function Ensure-Postgres {
 }
 
 function Start-Backend {
-    if (Test-BackendReady) {
+    param([bool]$SkipIfHealthy = $true)
+    if ($SkipIfHealthy -and (Test-BackendReady)) {
         Write-WatchdogLog "INFO" "Backend already healthy; skip start"
         return $true
     }
-    if (Get-NetTCPConnection -LocalPort $ProdBackendPort -State Listen -ErrorAction SilentlyContinue) {
+    if (Get-BackendListeners) {
         if (-not (Stop-ListenerTree -Port $ProdBackendPort)) {
             return $false
         }
@@ -183,6 +251,32 @@ function Start-Backend {
     }
     Write-WatchdogLog "ERROR" "Backend did not become ready after restart"
     return $false
+}
+
+function Restart-Backend {
+    param([string]$Commit = "")
+    Write-WatchdogLog "WARN" "deploy restart requested for prod backend"
+    if (-not (Stop-Backend)) {
+        return $false
+    }
+    if (Get-BackendListeners) {
+        Write-WatchdogLog "ERROR" "backend port $ProdBackendPort still listening after stop"
+        return $false
+    }
+    if (-not (Start-Backend -SkipIfHealthy $false)) {
+        return $false
+    }
+    if (-not (Test-BackendListenerIntegrity)) {
+        return $false
+    }
+    if (-not (Test-BackendReady)) {
+        Write-WatchdogLog "ERROR" "backend ready check failed after deploy restart"
+        return $false
+    }
+    if (-not (Test-BackendVersion -Commit $Commit)) {
+        return $false
+    }
+    return $true
 }
 
 function Start-Frontend {
@@ -264,6 +358,8 @@ function Ensure-All {
 $ok = switch ($Action) {
     "Redis" { Ensure-Redis }
     "Backend" { $r = Ensure-Redis; $p = Ensure-Postgres; if ($r -and $p) { Start-Backend } else { $false } }
+    "RestartBackend" { $r = Ensure-Redis; $p = Ensure-Postgres; if ($r -and $p) { Restart-Backend -Commit $ExpectedCommit } else { $false } }
+    "DeployBackend" { $r = Ensure-Redis; $p = Ensure-Postgres; if ($r -and $p) { Restart-Backend -Commit $ExpectedCommit } else { $false } }
     "Frontend" { Start-Frontend }
     "Worker" { Start-Worker }
     "All" { Ensure-All }

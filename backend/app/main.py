@@ -1,12 +1,15 @@
 import logging
 import os
+import subprocess
+import sys
+from datetime import datetime, timezone
 from logging.handlers import TimedRotatingFileHandler
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from sqlalchemy import text
-from .core.config import resolve_project_path, runtime_summary, settings, validate_runtime_isolation
+from .core.config import BACKEND_ROOT, PROJECT_ROOT, resolve_project_path, runtime_summary, settings, validate_runtime_isolation
 from .core.database import init_db, SessionLocal
 from .core.permission_constants import MANAGEMENT_GROUP_NAME
 from .core.security import get_password_hash
@@ -35,6 +38,7 @@ def _configure_error_logging() -> None:
 _configure_error_logging()
 
 app = FastAPI(title=settings.APP_NAME, version="1.0.0")
+STARTED_AT = datetime.now(timezone.utc).isoformat()
 
 app.add_middleware(
     CORSMiddleware,
@@ -140,6 +144,7 @@ def startup():
     )
     print(runtime_message, flush=True)
     logging.getLogger("app").info(runtime_message)
+    _log_version_check()
     init_db()
     seed_default_categories()
     seed_default_admin()
@@ -174,6 +179,65 @@ def _ready_payload() -> dict:
         db.close()
 
 
+def _run_git(args: list[str]) -> str:
+    try:
+        result = subprocess.run(
+            ["git", *args],
+            cwd=PROJECT_ROOT,
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=3,
+        )
+    except Exception:
+        return "unknown"
+    return (result.stdout or "").strip() or "unknown"
+
+
+def _runtime_version_payload() -> dict:
+    commit = (
+        os.getenv("APP_COMMIT")
+        or os.getenv("GIT_COMMIT")
+        or _run_git(["rev-parse", "HEAD"])
+    )
+    branch = (
+        os.getenv("APP_BRANCH")
+        or os.getenv("GIT_BRANCH")
+        or _run_git(["rev-parse", "--abbrev-ref", "HEAD"])
+    )
+    return {
+        "commit": commit or "unknown",
+        "branch": branch or "unknown",
+        "code_root": BACKEND_ROOT,
+        "cwd": os.getcwd(),
+        "python_executable": sys.executable,
+        "pid": os.getpid(),
+        "started_at": STARTED_AT,
+        "env": settings.APP_ENV,
+        "backend_port": settings.BACKEND_PORT,
+    }
+
+
+def _log_version_check() -> None:
+    payload = _runtime_version_payload()
+    message = (
+        "RUNNING VERSION CHECK "
+        f"commit={payload['commit']} "
+        f"branch={payload['branch']} "
+        f"code_root={payload['code_root']} "
+        f"cwd={payload['cwd']} "
+        f"pid={payload['pid']} "
+        f"python={payload['python_executable']} "
+        f"env={payload['env']} "
+        f"port={payload['backend_port']}"
+    )
+    logging.getLogger("app").info(message)
+    log_dir = resolve_project_path(settings.LOG_DIR)
+    os.makedirs(log_dir, exist_ok=True)
+    with open(os.path.join(log_dir, "backend_version.log"), "a", encoding="utf-8") as handle:
+        handle.write(f"{datetime.now(timezone.utc).isoformat()} {message}\n")
+
+
 @app.get("/api/health")
 def health_check():
     return _live_payload()
@@ -187,3 +251,8 @@ def live_check():
 @app.get("/api/health/ready")
 def ready_check():
     return _ready_payload()
+
+
+@app.get("/api/health/version")
+def version_check():
+    return _runtime_version_payload()
