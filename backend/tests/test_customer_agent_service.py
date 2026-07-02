@@ -3482,6 +3482,95 @@ class CustomerAgentEndToEndBehaviorRegressionTest(unittest.IsolatedAsyncioTestCa
         self.assertNotRegex(result["answer"], r"明火直烧、卡式炉、分体炉、一体炉.*适合酒精炉")
         self.assertIn("total_duration_ms", timing)
 
+    async def test_phase1_explicit_sku_alcohol_and_people_question_bypasses_core_selling_qa(self):
+        product = self.db.query(Product).filter(Product.sku == "CW-S10-A").one()
+        self.db.add(ProductQa(
+            id="q25-core-selling-qa",
+            product_id=product.id,
+            question="激川单锅的核心卖点是什么？",
+            answer="激川单锅的核心卖点包括：双人大容量、健康陶瓷不沾、快速沸腾、硬质氧化工艺。",
+            tags=json.dumps(["核心卖点"], ensure_ascii=False),
+            priority=20,
+        ))
+        self.db.commit()
+
+        result = await customer_service_service.ask_customer_service(
+            self.db,
+            user_id="q25-explicit-sku-alcohol-people-user",
+            question="CW-S10-A 是不是支持酒精炉？适合几个人？",
+        )
+
+        combined = " ".join([result.get("answer", ""), " ".join(result.get("result_skus") or [])])
+        self.assertIn("CW-S10-A", combined)
+        self.assertRegex(result["answer"], r"(支持酒精炉|适用热源.*酒精炉)")
+        self.assertRegex(result["answer"], r"(适合|人数|双人|2人|容量|1400ML|1\.4L|资料未显示适用人数)")
+        self.assertNotEqual((result.get("debug") or {}).get("agent_mode"), "product_qa_fast_path")
+        self.assertNotRegex(result["answer"], r"核心卖点包括")
+        self.assertEqual(result.get("result_skus"), ["CW-S10-A"])
+        self.assertIn("total_duration_ms", (result.get("answer_metadata") or {}).get("timing") or {})
+
+    async def test_phase1_alcohol_stove_except_sku_query_excludes_given_sku_and_core_selling_qa(self):
+        product = self.db.query(Product).filter(Product.sku == "CW-S10-A").one()
+        self.db.add(ProductQa(
+            id="q26-core-selling-qa",
+            product_id=product.id,
+            question="激川单锅的核心卖点是什么？",
+            answer="激川单锅的核心卖点包括：双人大容量、健康陶瓷不沾、快速沸腾、硬质氧化工艺。",
+            tags=json.dumps(["核心卖点"], ensure_ascii=False),
+            priority=20,
+        ))
+        self._add_product(
+            "Q26-NOALC",
+            "明火套锅",
+            "锅具",
+            "锅：1700ML",
+            "硬质氧化铝合金",
+            "明火直烧、卡式炉、分体炉、一体炉",
+            "套锅",
+            "双人露营",
+            960,
+        )
+        self._add_product("Q26-PAN", "测试烤盘", "锅具", "32cm", "铝合金", "酒精炉", "烤盘", "烧烤", 450)
+        self._add_product("Q26-STOVE", "测试酒精炉", "炉具", "200ML", "304不锈钢", "液体酒精", "炉具", "露营", 300)
+        self.db.commit()
+
+        result = await customer_service_service.ask_customer_service(
+            self.db,
+            user_id="q26-exclude-alcohol-cookware-user",
+            question="除了 CW-S10-A，还有别的明确支持酒精炉的锅吗？",
+        )
+
+        combined = " ".join([result.get("answer", ""), " ".join(result.get("result_skus") or []), " ".join(result.get("candidate_skus") or [])])
+        self.assertNotIn("CW-S10-A", result.get("result_skus") or [])
+        self.assertRegex(result["answer"], r"(除了它|除了 CW-S10-A|暂未找到其他明确.*支持酒精炉)")
+        self.assertNotRegex(combined, r"(Q26-NOALC|Q26-PAN|Q26-STOVE)")
+        self.assertNotRegex(result["answer"], r"核心卖点包括")
+        self.assertNotRegex(result["answer"], r"明火直烧、卡式炉、分体炉、一体炉.*支持酒精炉")
+        self.assertIn("total_duration_ms", (result.get("answer_metadata") or {}).get("timing") or {})
+
+    async def test_phase1_cookware_catalog_count_excludes_kettles_griddles_stoves_and_accessories(self):
+        self._add_product("Q22-POT", "测试汤锅", "锅具", "锅：2000ML", "铝合金", "燃气炉", "汤锅", "双人露营", 600)
+        self._add_product("Q22-KETTLE", "测试水壶", "水壶", "水壶：1000ML", "铝合金", "燃气炉", "户外补水", "徒步", 300)
+        self._add_product("Q22-PAN", "测试瓦片烤盘", "锅具", "32cm", "铝合金", "燃气炉", "烤盘", "烧烤", 450)
+        self._add_product("Q22-STOVE", "测试酒精炉", "炉具", "200ML", "304不锈钢", "液体酒精", "炉具", "露营", 300)
+        self._add_product("Q22-ACC", "测试收纳包", "配件", "收纳包", "涤纶", "/", "收纳", "露营配件", 100)
+        self._add_product("Q22-CLIP", "测试防刮手夹", "锅具", "手夹", "不锈钢", "/", "锅具配件", "露营配件", 80)
+        self.db.commit()
+
+        result = await customer_service_service.ask_customer_service(
+            self.db,
+            user_id="q22-cookware-catalog-user",
+            question="你们有哪些锅具产品？",
+        )
+
+        combined = " ".join([result.get("answer", ""), " ".join(result.get("result_skus") or []), " ".join(result.get("candidate_skus") or [])])
+        plan = (result.get("debug") or {}).get("plan") or {}
+        self.assertEqual(plan.get("primary_intent"), "catalog_count")
+        self.assertEqual((result.get("debug") or {}).get("agent_mode"), "structured_catalog_count")
+        self.assertIn("Q22-POT", combined)
+        self.assertNotRegex(combined, r"(Q22-KETTLE|Q22-PAN|Q22-STOVE|Q22-ACC|Q22-CLIP|水壶|烤盘|酒精炉|收纳包|防刮手夹)")
+        self.assertIn("total_duration_ms", (result.get("answer_metadata") or {}).get("timing") or {})
+
     async def test_phase1_picnic_set_buy_question_routes_to_recommendation(self):
         self._add_product(
             "CW-C19T-37",
@@ -5359,7 +5448,6 @@ class CustomerAgentEndToEndBehaviorRegressionTest(unittest.IsolatedAsyncioTestCa
         self.assertEqual((debug_intent.get("filters") or {}).get("product.category"), "锅具")
         self.assertEqual((debug_intent.get("filters") or {}).get("specs.heat_source"), "酒精炉")
         self.assertIn("CW-S10-A", returned_skus)
-        self.assertIn("CW-C69-1", returned_skus)
         self.assertNotIn("CF-PG19", returned_skus)
         self.assertNotIn("CW-C70", returned_skus)
         self.assertNotIn("CW-C74", returned_skus)
@@ -5459,6 +5547,7 @@ class CustomerAgentEndToEndBehaviorRegressionTest(unittest.IsolatedAsyncioTestCa
         self.assertEqual(turn2["answer_type"], "product_query")
         self.assertEqual((debug_intent.get("filters") or {}).get("specs.heat_source"), "酒精炉")
         self.assertIn("CW-C06PRO", turn2_skus)
+        self.assertNotIn("CW-C69-1", turn2_skus)
         self.assertNotIn("CW-C82", turn2_skus)
         self.assertNotIn("CF-PG19", turn2_skus)
         self.assertNotIn("CW-C74", turn2_skus)
@@ -5471,7 +5560,6 @@ class CustomerAgentEndToEndBehaviorRegressionTest(unittest.IsolatedAsyncioTestCa
         self.assertTrue(turn2_skus)
         self.assertEqual(turn2_context.get("candidate_skus"), turn2_skus)
         self.assertEqual(turn2_context.get("ordered_result_skus"), turn2_skus)
-        self.assertIn("CW-C69-1", same_sku_calls)
         self.assertEqual((turn3_debug.get("agent_mode")), "candidate_context_followup")
         self.assertIsInstance(turn3_intent, dict)
 

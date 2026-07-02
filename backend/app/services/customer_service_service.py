@@ -519,7 +519,7 @@ def _phase1_catalog_rows(db: Session, product_ref: str) -> list[dict]:
             category_text = " ".join(str(row.get(key) or "") for key in ("category", "sub_category", "product_name_cn", "product_name_en"))
             matched = "水壶" in category_text
         elif ref == "锅具":
-            matched = "锅" in str(row.get("category") or "") or "锅" in haystack
+            matched = _is_service_pot_or_cookware_set_candidate(row, product)
         elif ref == "套锅":
             matched = "套锅" in haystack or "锅" in str(row.get("category") or "") and "套" in haystack
         else:
@@ -560,6 +560,117 @@ def _phase1_catalog_count_result(db: Session, plan: dict) -> dict:
             "product_ref": product_ref,
         },
         "debug": {"agent_mode": "structured_catalog_count"},
+        "skip_polish": True,
+    }
+
+
+def _phase1_explicit_sku_alcohol_people_result(db: Session, question: str) -> dict | None:
+    text = str(question or "")
+    if "酒精炉" not in text and "酒精" not in text:
+        return None
+    if not any(term in text for term in ("适合几个人", "适合几人", "几个人", "几人", "多少人", "人数")):
+        return None
+    sku = _resolve_sku(db, text, None)
+    if not sku:
+        return None
+    product, specs, business, content = _phase1_product_bundle_by_ref(db, sku)
+    if not product:
+        return None
+    row = _product_row_from_model(product, specs, business, content)
+    compatibility_answer, evidence_status = _phase1_alcohol_stove_compatibility_answer(db, row)
+    people_answer = _phase1_people_capacity_answer(row)
+    answer = f"{compatibility_answer} {people_answer}"
+    sku_code = str(product.sku or "").strip().upper()
+    return {
+        "intent": "product_detail",
+        "answer_type": "product_detail",
+        "sku": sku_code,
+        "answer": answer,
+        "results": [row],
+        "result_skus": [sku_code],
+        "candidate_skus": [sku_code],
+        "answer_metadata": {
+            "answer_policy": "explicit_sku_compatibility_and_people",
+            "requested_fields": ["heat_source", "target_audience_or_capacity"],
+            "evidence_status": evidence_status,
+        },
+        "debug": {
+            "agent_mode": "explicit_sku_compatibility_people",
+            "raw_results": [row],
+            "candidate_skus": [sku_code],
+        },
+        "skip_polish": True,
+    }
+
+
+def _phase1_people_capacity_answer(row: dict[str, Any]) -> str:
+    name = str(row.get("product_name_cn") or row.get("product_name_en") or row.get("sku") or "该产品").strip()
+    usage = str(row.get("usage_scenarios") or "").strip()
+    positioning = str(row.get("positioning") or "").strip()
+    features = str(row.get("features") or "").strip()
+    capacity = str(row.get("capacity") or "").strip()
+    evidence_text = "；".join(item for item in (usage, positioning, features) if item)
+    people_match = re.search(r"(?:(?:\d+\s*[-~至]\s*\d+)|(?:\d+)|[一二两三四五六七八九十]+)\s*(?:个)?人", evidence_text)
+    if people_match:
+        return f"{name}的适用人数资料显示为：{people_match.group(0)}。"
+    if capacity and capacity not in {"/", "[]", "暂无"}:
+        return f"当前资料未单独标注适用人数；可参考容量/规格：{capacity}。"
+    return f"当前资料未显示{name}的明确适用人数。"
+
+
+def _phase1_except_alcohol_stove_cookware_result(db: Session, question: str) -> dict | None:
+    text = str(question or "")
+    if not any(term in text for term in ("除了", "除开", "除去")):
+        return None
+    if "酒精炉" not in text and "酒精" not in text:
+        return None
+    if not any(term in text for term in ("锅", "锅具", "套锅", "单锅", "炊具")):
+        return None
+    excluded_skus = {
+        str(item or "").strip().upper()
+        for item in SKU_RE.findall(text)
+        if str(item or "").strip()
+    }
+    if not excluded_skus:
+        return None
+    rows = [
+        row for row in _phase1_catalog_rows(db, "锅具")
+        if str(row.get("sku") or "").strip().upper() not in excluded_skus
+        and _phase1_row_has_explicit_alcohol_stove_support(db, row)
+    ]
+    skus = [str(row.get("sku") or "").strip().upper() for row in rows if str(row.get("sku") or "").strip()]
+    excluded_label = "、".join(sorted(excluded_skus))
+    if rows:
+        lines = [
+            f"除了 {excluded_label}，当前资料还明确找到以下支持酒精炉的锅具：",
+        ]
+        for row in rows[:10]:
+            name = row.get("product_name_cn") or row.get("name") or row.get("sku")
+            sku = str(row.get("sku") or "").strip().upper()
+            heat_source = str(row.get("heat_source") or "").strip()
+            lines.append(f"- {name}（{sku}），明确证据：{heat_source or '同SKU资料/问答明确显示支持酒精炉'}")
+    else:
+        lines = [
+            f"按当前资料，只明确找到 {excluded_label} 支持酒精炉；除了它，暂未找到其他明确标注支持酒精炉的锅具。",
+            "仅支持明火、卡式炉、分体炉或一体炉的锅具，我不会直接归为酒精炉适用。",
+        ]
+    return {
+        "intent": "query_products",
+        "answer_type": "product_query",
+        "answer": "\n".join(lines),
+        "results": rows[:10],
+        "result_skus": skus[:10],
+        "candidate_skus": skus[:10],
+        "answer_metadata": {
+            "source": "structured_alcohol_stove_cookware_exclusion",
+            "excluded_skus": sorted(excluded_skus),
+            "display_count": min(len(rows), 10),
+        },
+        "debug": {
+            "agent_mode": "structured_alcohol_stove_cookware_exclusion",
+            "raw_results": rows[:10],
+            "candidate_skus": skus[:10],
+        },
         "skip_polish": True,
     }
 
@@ -981,16 +1092,7 @@ def _phase1_row_has_explicit_alcohol_stove_support(db: Session, row: dict[str, A
         field_heat_source = str(field_values.get("热源") or field_values.get("适用热源") or "").strip()
         if customer_agent_intent_service._alcohol_stove_support_verdict(field_heat_source) is True:
             return True
-    sku = str(row.get("sku") or "").strip().upper()
-    if not sku:
-        return False
-    evidence = str(customer_agent_intent_service._best_same_sku_evidence_text(
-        db,
-        sku=sku,
-        supporting=None,
-        term_groups=[("酒精炉", "alcohol stove")],
-    ) or "").strip()
-    return customer_agent_intent_service._alcohol_stove_support_verdict(evidence) is True
+    return False
 
 
 def _sync_alcohol_stove_cookware_scope_metadata(
@@ -1706,6 +1808,30 @@ async def ask_customer_service(
         sku_identity_start,
         hit=bool(agent_result),
         agent_mode=(agent_result.get("debug") or {}).get("agent_mode") if agent_result else None,
+    )
+
+    explicit_multi_field_start = perf_counter()
+    explicit_multi_field_result = None
+    if not agent_result:
+        explicit_multi_field_result = _phase1_explicit_sku_alcohol_people_result(db, question)
+        agent_result = explicit_multi_field_result
+    customer_perf_service.log_stage(
+        "explicit_sku_compatibility_people",
+        explicit_multi_field_start,
+        hit=bool(explicit_multi_field_result),
+        agent_mode=(explicit_multi_field_result.get("debug") or {}).get("agent_mode") if explicit_multi_field_result else None,
+    )
+
+    alcohol_exclusion_start = perf_counter()
+    alcohol_exclusion_result = None
+    if not agent_result:
+        alcohol_exclusion_result = _phase1_except_alcohol_stove_cookware_result(db, question)
+        agent_result = alcohol_exclusion_result
+    customer_perf_service.log_stage(
+        "structured_alcohol_stove_cookware_exclusion",
+        alcohol_exclusion_start,
+        hit=bool(alcohol_exclusion_result),
+        agent_mode=(alcohol_exclusion_result.get("debug") or {}).get("agent_mode") if alcohol_exclusion_result else None,
     )
 
     qa_start = perf_counter()
@@ -4062,7 +4188,7 @@ def _looks_like_product_detail_field_question(text: str) -> bool:
     if not value:
         return False
     product_terms = ("套锅", "单锅", "酒精炉", "小方锅", "炊墨", "行山", "旋焰", "烽宴", "CW-", "CS-", "TW-")
-    field_terms = ("有没有不粘涂层", "有涂层吗", "有没有涂层", "是不是304", "是不是不锈钢", "是不是木头", "手柄", "把手", "锅体", "锅盖", "盖子", "煎盘", "材质", "尺寸", "容量", "重量", "净重", "适用人群", "适合哪些人群", "适合几人", "洗碗机")
+    field_terms = ("有没有不粘涂层", "有涂层吗", "有没有涂层", "是不是304", "是不是不锈钢", "是不是木头", "手柄", "把手", "锅体", "锅盖", "盖子", "煎盘", "材质", "尺寸", "容量", "重量", "净重", "热源", "燃料", "支持酒精炉", "用酒精炉", "适用人群", "适合哪些人群", "适合几人", "适合几个人", "几个人", "几人", "人数", "洗碗机")
     if not any(term in value for term in product_terms) or not any(term in value for term in field_terms):
         return False
     if "洗碗机" in value and any(term in value for term in ("能放", "放进", "可以放", "适合", "能不能放")):
@@ -5395,6 +5521,40 @@ def _is_service_pot_or_cookware_set_candidate(row: dict[str, Any], product: Prod
         )
     text = f"{row_text} {product_text}".lower()
     if _is_service_pan_or_griddle_candidate_text(text):
+        return False
+    accessory_terms = (
+        "防刮手夹",
+        "锅夹",
+        "手夹",
+        "夹子",
+        "收纳包",
+        "收纳袋",
+        "配件",
+        "accessory",
+    )
+    if any(term in text for term in accessory_terms) and not any(term in text for term in ("套锅", "单锅", "锅具套装", "炊具套装")):
+        return False
+    if any(term in text for term in ("炉具", "炉子", "酒精炉", "气炉", "燃气炉", "stove", "burner")):
+        if not any(term in text for term in ("套锅", "单锅", "锅具套装", "炊具套装", "cookware set", "pot set")):
+            return False
+    strong_cookware_terms = (
+        "单锅",
+        "套锅",
+        "炒锅",
+        "汤锅",
+        "锅具套装",
+        "炊具套装",
+        "炊具组合",
+        "野餐锅",
+        "野营锅",
+        "小方锅",
+        "cookware set",
+        "cook set",
+        "pot set",
+    )
+    if any(term in text for term in ("水壶", "茶壶", "烧水壶", "kettle", "bottle", "flask", "cup", "杯")) and not any(
+        term in text for term in strong_cookware_terms
+    ):
         return False
     has_positive_cookware_shape = _is_service_pot_or_cookware_set_text(text)
     if any(term in text for term in ("水壶", "茶壶", "烧水壶", "kettle", "bottle", "flask", "cup", "杯")) and not has_positive_cookware_shape:
