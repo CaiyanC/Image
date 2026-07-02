@@ -2590,6 +2590,7 @@ async def _recommend_result(
             ],
         )
 
+    rows = _filter_picnic_lightweight_set_candidate_rows(query_text, rows)
     if _is_explicit_cookware_recommendation_query(intent, query_text):
         rows = _filter_cookware_recommendation_candidate_rows(rows)
 
@@ -2743,6 +2744,7 @@ async def _recommendation_candidate_result(db: Session, user_id: str, intent: Cu
     rows = tool_result.get("results") or []
     if scenario_scope.get("guard") == "cooking_set":
         rows = _filter_cooking_set_candidate_rows(rows)
+        rows = _filter_picnic_lightweight_set_candidate_rows(query_text, rows)
     if rows and not intent.target_skus:
         rows = await _expand_single_person_cookware_recommendation_rows(
             db,
@@ -2759,6 +2761,7 @@ async def _recommendation_candidate_result(db: Session, user_id: str, intent: Cu
             fields=fields,
             base_rows=rows,
         )
+        rows = _filter_picnic_lightweight_set_candidate_rows(query_text, rows)
         rows = await _expand_long_prompt_cookware_recommendation_rows(
             db,
             user_id=user_id,
@@ -2776,6 +2779,7 @@ async def _recommendation_candidate_result(db: Session, user_id: str, intent: Cu
         )
     if intent.target_skus:
         rows = _filter_rows(rows or _rows_for_target_skus(db, intent.target_skus), filters=intent.filters, negative_filters=intent.negative_filters, term="")
+    rows = _filter_picnic_lightweight_set_candidate_rows(query_text, rows)
     return {
         "ok": True,
         "tool": tool_result.get("tool", "hybrid_search_products"),
@@ -2986,6 +2990,49 @@ def _filter_cooking_set_candidate_rows(rows: list[dict[str, Any]]) -> list[dict[
             continue
         filtered.append(row)
     return filtered
+
+
+def _filter_picnic_lightweight_set_candidate_rows(query_text: str, rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    if not _is_picnic_lightweight_set_mid_budget_scope(query_text):
+        return rows
+    filtered = [
+        row
+        for row in rows or []
+        if not _looks_like_single_backpacking_set_outside_picnic_scope(row)
+    ]
+    return filtered or list(rows or [])
+
+
+def _is_picnic_lightweight_set_mid_budget_scope(text: str) -> bool:
+    normalized = str(text or "")
+    return (
+        any(term in normalized for term in ("野餐", "周末野餐", "公园野餐"))
+        and any(term in normalized for term in ("套装", "套锅", "件套", "野餐锅", "炊具套装", "锅具套装"))
+        and any(term in normalized for term in ("轻便", "轻量", "便携", "收纳"))
+        and any(term in normalized for term in ("两个人", "两人", "2人", "双人"))
+        and any(term in normalized for term in ("预算中等", "中等预算", "预算适中", "预算"))
+    )
+
+
+def _looks_like_single_backpacking_set_outside_picnic_scope(row: dict[str, Any]) -> bool:
+    text = _cooking_set_candidate_text(row)
+    if not text:
+        return False
+    picnic_terms = ("野餐", "周末野餐", "公园野餐", "家庭野餐", "野餐锅")
+    two_person_terms = ("2-3人", "2-3 人", "两个人", "两人", "双人", "小家庭")
+    single_backpacking_terms = (
+        "单人背包客",
+        "单人露营",
+        "单人野宿",
+        "极限轻量",
+        "轻量徒步",
+        "背包旅行",
+        "速穿",
+        "荒野求生",
+    )
+    if any(term in text for term in picnic_terms + two_person_terms):
+        return False
+    return any(term in text for term in single_backpacking_terms)
 
 
 def _looks_like_cooking_set_candidate(row: dict[str, Any]) -> bool:

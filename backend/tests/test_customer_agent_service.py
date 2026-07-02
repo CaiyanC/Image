@@ -721,6 +721,83 @@ class CustomerAgentServiceTest(unittest.TestCase):
         self.assertIn("野餐锅", [str(item.get("semantic_query") or "") for item in captured_arguments[1:]])
         self.assertEqual(captured_arguments[1]["filters"], {"product.category": "锅具"})
 
+    def test_recommendation_result_excludes_ultralight_backpacking_set_for_two_person_picnic(self):
+        original_execute_tool_async = customer_agent_tool_service.execute_tool_async
+        original_finalize = customer_agent_intent_service._finalize_recommendation_answer
+
+        async def fake_execute_tool_async(db, *, user_id, name, arguments):
+            self.assertEqual(name, "hybrid_search_products")
+            rows = [
+                {
+                    "sku": "CW-C19T-37",
+                    "product_name_cn": "旅伴2-3人野餐锅5件套",
+                    "category": "锅具",
+                    "capacity": "2升锅，7.5英寸煎盘，1.4升水壶",
+                    "features": "野餐锅，全套收纳便携",
+                    "usage_scenarios": "家庭野餐，公园野餐，周末野餐",
+                    "target_audience": "2-3人，小家庭",
+                    "price_positioning": "中端",
+                },
+                {
+                    "sku": "TW-141",
+                    "product_name_cn": "烽宴多功能聚能套锅",
+                    "category": "锅具",
+                    "capacity": "锅1000ML，盖250ML",
+                    "features": "极致轻量，套娃式收纳，聚能结构",
+                    "usage_scenarios": "轻量徒步，单人露营，单人野宿",
+                    "target_audience": "单人背包客，极限轻量徒步用户",
+                    "price_positioning": "高端",
+                },
+                {
+                    "sku": "CW-C06S-37",
+                    "product_name_cn": "乐途3-4人野餐锅7件套",
+                    "category": "锅具",
+                    "capacity": "3L锅，1.7L锅，0.8L水壶",
+                    "features": "野餐锅，收纳袋，轻便套装",
+                    "usage_scenarios": "家庭野餐，湖边露营",
+                    "target_audience": "小型团建，3-4人",
+                    "price_positioning": "常规价格带",
+                },
+            ]
+            return {
+                "ok": True,
+                "tool": name,
+                "query": arguments.get("semantic_query") or "",
+                "results": rows,
+                "sources": [{"type": "product_search", "label": "测试召回", "count": len(rows)}],
+            }
+
+        async def fake_finalize(*args, **kwargs):
+            return (
+                "优先推荐旅伴2-3人野餐锅5件套（CW-C19T-37）。"
+                "如果更追求极致轻量，也可以考虑烽宴多功能聚能套锅（TW-141）。"
+            )
+
+        customer_agent_tool_service.execute_tool_async = fake_execute_tool_async
+        customer_agent_intent_service._finalize_recommendation_answer = fake_finalize
+        try:
+            result = self._run_async(customer_agent_intent_service._recommend_result(
+                self.db,
+                user_id="user-1",
+                intent=customer_agent_intent_service.CustomerIntent(
+                    intent="recommend_products",
+                    filters={},
+                    semantic_query="两个人周末野餐，想要轻便一点的套装，预算中等，推荐哪款",
+                    recommendation_query="两个人周末野餐，想要轻便一点的套装，预算中等，推荐哪款",
+                    term="",
+                ),
+            ))
+        finally:
+            customer_agent_tool_service.execute_tool_async = original_execute_tool_async
+            customer_agent_intent_service._finalize_recommendation_answer = original_finalize
+
+        answer = result.get("answer") or ""
+        result_skus = [str(item.get("sku") or "").upper() for item in result.get("results") or []]
+        self.assertEqual(result["answer_type"], "recommendation")
+        self.assertNotIn("TW-141", answer)
+        self.assertNotIn("TW-141", result_skus)
+        self.assertIn("CW-C19T-37", result_skus)
+
     def test_recommendation_candidate_result_expands_large_group_cookware_candidates(self):
         captured_arguments = []
         original_execute_tool_async = customer_agent_tool_service.execute_tool_async
