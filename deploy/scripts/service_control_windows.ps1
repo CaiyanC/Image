@@ -23,6 +23,9 @@ $ProdQueue = "celery_prod"
 $ProdWorkerName = "worker_prod"
 $ProdLogDir = Join-Path $RepoRoot "logs\prod"
 $ProdWorkerPidFile = Join-Path $ProdLogDir "celery.pid"
+$ProdFrontendDir = Join-Path $RepoRoot "frontend"
+$ProdFrontendOutLog = Join-Path $ProdLogDir "frontend.out.log"
+$ProdFrontendErrLog = Join-Path $ProdLogDir "frontend.err.log"
 $ExpectedBackendRoot = [System.IO.Path]::GetFullPath((Join-Path $RepoRoot "backend"))
 
 function Write-WatchdogLog {
@@ -35,7 +38,7 @@ function Test-HttpOk {
     param([string]$Url, [int]$TimeoutSeconds = 5)
     try {
         $resp = Invoke-WebRequest -Uri $Url -UseBasicParsing -TimeoutSec $TimeoutSeconds
-        return [int]$resp.StatusCode -ge 200 -and [int]$resp.StatusCode -lt 500
+        return [int]$resp.StatusCode -ge 200 -and [int]$resp.StatusCode -lt 300
     } catch {
         return $false
     }
@@ -50,6 +53,17 @@ function Test-BackendReady {
     }
 }
 
+function Test-BackendHealthEndpoints {
+    $healthOk = Test-HttpOk "http://127.0.0.1:$ProdBackendPort/api/health"
+    $liveOk = Test-HttpOk "http://127.0.0.1:$ProdBackendPort/api/health/live"
+    $readyOk = Test-BackendReady
+    if (-not ($healthOk -and $liveOk -and $readyOk)) {
+        Write-WatchdogLog "ERROR" "backend health/live/ready check failed after deploy restart"
+        return $false
+    }
+    return $true
+}
+
 function Get-BackendListeners {
     return @(Get-NetTCPConnection -LocalPort $ProdBackendPort -State Listen -ErrorAction SilentlyContinue)
 }
@@ -57,6 +71,15 @@ function Get-BackendListeners {
 function Get-ProcessById {
     param([int]$ProcessId)
     return Get-CimInstance Win32_Process -Filter "ProcessId=$ProcessId" -ErrorAction SilentlyContinue
+}
+
+function Test-ProductionBackendProcess {
+    param($Process)
+    if (-not $Process) {
+        return $false
+    }
+    $cmd = [string]$Process.CommandLine
+    return $cmd -like "*uvicorn app.main:app*" -and $cmd -like "*--port $ProdBackendPort*"
 }
 
 function Test-BackendListenerIntegrity {
@@ -71,9 +94,8 @@ function Test-BackendListenerIntegrity {
         Write-WatchdogLog "ERROR" "backend listener pid=$pidValue cannot be resolved"
         return $false
     }
-    $cmd = [string]$proc.CommandLine
-    if (-not ($cmd -like "*uvicorn app.main:app*" -and $cmd -like "*--port $ProdBackendPort*")) {
-        Write-WatchdogLog "ERROR" "backend listener pid=$pidValue has unexpected command line: $cmd"
+    if (-not (Test-ProductionBackendProcess -Process $proc)) {
+        Write-WatchdogLog "ERROR" "backend listener pid=$pidValue has unexpected command line: $($proc.CommandLine)"
         return $false
     }
     Write-WatchdogLog "INFO" "backend listener verified pid=$pidValue exe=$($proc.ExecutablePath)"
@@ -100,6 +122,11 @@ function Test-BackendVersion {
     }
     if ($Commit -and ([string]$version.commit) -ne $Commit) {
         Write-WatchdogLog "ERROR" "backend commit mismatch: expected=$Commit actual=$($version.commit)"
+        return $false
+    }
+    $versionPid = 0
+    if (-not [int]::TryParse([string]$version.pid, [ref]$versionPid) -or $versionPid -le 0 -or -not (Get-ProcessById -ProcessId $versionPid)) {
+        Write-WatchdogLog "ERROR" "backend version pid cannot be resolved: $($version.pid)"
         return $false
     }
     Write-WatchdogLog "INFO" "backend version verified commit=$($version.commit) code_root=$codeRoot cwd=$cwd pid=$($version.pid)"
@@ -130,19 +157,43 @@ function Wait-PortReleased {
     return $false
 }
 
+function Stop-ProcessTreeBestEffort {
+    param([int]$ProcessId)
+    $proc = Get-ProcessById -ProcessId $ProcessId
+    if (-not $proc) {
+        Write-WatchdogLog "INFO" "pid=$ProcessId is already gone"
+        return $true
+    }
+
+    $children = Get-CimInstance Win32_Process -ErrorAction SilentlyContinue | Where-Object { $_.ParentProcessId -eq $ProcessId }
+    foreach ($child in $children) {
+        Stop-Process -Id $child.ProcessId -Force -ErrorAction SilentlyContinue
+        Write-WatchdogLog "WARN" "requested stop for child pid=$($child.ProcessId) of pid=$ProcessId"
+    }
+    Stop-Process -Id $ProcessId -Force -ErrorAction SilentlyContinue
+    Start-Sleep -Milliseconds 250
+
+    if (Get-ProcessById -ProcessId $ProcessId) {
+        try {
+            $taskkill = Start-Process -FilePath (Join-Path $env:SystemRoot "System32\taskkill.exe") `
+                -ArgumentList @("/F", "/T", "/PID", "$ProcessId") -Wait -PassThru -WindowStyle Hidden
+            if ($taskkill.ExitCode -ne 0) {
+                Write-WatchdogLog "INFO" "taskkill pid=$ProcessId returned exit=$($taskkill.ExitCode); final listener state will decide"
+            }
+        } catch {
+            Write-WatchdogLog "INFO" "taskkill pid=$ProcessId was not fatal: $($_.Exception.Message)"
+        }
+    }
+    return -not [bool](Get-ProcessById -ProcessId $ProcessId)
+}
+
 function Stop-ListenerTree {
     param([int]$Port)
     $listeners = Get-NetTCPConnection -LocalPort $Port -State Listen -ErrorAction SilentlyContinue
     foreach ($listener in $listeners) {
         $pidValue = [int]$listener.OwningProcess
         Write-WatchdogLog "WARN" "cleaning listener on port $Port pid=$pidValue before restart"
-        $children = Get-CimInstance Win32_Process | Where-Object { $_.ParentProcessId -eq $pidValue }
-        foreach ($child in $children) {
-            Stop-Process -Id $child.ProcessId -Force -ErrorAction SilentlyContinue
-            Write-WatchdogLog "WARN" "stopped child pid=$($child.ProcessId) of port $Port listener"
-        }
-        Stop-Process -Id $pidValue -Force -ErrorAction SilentlyContinue
-        & taskkill.exe /F /T /PID $pidValue 2>$null | Out-Null
+        Stop-ProcessTreeBestEffort -ProcessId $pidValue | Out-Null
     }
     if (-not (Wait-PortReleased -Port $Port -TimeoutSeconds 20)) {
         Write-WatchdogLog "ERROR" "port $Port is still occupied after cleanup; skip restart"
@@ -151,13 +202,45 @@ function Stop-ListenerTree {
     return $true
 }
 
+function Stop-BackendListeners {
+    for ($attempt = 1; $attempt -le 3; $attempt++) {
+        $listeners = @(Get-BackendListeners)
+        if (-not $listeners) {
+            Write-WatchdogLog "INFO" "backend port $ProdBackendPort is clear"
+            return $true
+        }
+
+        foreach ($pidValue in @($listeners | ForEach-Object { [int]$_.OwningProcess } | Select-Object -Unique)) {
+            $proc = Get-ProcessById -ProcessId $pidValue
+            if (-not $proc) {
+                Write-WatchdogLog "ERROR" "backend listener pid=$pidValue cannot be resolved after stop attempt"
+                return $false
+            }
+            if (-not (Test-ProductionBackendProcess -Process $proc)) {
+                Write-WatchdogLog "ERROR" "listener pid=$pidValue is not a production backend after stop attempt: $($proc.CommandLine)"
+                return $false
+            }
+            Write-WatchdogLog "WARN" "stopping production backend listener pid=$pidValue attempt=$attempt"
+            Stop-ProcessTreeBestEffort -ProcessId $pidValue | Out-Null
+        }
+
+        if (Wait-PortReleased -Port $ProdBackendPort -TimeoutSeconds 5) {
+            Write-WatchdogLog "INFO" "backend port $ProdBackendPort is clear"
+            return $true
+        }
+    }
+
+    Write-WatchdogLog "ERROR" "backend port $ProdBackendPort still has a listener after stop attempts"
+    return $false
+}
+
 function Stop-Backend {
     $listeners = @(Get-BackendListeners)
     if (-not $listeners) {
         Write-WatchdogLog "INFO" "backend port $ProdBackendPort has no listener"
         return $true
     }
-    return Stop-ListenerTree -Port $ProdBackendPort
+    return Stop-BackendListeners
 }
 
 function Ensure-Docker {
@@ -236,7 +319,7 @@ function Start-Backend {
         return $true
     }
     if (Get-BackendListeners) {
-        if (-not (Stop-ListenerTree -Port $ProdBackendPort)) {
+        if (-not (Stop-Backend)) {
             return $false
         }
     }
@@ -269,8 +352,7 @@ function Restart-Backend {
     if (-not (Test-BackendListenerIntegrity)) {
         return $false
     }
-    if (-not (Test-BackendReady)) {
-        Write-WatchdogLog "ERROR" "backend ready check failed after deploy restart"
+    if (-not (Test-BackendHealthEndpoints)) {
         return $false
     }
     if (-not (Test-BackendVersion -Commit $Commit)) {
@@ -289,8 +371,21 @@ function Start-Frontend {
             return $false
         }
     }
-    Write-WatchdogLog "WARN" "starting prod frontend via start-all.bat frontend"
-    Start-Process -FilePath "cmd.exe" -ArgumentList @("/c", "`"$RepoRoot\start-all.bat`" frontend") -WorkingDirectory $RepoRoot -WindowStyle Hidden
+    $frontendIndex = Join-Path $ProdFrontendDir "dist\index.html"
+    if (-not (Test-Path (Join-Path $ProdFrontendDir "dist\index.html"))) {
+        Write-WatchdogLog "ERROR" "production frontend dist is missing: $frontendIndex"
+        return $false
+    }
+    if (-not (Get-Command "npm.cmd" -ErrorAction SilentlyContinue)) {
+        Write-WatchdogLog "ERROR" "npm.cmd is not available for production frontend startup"
+        return $false
+    }
+    New-Item -ItemType Directory -Force -Path $ProdLogDir | Out-Null
+    Write-WatchdogLog "WARN" "starting production frontend from $ProdFrontendDir on port $ProdFrontendPort"
+    $frontendProcess = Start-Process -FilePath "npm.cmd" -ArgumentList @("run", "serve:prod") `
+        -WorkingDirectory $ProdFrontendDir -WindowStyle Hidden -PassThru `
+        -RedirectStandardOutput $ProdFrontendOutLog -RedirectStandardError $ProdFrontendErrLog
+    Write-WatchdogLog "INFO" "production frontend launcher pid=$($frontendProcess.Id) stdout=$ProdFrontendOutLog stderr=$ProdFrontendErrLog"
     for ($i = 0; $i -lt 45; $i++) {
         Start-Sleep -Seconds 2
         if (Test-HttpOk "http://127.0.0.1:$ProdFrontendPort") {
