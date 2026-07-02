@@ -215,11 +215,15 @@ def _explicit_pan_alcohol_stove_compatibility(text: str) -> dict[str, Any] | Non
 
 
 def _is_compare_question(text: str) -> bool:
-    return (
-        "和" in text
-        and any(term in text for term in ("区别", "不同", "对比", "比较"))
-        and len(_extract_compare_product_refs(text)) >= 2
-    )
+    if _looks_like_context_ordinal_reference(text):
+        return False
+    if len(_extract_compare_product_refs(text)) < 2:
+        return False
+    if "vs" in text.lower() or "VS" in text:
+        return True
+    if "和" not in text:
+        return False
+    return any(term in text for term in ("区别", "不同", "对比", "比较", "哪个", "哪款", "更适合", "该买", "应该买", "买哪个"))
 
 
 def _is_compare_choice_question(text: str) -> bool:
@@ -231,6 +235,9 @@ def _is_compare_choice_question(text: str) -> bool:
 
 def _extract_compare_product_refs(text: str) -> list[str]:
     products: list[str] = []
+    sku_refs = re.findall(r"\b[A-Za-z]{1,6}[-_][A-Za-z0-9][A-Za-z0-9_-]{1,40}\b", text)
+    if len(sku_refs) >= 2:
+        return [item.upper().replace("_", "-") for item in sku_refs[:2]]
     for name in ("行山单锅", "激川单锅", "轻途套锅", "享野套锅"):
         if name in text:
             products.append(name)
@@ -249,7 +256,7 @@ def _is_catalog_count_question(text: str) -> bool:
     has_product_scope = any(term in text for term in ("套锅", "锅具", "水壶", "烤盘", "单锅", "产品"))
     return has_count_or_list and has_product_scope and (
         has_catalog
-        or any(term in text for term in ("有哪些", "都有哪些", "列一下", "产品有哪些", "产品列表"))
+        or any(term in text for term in ("有哪些", "都有哪些", "列一下", "产品有哪些", "产品列表", "有多少个", "多少个", "分别是什么"))
     )
 
 

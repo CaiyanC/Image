@@ -4165,7 +4165,20 @@ def _case71_eligible_cookware_row(row: dict[str, Any], db: Session | None = None
         return False
     if _is_water_container_like_cookware_row(row):
         return False
-    return _row_supports_alcohol_stove(row, db)
+    return _row_has_explicit_alcohol_stove_heat_source(row)
+
+
+def _row_has_explicit_alcohol_stove_heat_source(row: dict[str, Any]) -> bool:
+    if not isinstance(row, dict):
+        return False
+    heat_source = str(row.get("heat_source") or "").strip()
+    if _alcohol_stove_support_verdict(heat_source) is True:
+        return True
+    field_values = row.get("field_values")
+    if isinstance(field_values, dict):
+        field_heat_source = str(field_values.get("热源") or field_values.get("适用热源") or "").strip()
+        return _alcohol_stove_support_verdict(field_heat_source) is True
+    return False
 
 
 def _case71_filter_summary_override(intent: CustomerIntent, rows: list[dict[str, Any]]) -> str | None:
@@ -4175,7 +4188,7 @@ def _case71_filter_summary_override(intent: CustomerIntent, rows: list[dict[str,
         return None
     if str((intent.filters or {}).get("specs.heat_source") or "") != "酒精炉":
         return None
-    return "已按酒精炉热源字段或同SKU兼容证据收窄到可用于酒精炉的锅具列表。"
+    return "已按明确酒精炉热源字段收窄到可用于酒精炉的锅具列表；仅支持明火、卡式炉、分体炉或一体炉的锅具未归入酒精炉适用。"
 
 
 def _narrow_alcohol_stove_cookware_query_rows(

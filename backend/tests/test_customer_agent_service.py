@@ -3356,6 +3356,132 @@ class CustomerAgentEndToEndBehaviorRegressionTest(unittest.IsolatedAsyncioTestCa
         self.assertEqual(set(result.get("result_skus") or []), {"CW-C06PRO", "CW-C19T-37"})
         self.assertNotRegex(result["answer"], r"(小方锅|城市出逃)")
 
+    async def test_phase1_sku_vs_sku_purchase_choice_stays_on_explicit_pair(self):
+        self._add_product(
+            "CW-C06PRO",
+            "轻途套锅",
+            "锅具",
+            "大锅约3.0L，小锅约1.7L，水壶约0.8L",
+            "硬质氧化铝合金",
+            "酒精炉, 燃气炉",
+            "极致轻量化，套娃式收纳，硬质氧化工艺",
+            "轻量徒步，背包旅行，双人露营",
+            880,
+        )
+        self._add_product(
+            "CW-C19T-37",
+            "旅伴2-3人野餐锅5件套",
+            "锅具",
+            "2升锅，7.5英寸煎盘，1.4升水壶",
+            "硬质氧化铝合金",
+            "酒精炉, 燃气炉",
+            "全套收纳便携，2-3人容量",
+            "家庭野餐，公园野餐，双人露营",
+            760,
+        )
+        self._add_product("AC-Z13", "拾野·便携调料瓶套装", "配件", "调料瓶", "塑料", "/", "调味收纳", "野餐配件", 50)
+        self._add_product("CB253", "聚能环水壶", "水壶", "800ML", "铝合金", "/", "户外补水", "轻量徒步", 300)
+        self.db.commit()
+
+        result = await customer_service_service.ask_customer_service(
+            self.db,
+            user_id="q11-sku-compare-user",
+            question="CW-C06PRO 和 CW-C19T-37 我该买哪个？我更在意轻便收纳。",
+        )
+
+        plan = (result.get("debug") or {}).get("plan") or {}
+        combined = " ".join([result.get("answer", ""), " ".join(result.get("result_skus") or []), " ".join(result.get("candidate_skus") or [])])
+        self.assertEqual(result.get("answer_type"), "comparison")
+        self.assertIn(plan.get("primary_intent"), {"product_compare_recommendation", "comparison"})
+        self.assertRegex(result["answer"], r"CW-C06PRO")
+        self.assertRegex(result["answer"], r"CW-C19T-37")
+        self.assertRegex(result["answer"], r"(轻便|收纳|建议|更适合|选)")
+        self.assertEqual(set(result.get("result_skus") or []), {"CW-C06PRO", "CW-C19T-37"})
+        self.assertNotRegex(combined, r"(AC-Z13|CB253|CB254|CF-PG11-42|CF-RT06-37)")
+        self.assertIn("total_duration_ms", (result.get("answer_metadata") or {}).get("timing") or {})
+
+    async def test_phase1_named_pot_choice_question_routes_to_comparison(self):
+        result = await customer_service_service.ask_customer_service(
+            self.db,
+            user_id="q10-name-compare-user",
+            question="行山单锅和激川单锅哪个更适合两个人吃饭？主要看容量和重量。",
+        )
+
+        plan = (result.get("debug") or {}).get("plan") or {}
+        self.assertEqual(result.get("answer_type"), "comparison")
+        self.assertIn(plan.get("primary_intent"), {"product_compare_recommendation", "comparison"})
+        self.assertRegex(result["answer"], r"行山单锅")
+        self.assertRegex(result["answer"], r"激川单锅")
+        self.assertRegex(result["answer"], r"(容量|1000ML|1400ML)")
+        self.assertRegex(result["answer"], r"(重量|220|300)")
+        self.assertRegex(result["answer"], r"(两个人|2人|双人|吃饭|建议|更适合)")
+        self.assertNotRegex(result["answer"], r"(小方锅|城市出逃|水壶)")
+        self.assertIn("total_duration_ms", (result.get("answer_metadata") or {}).get("timing") or {})
+
+    async def test_phase1_kettle_count_uses_structured_catalog_with_consistent_display_skus(self):
+        for idx, sku in enumerate(("KTEST-001", "KTEST-002", "KTEST-003"), start=1):
+            self._add_product(
+                sku,
+                f"{idx}.0L户外水壶",
+                "水壶",
+                f"{idx}000ML",
+                "硬质氧化铝合金",
+                "燃气炉",
+                "户外补水",
+                "户外补水",
+                300 + idx,
+            )
+        self.db.commit()
+
+        result = await customer_service_service.ask_customer_service(
+            self.db,
+            user_id="q13-kettle-count-user",
+            question="你们有多少个水壶产品？分别是什么？",
+        )
+
+        plan = (result.get("debug") or {}).get("plan") or {}
+        timing = (result.get("answer_metadata") or {}).get("timing") or {}
+        self.assertEqual(plan.get("primary_intent"), "catalog_count")
+        self.assertEqual((result.get("debug") or {}).get("agent_mode"), "structured_catalog_count")
+        self.assertRegex(result["answer"], r"共有\s*3\s*款")
+        self.assertRegex(result["answer"], r"KTEST-001.*水壶")
+        self.assertRegex(result["answer"], r"KTEST-002.*水壶")
+        self.assertRegex(result["answer"], r"KTEST-003.*水壶")
+        self.assertEqual(set(result.get("result_skus") or []), {"KTEST-001", "KTEST-002", "KTEST-003"})
+        self.assertNotRegex(result["answer"], r"知识库.*检索")
+        self.assertIn("total_duration_ms", timing)
+
+    async def test_phase1_alcohol_stove_cookware_requires_explicit_heat_source_evidence(self):
+        self._add_product(
+            "Q14-NOALC",
+            "无酒精炉证据套锅",
+            "锅具",
+            "锅：1700ML",
+            "硬质氧化铝合金",
+            "明火直烧、卡式炉、分体炉、一体炉",
+            "套锅",
+            "双人露营",
+            960,
+        )
+        self._add_product("Q14-PAN", "测试瓦片烤盘", "锅具", "32cm", "铝合金", "酒精炉", "烤盘", "烧烤", 450)
+        self._add_product("Q14-STOVE", "测试酒精炉", "炉具", "200ML", "304不锈钢", "液体酒精", "炉具", "露营", 300)
+        self._add_product("Q14-ACC", "测试调料瓶", "配件", "调料瓶", "塑料", "/", "调味收纳", "野餐配件", 50)
+        self.db.commit()
+
+        result = await customer_service_service.ask_customer_service(
+            self.db,
+            user_id="q14-alcohol-cookware-user",
+            question="有没有适合酒精炉用的锅具，列几个 SKU 给我。",
+        )
+
+        combined = " ".join([result.get("answer", ""), " ".join(result.get("result_skus") or []), " ".join(result.get("candidate_skus") or [])])
+        timing = (result.get("answer_metadata") or {}).get("timing") or {}
+        self.assertRegex(result["answer"], r"(明确.*酒精炉|没有明确酒精炉证据|不建议直接归为酒精炉适用)")
+        self.assertIn("CW-S10-1", result.get("result_skus") or [])
+        self.assertNotRegex(combined, r"(Q14-NOALC|Q14-PAN|Q14-STOVE|Q14-ACC)")
+        self.assertNotRegex(result["answer"], r"明火直烧、卡式炉、分体炉、一体炉.*适合酒精炉")
+        self.assertIn("total_duration_ms", timing)
+
     async def test_phase1_picnic_set_buy_question_routes_to_recommendation(self):
         self._add_product(
             "CW-C19T-37",

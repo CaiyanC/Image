@@ -515,6 +515,9 @@ def _phase1_catalog_rows(db: Session, product_ref: str) -> list[dict]:
         ))
         if ref == "产品":
             matched = True
+        elif ref == "水壶":
+            category_text = " ".join(str(row.get(key) or "") for key in ("category", "sub_category", "product_name_cn", "product_name_en"))
+            matched = "水壶" in category_text
         elif ref == "锅具":
             matched = "锅" in str(row.get("category") or "") or "锅" in haystack
         elif ref == "套锅":
@@ -530,22 +533,30 @@ def _phase1_catalog_count_result(db: Session, plan: dict) -> dict:
     product_ref = str(plan.get("product_ref") or "").strip() or "产品"
     rows = _phase1_catalog_rows(db, product_ref)
     skus = [str(row.get("sku") or "") for row in rows if row.get("sku")]
+    display_rows = rows[:10]
+    display_skus = [str(row.get("sku") or "") for row in display_rows if row.get("sku")]
     samples = "、".join(
         f"{row.get('sku')} {row.get('product_name_cn')}".strip()
-        for row in rows[:10]
+        for row in display_rows
         if row.get("sku")
     )
-    suffix = f" 例如：{samples}。" if samples else ""
+    if samples and len(rows) > len(display_rows):
+        suffix = f" 当前先列出前 {len(display_rows)} 个：{samples}。"
+    elif samples:
+        suffix = f" 分别是：{samples}。"
+    else:
+        suffix = ""
     return {
         "intent": "query_products",
         "answer_type": "query_products",
         "answer": f"当前产品库里匹配“{product_ref}”的产品共有 {len(rows)} 款。{suffix}",
-        "results": rows[:20],
-        "result_skus": skus[:20],
-        "candidate_skus": skus[:20],
+        "results": display_rows,
+        "result_skus": display_skus,
+        "candidate_skus": display_skus,
         "answer_metadata": {
             "source": "product_catalog_structured_query",
             "catalog_count": len(rows),
+            "display_count": len(display_rows),
             "product_ref": product_ref,
         },
         "debug": {"agent_mode": "structured_catalog_count"},
@@ -881,6 +892,8 @@ def _phase1_is_alcohol_stove_cookware_question(
     text = str(question or "")
     if "酒精炉" not in text and "alcohol stove" not in text.lower():
         return False
+    if SKU_RE.search(text) and any(term in text for term in ("能不能", "能否", "是否", "可不可以", "支持", "适用")):
+        return False
     context = candidate_context if isinstance(candidate_context, dict) else {}
     if any(term in text for term in ("水壶", "茶壶", "烧水壶", "壶类")):
         return False
@@ -916,6 +929,8 @@ def _phase1_filter_alcohol_stove_cookware_result(
 ) -> dict | None:
     if not isinstance(agent_result, dict) or not _phase1_is_alcohol_stove_cookware_question(question, candidate_context, agent_result):
         return agent_result
+    if str(agent_result.get("answer_type") or "") == "product_detail":
+        return agent_result
     rows = [row for row in (agent_result.get("results") or []) if isinstance(row, dict)]
     if not rows:
         return agent_result
@@ -925,9 +940,13 @@ def _phase1_filter_alcohol_stove_cookware_result(
         if str(row.get("sku") or "").strip()
     ])).all()
     product_by_sku = {str(product.sku or "").strip().upper(): product for product in products}
-    filtered = [
+    cookware_filtered = [
         row for row in rows
         if _is_service_pot_or_cookware_set_candidate(row, product_by_sku.get(str(row.get("sku") or "").strip().upper()))
+    ]
+    filtered = [
+        row for row in cookware_filtered
+        if _phase1_row_has_explicit_alcohol_stove_support(db, row)
     ]
     if len(filtered) == len(rows):
         result = dict(agent_result)
@@ -937,15 +956,41 @@ def _phase1_filter_alcohol_stove_cookware_result(
     result = dict(agent_result)
     result["results"] = filtered
     result = _sync_alcohol_stove_cookware_scope_metadata(result, skus=skus, rows=filtered, question=question)
-    lines = ["筛选条件：类目包含 锅具；适用热源包含 酒精炉。", "已排除非锅具候选。"]
+    lines = [
+        "筛选条件：类目包含 锅具；必须有明确酒精炉支持证据。",
+        "当前资料里只确认以下 SKU 明确支持酒精炉；其他锅具虽然可能支持明火、卡式炉、分体炉或一体炉，但没有明确酒精炉证据，我不建议直接归为酒精炉适用。",
+    ]
     for row in filtered[:10]:
         name = row.get("product_name_cn") or row.get("name") or row.get("sku")
         sku = row.get("sku")
         heat_source = row.get("heat_source") or ((row.get("field_values") or {}).get("热源") if isinstance(row.get("field_values"), dict) else "")
-        lines.append(f"- {name}（{sku}），适用热源：{heat_source or '同SKU资料/问答显示可用于酒精炉'}")
+        lines.append(f"- {name}（{sku}），明确证据：{heat_source or '同SKU资料/问答明确显示支持酒精炉'}")
     result["answer"] = "\n".join(lines)
     result["skip_polish"] = True
     return result
+
+
+def _phase1_row_has_explicit_alcohol_stove_support(db: Session, row: dict[str, Any]) -> bool:
+    if not isinstance(row, dict):
+        return False
+    heat_source = str(row.get("heat_source") or "").strip()
+    if customer_agent_intent_service._alcohol_stove_support_verdict(heat_source) is True:
+        return True
+    field_values = row.get("field_values")
+    if isinstance(field_values, dict):
+        field_heat_source = str(field_values.get("热源") or field_values.get("适用热源") or "").strip()
+        if customer_agent_intent_service._alcohol_stove_support_verdict(field_heat_source) is True:
+            return True
+    sku = str(row.get("sku") or "").strip().upper()
+    if not sku:
+        return False
+    evidence = str(customer_agent_intent_service._best_same_sku_evidence_text(
+        db,
+        sku=sku,
+        supporting=None,
+        term_groups=[("酒精炉", "alcohol stove")],
+    ) or "").strip()
+    return customer_agent_intent_service._alcohol_stove_support_verdict(evidence) is True
 
 
 def _sync_alcohol_stove_cookware_scope_metadata(
