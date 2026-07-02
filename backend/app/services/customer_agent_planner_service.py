@@ -181,9 +181,12 @@ def _extract_compare_product_refs(text: str) -> list[str]:
 
 def _is_catalog_count_question(text: str) -> bool:
     has_catalog = "产品库" in text or "库里" in text
-    has_count_or_list = any(term in text for term in ("多少", "有多少", "有哪些", "几款", "几种"))
-    has_product_scope = any(term in text for term in ("套锅", "锅具", "产品"))
-    return has_catalog and has_count_or_list and has_product_scope
+    has_count_or_list = any(term in text for term in ("多少", "有多少", "多少个", "几个", "数量", "有哪些", "都有哪些", "列一下", "产品有哪些", "产品列表", "几款", "几种"))
+    has_product_scope = any(term in text for term in ("套锅", "锅具", "水壶", "烤盘", "单锅", "产品"))
+    return has_count_or_list and has_product_scope and (
+        has_catalog
+        or any(term in text for term in ("有哪些", "都有哪些", "列一下", "产品有哪些", "产品列表"))
+    )
 
 
 def _catalog_product_ref(text: str) -> str:
@@ -191,6 +194,12 @@ def _catalog_product_ref(text: str) -> str:
         return "套锅"
     if "锅具" in text:
         return "锅具"
+    if "水壶" in text:
+        return "水壶"
+    if "烤盘" in text:
+        return "烤盘"
+    if "单锅" in text:
+        return "单锅"
     return "产品"
 
 

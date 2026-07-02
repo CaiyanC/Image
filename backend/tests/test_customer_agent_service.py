@@ -2947,6 +2947,15 @@ class CustomerAgentEndToEndBehaviorRegressionTest(unittest.IsolatedAsyncioTestCa
         self.assertTrue(any(task["type"] == "catalog_count" for task in plan["tasks"]))
         self.assertEqual(plan["source"], "product_catalog_structured_query")
 
+    def test_phase1_planner_routes_catalog_list_to_structured_query_without_catalog_word(self):
+        from app.services import customer_agent_planner_service
+
+        plan = customer_agent_planner_service.plan_customer_question("有哪些套锅？")
+
+        self.assertEqual(plan["primary_intent"], "catalog_count")
+        self.assertEqual(plan["product_ref"], "套锅")
+        self.assertEqual(plan["source"], "product_catalog_structured_query")
+
     def test_phase1_planner_routes_compare_choice_as_internal_compare_recommendation(self):
         from app.services import customer_agent_planner_service
 
@@ -3040,6 +3049,86 @@ class CustomerAgentEndToEndBehaviorRegressionTest(unittest.IsolatedAsyncioTestCa
         self.assertRegex(result["answer"], r"套锅")
         self.assertRegex(result["answer"], r"\d+")
         self.assertNotRegex(result["answer"], r"(向量|topK|片段)")
+
+    async def test_phase1_catalog_list_uses_structured_product_catalog_without_catalog_word(self):
+        self._add_product(
+            "CAT-LIST-1",
+            "轻量单人套锅",
+            "锅具",
+            "锅1.2L",
+            "硬质氧化铝合金",
+            "燃气炉",
+            "单人套锅",
+            "徒步",
+            520,
+        )
+        self._add_product(
+            "CAT-LIST-2",
+            "双人稳定套锅",
+            "锅具",
+            "锅1.8L",
+            "硬质氧化铝合金",
+            "燃气炉",
+            "双人套锅",
+            "露营",
+            680,
+        )
+        self.db.commit()
+
+        result = await customer_service_service.ask_customer_service(
+            self.db,
+            user_id="phase1-catalog-list-user",
+            question="有哪些套锅？",
+        )
+
+        plan = (result.get("debug") or {}).get("plan") or {}
+        metadata = result.get("answer_metadata") or {}
+        self.assertEqual(plan.get("primary_intent"), "catalog_count")
+        self.assertEqual(metadata.get("source"), "product_catalog_structured_query")
+        self.assertIn("CAT-LIST-1", result.get("result_skus") or [])
+        self.assertIn("CAT-LIST-2", result.get("result_skus") or [])
+        self.assertRegex(result["answer"], r"(CAT-LIST-1|轻量单人套锅)")
+        self.assertNotRegex(result["answer"], r"(当前知识库|片段|topK)")
+
+    async def test_phase1_recommendation_guard_prevents_kb_answer_without_products(self):
+        result = await customer_service_service.ask_customer_service(
+            self.db,
+            user_id="phase1-recommendation-guard-user",
+            question="一个人徒步，买什么产品",
+        )
+
+        plan = (result.get("debug") or {}).get("plan") or {}
+        self.assertEqual(plan.get("primary_intent"), "recommendation")
+        self.assertNotEqual(result.get("answer_type"), "knowledge_base_answer")
+        self.assertNotEqual(result.get("intent"), "knowledge_base_answer")
+        self.assertTrue(result.get("result_skus") or re.search(r"[A-Z]{2,}-[A-Z0-9-]+", result["answer"]))
+        self.assertNotRegex(result["answer"], r"^(户外打火棒适用于|.*卖点片段)")
+
+    async def test_phase1_timing_is_attached_to_usage_care_fast_path(self):
+        result = await customer_service_service.ask_customer_service(
+            self.db,
+            user_id="phase1-usage-care-timing-user",
+            question="不粘锅怎么清洗",
+        )
+
+        debug = result.get("debug") or {}
+        metadata = result.get("answer_metadata") or {}
+        self.assertIn("timing", debug)
+        self.assertIn("timing", metadata)
+        self.assertIn("total_duration_ms", debug["timing"])
+
+    async def test_phase1_timing_is_attached_to_composite_n065_path(self):
+        result = await customer_service_service.ask_customer_service(
+            self.db,
+            user_id="phase1-n065-timing-user",
+            question="推荐锅具，并说明 CW-C83 能不能用酒精炉",
+        )
+
+        debug = result.get("debug") or {}
+        metadata = result.get("answer_metadata") or {}
+        self.assertIn("timing", debug)
+        self.assertIn("timing", metadata)
+        self.assertIn("total_duration_ms", debug["timing"])
 
     async def test_phase1_compare_choice_covers_both_products_and_makes_decision(self):
         self._add_product_qa("CW-C93", "行山单锅适合几个人？", "行山单锅更偏一个人轻量徒步，容量余量有限。")
@@ -4835,6 +4924,11 @@ class CustomerAgentEndToEndBehaviorRegressionTest(unittest.IsolatedAsyncioTestCa
             price_positioning="高端",
         )
         self._add_product(
+            "CW-C74", "8寸煎盘-享野", "锅具", "煎盘", "硬质氧化铝合金",
+            "酒精炉, 燃气炉", "煎盘烤盘，适合煎烤", "露营煎烤", 420,
+            price_positioning="中端",
+        )
+        self._add_product(
             "CW-C82", "时谷水壶", "锅具", "1L", "304不锈钢",
             "酒精炉", "快速烧水", "露营补水，煮茶", 530,
             price_positioning="中端",
@@ -4862,7 +4956,9 @@ class CustomerAgentEndToEndBehaviorRegressionTest(unittest.IsolatedAsyncioTestCa
         self.assertIn("CW-C69-1", returned_skus)
         self.assertNotIn("CF-PG19", returned_skus)
         self.assertNotIn("CW-C70", returned_skus)
+        self.assertNotIn("CW-C74", returned_skus)
         self.assertNotIn("CW-C82", returned_skus)
+        self.assertNotRegex(result["answer"], r"(CW-C74|8寸煎盘|煎盘|烤盘|griddle)")
         self.assertTrue(returned_skus)
         self.assertLess(len(returned_skus), 10)
         self.assertRegex(result["answer"], r"(酒精炉|热源)")
@@ -4888,6 +4984,11 @@ class CustomerAgentEndToEndBehaviorRegressionTest(unittest.IsolatedAsyncioTestCa
             "CW-C06PRO", "轻途套锅", "锅具", "大锅约3.0L，小锅约1.7L，水壶约0.8L", "硬质氧化铝合金",
             "酒精炉, 燃气炉", "轻量套锅，适合两人做饭", "双人露营，轻量野餐", 880,
             price_positioning="高端",
+        )
+        self._add_product(
+            "CW-C74", "8寸煎盘-享野", "锅具", "煎盘", "硬质氧化铝合金",
+            "酒精炉, 燃气炉", "煎盘烤盘，适合煎烤", "露营煎烤", 420,
+            price_positioning="中端",
         )
         self._add_product(
             "CW-C82", "时谷水壶", "锅具", "1L", "304不锈钢",
@@ -4946,6 +5047,9 @@ class CustomerAgentEndToEndBehaviorRegressionTest(unittest.IsolatedAsyncioTestCa
         self.assertIn("CW-C06PRO", turn2_skus)
         self.assertNotIn("CW-C82", turn2_skus)
         self.assertNotIn("CF-PG19", turn2_skus)
+        self.assertNotIn("CW-C74", turn2_skus)
+        self.assertEqual(turn2.get("result_skus"), turn2_skus)
+        self.assertNotRegex(turn2["answer"], r"(CW-C74|8寸煎盘|煎盘|烤盘|griddle)")
         self.assertFalse(turn2_context.get("empty_subset"))
         self.assertTrue(turn2_skus)
         self.assertEqual(turn2_context.get("candidate_skus"), turn2_skus)

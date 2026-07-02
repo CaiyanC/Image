@@ -168,6 +168,14 @@ async def _save_agent_result_and_return(
     branch: str,
 ) -> dict:
     stage_start = perf_counter()
+    if not ((agent_result.get("debug") or {}).get("timing")) or not ((agent_result.get("answer_metadata") or {}).get("timing")):
+        existing_debug = agent_result.get("debug") if isinstance(agent_result.get("debug"), dict) else {}
+        existing_plan = existing_debug.get("plan") if isinstance(existing_debug.get("plan"), dict) else {}
+        agent_result = _attach_phase1_plan_and_timing(
+            agent_result,
+            existing_plan,
+            _phase1_timing(request_start=request_start),
+        )
     agent_result = _finalize_answer(agent_result)
     answer_metadata = agent_result.get("answer_metadata") if isinstance(agent_result.get("answer_metadata"), dict) else {}
     skip_polish = bool(agent_result.get("skip_polish"))
@@ -244,7 +252,11 @@ async def _save_agent_result_and_return(
         "actions": agent_result.get("actions") or [],
         "results": agent_result.get("results") or [],
         "steps": agent_result.get("steps") or [],
-        "result_skus": agent_result.get("result_skus") or [],
+        "result_skus": agent_result.get("result_skus") or [
+            str(item.get("sku") or "").strip().upper()
+            for item in (agent_result.get("results") or [])
+            if isinstance(item, dict) and str(item.get("sku") or "").strip()
+        ],
         "agent_mode": (agent_result.get("debug") or {}).get("agent_mode"),
     }
 
@@ -391,7 +403,9 @@ def _phase1_catalog_rows(db: Session, product_ref: str) -> list[dict]:
             "positioning",
             "long_description_cn",
         ))
-        if ref == "锅具":
+        if ref == "产品":
+            matched = True
+        elif ref == "锅具":
             matched = "锅" in str(row.get("category") or "") or "锅" in haystack
         elif ref == "套锅":
             matched = "套锅" in haystack or "锅" in str(row.get("category") or "") and "套" in haystack
@@ -406,7 +420,11 @@ def _phase1_catalog_count_result(db: Session, plan: dict) -> dict:
     product_ref = str(plan.get("product_ref") or "").strip() or "产品"
     rows = _phase1_catalog_rows(db, product_ref)
     skus = [str(row.get("sku") or "") for row in rows if row.get("sku")]
-    samples = "、".join(skus[:10])
+    samples = "、".join(
+        f"{row.get('sku')} {row.get('product_name_cn')}".strip()
+        for row in rows[:10]
+        if row.get("sku")
+    )
     suffix = f" 例如：{samples}。" if samples else ""
     return {
         "intent": "query_products",
@@ -504,10 +522,184 @@ def _phase1_answer_mentions_product(agent_result: dict) -> bool:
     return any(term in answer for term in ("单锅", "套锅", "锅具", "烤盘", "水壶", "行山", "激川"))
 
 
+def _phase1_structured_recommendation_result(db: Session, plan: dict) -> dict | None:
+    scenario = str(plan.get("scenario") or "").strip()
+    if not scenario:
+        return None
+    rows = _phase1_catalog_rows(db, "产品")
+    scored: list[tuple[int, dict]] = []
+    for row in rows:
+        haystack = " ".join(
+            str(row.get(key) or "")
+            for key in (
+                "sku",
+                "product_name_cn",
+                "category",
+                "capacity",
+                "features",
+                "usage_scenarios",
+                "positioning",
+                "long_description_cn",
+            )
+        )
+        score = 0
+        if "徒步" in scenario and "徒步" in haystack:
+            score += 8
+        if any(term in scenario for term in ("一个人", "单人", "1人")) and any(term in haystack for term in ("单人", "1人", "1-2人", "1000ML", "轻量")):
+            score += 5
+        if "轻量" in haystack or "便携" in haystack:
+            score += 2
+        if any(term in haystack for term in ("锅", "炉", "水壶", "套装")):
+            score += 1
+        if any(term in haystack for term in ("烤盘", "煎盘", "griddle")):
+            score -= 3
+        if score > 0:
+            scored.append((score, row))
+    scored.sort(key=lambda item: (-item[0], str(item[1].get("sku") or "")))
+    selected = [row for _, row in scored[:5]]
+    if not selected:
+        return None
+    skus = [str(row.get("sku") or "").strip().upper() for row in selected if row.get("sku")]
+    lines = []
+    for row in selected[:3]:
+        name = row.get("product_name_cn") or row.get("sku")
+        sku = row.get("sku")
+        reason = row.get("usage_scenarios") or row.get("features") or row.get("positioning") or "匹配当前使用场景"
+        lines.append(f"- {name}（{sku}）：{reason}")
+    return {
+        "intent": "recommendation",
+        "answer_type": "recommendation",
+        "answer": "按你“一个人徒步/轻量携带”的需求，可以优先看这些具体产品：\n" + "\n".join(lines),
+        "results": selected,
+        "result_skus": skus,
+        "candidate_skus": skus,
+        "debug": {"agent_mode": "planner_recommendation_guard_rebuild"},
+        "answer_metadata": {"source": "product_catalog_structured_recommendation"},
+        "skip_polish": True,
+    }
+
+
+def _phase1_repair_recommendation_result(db: Session, agent_result: dict, plan: dict) -> dict:
+    if not isinstance(agent_result, dict) or (plan or {}).get("primary_intent") != "recommendation":
+        return agent_result
+    if _phase1_answer_mentions_product(agent_result) and _phase1_result_skus(agent_result):
+        return agent_result
+    rebuilt = _phase1_structured_recommendation_result(db, plan)
+    return rebuilt or agent_result
+
+
+def _phase1_is_alcohol_stove_cookware_question(
+    question: str,
+    candidate_context: dict[str, Any] | None = None,
+    agent_result: dict | None = None,
+) -> bool:
+    text = str(question or "")
+    if "酒精炉" not in text and "alcohol stove" not in text.lower():
+        return False
+    context = candidate_context if isinstance(candidate_context, dict) else {}
+    if any(term in text for term in ("水壶", "茶壶", "烧水壶", "壶类")):
+        return False
+    if _is_service_pot_cookware_scope(
+        str(context.get("product_scope") or ""),
+        " ".join([text, str(context.get("user_question") or "")]),
+    ):
+        return True
+    result_text = ""
+    if isinstance(agent_result, dict):
+        result_text = " ".join(
+            str(value or "")
+            for row in (agent_result.get("results") or [])
+            if isinstance(row, dict)
+            for value in (
+                row.get("category"),
+                row.get("product_name_cn"),
+                row.get("product_name_en"),
+            )
+        )
+    return _is_service_pot_cookware_scope(
+        "",
+        " ".join([text, result_text]),
+    )
+
+
+def _phase1_filter_alcohol_stove_cookware_result(
+    db: Session,
+    agent_result: dict | None,
+    *,
+    question: str,
+    candidate_context: dict[str, Any] | None = None,
+) -> dict | None:
+    if not isinstance(agent_result, dict) or not _phase1_is_alcohol_stove_cookware_question(question, candidate_context, agent_result):
+        return agent_result
+    rows = [row for row in (agent_result.get("results") or []) if isinstance(row, dict)]
+    if not rows:
+        return agent_result
+    products = db.query(Product).filter(Product.sku.in_([
+        str(row.get("sku") or "").strip().upper()
+        for row in rows
+        if str(row.get("sku") or "").strip()
+    ])).all()
+    product_by_sku = {str(product.sku or "").strip().upper(): product for product in products}
+    filtered = [
+        row for row in rows
+        if _is_service_pot_cookware_product(product_by_sku.get(str(row.get("sku") or "").strip().upper()))
+    ]
+    if len(filtered) == len(rows):
+        return agent_result
+    skus = [str(row.get("sku") or "").strip().upper() for row in filtered if str(row.get("sku") or "").strip()]
+    result = dict(agent_result)
+    result["results"] = filtered
+    result["result_skus"] = skus
+    result["candidate_skus"] = skus
+    sources = list(result.get("sources") or [])
+    meta = next((item for item in sources if isinstance(item, dict) and item.get("type") == "agent_meta"), None)
+    scoped_context = {
+        "candidate_skus": skus,
+        "ordered_result_skus": skus,
+        "filtered_skus": skus,
+        "product_scope": "锅具",
+        "user_question": question,
+        "applied_filter": {"specs.heat_source": "酒精炉", "product.category": "锅具"},
+        "empty_subset": False,
+    }
+    if isinstance(meta, dict):
+        meta["candidate_context"] = scoped_context
+    else:
+        sources.append({"type": "agent_meta", "candidate_context": scoped_context})
+    result["sources"] = sources
+    debug = result.get("debug") if isinstance(result.get("debug"), dict) else {}
+    intent_debug = debug.get("intent") if isinstance(debug.get("intent"), dict) else {}
+    filters = intent_debug.get("filters") if isinstance(intent_debug.get("filters"), dict) else {}
+    filters["product.category"] = "锅具"
+    filters["specs.heat_source"] = "酒精炉"
+    intent_debug["filters"] = filters
+    debug["intent"] = intent_debug
+    debug["alcohol_stove_cookware_scope"] = "exclude_griddle_pan"
+    result["debug"] = debug
+    lines = ["筛选条件：类目包含 锅具；适用热源包含 酒精炉。", "已排除非锅具候选。"]
+    for row in filtered[:10]:
+        name = row.get("product_name_cn") or row.get("name") or row.get("sku")
+        sku = row.get("sku")
+        heat_source = row.get("heat_source") or ((row.get("field_values") or {}).get("热源") if isinstance(row.get("field_values"), dict) else "")
+        lines.append(f"- {name}（{sku}），适用热源：{heat_source or '同SKU资料/问答显示可用于酒精炉'}")
+    result["answer"] = "\n".join(lines)
+    result["skip_polish"] = True
+    return result
+
+
 def _run_phase1_answer_guard(agent_result: dict, plan: dict) -> dict:
     if not isinstance(agent_result, dict) or not isinstance(plan, dict):
         return agent_result
     primary_intent = str(plan.get("primary_intent") or "")
+    if primary_intent == "recommendation" and agent_result.get("answer_type") == "knowledge_base_answer":
+        skus = _phase1_result_skus(agent_result)
+        if skus:
+            agent_result["answer"] = f"更建议先看 {skus[0]}。它更贴近你的使用场景，建议结合容量、重量、便携性和适用人数确认。"
+        else:
+            agent_result["answer"] = "当前资料里没有找到足够明确、可推荐的具体产品；建议补充人数、场景、预算或希望的品类后再推荐。"
+        agent_result["answer_type"] = "recommendation"
+        agent_result["intent"] = "recommendation"
+        agent_result["skip_polish"] = True
     if plan.get("must_return_products") and not _phase1_answer_mentions_product(agent_result):
         skus = _phase1_result_skus(agent_result)
         if skus:
@@ -872,6 +1064,14 @@ async def ask_customer_service(
         agent_mode=(usage_care_result.get("debug") or {}).get("agent_mode") if usage_care_result else None,
     )
     if usage_care_result:
+        usage_care_result = _attach_phase1_plan_and_timing(
+            usage_care_result,
+            phase1_plan,
+            _phase1_timing(
+                request_start=request_start,
+                planner_duration_ms=planner_duration_ms,
+            ),
+        )
         usage_care_result = _finalize_answer(usage_care_result)
         usage_care_result = _shape_answer_for_output(usage_care_result)
         stage_start = perf_counter()
@@ -947,6 +1147,14 @@ async def ask_customer_service(
         agent_mode=(faq_result.get("debug") or {}).get("agent_mode") if faq_result else None,
     )
     if faq_result:
+        faq_result = _attach_phase1_plan_and_timing(
+            faq_result,
+            phase1_plan,
+            _phase1_timing(
+                request_start=request_start,
+                planner_duration_ms=planner_duration_ms,
+            ),
+        )
         faq_result = _finalize_answer(faq_result)
         faq_result = _shape_answer_for_output(faq_result)
         faq_result = await _attach_debug_supporting_knowledge(db, faq_result, question)
@@ -1086,6 +1294,12 @@ async def ask_customer_service(
             "actions": agent_result.get("actions") or [],
             "results": agent_result.get("results") or [],
             "steps": agent_result.get("steps") or [],
+            "result_skus": agent_result.get("result_skus") or [
+                str(item.get("sku") or "").strip().upper()
+                for item in (agent_result.get("results") or [])
+                if isinstance(item, dict) and str(item.get("sku") or "").strip()
+            ],
+            "agent_mode": (agent_result.get("debug") or {}).get("agent_mode"),
         }
 
     preloaded_entity_stack: list[dict] | None = None
@@ -1434,6 +1648,14 @@ async def ask_customer_service(
             candidate_context=candidate_context,
         )
         customer_perf_service.log_stage("process_agent_request_followup", stage_start, hit=bool(agent_result), intent=agent_result.get("intent") if agent_result else None, agent_mode=(agent_result.get("debug") or {}).get("agent_mode") if agent_result else None)
+    agent_result = _phase1_filter_alcohol_stove_cookware_result(
+        db,
+        agent_result,
+        question=question,
+        candidate_context=candidate_followup_context or _latest_candidate_context_for_sources(db, conversation_id),
+    )
+    if isinstance(agent_result, dict):
+        agent_result = _phase1_repair_recommendation_result(db, agent_result, phase1_plan)
     if agent_result:
         stage_start = perf_counter()
         guard_start = perf_counter()
@@ -1522,6 +1744,12 @@ async def ask_customer_service(
             "actions": agent_result.get("actions") or [],
             "results": agent_result.get("results") or [],
             "steps": agent_result.get("steps") or [],
+            "result_skus": agent_result.get("result_skus") or [
+                str(item.get("sku") or "").strip().upper()
+                for item in (agent_result.get("results") or [])
+                if isinstance(item, dict) and str(item.get("sku") or "").strip()
+            ],
+            "agent_mode": (agent_result.get("debug") or {}).get("agent_mode"),
         }
 
     resolved_sku = _resolve_sku(db, question, sku)
@@ -4639,6 +4867,8 @@ def _normalize_candidate_context_followup_result(
     else:
         sources.append({"type": "agent_meta", "candidate_context": scoped_context})
     agent_result["sources"] = sources
+    agent_result["result_skus"] = result_skus
+    agent_result["candidate_skus"] = result_skus
     return agent_result
 
 
@@ -4661,12 +4891,15 @@ def _is_service_pot_cookware_product(product: Product | None) -> bool:
             product.sub_category,
         )
     )
-    cookware_terms = ("套锅", "炒锅", "煎锅", "单锅", "汤锅", "锅具", "锅", "煎盘", "烤盘")
-    if any(term in name_text for term in cookware_terms):
-        return True
+    excluded_terms = ("烤盘", "煎盘", "瓦片烤盘", "griddle")
+    if any(term in name_text.lower() for term in excluded_terms):
+        return False
     kettle_terms = ("水壶", "茶壶", "烧水壶", "壶")
     if any(term in name_text for term in kettle_terms):
         return False
+    cookware_terms = ("套锅", "炒锅", "煎锅", "单锅", "汤锅", "锅具", "锅")
+    if any(term in name_text for term in cookware_terms):
+        return True
     return True
 
 
