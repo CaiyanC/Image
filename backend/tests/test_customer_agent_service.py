@@ -3015,6 +3015,42 @@ class CustomerAgentEndToEndBehaviorRegressionTest(unittest.IsolatedAsyncioTestCa
         self.assertTrue(plan["field_only"])
         self.assertTrue(plan["routing_conflict"])
 
+    def test_phase1_planner_routes_long_size_question_to_field_only(self):
+        from app.services import customer_agent_planner_service
+
+        plan = customer_agent_planner_service.plan_customer_question(
+            "瓦片烤盘到底多大？我想确认能不能放进我的收纳箱。",
+            deterministic_intent="product_detail",
+            deterministic_answer_type="product_detail",
+        )
+
+        self.assertEqual(plan["primary_intent"], "product_field")
+        self.assertEqual(plan["answer_type"], "product_detail")
+        self.assertEqual(plan["product_ref"], "瓦片烤盘")
+        self.assertEqual(plan["requested_field"], "尺寸")
+        self.assertTrue(plan["field_only"])
+
+    def test_phase1_planner_routes_named_set_difference_to_comparison(self):
+        from app.services import customer_agent_planner_service
+
+        compare_only = customer_agent_planner_service.plan_customer_question(
+            "轻途套锅和享野套锅有什么区别？"
+        )
+        choose = customer_agent_planner_service.plan_customer_question(
+            "轻途套锅和享野套锅有什么区别？我两个人露营应该买哪个？"
+        )
+
+        self.assertEqual(compare_only["primary_intent"], "comparison")
+        self.assertEqual(compare_only["answer_type"], "comparison")
+        self.assertEqual(compare_only["product_refs"], ["轻途套锅", "享野套锅"])
+        self.assertTrue(compare_only["must_compare_both_products"])
+        self.assertFalse(compare_only["must_make_choice"])
+        self.assertEqual(choose["primary_intent"], "product_compare_recommendation")
+        self.assertEqual(choose["answer_type"], "comparison")
+        self.assertEqual(choose["product_refs"], ["轻途套锅", "享野套锅"])
+        self.assertTrue(choose["must_compare_both_products"])
+        self.assertTrue(choose["must_make_choice"])
+
     def test_phase1_planner_routes_catalog_count_to_structured_query(self):
         from app.services import customer_agent_planner_service
 
@@ -3087,6 +3123,42 @@ class CustomerAgentEndToEndBehaviorRegressionTest(unittest.IsolatedAsyncioTestCa
         self.assertRegex(result["answer"], r"(没有找到|暂无|未找到|资料里没有)")
         self.assertRegex(result["answer"], r"(尺寸|规格|直径)")
         self.assertNotRegex(result["answer"], r"(推荐|卖点|核心)")
+
+    async def test_phase1_long_size_question_bypasses_product_qa_selling_points(self):
+        self._add_product(
+            "CF-PG19",
+            "瓦片烤盘",
+            "烤盘",
+            "/",
+            "铝合金",
+            "/",
+            "基础款瓦片烤盘，适合户外烧烤",
+            "户外烧烤",
+            450,
+        )
+        self._add_product_qa("CF-PG19", "瓦片烤盘核心卖点是什么？", "核心卖点：棋盘格纹理、大面积煎烤。", priority=20)
+        self.db.commit()
+
+        for question in (
+            "瓦片烤盘到底多大？我想确认能不能放进我的收纳箱。",
+            "瓦片烤盘尺寸是什么",
+            "瓦片烤盘规格是什么",
+            "瓦片烤盘直径是多少",
+        ):
+            result = await customer_service_service.ask_customer_service(
+                self.db,
+                user_id=f"phase1-field-long-user-{abs(hash(question))}",
+                question=question,
+            )
+            plan = (result.get("debug") or {}).get("plan") or {}
+            timing = (result.get("answer_metadata") or {}).get("timing") or {}
+            self.assertEqual(result.get("answer_type"), "product_detail")
+            self.assertEqual(plan.get("primary_intent"), "product_field")
+            self.assertEqual(plan.get("requested_field"), "尺寸")
+            self.assertRegex(result["answer"], r"(没有找到|暂无|未找到|资料里没有)")
+            self.assertRegex(result["answer"], r"(尺寸|规格|直径)")
+            self.assertNotRegex(result["answer"], r"(核心卖点|棋盘格|大面积煎烤|推荐理由)")
+            self.assertIn("total_duration_ms", timing)
 
     async def test_phase1_catalog_count_uses_structured_product_catalog(self):
         self._add_product(
@@ -3230,6 +3302,110 @@ class CustomerAgentEndToEndBehaviorRegressionTest(unittest.IsolatedAsyncioTestCa
         self.assertRegex(result["answer"], r"(区别|相比|不同)")
         self.assertRegex(result["answer"], r"(两个人|2人|吃饱)")
         self.assertRegex(result["answer"], r"(建议|更稳妥|更适合|选)")
+
+    async def test_phase1_light_vs_xiangye_set_compare_stays_on_explicit_pair(self):
+        self._add_product(
+            "CW-C06PRO",
+            "轻途套锅",
+            "锅具",
+            "大锅约3.0L，小锅约1.7L，水壶约0.8L",
+            "硬质氧化铝合金",
+            "酒精炉, 燃气炉",
+            "轻量套锅，适合两人做饭",
+            "两个人露营，轻量野餐",
+            880,
+        )
+        self._add_product(
+            "CW-C19T-37",
+            "享野套锅",
+            "锅具",
+            "2升锅，7.5英寸煎盘，1.4升水壶",
+            "硬质氧化铝合金",
+            "酒精炉, 燃气炉",
+            "全套收纳便携",
+            "家庭野餐，公园野餐，双人露营",
+            760,
+        )
+        self._add_product(
+            "TW-139CS",
+            "城市出逃饭盒",
+            "餐具",
+            "饭盒",
+            "不锈钢",
+            "/",
+            "餐具配件",
+            "通勤野餐",
+            120,
+        )
+        self.db.commit()
+
+        result = await customer_service_service.ask_customer_service(
+            self.db,
+            user_id="q09-compare-user",
+            question="轻途套锅和享野套锅有什么区别？我两个人露营应该买哪个？",
+        )
+
+        plan = (result.get("debug") or {}).get("plan") or {}
+        self.assertEqual(result.get("answer_type"), "comparison")
+        self.assertEqual(plan.get("primary_intent"), "product_compare_recommendation")
+        self.assertTrue(plan.get("must_compare_both_products"))
+        self.assertTrue(plan.get("must_make_choice"))
+        self.assertRegex(result["answer"], r"轻途套锅")
+        self.assertRegex(result["answer"], r"享野套锅")
+        self.assertRegex(result["answer"], r"(建议|更适合|选)")
+        self.assertEqual(set(result.get("result_skus") or []), {"CW-C06PRO", "CW-C19T-37"})
+        self.assertNotRegex(result["answer"], r"(小方锅|城市出逃)")
+
+    async def test_phase1_picnic_set_buy_question_routes_to_recommendation(self):
+        self._add_product(
+            "CW-C19T-37",
+            "旅伴2-3人野餐锅5件套",
+            "锅具",
+            "2升锅，7.5英寸煎盘，1.4升水壶",
+            "硬质氧化铝合金",
+            "酒精炉, 燃气炉",
+            "全套收纳便携",
+            "家庭野餐，公园野餐，双人露营",
+            760,
+        )
+        self._add_product(
+            "TW-SPICE",
+            "户外调料瓶",
+            "配件",
+            "调料瓶",
+            "塑料",
+            "/",
+            "调味收纳",
+            "野餐配件",
+            50,
+        )
+        self._add_product(
+            "CS-TRI",
+            "户外三角架",
+            "配件",
+            "三角架",
+            "不锈钢",
+            "/",
+            "悬挂支架",
+            "营地配件",
+            180,
+        )
+        self.db.commit()
+
+        result = await customer_service_service.ask_customer_service(
+            self.db,
+            user_id="q16-t1-user",
+            question="我周末两个人野餐，想买套锅。",
+        )
+
+        plan = (result.get("debug") or {}).get("plan") or {}
+        text = " ".join([result.get("answer", ""), " ".join(result.get("result_skus") or [])])
+        self.assertEqual(result.get("answer_type"), "recommendation")
+        self.assertEqual(plan.get("primary_intent"), "recommendation")
+        self.assertNotEqual((result.get("debug") or {}).get("agent_mode"), "purchase_channel_fast_path")
+        self.assertRegex(text, r"(CW-C19T-37|旅伴2-3人野餐锅5件套)")
+        self.assertNotRegex(text, r"(调料瓶|三角架|TW-SPICE|CS-TRI|水壶)")
+        self.assertIn("total_duration_ms", (result.get("answer_metadata") or {}).get("timing") or {})
 
     async def test_phase1_timing_is_attached_to_service_results(self):
         result = await customer_service_service.ask_customer_service(
@@ -7068,6 +7244,10 @@ class CustomerServiceServiceTest(unittest.IsolatedAsyncioTestCase):
     async def test_single_person_cookware_purchase_is_not_classified_as_purchase_channel(self):
         self.assertIsNone(customer_service_service._classify_customer_faq_intent("我想买个锅，适合一个人用的那种"))
 
+    async def test_picnic_set_purchase_decision_is_not_purchase_channel(self):
+        self.assertIsNone(customer_service_service._classify_customer_faq_intent("我周末两个人野餐，想买套锅。"))
+        self.assertEqual(customer_service_service._classify_customer_faq_intent("套锅哪里可以买到？"), "purchase_channel")
+
     async def test_single_person_named_cookware_question_stays_out_of_recommendation_fast_path(self):
         self.assertEqual(
             customer_service_service._classify_customer_faq_intent("「行山单锅」适合一个人用吗"),
@@ -7515,6 +7695,26 @@ class CustomerServiceServiceTest(unittest.IsolatedAsyncioTestCase):
         meta = next(item for item in sources if item.get("type") == "agent_meta")
         self.assertEqual(meta["recommendation_context"]["recommended_skus"], ["CW-C93"])
         self.assertEqual(meta["recommendation_context"]["product_scope"], "\u9505")
+
+    def test_recommendation_context_orders_recommended_skus_by_answer_first_pick(self):
+        sources = customer_service_service._sources_with_result_context(
+            {
+                "intent": "recommend_products",
+                "answer_type": "recommendation",
+                "confidence": "high",
+                "answer": "优先推荐 CW-C93 行山单锅。也可以考虑 CW-C01-37。",
+                "results": [
+                    {"sku": "CW-C01-37", "product_name_cn": "1－2人野营锅7件套"},
+                    {"sku": "CW-C93", "product_name_cn": "行山单锅"},
+                ],
+                "sources": [],
+            },
+            user_question="我一个人徒步，想轻一点，推荐一个锅。",
+        )
+
+        meta = next(item for item in sources if item.get("type") == "agent_meta")
+        self.assertEqual(meta["recommendation_context"]["recommended_skus"][:2], ["CW-C93", "CW-C01-37"])
+        self.assertEqual(meta["recommendation_context"]["ordered_result_skus"][:2], ["CW-C93", "CW-C01-37"])
 
     def test_recommendation_context_inherits_product_scope_for_alternative_turn(self):
         sources = customer_service_service._sources_with_result_context(
@@ -8229,6 +8429,213 @@ class CustomerServiceServiceTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result["answer_type"], "product_detail")
         self.assertEqual(result["sku"], "CW-C05-37")
         self.assertIn("CW-C05-37", result["answer"])
+
+    async def test_ordinal_compare_without_context_requires_product_names(self):
+        result = await customer_service_service.ask_customer_service(
+            self.db,
+            user_id="q20-no-context-user",
+            question="你刚才推荐的第一个和第二个，哪个更适合女生一个人背？",
+        )
+
+        self.assertIn(result["answer_type"], {"clarification", "context_required"})
+        self.assertRegex(result["answer"], r"(没有看到|没有可引用|补充|产品名|SKU)")
+        self.assertFalse(result.get("result_skus") or [])
+        self.assertNotRegex(result["answer"], r"(水壶|酒精炉套装|推荐\s*[A-Z]{2,}-)")
+        self.assertIn("total_duration_ms", (result.get("answer_metadata") or {}).get("timing") or {})
+
+    async def test_pronoun_heat_source_followup_uses_first_recommended_sku(self):
+        for sku, name, heat_source, features in (
+            ("CW-C93", "行山单锅", "酒精炉, 燃气炉", "极限轻量"),
+            ("CW-C73", "轻量备用锅", "燃气炉", "便携"),
+        ):
+            product = Product(
+                id=f"product-{sku}",
+                sku=sku,
+                barcode=f"barcode-{sku}",
+                product_name_cn=name,
+                product_name_en=name,
+                brand="alocs爱路客",
+                category="锅具",
+            )
+            self.db.add(product)
+            self.db.add(ProductSpecs(
+                id=f"specs-{sku}",
+                product_id=product.id,
+                capacity="锅 1000ML" if sku == "CW-C93" else "锅 900ML",
+                body_material="硬质氧化铝合金",
+                heat_source=heat_source,
+                technical_advantages=features,
+            ))
+            self.db.add(ProductBusiness(
+                id=f"business-{sku}",
+                product_id=product.id,
+                usage_scenarios="单人徒步",
+                price_positioning="中端",
+            ))
+        conversation = CustomerServiceConversation(id="conv-q15-compat", user_id="q15-user", title="q15")
+        self.db.add(conversation)
+        self.db.add(CustomerServiceMessage(
+            conversation_id=conversation.id,
+            role="assistant",
+            content="首推 CW-C93 行山单锅，备选 CW-C73。",
+            sources_json=json.dumps([
+                {
+                    "type": "agent_meta",
+                    "intent": "recommend_products",
+                    "answer_type": "recommendation",
+                    "recommendation_context": {
+                        "recommended_skus": ["CW-C93"],
+                        "ordered_result_skus": ["CW-C93", "CW-C73"],
+                        "candidate_skus": ["CW-C93", "CW-C73"],
+                        "user_question": "我一个人徒步，想轻一点，推荐一个锅。",
+                        "product_scope": "锅",
+                    },
+                    "candidate_context": {
+                        "candidate_skus": ["CW-C93", "CW-C73"],
+                        "ordered_result_skus": ["CW-C93", "CW-C73"],
+                        "recommended_skus": ["CW-C93"],
+                        "user_question": "我一个人徒步，想轻一点，推荐一个锅。",
+                        "product_scope": "锅",
+                    },
+                }
+            ], ensure_ascii=False),
+        ))
+        self.db.commit()
+
+        result = await customer_service_service.ask_customer_service(
+            self.db,
+            user_id="q15-user",
+            conversation_id=conversation.id,
+            question="它能不能用酒精炉？",
+        )
+
+        self.assertEqual(result.get("answer_type"), "product_detail")
+        self.assertIn("CW-C93", result["answer"])
+        self.assertIn("酒精炉", result["answer"])
+        self.assertNotRegex(result["answer"], r"(列表|列几个|符合条件)")
+        self.assertEqual((result.get("result_skus") or [])[:1], ["CW-C93"])
+
+    async def test_ordinal_compare_with_context_resolves_first_and_second_products(self):
+        for sku, name, weight in (
+            ("CW-C93", "行山单锅", 220),
+            ("TW-141", "野营套锅", 800),
+        ):
+            product = Product(
+                id=f"product-q20-{sku}",
+                sku=sku,
+                barcode=f"barcode-q20-{sku}",
+                product_name_cn=name,
+                product_name_en=name,
+                brand="alocs爱路客",
+                category="锅具",
+            )
+            self.db.add(product)
+            self.db.add(ProductSpecs(
+                id=f"specs-q20-{sku}",
+                product_id=product.id,
+                capacity="锅 1000ML" if sku == "CW-C93" else "套锅组合",
+                body_material="硬质氧化铝合金",
+                heat_source="燃气炉",
+                technical_advantages="极限轻量" if sku == "CW-C93" else "多人套锅",
+                gross_weight_g=weight,
+            ))
+            self.db.add(ProductBusiness(
+                id=f"business-q20-{sku}",
+                product_id=product.id,
+                usage_scenarios="单人徒步" if sku == "CW-C93" else "多人野餐",
+                positioning="轻量单锅" if sku == "CW-C93" else "野餐套锅",
+            ))
+        conversation = CustomerServiceConversation(id="conv-q20-with-context", user_id="q20-context-user", title="q20")
+        self.db.add(conversation)
+        self.db.add(CustomerServiceMessage(
+            conversation_id=conversation.id,
+            role="assistant",
+            content="推荐第一款 CW-C93，第二款 TW-141。",
+            sources_json=json.dumps([
+                {
+                    "type": "agent_meta",
+                    "intent": "recommend_products",
+                    "answer_type": "recommendation",
+                    "recommendation_context": {
+                        "recommended_skus": ["CW-C93", "TW-141"],
+                        "ordered_result_skus": ["CW-C93", "TW-141"],
+                        "candidate_skus": ["CW-C93", "TW-141"],
+                        "user_question": "我一个人徒步，想轻一点，推荐两个锅。",
+                        "product_scope": "锅",
+                    },
+                }
+            ], ensure_ascii=False),
+        ))
+        self.db.commit()
+
+        result = await customer_service_service.ask_customer_service(
+            self.db,
+            user_id="q20-context-user",
+            conversation_id=conversation.id,
+            question="你刚才推荐的第一个和第二个，哪个更适合女生一个人背？",
+        )
+
+        self.assertEqual(result.get("answer_type"), "comparison")
+        self.assertRegex(result["answer"], r"CW-C93")
+        self.assertRegex(result["answer"], r"TW-141")
+        self.assertNotRegex(result["answer"], r"(没有看到|请把两个产品名)")
+
+    async def test_comparison_sequence_keeps_two_products_for_choice_and_heat_source(self):
+        for sku, name, heat_source, scenarios in (
+            ("CW-C06PRO", "轻途套锅", "酒精炉, 燃气炉", "两个人露营，轻量徒步"),
+            ("CW-C19T-37", "享野套锅", "酒精炉, 燃气炉", "家庭野餐，双人露营"),
+        ):
+            product = Product(
+                id=f"product-q17-{sku}",
+                sku=sku,
+                barcode=f"barcode-q17-{sku}",
+                product_name_cn=name,
+                product_name_en=name,
+                brand="alocs爱路客",
+                category="锅具",
+            )
+            self.db.add(product)
+            self.db.add(ProductSpecs(
+                id=f"specs-q17-{sku}",
+                product_id=product.id,
+                capacity="大锅约3.0L" if sku == "CW-C06PRO" else "2升锅，1.4升水壶",
+                body_material="硬质氧化铝合金",
+                heat_source=heat_source,
+                technical_advantages="轻量收纳" if sku == "CW-C06PRO" else "全套收纳便携",
+            ))
+            self.db.add(ProductBusiness(
+                id=f"business-q17-{sku}",
+                product_id=product.id,
+                usage_scenarios=scenarios,
+                positioning=scenarios,
+            ))
+        self.db.commit()
+
+        turn1 = await customer_service_service.ask_customer_service(
+            self.db,
+            user_id="q17-user",
+            question="轻途套锅和享野套锅有什么区别？",
+        )
+        turn2 = await customer_service_service.ask_customer_service(
+            self.db,
+            user_id="q17-user",
+            conversation_id=turn1.get("conversation_id"),
+            question="那哪个更适合新手？",
+        )
+        turn3 = await customer_service_service.ask_customer_service(
+            self.db,
+            user_id="q17-user",
+            conversation_id=turn1.get("conversation_id"),
+            question="它们能不能用酒精炉？",
+        )
+
+        self.assertEqual(turn1.get("answer_type"), "comparison")
+        self.assertEqual(set(turn1.get("result_skus") or []), {"CW-C06PRO", "CW-C19T-37"})
+        self.assertRegex(turn2["answer"], r"(CW-C06PRO|轻途套锅)")
+        self.assertRegex(turn2["answer"], r"(CW-C19T-37|享野套锅)")
+        self.assertRegex(turn2["answer"], r"(新手|建议|更适合|选)")
+        self.assertRegex(turn3["answer"], r"(CW-C06PRO|轻途套锅).*(酒精炉)")
+        self.assertRegex(turn3["answer"], r"(CW-C19T-37|享野套锅).*(酒精炉)")
 
     async def test_pronoun_update_uses_previous_result_sku(self):
         product = Product(

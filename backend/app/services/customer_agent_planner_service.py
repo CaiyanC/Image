@@ -50,17 +50,18 @@ def plan_customer_question(
         plan.update(compatibility)
         return plan
 
-    if _is_compare_choice_question(text):
+    if _is_compare_question(text):
         products = _extract_compare_product_refs(text)
+        must_make_choice = _is_compare_choice_question(text)
         plan.update(
             {
-                "primary_intent": "product_compare_recommendation",
+                "primary_intent": "product_compare_recommendation" if must_make_choice else "comparison",
                 "answer_type": "comparison",
                 "product_refs": products,
                 "scenario": "两个人吃饱" if _has_two_person_signal(text) else "",
                 "constraints": ["两人", "容量够", "户外吃饭"],
                 "must_compare_both_products": True,
-                "must_make_choice": True,
+                "must_make_choice": must_make_choice,
                 "confidence": "high",
                 "tasks": [
                     {
@@ -73,11 +74,15 @@ def plan_customer_question(
                         "products": products,
                         "source": "file_knowledge_base",
                     },
-                    {
-                        "type": "recommendation_decision",
-                        "scenario": "两个人吃饱",
-                        "constraints": ["两人", "容量够", "户外吃饭"],
-                    },
+                    *(
+                        [{
+                            "type": "recommendation_decision",
+                            "scenario": "两个人吃饱",
+                            "constraints": ["两人", "容量够", "户外吃饭"],
+                        }]
+                        if must_make_choice
+                        else []
+                    ),
                 ],
             }
         )
@@ -209,17 +214,24 @@ def _explicit_pan_alcohol_stove_compatibility(text: str) -> dict[str, Any] | Non
     }
 
 
-def _is_compare_choice_question(text: str) -> bool:
+def _is_compare_question(text: str) -> bool:
     return (
         "和" in text
         and any(term in text for term in ("区别", "不同", "对比", "比较"))
-        and any(term in text for term in ("选哪个", "应该选", "更适合", "选哪"))
+        and len(_extract_compare_product_refs(text)) >= 2
+    )
+
+
+def _is_compare_choice_question(text: str) -> bool:
+    return (
+        _is_compare_question(text)
+        and any(term in text for term in ("选哪个", "应该选", "应该买", "买哪个", "更适合", "选哪", "该买"))
     )
 
 
 def _extract_compare_product_refs(text: str) -> list[str]:
     products: list[str] = []
-    for name in ("行山单锅", "激川单锅"):
+    for name in ("行山单锅", "激川单锅", "轻途套锅", "享野套锅"):
         if name in text:
             products.append(name)
     if products:
@@ -256,22 +268,59 @@ def _catalog_product_ref(text: str) -> str:
 
 
 def _requested_field(text: str) -> str:
-    if any(term in text for term in ("尺寸", "多大", "规格", "直径")):
+    if any(term in text for term in ("尺寸", "多大", "规格", "直径", "长宽高", "长宽", "高度", "宽度")):
         return "尺寸"
+    if any(term in text for term in ("容量", "装多少")):
+        return "容量"
+    if any(term in text for term in ("重量", "多重", "多沉")):
+        return "重量"
+    if any(term in text for term in ("材质", "什么材料", "材料")):
+        return "材质"
     return ""
 
 
 def _field_product_ref(text: str, requested_field: str) -> str:
     if not requested_field:
         return ""
-    for suffix in ("尺寸是什么", "多大", "规格是什么", "直径是多少", "尺寸", "规格", "直径"):
-        if text.endswith(suffix):
-            return text[: -len(suffix)].strip("「」 ？?")
+    for suffix in ("尺寸是什么", "多大", "规格是什么", "直径是多少", "容量是多少", "重量是多少", "材质是什么", "尺寸", "规格", "直径", "容量", "重量", "材质"):
+        idx = text.find(suffix)
+        if idx > 0:
+            return _clean_product_ref_fragment(text[:idx])
     return ""
 
 
+def _clean_product_ref_fragment(value: str) -> str:
+    text = str(value or "").strip("「」 ？?。,.，")
+    for prefix in ("你们那个", "你们的", "那个", "这款", "这个"):
+        if text.startswith(prefix):
+            text = text[len(prefix):].strip()
+    for suffix in ("到底", "具体", "大概", "请问"):
+        if text.endswith(suffix):
+            text = text[: -len(suffix)].strip()
+    return text.strip("「」 ？?。,.，")
+
+
 def _is_recommendation_question(text: str) -> bool:
-    return any(term in text for term in ("推荐", "买什么", "买哪款", "选哪款", "该买哪", "买什么产品"))
+    if _looks_like_context_ordinal_reference(text):
+        return False
+    if any(term in text for term in ("推荐", "买什么", "买哪款", "选哪款", "该买哪", "买什么产品")):
+        return True
+    product_terms = ("锅", "套锅", "单锅", "炉", "炉具", "水壶", "餐具", "套装")
+    scenario_terms = ("野餐", "露营", "徒步", "爬山", "公园", "周末", "两个人", "三个人", "一个人", "轻便", "轻量")
+    purchase_decision_terms = ("想买", "买个", "买口", "买套", "买一套", "应该买", "该买", "买")
+    return (
+        any(term in text for term in purchase_decision_terms)
+        and any(term in text for term in product_terms)
+        and any(term in text for term in scenario_terms)
+    )
+
+
+def _looks_like_context_ordinal_reference(text: str) -> bool:
+    return (
+        any(term in text for term in ("刚才", "前面", "上面"))
+        and any(term in text for term in ("第一个", "第一款"))
+        and any(term in text for term in ("第二个", "第二款"))
+    )
 
 
 def _has_two_person_signal(text: str) -> bool:

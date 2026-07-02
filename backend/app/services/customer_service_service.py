@@ -368,6 +368,17 @@ def _phase1_product_field_result(db: Session, plan: dict) -> dict | None:
         value = str(getattr(specs, "size_info", "") or "").strip()
         if value in {"", "[]", "/"}:
             value = ""
+    elif requested_field == "容量":
+        value = str(getattr(specs, "capacity", "") or "").strip()
+        if value in {"", "[]", "/"}:
+            value = ""
+    elif requested_field == "重量":
+        weight = getattr(specs, "gross_weight_g", None)
+        value = f"{weight}g" if weight not in (None, "", 0) else ""
+    elif requested_field == "材质":
+        value = str(getattr(specs, "body_material", "") or "").strip()
+        if value in {"", "[]", "/"}:
+            value = ""
     row = _product_row_from_model(product, specs, business, content)
     if requested_field == "heat_source":
         answer, evidence_status = _phase1_alcohol_stove_compatibility_answer(db, row)
@@ -569,9 +580,12 @@ def _phase1_compare_choice_result(db: Session, plan: dict) -> dict | None:
         f"{first_name}和{second_name}的区别可以先看容量、重量、材质和使用场景。"
         f"{first_name}：{first_evidence or '当前资料未提供足够细项'}。"
         f"{second_name}：{second_evidence or '当前资料未提供足够细项'}。"
-        f"两个人吃饱更建议选{choice_name}（{choice.get('sku')}）。"
-        "原因是它在现有资料里对两人/容量余量/户外吃饭场景的匹配更稳妥；如果还要精确判断饭量，仍建议以实际容量和菜量为准。"
     )
+    if plan.get("must_make_choice"):
+        answer += (
+            f"两个人吃饱更建议选{choice_name}（{choice.get('sku')}）。"
+            "原因是它在现有资料里对两人/容量余量/户外吃饭场景的匹配更稳妥；如果还要精确判断饭量，仍建议以实际容量和菜量为准。"
+        )
     return {
         "intent": "compare_products",
         "answer_type": "comparison",
@@ -579,7 +593,10 @@ def _phase1_compare_choice_result(db: Session, plan: dict) -> dict | None:
         "results": rows,
         "result_skus": [str(row.get("sku") or "") for row in rows if row.get("sku")],
         "candidate_skus": [str(row.get("sku") or "") for row in rows if row.get("sku")],
-        "answer_metadata": {"source": "planner_compare_choice", "final_choice_sku": choice.get("sku")},
+        "answer_metadata": {
+            "source": "planner_compare_choice",
+            "final_choice_sku": choice.get("sku") if plan.get("must_make_choice") else None,
+        },
         "debug": {"agent_mode": "planner_compare_choice"},
         "skip_polish": True,
     }
@@ -597,6 +614,145 @@ def _phase1_two_person_score(row: dict) -> int:
     if "一个人" in text or "单人" in text:
         score -= 2
     return score
+
+
+def _context_required_ordinal_compare_result(question: str) -> dict:
+    return {
+        "intent": "clarify",
+        "answer_type": "clarification",
+        "answer": "我这边没有看到你前面提到的第一个和第二个产品，请把两个产品名或 SKU 发我，我再帮你比较哪个更适合一个人背。",
+        "results": [],
+        "result_skus": [],
+        "candidate_skus": [],
+        "needs_clarification": True,
+        "answer_metadata": {"answer_policy": "context_required"},
+        "debug": {"agent_mode": "context_required_ordinal_compare"},
+        "skip_polish": True,
+    }
+
+
+def _looks_like_context_required_ordinal_compare(question: str) -> bool:
+    text = str(question or "")
+    return (
+        any(term in text for term in ("刚才", "前面", "上面"))
+        and any(term in text for term in ("第一个", "第一款"))
+        and any(term in text for term in ("第二个", "第二款"))
+        and any(term in text for term in ("哪个", "更适合", "比较", "比"))
+    )
+
+
+def _pronoun_heat_source_followup_target_sku(question: str, recommendation_context: dict[str, Any] | None) -> str:
+    text = str(question or "")
+    if not (
+        any(term in text for term in ("它", "这个", "这款", "刚才推荐"))
+        and any(term in text for term in ("酒精炉", "酒精"))
+        and any(term in text for term in ("能不能", "能用", "可以用", "支持", "是否支持"))
+    ):
+        return ""
+    context = recommendation_context if isinstance(recommendation_context, dict) else {}
+    for key in ("recommended_skus", "ordered_result_skus", "candidate_skus"):
+        for sku in context.get(key) or []:
+            value = str(sku or "").strip().upper()
+            if value:
+                return value
+    return ""
+
+
+def _product_heat_source_followup_result(db: Session, question: str, sku: str) -> dict | None:
+    if not sku:
+        return None
+    plan = {
+        "primary_intent": "product_field",
+        "answer_type": "product_detail",
+        "product_ref": sku,
+        "requested_field": "heat_source",
+        "field_only": True,
+        "confidence": "high",
+        "tasks": [{"type": "product_field", "product_ref": sku, "requested_field": "heat_source"}],
+    }
+    result = _phase1_product_field_result(db, plan)
+    if not result:
+        return None
+    debug = result.get("debug") if isinstance(result.get("debug"), dict) else {}
+    debug["agent_mode"] = "recommendation_context_product_compatibility"
+    result["debug"] = debug
+    return result
+
+
+def _context_skus_for_pair_followup(*contexts: dict[str, Any] | None) -> list[str]:
+    for context in contexts:
+        if not isinstance(context, dict):
+            continue
+        for key in ("ordered_result_skus", "recommended_skus", "candidate_skus"):
+            skus = [
+                str(sku or "").strip().upper()
+                for sku in context.get(key) or []
+                if str(sku or "").strip()
+            ]
+            if len(skus) >= 2:
+                return skus[:2]
+    return []
+
+
+def _context_pair_followup_result(db: Session, question: str, skus: list[str]) -> dict | None:
+    pair = [str(sku or "").strip().upper() for sku in skus[:2] if str(sku or "").strip()]
+    if len(pair) < 2:
+        return None
+    products = (
+        db.query(Product)
+        .filter(Product.sku.in_(pair))
+        .all()
+    )
+    by_sku = {str(product.sku or "").strip().upper(): product for product in products}
+    rows: list[dict] = []
+    for sku in pair:
+        product = by_sku.get(sku)
+        if not product:
+            continue
+        specs = db.query(ProductSpecs).filter(ProductSpecs.product_id == product.id).first()
+        business = db.query(ProductBusiness).filter(ProductBusiness.product_id == product.id).first()
+        content = db.query(ProductContent).filter(ProductContent.product_id == product.id).first()
+        rows.append(_product_row_from_model(product, specs, business, content))
+    if len(rows) < 2:
+        return None
+    text = str(question or "")
+    if any(term in text for term in ("酒精炉", "酒精")) and any(term in text for term in ("它们", "这两个", "两款", "两个")):
+        lines = []
+        for row in rows:
+            answer, _ = _phase1_alcohol_stove_compatibility_answer(db, row)
+            lines.append(f"- {answer}")
+        answer = "分别看这两个产品的酒精炉兼容性：\n" + "\n".join(lines)
+        answer_type = "product_detail"
+        intent = "product_detail"
+        agent_mode = "context_pair_product_compatibility"
+    else:
+        first, second = rows[0], rows[1]
+        first_name = first.get("product_name_cn") or first.get("sku")
+        second_name = second.get("product_name_cn") or second.get("sku")
+        first_evidence = _phase1_product_evidence_text(first)
+        second_evidence = _phase1_product_evidence_text(second)
+        choice = second if _phase1_two_person_score(second) >= _phase1_two_person_score(first) else first
+        answer = (
+            f"你前面提到的第一个是{first_name}（{first.get('sku')}），第二个是{second_name}（{second.get('sku')}）。"
+            f"{first_name}：{first_evidence or '当前资料未提供足够细项'}。"
+            f"{second_name}：{second_evidence or '当前资料未提供足够细项'}。"
+            f"如果更在意新手使用/一个人背，建议优先看{choice.get('product_name_cn') or choice.get('sku')}（{choice.get('sku')}），并结合实际重量和收纳体积确认。"
+        )
+        answer_type = "comparison"
+        intent = "compare_products"
+        agent_mode = "context_pair_comparison_followup"
+    skus_out = [str(row.get("sku") or "").strip().upper() for row in rows if str(row.get("sku") or "").strip()]
+    return {
+        "intent": intent,
+        "answer_type": answer_type,
+        "answer": answer,
+        "results": rows,
+        "result_skus": skus_out,
+        "candidate_skus": skus_out,
+        "answer_metadata": {"source": agent_mode},
+        "debug": {"agent_mode": agent_mode, "raw_results": rows, "candidate_skus": skus_out},
+        "skip_polish": True,
+    }
 
 
 def _phase1_result_skus(agent_result: dict) -> list[str]:
@@ -641,7 +797,21 @@ def _phase1_structured_recommendation_result(db: Session, plan: dict) -> dict | 
                 "long_description_cn",
             )
         )
+        category = str(row.get("category") or "")
         score = 0
+        if any(term in scenario for term in ("套锅", "套装")):
+            if any(term in haystack for term in ("套锅", "套装", "锅5件套", "锅7件套", "锅10件套")):
+                score += 8
+            elif "锅" in category:
+                score += 2
+            else:
+                score -= 8
+        if "野餐" in scenario and "野餐" in haystack:
+            score += 6
+        if any(term in scenario for term in ("两个人", "2人", "两人", "双人")) and any(term in haystack for term in ("2人", "2-3人", "两人", "两个人", "双人")):
+            score += 5
+        if "周末" in scenario and any(term in haystack for term in ("周末", "短途", "公园", "家庭野餐")):
+            score += 2
         if "徒步" in scenario and "徒步" in haystack:
             score += 8
         if any(term in scenario for term in ("一个人", "单人", "1人")) and any(term in haystack for term in ("单人", "1人", "1-2人", "1000ML", "轻量")):
@@ -650,6 +820,8 @@ def _phase1_structured_recommendation_result(db: Session, plan: dict) -> dict | 
             score += 2
         if any(term in haystack for term in ("锅", "炉", "水壶", "套装")):
             score += 1
+        if any(term in scenario for term in ("套锅", "套装", "锅")) and any(term in haystack for term in ("调料瓶", "三角架", "配件", "餐具")):
+            score -= 12
         if any(term in haystack for term in ("烤盘", "煎盘", "griddle")):
             score -= 3
         if score > 0:
@@ -665,10 +837,11 @@ def _phase1_structured_recommendation_result(db: Session, plan: dict) -> dict | 
         sku = row.get("sku")
         reason = row.get("usage_scenarios") or row.get("features") or row.get("positioning") or "匹配当前使用场景"
         lines.append(f"- {name}（{sku}）：{reason}")
+    scenario_label = "、".join(_phase1_scenario_labels(scenario)) or "当前"
     return {
         "intent": "recommendation",
         "answer_type": "recommendation",
-        "answer": "按你“一个人徒步/轻量携带”的需求，可以优先看这些具体产品：\n" + "\n".join(lines),
+        "answer": f"按你“{scenario_label}”的需求，可以优先看这些具体产品：\n" + "\n".join(lines),
         "results": selected,
         "result_skus": skus,
         "candidate_skus": skus,
@@ -676,6 +849,19 @@ def _phase1_structured_recommendation_result(db: Session, plan: dict) -> dict | 
         "answer_metadata": {"source": "product_catalog_structured_recommendation"},
         "skip_polish": True,
     }
+
+
+def _phase1_should_use_structured_recommendation(plan: dict) -> bool:
+    scenario = str((plan or {}).get("scenario") or "")
+    return any(term in scenario for term in ("想买套锅", "想买锅", "买套锅", "买锅", "买哪个", "应该买", "该买"))
+
+
+def _phase1_scenario_labels(scenario: str) -> list[str]:
+    labels = []
+    for term in ("周末", "两个人", "三个人", "一个人", "野餐", "露营", "徒步", "轻量", "轻便", "套锅", "锅具"):
+        if term in scenario and term not in labels:
+            labels.append(term)
+    return labels
 
 
 def _phase1_repair_recommendation_result(db: Session, agent_result: dict, plan: dict) -> dict:
@@ -1079,8 +1265,10 @@ async def ask_customer_service(
         phase1_direct_result = _phase1_category_compatibility_result(db, phase1_plan)
     elif phase1_plan.get("primary_intent") == "catalog_count":
         phase1_direct_result = _phase1_catalog_count_result(db, phase1_plan)
-    elif phase1_plan.get("primary_intent") == "product_compare_recommendation":
+    elif phase1_plan.get("primary_intent") in {"product_compare_recommendation", "comparison"}:
         phase1_direct_result = _phase1_compare_choice_result(db, phase1_plan)
+    elif phase1_plan.get("primary_intent") == "recommendation" and _phase1_should_use_structured_recommendation(phase1_plan):
+        phase1_direct_result = _phase1_structured_recommendation_result(db, phase1_plan)
     phase1_executor_duration_ms = round((perf_counter() - executor_start) * 1000, 2) if phase1_direct_result else 0
     if phase1_direct_result:
         guard_start = perf_counter()
@@ -1177,6 +1365,18 @@ async def ask_customer_service(
             )
 
     named_products = _products_named_in_question(db, question)
+    recommendation_followup_context = _latest_recommendation_context_for_sources(db, conversation_id)
+    candidate_followup_context = _latest_candidate_context_for_sources(db, conversation_id)
+    active_product_context_skus = _latest_active_product_skus(db, conversation_id, user_id)
+    context_pair_result = None
+    if (
+        _is_ordinal_compare_followup_question(question)
+        or "哪个更适合" in question
+        or ("它们" in question and any(term in question for term in ("酒精炉", "酒精")))
+    ):
+        pair_skus = _context_skus_for_pair_followup(recommendation_followup_context, candidate_followup_context)
+        if pair_skus:
+            context_pair_result = _context_pair_followup_result(db, question, pair_skus)
     followup_runtime_bypass = _should_bypass_usage_care_and_faq_for_followup(
         db,
         conversation_id=conversation_id,
@@ -1192,7 +1392,7 @@ async def ask_customer_service(
     )
     usage_care_start = perf_counter()
     usage_care_result = None
-    if _is_product_usage_care_question(question) and not followup_runtime_bypass:
+    if not context_pair_result and _is_product_usage_care_question(question) and not followup_runtime_bypass:
         usage_care_result = await customer_agent_intent_service.answer_product_usage_care_request(
             db,
             question=question,
@@ -1277,7 +1477,7 @@ async def ask_customer_service(
             "agent_mode": (usage_care_result.get("debug") or {}).get("agent_mode"),
         }
     faq_start = perf_counter()
-    faq_intent = None if named_products or followup_runtime_bypass else _classify_customer_faq_intent(question)
+    faq_intent = None if context_pair_result or named_products or followup_runtime_bypass else _classify_customer_faq_intent(question)
     faq_result = None
     if faq_intent:
         faq_result = await _answer_customer_faq_fast_path(db, question, faq_intent)
@@ -1365,6 +1565,8 @@ async def ask_customer_service(
     stage_start = perf_counter()
     agent_result = customer_enterprise_guardrail_service.evaluate_question(question)
     customer_perf_service.log_stage("guardrail.evaluate_question", stage_start, matched=bool(agent_result))
+    if not agent_result and context_pair_result:
+        agent_result = context_pair_result
     if agent_result:
         stage_start = perf_counter()
         guard_start = perf_counter()
@@ -1497,6 +1699,25 @@ async def ask_customer_service(
     recommendation_followup_context = _latest_recommendation_context_for_sources(db, conversation_id)
     candidate_followup_context = _latest_candidate_context_for_sources(db, conversation_id)
     active_product_context_skus = _latest_active_product_skus(db, conversation_id, user_id)
+    if (
+        not agent_result
+        and _looks_like_context_required_ordinal_compare(question)
+        and not _has_followup_result_context(recommendation_followup_context)
+        and not _has_followup_result_context(candidate_followup_context)
+    ):
+        agent_result = _context_required_ordinal_compare_result(question)
+    if not agent_result and (
+        _is_ordinal_compare_followup_question(question)
+        or "哪个更适合" in question
+        or ("它们" in question and any(term in question for term in ("酒精炉", "酒精")))
+    ):
+        pair_skus = _context_skus_for_pair_followup(recommendation_followup_context, candidate_followup_context)
+        if pair_skus:
+            agent_result = _context_pair_followup_result(db, question, pair_skus)
+    if not agent_result:
+        heat_source_followup_sku = _pronoun_heat_source_followup_target_sku(question, recommendation_followup_context)
+        if heat_source_followup_sku:
+            agent_result = _product_heat_source_followup_result(db, question, heat_source_followup_sku)
     vague_price_start = perf_counter()
     vague_price_clarification = bool(
         not agent_result
@@ -2644,6 +2865,9 @@ def _sources_with_result_context(
     )
     entities = _entities_from_agent_result(agent_result)
     result_skus = [item["sku"] for item in entities]
+    answer_ordered_skus = _order_skus_by_answer(result_skus, str(agent_result.get("answer") or ""))
+    if answer_ordered_skus:
+        result_skus = answer_ordered_skus
     recommendation_context = None
     candidate_context = None
     existing_candidate_context = next(
@@ -3402,6 +3626,27 @@ def _entities_from_agent_result(agent_result: dict, limit: int = 20) -> list[dic
     return entities
 
 
+def _order_skus_by_answer(skus: list[str], answer: str) -> list[str]:
+    normalized = [
+        str(sku or "").strip().upper()
+        for sku in skus
+        if str(sku or "").strip()
+    ]
+    if not normalized:
+        return []
+    positions: list[tuple[int, int, str]] = []
+    for index, sku in enumerate(normalized):
+        pos = str(answer or "").upper().find(sku)
+        if pos >= 0:
+            positions.append((pos, index, sku))
+    if not positions:
+        return normalized
+    seen = {sku for _, _, sku in positions}
+    ordered = [sku for _, _, sku in sorted(positions)]
+    ordered.extend(sku for sku in normalized if sku not in seen)
+    return ordered
+
+
 def _steps_from_sources(sources_json: str | None) -> list[dict]:
     for source in _safe_json(sources_json, []):
         if isinstance(source, dict) and source.get("type") == "agent_steps":
@@ -3668,7 +3913,7 @@ def _classify_customer_faq_intent(question: str) -> str | None:
     normalized = customer_cache_service.normalize_text(text)
     if any(term in normalized for term in _FAQ_GREETING_TERMS):
         return "greeting"
-    if any(term in text for term in _FAQ_PURCHASE_TERMS) and not _looks_like_recommendation_request(text):
+    if _looks_like_purchase_channel_question(text) and not _looks_like_recommendation_request(text):
         return "purchase_channel"
     if any(term in text for term in _FAQ_AFTERSALES_TERMS):
         return "aftersales"
@@ -3684,11 +3929,20 @@ def _looks_like_recommendation_request(text: str) -> bool:
     if not value:
         return False
     explicit_recommendation_terms = ("推荐", "哪款", "选什么", "用什么", "帮我选", "帮我挑", "合适", "适合")
-    if any(term in value for term in _FAQ_PURCHASE_TERMS) and not any(term in value for term in explicit_recommendation_terms):
-        return False
     recommendation_terms = (*explicit_recommendation_terms, "哪个")
     product_terms = ("锅", "套锅", "单锅", "炉", "炉具", "酒精炉", "壶", "水壶", "餐具", "套装")
     cookware_terms = ("锅", "锅具", "单锅", "套锅")
+    scenario_terms = ("野餐", "露营", "徒步", "爬山", "公园", "周末", "两个人", "三个人", "一个人", "轻便", "轻量")
+    open_purchase_decision_terms = ("想买", "买个", "买口", "买套", "买一套", "买哪个", "该买", "应该买")
+    if (
+        not _looks_like_purchase_channel_question(value)
+        and any(term in value for term in open_purchase_decision_terms)
+        and any(term in value for term in product_terms)
+        and (any(term in value for term in scenario_terms) or any(term in value for term in recommendation_terms))
+    ):
+        return True
+    if _looks_like_purchase_channel_question(value) and not any(term in value for term in explicit_recommendation_terms):
+        return False
     single_person_terms = ("一个人用", "一人用", "单人用", "1人用", "1-2人用", "1－2人用", "适合一个人", "适合一人", "适合单人")
     open_purchase_terms = ("想买", "买个", "买口", "推荐", "适合", "那种", "有没有", "帮我选", "帮我挑")
     if (
@@ -3701,6 +3955,33 @@ def _looks_like_recommendation_request(text: str) -> bool:
     ):
         return True
     return any(term in value for term in recommendation_terms) and any(term in value for term in product_terms)
+
+
+def _looks_like_purchase_channel_question(text: str) -> bool:
+    value = str(text or "").strip()
+    if not value:
+        return False
+    channel_terms = (
+        "哪里买",
+        "哪里可以买",
+        "在哪买",
+        "在哪里买",
+        "买到",
+        "怎么买",
+        "购买渠道",
+        "销售渠道",
+        "购买链接",
+        "有链接",
+        "链接吗",
+        "官网",
+        "官方店",
+        "旗舰店",
+        "淘宝",
+        "京东",
+        "店铺",
+        "下单",
+    )
+    return any(term in value for term in channel_terms)
 
 
 def _is_unscoped_aftersales_help_request(text: str) -> bool:
