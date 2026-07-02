@@ -5083,7 +5083,12 @@ class CustomerAgentEndToEndBehaviorRegressionTest(unittest.IsolatedAsyncioTestCa
         dmxapi_service.chat_completion = self._fake_chat_completion
         self._add_product(
             "CF-PG19", "瓦片烤盘", "锅具", "烤盘", "铝合金",
-            "酒精炉, 燃气炉", "露营烤盘，适合煎烤", "双人露营烧烤", 1000,
+            "燃气炉, 卡式炉", "露营烤盘，适合煎烤", "双人露营烧烤", 1000,
+            price_positioning="高端",
+        )
+        self._add_product(
+            "CF-PG19PRO", "瓦片烤盘Pro", "锅具", "烤盘", "铝合金",
+            "酒精炉, 燃气炉", "升级款露营烤盘", "双人露营烧烤", 900,
             price_positioning="高端",
         )
         self._add_product(
@@ -5104,10 +5109,124 @@ class CustomerAgentEndToEndBehaviorRegressionTest(unittest.IsolatedAsyncioTestCa
             for item in (result.get("results") or [])
             if isinstance(item, dict) and str(item.get("sku") or "").strip()
         }
+        debug = result.get("debug") or {}
+        plan = debug.get("plan") or {}
+        debug_raw_skus = {
+            str(item.get("sku") or "").strip().upper()
+            for item in (debug.get("raw_results") or [])
+            if isinstance(item, dict) and str(item.get("sku") or "").strip()
+        }
 
         self.assertIn("CF-PG19", returned_skus | set(result.get("result_skus") or []))
         self.assertNotEqual((result.get("debug") or {}).get("alcohol_stove_cookware_scope"), "pot_or_cookware_set_only")
-        self.assertRegex(result["answer"], r"(CF-PG19|瓦片烤盘|酒精炉|适用热源)")
+        self.assertEqual(result["answer_type"], "product_detail")
+        self.assertEqual(plan.get("primary_intent"), "product_field")
+        self.assertEqual(plan.get("requested_field"), "heat_source")
+        self.assertEqual(plan.get("product_ref"), "瓦片烤盘")
+        self.assertTrue(plan.get("must_not_recommend_other_categories"))
+        self.assertRegex(result["answer"], r"(CF-PG19|瓦片烤盘).*(酒精炉|适用热源)")
+        self.assertRegex(result["answer"], r"(未显示支持|没有找到.*明确说明)")
+        self.assertNotRegex(result["answer"], r"(核心卖点|推荐以下|茶具|水壶|单锅|套锅)")
+        self.assertEqual(result.get("result_skus"), ["CF-PG19"])
+        self.assertEqual(result.get("candidate_skus"), ["CF-PG19"])
+        self.assertEqual(debug_raw_skus, {"CF-PG19"})
+
+    async def test_explicit_griddle_sku_alcohol_stove_questions_use_product_compatibility(self):
+        dmxapi_service.chat_completion = self._fake_chat_completion
+        self._add_product(
+            "CF-PG19", "瓦片烤盘", "锅具", "烤盘", "铝合金",
+            "燃气炉, 卡式炉", "露营烤盘", "双人露营烧烤", 1000,
+            price_positioning="高端",
+        )
+        self._add_product(
+            "CF-PG19PRO", "瓦片烤盘Pro", "锅具", "烤盘", "铝合金",
+            "酒精炉, 燃气炉", "升级款露营烤盘", "双人露营烧烤", 900,
+            price_positioning="高端",
+        )
+        self.db.commit()
+
+        for sku, expected_support in (("CF-PG19", False), ("CF-PG19PRO", True)):
+            result = await customer_service_service.ask_customer_service(
+                self.db,
+                user_id=f"explicit-{sku.lower()}-alcohol-user",
+                question=f"{sku} 能不能用酒精炉？",
+            )
+            plan = (result.get("debug") or {}).get("plan") or {}
+            self.assertEqual(result["answer_type"], "product_detail")
+            self.assertEqual(plan.get("primary_intent"), "product_field")
+            self.assertEqual(plan.get("requested_field"), "heat_source")
+            self.assertEqual(result.get("result_skus"), [sku])
+            self.assertEqual(result.get("candidate_skus"), [sku])
+            self.assertNotRegex(result["answer"], r"(核心卖点|推荐以下|茶具|水壶|单锅|套锅)")
+            if expected_support:
+                self.assertRegex(result["answer"], r"(支持|适用热源.*酒精炉)")
+            else:
+                self.assertRegex(result["answer"], r"(未显示支持|没有找到.*明确说明)")
+
+    async def test_explicit_pan_category_alcohol_stove_questions_stay_within_pan_domain(self):
+        dmxapi_service.chat_completion = self._fake_chat_completion
+        self._add_product(
+            "CF-PG19", "瓦片烤盘", "锅具", "烤盘", "铝合金",
+            "燃气炉, 卡式炉", "露营烤盘", "双人露营烧烤", 1000,
+            price_positioning="高端",
+        )
+        self._add_product(
+            "CW-C74", "8寸煎盘-享野", "锅具", "煎盘", "硬质氧化铝合金",
+            "酒精炉, 燃气炉", "煎盘烤盘，适合煎烤", "露营煎烤", 420,
+            price_positioning="中端",
+        )
+        self._add_product(
+            "CW-C82", "时谷水壶", "锅具", "1L", "304不锈钢",
+            "酒精炉", "快速烧水", "露营补水，煮茶", 530,
+            price_positioning="中端",
+        )
+        self._add_product(
+            "CT-T04-BM", "出山茶具套装", "茶具", "茶壶和茶杯", "陶瓷",
+            "酒精炉", "户外茶具", "露营煮茶", 600,
+            price_positioning="中端",
+        )
+        self._add_product(
+            "CW-C71", "3L单锅", "锅具", "3L", "铝合金",
+            "酒精炉, 燃气炉", "大容量单锅", "多人露营", 560,
+            price_positioning="中端",
+        )
+        self._add_product(
+            "CS-G26HM", "X-Power桌面炉（不含炉配件-烤盘）", "炉具", "炉具", "不锈钢",
+            "高山气罐, 卡式气罐", "桌面炉配件说明", "家庭露营", 2500,
+            price_positioning="高端",
+        )
+        self.db.commit()
+
+        for index, question in enumerate((
+            "煎盘能不能用酒精炉？",
+            "烤盘能不能用酒精炉？",
+            "煎烤盘能不能用酒精炉？",
+            "griddle 能不能用酒精炉？",
+        )):
+            result = await customer_service_service.ask_customer_service(
+                self.db,
+                user_id=f"explicit-pan-category-{index}",
+                question=question,
+            )
+            debug = result.get("debug") or {}
+            plan = debug.get("plan") or {}
+            result_skus = [str(item or "").strip().upper() for item in result.get("result_skus") or []]
+            candidate_skus = [str(item or "").strip().upper() for item in result.get("candidate_skus") or []]
+            raw_skus = [
+                str(item.get("sku") or "").strip().upper()
+                for item in debug.get("raw_results") or []
+                if isinstance(item, dict) and str(item.get("sku") or "").strip()
+            ]
+            self.assertEqual(result["answer_type"], "product_detail")
+            self.assertEqual(plan.get("primary_intent"), "category_compatibility")
+            self.assertEqual(plan.get("requested_field"), "heat_source")
+            self.assertTrue(plan.get("must_stay_within_category"))
+            self.assertTrue(result_skus)
+            self.assertTrue(set(result_skus).issubset({"CF-PG19", "CW-C74"}))
+            self.assertEqual(candidate_skus, result_skus)
+            self.assertEqual(raw_skus, result_skus)
+            self.assertNotRegex(result["answer"], r"(茶具|水壶|单锅|套锅|推荐以下|核心卖点)")
+            self.assertNotEqual(result["answer_type"], "recommendation")
 
     async def test_multiturn_candidate_context_empty_subset_blocks_lightest_followup(self):
         dmxapi_service.chat_completion = self._fake_chat_completion

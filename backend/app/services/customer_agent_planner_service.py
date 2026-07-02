@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import re
+
 from typing import Any
 
 
@@ -42,6 +44,11 @@ def plan_customer_question(
 ) -> dict[str, Any]:
     text = str(question or "").strip()
     plan = _base_plan()
+
+    compatibility = _explicit_pan_alcohol_stove_compatibility(text)
+    if compatibility:
+        plan.update(compatibility)
+        return plan
 
     if _is_compare_choice_question(text):
         products = _extract_compare_product_refs(text)
@@ -141,6 +148,7 @@ def _base_plan() -> dict[str, Any]:
         "answer_type": "",
         "tasks": [],
         "product_ref": "",
+        "category_ref": "",
         "product_refs": [],
         "sku": "",
         "requested_field": "",
@@ -153,7 +161,51 @@ def _base_plan() -> dict[str, Any]:
         "must_return_products": False,
         "must_compare_both_products": False,
         "must_make_choice": False,
+        "explicit_product_or_category": False,
+        "must_stay_within_category": False,
+        "must_not_recommend_other_categories": False,
         "source": "",
+    }
+
+
+def _explicit_pan_alcohol_stove_compatibility(text: str) -> dict[str, Any] | None:
+    value = str(text or "").strip()
+    lowered = value.lower()
+    has_alcohol_stove = "酒精炉" in value or "alcohol stove" in lowered
+    has_compatibility = any(term in value for term in ("能不能用", "能否使用", "是否支持", "支不支持", "可不可以放", "可以用", "适用"))
+    has_pan_scope = any(
+        term in lowered
+        for term in ("烤盘", "煎盘", "煎烤盘", "griddle", "grill pan", "fry pan", "pan plate", "cf-pg19")
+    )
+    if not (has_alcohol_stove and has_compatibility and has_pan_scope):
+        return None
+
+    sku_match = re.search(r"\bCF-PG19(?:PRO)?\b", value, flags=re.I)
+    if sku_match or "瓦片烤盘" in value:
+        product_ref = sku_match.group(0).upper() if sku_match else ("瓦片烤盘Pro" if "瓦片烤盘Pro" in value else "瓦片烤盘")
+        return {
+            "primary_intent": "product_field",
+            "answer_type": "product_detail",
+            "product_ref": product_ref,
+            "requested_field": "heat_source",
+            "field_only": True,
+            "explicit_product_or_category": True,
+            "must_not_recommend_other_categories": True,
+            "confidence": "high",
+            "tasks": [{"type": "product_field", "product_ref": product_ref, "requested_field": "heat_source"}],
+        }
+
+    category_ref = "煎烤盘" if "煎烤盘" in value else "煎盘" if "煎盘" in value else "烤盘" if "烤盘" in value else "griddle"
+    return {
+        "primary_intent": "category_compatibility",
+        "answer_type": "product_detail",
+        "category_ref": category_ref,
+        "requested_field": "heat_source",
+        "explicit_product_or_category": True,
+        "must_stay_within_category": True,
+        "must_not_recommend_other_categories": True,
+        "confidence": "high",
+        "tasks": [{"type": "category_compatibility", "category_ref": category_ref, "requested_field": "heat_source"}],
     }
 
 

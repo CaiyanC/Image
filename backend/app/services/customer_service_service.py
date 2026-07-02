@@ -257,6 +257,11 @@ async def _save_agent_result_and_return(
             for item in (agent_result.get("results") or [])
             if isinstance(item, dict) and str(item.get("sku") or "").strip()
         ],
+        "candidate_skus": agent_result.get("candidate_skus") or [
+            str(item.get("sku") or "").strip().upper()
+            for item in (agent_result.get("results") or [])
+            if isinstance(item, dict) and str(item.get("sku") or "").strip()
+        ],
         "agent_mode": (agent_result.get("debug") or {}).get("agent_mode"),
     }
 
@@ -364,10 +369,14 @@ def _phase1_product_field_result(db: Session, plan: dict) -> dict | None:
         if value in {"", "[]", "/"}:
             value = ""
     row = _product_row_from_model(product, specs, business, content)
-    if value:
+    if requested_field == "heat_source":
+        answer, evidence_status = _phase1_alcohol_stove_compatibility_answer(db, row)
+    elif value:
         answer = f"{product.product_name_cn}（{product.sku}）的{requested_field}：{value}。"
+        evidence_status = "structured"
     else:
         answer = f"当前资料里没有找到{product.product_name_cn}的明确{requested_field}。"
+        evidence_status = "missing"
     return {
         "intent": "product_detail",
         "answer_type": "product_detail",
@@ -376,8 +385,98 @@ def _phase1_product_field_result(db: Session, plan: dict) -> dict | None:
         "results": [row],
         "result_skus": [product.sku],
         "candidate_skus": [product.sku],
-        "answer_metadata": {"answer_policy": "field_only", "requested_field": requested_field},
-        "debug": {"agent_mode": "planner_product_field"},
+        "answer_metadata": {
+            "answer_policy": "field_only",
+            "requested_field": requested_field,
+            "evidence_status": evidence_status,
+        },
+        "debug": {
+            "agent_mode": "planner_product_compatibility" if requested_field == "heat_source" else "planner_product_field",
+            "raw_results": [row],
+            "candidate_skus": [product.sku],
+        },
+        "skip_polish": True,
+    }
+
+
+def _phase1_alcohol_stove_compatibility_answer(db: Session, row: dict) -> tuple[str, str]:
+    name = str(row.get("product_name_cn") or row.get("product_name_en") or row.get("sku") or "该产品").strip()
+    sku = str(row.get("sku") or "").strip().upper()
+    heat_source = str(row.get("heat_source") or "").strip()
+    verdict = customer_agent_intent_service._alcohol_stove_support_verdict(heat_source)
+    evidence = ""
+    if verdict is None and sku:
+        evidence = str(customer_agent_intent_service._best_same_sku_evidence_text(
+            db,
+            sku=sku,
+            supporting=None,
+            term_groups=[("酒精炉", "alcohol stove")],
+        ) or "").strip()
+        verdict = customer_agent_intent_service._alcohol_stove_support_verdict(evidence)
+    if verdict is True:
+        source_text = evidence or heat_source
+        return f"{name}（{sku}）当前资料显示支持酒精炉；适用热源/同 SKU 证据为：{source_text}。", "supported"
+    if verdict is False:
+        return f"{name}（{sku}）当前资料显示不支持酒精炉；相关证据为：{evidence or heat_source}。", "unsupported"
+    if heat_source and heat_source not in {"/", "[]"}:
+        return f"{name}（{sku}）当前资料显示适用热源为：{heat_source}；当前资料未显示支持酒精炉。", "not_listed"
+    return f"当前资料里没有找到{name}（{sku}）是否支持酒精炉的明确说明。", "missing"
+
+
+def _phase1_pan_category_terms(category_ref: str) -> tuple[str, ...]:
+    ref = str(category_ref or "").strip().lower()
+    if ref == "煎盘":
+        return ("煎盘", "煎烤盘", "griddle", "grill pan", "fry pan", "pan plate")
+    if ref == "烤盘":
+        return ("烤盘", "煎烤盘", "griddle", "grill pan", "pan plate")
+    if ref == "煎烤盘":
+        return ("煎盘", "烤盘", "煎烤盘", "griddle", "grill pan")
+    return ("煎盘", "烤盘", "煎烤盘", "griddle", "grill pan", "fry pan", "pan plate")
+
+
+def _phase1_is_pan_category_row(row: dict, category_ref: str) -> bool:
+    category = str(row.get("category") or "").strip().lower()
+    name = " ".join(str(row.get(key) or "") for key in ("product_name_cn", "product_name_en")).lower()
+    if any(term in category for term in ("炉具", "茶具", "水壶")):
+        return False
+    if "不含" in name and any(term in name for term in ("煎盘", "烤盘", "griddle", "grill pan")):
+        return False
+    haystack = " ".join(
+        str(row.get(key) or "")
+        for key in ("product_name_cn", "product_name_en", "category")
+    ).lower()
+    return any(term in haystack for term in _phase1_pan_category_terms(category_ref))
+
+
+def _phase1_category_compatibility_result(db: Session, plan: dict) -> dict:
+    category_ref = str(plan.get("category_ref") or "").strip() or "煎盘/烤盘"
+    rows = [row for row in _phase1_catalog_rows(db, "产品") if _phase1_is_pan_category_row(row, category_ref)]
+    skus = [str(row.get("sku") or "").strip().upper() for row in rows if str(row.get("sku") or "").strip()]
+    if rows:
+        lines = [f"你问的是{category_ref}这个品类。当前资料中的对应产品及酒精炉兼容性如下："]
+        for row in rows:
+            answer, _ = _phase1_alcohol_stove_compatibility_answer(db, row)
+            lines.append(f"- {answer}")
+        answer = "\n".join(lines)
+    else:
+        answer = f"你问的是{category_ref}这个品类。当前资料里没有找到对应产品，无法确认是否支持酒精炉；请提供具体产品名或 SKU。"
+    return {
+        "intent": "product_detail",
+        "answer_type": "product_detail",
+        "answer": answer,
+        "results": rows,
+        "result_skus": skus,
+        "candidate_skus": skus,
+        "answer_metadata": {
+            "answer_policy": "category_compatibility",
+            "requested_field": "heat_source",
+            "category_ref": category_ref,
+        },
+        "debug": {
+            "agent_mode": "planner_category_compatibility",
+            "raw_results": rows,
+            "candidate_skus": skus,
+        },
         "skip_polish": True,
     }
 
@@ -735,12 +834,28 @@ def _run_phase1_answer_guard(agent_result: dict, plan: dict) -> dict:
     if primary_intent == "product_field" and plan.get("field_only"):
         requested_field = str(plan.get("requested_field") or "").strip()
         answer = str(agent_result.get("answer") or "")
-        if requested_field and requested_field not in answer:
+        field_answered = requested_field in answer
+        if requested_field == "heat_source":
+            field_answered = any(term in answer for term in ("酒精炉", "适用热源", "热源"))
+        if requested_field and not field_answered:
             product_ref = str(plan.get("product_ref") or "").strip()
             agent_result["answer"] = f"当前资料里没有找到{product_ref}的明确{requested_field}。"
             agent_result["answer_type"] = "product_detail"
             agent_result["intent"] = "product_detail"
             agent_result["skip_polish"] = True
+    if plan.get("must_not_recommend_other_categories"):
+        rows = [item for item in agent_result.get("results") or [] if isinstance(item, dict)]
+        skus = [str(item.get("sku") or "").strip().upper() for item in rows if str(item.get("sku") or "").strip()]
+        agent_result["intent"] = "product_detail"
+        agent_result["answer_type"] = "product_detail"
+        agent_result["results"] = rows
+        agent_result["result_skus"] = skus
+        agent_result["candidate_skus"] = skus
+        debug = agent_result.get("debug") if isinstance(agent_result.get("debug"), dict) else {}
+        debug["raw_results"] = rows
+        debug["candidate_skus"] = skus
+        agent_result["debug"] = debug
+        agent_result["skip_polish"] = True
     if primary_intent == "product_compare_recommendation":
         answer = str(agent_result.get("answer") or "")
         missing_products = [name for name in plan.get("product_refs") or [] if name and name not in answer]
@@ -960,6 +1075,8 @@ async def ask_customer_service(
     executor_start = perf_counter()
     if phase1_plan.get("primary_intent") == "product_field":
         phase1_direct_result = _phase1_product_field_result(db, phase1_plan)
+    elif phase1_plan.get("primary_intent") == "category_compatibility":
+        phase1_direct_result = _phase1_category_compatibility_result(db, phase1_plan)
     elif phase1_plan.get("primary_intent") == "catalog_count":
         phase1_direct_result = _phase1_catalog_count_result(db, phase1_plan)
     elif phase1_plan.get("primary_intent") == "product_compare_recommendation":
