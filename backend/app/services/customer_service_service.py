@@ -18,6 +18,7 @@ from ..internal.experience_layer.tone_shaping import shape_answer_tone
 from . import (
     customer_enterprise_guardrail_service,
     customer_agent_intent_service,
+    customer_agent_planner_service,
     customer_agent_quality_service,
     customer_agent_runtime_service,
     customer_agent_service,
@@ -29,6 +30,9 @@ from . import (
     knowledge_service,
     product_service,
 )
+from ..models.product_business import ProductBusiness
+from ..models.product_content import ProductContent
+from ..models.product_specs import ProductSpecs
 
 
 SKU_RE = re.compile(r"\b[A-Za-z]{1,6}[-_][A-Za-z0-9][A-Za-z0-9_-]{1,40}\b")
@@ -245,6 +249,294 @@ async def _save_agent_result_and_return(
     }
 
 
+def _phase1_timing(
+    *,
+    request_start: float,
+    planner_duration_ms: float = 0,
+    retrieval_duration_ms: float = 0,
+    executor_duration_ms: float = 0,
+    composer_duration_ms: float = 0,
+    guard_duration_ms: float = 0,
+    llm_duration_ms: float = 0,
+    llm_call_count: int = 0,
+) -> dict:
+    return customer_agent_planner_service.merge_timing(
+        None,
+        {
+            "total_duration_ms": round((perf_counter() - request_start) * 1000, 2),
+            "planner_duration_ms": planner_duration_ms,
+            "retrieval_duration_ms": retrieval_duration_ms,
+            "executor_duration_ms": executor_duration_ms,
+            "llm_duration_ms": llm_duration_ms,
+            "llm_call_count": llm_call_count,
+            "composer_duration_ms": composer_duration_ms,
+            "guard_duration_ms": guard_duration_ms,
+        },
+    )
+
+
+def _attach_phase1_plan_and_timing(agent_result: dict, plan: dict, timing: dict) -> dict:
+    if not isinstance(agent_result, dict):
+        return agent_result
+    answer_metadata = agent_result.get("answer_metadata") if isinstance(agent_result.get("answer_metadata"), dict) else {}
+    debug = agent_result.get("debug") if isinstance(agent_result.get("debug"), dict) else {}
+    merged_timing = customer_agent_planner_service.merge_timing(debug.get("timing"), timing)
+    answer_metadata["timing"] = customer_agent_planner_service.merge_timing(answer_metadata.get("timing"), merged_timing)
+    debug["timing"] = merged_timing
+    debug["plan"] = plan
+    agent_result["answer_metadata"] = answer_metadata
+    agent_result["debug"] = debug
+    return agent_result
+
+
+def _product_row_from_model(product: Product, specs: ProductSpecs | None = None, business: ProductBusiness | None = None, content: ProductContent | None = None) -> dict:
+    return {
+        "sku": product.sku,
+        "product_name_cn": product.product_name_cn,
+        "product_name_en": product.product_name_en,
+        "category": product.category,
+        "capacity": getattr(specs, "capacity", "") if specs else "",
+        "size_info": getattr(specs, "size_info", "") if specs else "",
+        "heat_source": getattr(specs, "heat_source", "") if specs else "",
+        "body_material": getattr(specs, "body_material", "") if specs else "",
+        "gross_weight_g": getattr(specs, "gross_weight_g", 0) if specs else 0,
+        "features": getattr(specs, "technical_advantages", "") if specs else "",
+        "usage_scenarios": getattr(business, "usage_scenarios", "") if business else "",
+        "positioning": getattr(business, "positioning", "") if business else "",
+        "price_positioning": getattr(business, "price_positioning", "") if business else "",
+        "long_description_cn": getattr(content, "long_description_cn", "") if content else "",
+    }
+
+
+def _phase1_product_bundle_by_ref(db: Session, product_ref: str) -> tuple[Product | None, ProductSpecs | None, ProductBusiness | None, ProductContent | None]:
+    ref = str(product_ref or "").strip()
+    if not ref:
+        return None, None, None, None
+    product = (
+        db.query(Product)
+        .filter(
+            (Product.product_name_cn == ref)
+            | (Product.product_name_cn.contains(ref))
+            | (Product.product_name_en.contains(ref))
+            | (Product.sku == ref.upper())
+        )
+        .order_by(Product.sku.asc())
+        .first()
+    )
+    if not product:
+        return None, None, None, None
+    specs = db.query(ProductSpecs).filter(ProductSpecs.product_id == product.id).first()
+    business = db.query(ProductBusiness).filter(ProductBusiness.product_id == product.id).first()
+    content = db.query(ProductContent).filter(ProductContent.product_id == product.id).first()
+    return product, specs, business, content
+
+
+def _phase1_product_field_result(db: Session, plan: dict) -> dict | None:
+    product_ref = str(plan.get("product_ref") or "").strip()
+    requested_field = str(plan.get("requested_field") or "").strip()
+    product, specs, business, content = _phase1_product_bundle_by_ref(db, product_ref)
+    if not product:
+        return {
+            "intent": "product_detail",
+            "answer_type": "product_detail",
+            "answer": f"当前资料里没有找到{product_ref}的明确{requested_field}。",
+            "results": [],
+            "result_skus": [],
+            "answer_metadata": {"answer_policy": "field_only_missing"},
+            "debug": {"agent_mode": "planner_product_field"},
+            "skip_polish": True,
+        }
+    value = ""
+    if requested_field == "尺寸":
+        value = str(getattr(specs, "size_info", "") or "").strip()
+        if value in {"", "[]", "/"}:
+            value = ""
+    row = _product_row_from_model(product, specs, business, content)
+    if value:
+        answer = f"{product.product_name_cn}（{product.sku}）的{requested_field}：{value}。"
+    else:
+        answer = f"当前资料里没有找到{product.product_name_cn}的明确{requested_field}。"
+    return {
+        "intent": "product_detail",
+        "answer_type": "product_detail",
+        "sku": product.sku,
+        "answer": answer,
+        "results": [row],
+        "result_skus": [product.sku],
+        "candidate_skus": [product.sku],
+        "answer_metadata": {"answer_policy": "field_only", "requested_field": requested_field},
+        "debug": {"agent_mode": "planner_product_field"},
+        "skip_polish": True,
+    }
+
+
+def _phase1_catalog_rows(db: Session, product_ref: str) -> list[dict]:
+    ref = str(product_ref or "").strip()
+    query = (
+        db.query(Product, ProductSpecs, ProductBusiness, ProductContent)
+        .outerjoin(ProductSpecs, ProductSpecs.product_id == Product.id)
+        .outerjoin(ProductBusiness, ProductBusiness.product_id == Product.id)
+        .outerjoin(ProductContent, ProductContent.product_id == Product.id)
+    )
+    rows: list[dict] = []
+    for product, specs, business, content in query.all():
+        row = _product_row_from_model(product, specs, business, content)
+        haystack = " ".join(str(row.get(key) or "") for key in (
+            "product_name_cn",
+            "product_name_en",
+            "category",
+            "capacity",
+            "features",
+            "usage_scenarios",
+            "positioning",
+            "long_description_cn",
+        ))
+        if ref == "锅具":
+            matched = "锅" in str(row.get("category") or "") or "锅" in haystack
+        elif ref == "套锅":
+            matched = "套锅" in haystack or "锅" in str(row.get("category") or "") and "套" in haystack
+        else:
+            matched = bool(ref and ref in haystack)
+        if matched:
+            rows.append(row)
+    return rows
+
+
+def _phase1_catalog_count_result(db: Session, plan: dict) -> dict:
+    product_ref = str(plan.get("product_ref") or "").strip() or "产品"
+    rows = _phase1_catalog_rows(db, product_ref)
+    skus = [str(row.get("sku") or "") for row in rows if row.get("sku")]
+    samples = "、".join(skus[:10])
+    suffix = f" 例如：{samples}。" if samples else ""
+    return {
+        "intent": "query_products",
+        "answer_type": "query_products",
+        "answer": f"当前产品库里匹配“{product_ref}”的产品共有 {len(rows)} 款。{suffix}",
+        "results": rows[:20],
+        "result_skus": skus[:20],
+        "candidate_skus": skus[:20],
+        "answer_metadata": {
+            "source": "product_catalog_structured_query",
+            "catalog_count": len(rows),
+            "product_ref": product_ref,
+        },
+        "debug": {"agent_mode": "structured_catalog_count"},
+        "skip_polish": True,
+    }
+
+
+def _phase1_product_evidence_text(row: dict) -> str:
+    return "；".join(
+        str(row.get(key) or "").strip()
+        for key in ("capacity", "body_material", "gross_weight_g", "features", "usage_scenarios", "positioning", "long_description_cn")
+        if str(row.get(key) or "").strip()
+    )
+
+
+def _phase1_compare_choice_result(db: Session, plan: dict) -> dict | None:
+    product_refs = [str(item or "").strip() for item in plan.get("product_refs") or [] if str(item or "").strip()]
+    if len(product_refs) < 2:
+        return None
+    bundles = [_phase1_product_bundle_by_ref(db, ref) for ref in product_refs[:2]]
+    if not all(bundle[0] for bundle in bundles):
+        return None
+    rows = [_product_row_from_model(product, specs, business, content) for product, specs, business, content in bundles if product]
+    first, second = rows[0], rows[1]
+    first_name = first.get("product_name_cn") or product_refs[0]
+    second_name = second.get("product_name_cn") or product_refs[1]
+    first_evidence = _phase1_product_evidence_text(first)
+    second_evidence = _phase1_product_evidence_text(second)
+    choice = second if _phase1_two_person_score(second) >= _phase1_two_person_score(first) else first
+    choice_name = choice.get("product_name_cn") or choice.get("sku")
+    answer = (
+        f"{first_name}和{second_name}的区别可以先看容量、重量、材质和使用场景。"
+        f"{first_name}：{first_evidence or '当前资料未提供足够细项'}。"
+        f"{second_name}：{second_evidence or '当前资料未提供足够细项'}。"
+        f"两个人吃饱更建议选{choice_name}（{choice.get('sku')}）。"
+        "原因是它在现有资料里对两人/容量余量/户外吃饭场景的匹配更稳妥；如果还要精确判断饭量，仍建议以实际容量和菜量为准。"
+    )
+    return {
+        "intent": "compare_products",
+        "answer_type": "comparison",
+        "answer": answer,
+        "results": rows,
+        "result_skus": [str(row.get("sku") or "") for row in rows if row.get("sku")],
+        "candidate_skus": [str(row.get("sku") or "") for row in rows if row.get("sku")],
+        "answer_metadata": {"source": "planner_compare_choice", "final_choice_sku": choice.get("sku")},
+        "debug": {"agent_mode": "planner_compare_choice"},
+        "skip_polish": True,
+    }
+
+
+def _phase1_two_person_score(row: dict) -> int:
+    text = " ".join(str(row.get(key) or "") for key in ("capacity", "features", "usage_scenarios", "positioning", "long_description_cn"))
+    score = 0
+    for term in ("两人", "两个人", "2人", "2-3人", "双人"):
+        if term in text:
+            score += 4
+    for term in ("1.5L", "1500", "2.0L", "2000", "锅1.5", "锅2."):
+        if term in text:
+            score += 2
+    if "一个人" in text or "单人" in text:
+        score -= 2
+    return score
+
+
+def _phase1_result_skus(agent_result: dict) -> list[str]:
+    skus = []
+    for key in ("result_skus", "candidate_skus"):
+        for sku in agent_result.get(key) or []:
+            text = str(sku or "").strip()
+            if text and text not in skus:
+                skus.append(text)
+    for row in agent_result.get("results") or []:
+        if isinstance(row, dict):
+            sku = str(row.get("sku") or "").strip()
+            if sku and sku not in skus:
+                skus.append(sku)
+    return skus
+
+
+def _phase1_answer_mentions_product(agent_result: dict) -> bool:
+    answer = str(agent_result.get("answer") or "")
+    if re.search(r"\b[A-Z]{1,6}-[A-Z0-9][A-Z0-9-]{1,40}\b", answer):
+        return True
+    return any(term in answer for term in ("单锅", "套锅", "锅具", "烤盘", "水壶", "行山", "激川"))
+
+
+def _run_phase1_answer_guard(agent_result: dict, plan: dict) -> dict:
+    if not isinstance(agent_result, dict) or not isinstance(plan, dict):
+        return agent_result
+    primary_intent = str(plan.get("primary_intent") or "")
+    if plan.get("must_return_products") and not _phase1_answer_mentions_product(agent_result):
+        skus = _phase1_result_skus(agent_result)
+        if skus:
+            agent_result["answer"] = f"更建议先看 {skus[0]}。它更贴近你的使用场景，建议结合容量、重量、便携性和适用人数确认。"
+            agent_result["answer_type"] = "recommendation"
+            agent_result["intent"] = "recommendation"
+            agent_result["skip_polish"] = True
+    if primary_intent == "product_field" and plan.get("field_only"):
+        requested_field = str(plan.get("requested_field") or "").strip()
+        answer = str(agent_result.get("answer") or "")
+        if requested_field and requested_field not in answer:
+            product_ref = str(plan.get("product_ref") or "").strip()
+            agent_result["answer"] = f"当前资料里没有找到{product_ref}的明确{requested_field}。"
+            agent_result["answer_type"] = "product_detail"
+            agent_result["intent"] = "product_detail"
+            agent_result["skip_polish"] = True
+    if primary_intent == "product_compare_recommendation":
+        answer = str(agent_result.get("answer") or "")
+        missing_products = [name for name in plan.get("product_refs") or [] if name and name not in answer]
+        needs_choice = plan.get("must_make_choice") and not any(term in answer for term in ("建议", "更适合", "更稳妥", "选"))
+        if missing_products or needs_choice:
+            suffix = " ".join(str(name) for name in missing_products)
+            agent_result["answer"] = f"{answer} {suffix} 两个人吃饱需要结合容量和适用人数判断；当前资料不足时不能硬编容量，建议优先选择容量余量更稳妥的一款。".strip()
+            agent_result["answer_type"] = "comparison"
+            agent_result["intent"] = "compare_products"
+            agent_result["skip_polish"] = True
+    return agent_result
+
+
 async def _attach_debug_supporting_knowledge(db: Session, result: dict, question: str) -> dict:
     """Attach QA/KB evidence for dev observability without changing the chosen answer."""
     if not isinstance(result, dict):
@@ -443,6 +735,42 @@ async def ask_customer_service(
     if not customer_perf_service.get_trace_id():
         customer_perf_service.start_trace()
     request_start = perf_counter()
+    planner_start = perf_counter()
+    phase1_plan = customer_agent_planner_service.plan_customer_question(question)
+    planner_duration_ms = round((perf_counter() - planner_start) * 1000, 2)
+
+    phase1_direct_result = None
+    executor_start = perf_counter()
+    if phase1_plan.get("primary_intent") == "product_field":
+        phase1_direct_result = _phase1_product_field_result(db, phase1_plan)
+    elif phase1_plan.get("primary_intent") == "catalog_count":
+        phase1_direct_result = _phase1_catalog_count_result(db, phase1_plan)
+    elif phase1_plan.get("primary_intent") == "product_compare_recommendation":
+        phase1_direct_result = _phase1_compare_choice_result(db, phase1_plan)
+    phase1_executor_duration_ms = round((perf_counter() - executor_start) * 1000, 2) if phase1_direct_result else 0
+    if phase1_direct_result:
+        guard_start = perf_counter()
+        phase1_direct_result = _run_phase1_answer_guard(phase1_direct_result, phase1_plan)
+        guard_duration_ms = round((perf_counter() - guard_start) * 1000, 2)
+        phase1_direct_result = _attach_phase1_plan_and_timing(
+            phase1_direct_result,
+            phase1_plan,
+            _phase1_timing(
+                request_start=request_start,
+                planner_duration_ms=planner_duration_ms,
+                executor_duration_ms=phase1_executor_duration_ms,
+                guard_duration_ms=guard_duration_ms,
+            ),
+        )
+        return await _save_agent_result_and_return(
+            db,
+            user_id=user_id,
+            question=question,
+            conversation_id=conversation_id,
+            agent_result=phase1_direct_result,
+            request_start=request_start,
+            branch=f"phase1_{phase1_plan.get('primary_intent') or 'planner'}",
+        )
 
     composite_question = _split_composite_customer_question(question)
     if composite_question:
@@ -689,6 +1017,18 @@ async def ask_customer_service(
     customer_perf_service.log_stage("guardrail.evaluate_question", stage_start, matched=bool(agent_result))
     if agent_result:
         stage_start = perf_counter()
+        guard_start = perf_counter()
+        agent_result = _run_phase1_answer_guard(agent_result, phase1_plan)
+        guard_duration_ms = round((perf_counter() - guard_start) * 1000, 2)
+        agent_result = _attach_phase1_plan_and_timing(
+            agent_result,
+            phase1_plan,
+            _phase1_timing(
+                request_start=request_start,
+                planner_duration_ms=planner_duration_ms,
+                guard_duration_ms=guard_duration_ms,
+            ),
+        )
         agent_result = _finalize_answer(agent_result)
         agent_result = _shape_answer_for_output(agent_result)
         agent_result = await _attach_debug_supporting_knowledge(db, agent_result, question)
@@ -921,14 +1261,29 @@ async def ask_customer_service(
             question=question,
         )
         stage_start = perf_counter()
-        agent_result = await customer_agent_intent_service.process_intent_request(
-            db,
-            user_id=user_id,
-            question=question,
-            sku=None,
-            previous_result_skus=deterministic_previous_result_skus,
-            allow_llm_fallback=False,
-        )
+        try:
+            agent_result = await customer_agent_intent_service.process_intent_request(
+                db,
+                user_id=user_id,
+                question=question,
+                sku=None,
+                previous_result_skus=deterministic_previous_result_skus,
+                allow_llm_fallback=False,
+            )
+        except HTTPException as exc:
+            if exc.status_code == status.HTTP_404_NOT_FOUND and SKU_RE.fullmatch(question.strip()):
+                agent_result = {
+                    "intent": "clarify",
+                    "answer_type": "clarification",
+                    "answer": f"当前没有找到 SKU {question.strip().upper()} 对应的产品资料，请确认 SKU 是否正确。",
+                    "results": [],
+                    "result_skus": [],
+                    "needs_clarification": True,
+                    "debug": {"agent_mode": "missing_sku_clarification"},
+                    "skip_polish": True,
+                }
+            else:
+                raise
         customer_perf_service.log_stage("process_intent_request_pre_runtime", stage_start, hit=bool(agent_result), intent=agent_result.get("intent") if agent_result else None)
     if not agent_result and not followup_runtime_bypass and not bypass_stateless_pre_runtime and not force_runtime_followup and not force_runtime_empty_subset_followup and not force_runtime_ordinal_compare_followup and not bypass_pre_runtime_for_detail_context and not category_reference_detail:
         stage_start = perf_counter()
@@ -1081,6 +1436,18 @@ async def ask_customer_service(
         customer_perf_service.log_stage("process_agent_request_followup", stage_start, hit=bool(agent_result), intent=agent_result.get("intent") if agent_result else None, agent_mode=(agent_result.get("debug") or {}).get("agent_mode") if agent_result else None)
     if agent_result:
         stage_start = perf_counter()
+        guard_start = perf_counter()
+        agent_result = _run_phase1_answer_guard(agent_result, phase1_plan)
+        guard_duration_ms = round((perf_counter() - guard_start) * 1000, 2)
+        agent_result = _attach_phase1_plan_and_timing(
+            agent_result,
+            phase1_plan,
+            _phase1_timing(
+                request_start=request_start,
+                planner_duration_ms=planner_duration_ms,
+                guard_duration_ms=guard_duration_ms,
+            ),
+        )
         agent_result = _finalize_answer(agent_result)
         answer_metadata = agent_result.get("answer_metadata") if isinstance(agent_result.get("answer_metadata"), dict) else {}
         skip_polish = bool(agent_result.get("skip_polish"))

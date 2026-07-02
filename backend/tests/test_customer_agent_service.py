@@ -2922,6 +2922,173 @@ class CustomerAgentEndToEndBehaviorRegressionTest(unittest.IsolatedAsyncioTestCa
             priority=priority,
         ))
 
+    def test_phase1_planner_routes_product_field_alias_question(self):
+        from app.services import customer_agent_planner_service
+
+        plan = customer_agent_planner_service.plan_customer_question(
+            "瓦片烤盘尺寸是什么",
+            deterministic_intent="recommendation",
+            deterministic_answer_type="recommendation",
+        )
+
+        self.assertEqual(plan["primary_intent"], "product_field")
+        self.assertEqual(plan["answer_type"], "product_detail")
+        self.assertEqual(plan["product_ref"], "瓦片烤盘")
+        self.assertEqual(plan["requested_field"], "尺寸")
+        self.assertTrue(plan["field_only"])
+        self.assertTrue(plan["routing_conflict"])
+
+    def test_phase1_planner_routes_catalog_count_to_structured_query(self):
+        from app.services import customer_agent_planner_service
+
+        plan = customer_agent_planner_service.plan_customer_question("我们产品库有多少套锅")
+
+        self.assertEqual(plan["primary_intent"], "catalog_count")
+        self.assertTrue(any(task["type"] == "catalog_count" for task in plan["tasks"]))
+        self.assertEqual(plan["source"], "product_catalog_structured_query")
+
+    def test_phase1_planner_routes_compare_choice_as_internal_compare_recommendation(self):
+        from app.services import customer_agent_planner_service
+
+        plan = customer_agent_planner_service.plan_customer_question(
+            "行山单锅和激川单锅的区别是什么，我想两个人吃饱应该选哪个"
+        )
+
+        self.assertEqual(plan["primary_intent"], "product_compare_recommendation")
+        self.assertEqual(plan["answer_type"], "comparison")
+        self.assertTrue(plan["must_compare_both_products"])
+        self.assertTrue(plan["must_make_choice"])
+        self.assertIn("行山单锅", plan["product_refs"])
+        self.assertIn("激川单锅", plan["product_refs"])
+        self.assertEqual(
+            [task["type"] for task in plan["tasks"]],
+            ["product_compare", "knowledge_evidence_lookup", "recommendation_decision"],
+        )
+
+    def test_phase1_planner_marks_recommendation_must_return_products(self):
+        from app.services import customer_agent_planner_service
+
+        plan = customer_agent_planner_service.plan_customer_question("一个人徒步，买什么产品")
+
+        self.assertEqual(plan["primary_intent"], "recommendation")
+        self.assertEqual(plan["answer_type"], "recommendation")
+        self.assertTrue(plan["must_return_products"])
+
+    async def test_phase1_product_field_alias_question_returns_only_requested_field(self):
+        self._add_product(
+            "CF-PG19",
+            "瓦片烤盘",
+            "烤盘",
+            "/",
+            "铝合金",
+            "/",
+            "基础款瓦片烤盘，适合户外烧烤",
+            "户外烧烤",
+            450,
+        )
+        self.db.commit()
+
+        result = await customer_service_service.ask_customer_service(
+            self.db,
+            user_id="phase1-field-user",
+            question="瓦片烤盘尺寸是什么",
+        )
+
+        plan = (result.get("debug") or {}).get("plan") or {}
+        self.assertEqual(result.get("answer_type"), "product_detail")
+        self.assertEqual(plan.get("primary_intent"), "product_field")
+        self.assertEqual(plan.get("requested_field"), "尺寸")
+        self.assertRegex(result["answer"], r"(没有找到|暂无|未找到|资料里没有)")
+        self.assertRegex(result["answer"], r"(尺寸|规格|直径)")
+        self.assertNotRegex(result["answer"], r"(推荐|卖点|核心)")
+
+    async def test_phase1_catalog_count_uses_structured_product_catalog(self):
+        self._add_product(
+            "CAT-SET-1",
+            "双人轻量套锅",
+            "锅具",
+            "锅1.8L",
+            "硬质氧化铝合金",
+            "燃气炉",
+            "两人套锅",
+            "徒步露营",
+            720,
+        )
+        self._add_product(
+            "CAT-SET-2",
+            "家庭野餐套锅",
+            "锅具",
+            "锅2.2L",
+            "硬质氧化铝合金",
+            "燃气炉",
+            "多人套锅",
+            "野餐",
+            880,
+        )
+        self.db.commit()
+
+        result = await customer_service_service.ask_customer_service(
+            self.db,
+            user_id="phase1-catalog-user",
+            question="我们产品库有多少套锅",
+        )
+
+        plan = (result.get("debug") or {}).get("plan") or {}
+        metadata = result.get("answer_metadata") or {}
+        self.assertEqual(plan.get("primary_intent"), "catalog_count")
+        self.assertEqual(metadata.get("source"), "product_catalog_structured_query")
+        self.assertRegex(result["answer"], r"套锅")
+        self.assertRegex(result["answer"], r"\d+")
+        self.assertNotRegex(result["answer"], r"(向量|topK|片段)")
+
+    async def test_phase1_compare_choice_covers_both_products_and_makes_decision(self):
+        self._add_product_qa("CW-C93", "行山单锅适合几个人？", "行山单锅更偏一个人轻量徒步，容量余量有限。")
+        self._add_product_qa("CW-S10-1", "激川单锅适合两个人吃饭吗？", "激川单锅容量约1.5L，两个人户外吃饭更稳妥。")
+        self.db.commit()
+
+        result = await customer_service_service.ask_customer_service(
+            self.db,
+            user_id="phase1-compare-choice-user",
+            question="行山单锅和激川单锅的区别是什么，我想两个人吃饱应该选哪个",
+        )
+
+        plan = (result.get("debug") or {}).get("plan") or {}
+        task_types = [task.get("type") for task in plan.get("tasks") or []]
+        self.assertEqual(result.get("answer_type"), "comparison")
+        self.assertEqual(plan.get("primary_intent"), "product_compare_recommendation")
+        self.assertIn("product_compare", task_types)
+        self.assertIn("knowledge_evidence_lookup", task_types)
+        self.assertIn("recommendation_decision", task_types)
+        self.assertRegex(result["answer"], r"行山单锅")
+        self.assertRegex(result["answer"], r"激川单锅")
+        self.assertRegex(result["answer"], r"(区别|相比|不同)")
+        self.assertRegex(result["answer"], r"(两个人|2人|吃饱)")
+        self.assertRegex(result["answer"], r"(建议|更稳妥|更适合|选)")
+
+    async def test_phase1_timing_is_attached_to_service_results(self):
+        result = await customer_service_service.ask_customer_service(
+            self.db,
+            user_id="phase1-timing-user",
+            question="一个人徒步，买什么产品",
+        )
+
+        debug = result.get("debug") or {}
+        metadata = result.get("answer_metadata") or {}
+        self.assertIn("plan", debug)
+        self.assertIn("timing", debug)
+        self.assertIn("timing", metadata)
+        for key in (
+            "total_duration_ms",
+            "planner_duration_ms",
+            "retrieval_duration_ms",
+            "executor_duration_ms",
+            "llm_duration_ms",
+            "llm_call_count",
+            "composer_duration_ms",
+            "guard_duration_ms",
+        ):
+            self.assertIn(key, debug["timing"])
+
     async def test_product_detail_load_capacity_uses_same_sku_business_evidence(self):
         result = await customer_agent_intent_service._product_detail_result(
             self.db,
