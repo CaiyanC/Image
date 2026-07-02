@@ -3344,6 +3344,18 @@ class CustomerAgentEndToEndBehaviorRegressionTest(unittest.IsolatedAsyncioTestCa
 
     async def test_followup_explanation_uses_previous_recommended_set_via_service_entry(self):
         dmxapi_service.chat_completion = self._fake_chat_completion
+        original_runtime_llm = customer_agent_runtime_service.customer_llm_service.chat_completion
+        original_runtime_stream = customer_agent_runtime_service.customer_llm_service.chat_completion_stream
+
+        async def fail_runtime_llm(*args, **kwargs):
+            raise AssertionError("recommendation explanation followup should not call final-answer LLM")
+
+        async def fail_runtime_stream(*args, **kwargs):
+            raise AssertionError("recommendation explanation followup should not stream final-answer LLM")
+            yield ""
+
+        customer_agent_runtime_service.customer_llm_service.chat_completion = fail_runtime_llm
+        customer_agent_runtime_service.customer_llm_service.chat_completion_stream = fail_runtime_stream
         self._add_product(
             "CW-C69-1", "小方锅套装", "锅具", "水壶约1.0L，大锅约1.7L，煎锅约7寸", "304不锈钢",
             "明火直烧, 卡式炉, 分体炉, 一体炉", "轻量化便携", "轻量徒步，1-2人露营", 960,
@@ -3397,14 +3409,19 @@ class CustomerAgentEndToEndBehaviorRegressionTest(unittest.IsolatedAsyncioTestCa
         ))
         self.db.commit()
 
-        turn2 = await customer_service_service.ask_customer_service(
-            self.db,
-            user_id="case-44-user",
-            question="为什么推荐这些产品",
-            conversation_id=conversation_id,
-        )
+        try:
+            turn2 = await customer_service_service.ask_customer_service(
+                self.db,
+                user_id="case-44-user",
+                question="为什么推荐这些产品",
+                conversation_id=conversation_id,
+            )
+        finally:
+            customer_agent_runtime_service.customer_llm_service.chat_completion = original_runtime_llm
+            customer_agent_runtime_service.customer_llm_service.chat_completion_stream = original_runtime_stream
 
         self.assertEqual(turn2["intent"], "recommendation")
+        self.assertEqual((turn2.get("debug") or {}).get("agent_mode"), "recommendation_explanation_followup")
         self.assertIn("CW-C69-1", turn2["answer"])
         self.assertIn("CW-C06PRO", turn2["answer"])
         self.assertIn("CW-C47-37", turn2["answer"])

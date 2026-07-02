@@ -250,43 +250,31 @@ async def process_agent_request(
     if _is_explanation_followup(question, explanation_summary):
         explanation_skus = _explanation_followup_skus(question, explanation_summary)
         detail_results = []
+        detail_steps = []
         for sku_item in explanation_skus[:5]:
+            arguments = {
+                "skus": [sku_item],
+                "fields": [
+                    "specs.capacity",
+                    "specs.body_material",
+                    "specs.heat_source",
+                    "specs.power",
+                    "business.top_selling_points",
+                    "business.usage_scenarios",
+                    "business.target_audience",
+                    "business.positioning",
+                    "business.price_positioning",
+                ],
+            }
             result = await customer_agent_tool_service.execute_tool_async(
                 db,
                 user_id=user_id,
                 name="get_product_detail",
-                arguments={
-                    "skus": [sku_item],
-                    "fields": [
-                        "specs.capacity",
-                        "specs.body_material",
-                        "specs.heat_source",
-                        "specs.power",
-                        "business.top_selling_points",
-                        "business.usage_scenarios",
-                        "business.target_audience",
-                        "business.positioning",
-                        "business.price_positioning",
-                    ],
-                },
+                arguments=arguments,
             )
+            detail_steps.append(_step_from_tool_result("get_product_detail", arguments, result))
             detail_results.append(result)
         if detail_results:
-            result = await _build_result_async(
-                db,
-                question,
-                None,
-                detail_results,
-                None,
-                [],
-                conversation_history=conversation_history,
-                conversation_id=conversation_id,
-                user_id=user_id,
-                intent_override="product_detail",
-                preserve_llm_answer=True,
-                route_hints={"explanation_followup": True, "followup_target_skus": explanation_skus[:5]},
-                answer_delta_callback=answer_delta_callback,
-            )
             explanation_rows = _collect_results(detail_results) or []
             if _is_plural_recommendation_explanation(question) and len(explanation_rows) > 1:
                 followup_answer = _compose_multi_recommendation_explanation_answer(
@@ -302,10 +290,34 @@ async def process_agent_request(
                     explanation_summary,
                 )
             if followup_answer:
-                result["answer"] = followup_answer
+                result = _build_result(
+                    question,
+                    None,
+                    detail_results,
+                    followup_answer,
+                    detail_steps,
+                    conversation_history=conversation_history,
+                    intent_override="recommend_products",
+                    preserve_llm_answer=True,
+                )
                 result["intent"] = "recommendation"
                 result["answer_type"] = "recommendation"
-            return result
+                result["skip_polish"] = True
+                debug = dict(result.get("debug") or {})
+                debug["agent_mode"] = "recommendation_explanation_followup"
+                debug["followup_target_skus"] = explanation_skus[:5]
+                result["debug"] = debug
+                return result
+            return _build_result(
+                question,
+                None,
+                detail_results,
+                None,
+                detail_steps,
+                conversation_history=conversation_history,
+                intent_override="recommend_products",
+                preserve_llm_answer=False,
+            )
     if explicit_product_detection["has_new_product"]:
         detected_skus = [
             str(item or "").strip().upper()
@@ -5176,17 +5188,20 @@ def _recommendation_reason(question: str, row: dict, *, followup: bool = False) 
     if evidence_reason:
         return evidence_reason
     parts: list[str] = []
-    capacity = row.get("capacity")
+    field_values = row.get("field_values") if isinstance(row.get("field_values"), dict) else {}
+    capacity = row.get("capacity") or field_values.get("容量") or field_values.get("尺寸")
     if capacity:
         parts.append(f"\u5bb9\u91cf {capacity}")
-    if row.get("body_material"):
-        parts.append(f"\u6750\u8d28 {row.get('body_material')}")
-    features = row.get("features") or row.get("top_selling_points") or row.get("semantic_match")
+    body_material = row.get("body_material") or field_values.get("材质") or field_values.get("主体材质")
+    if body_material:
+        parts.append(f"\u6750\u8d28 {body_material}")
+    features = row.get("features") or row.get("top_selling_points") or row.get("semantic_match") or field_values.get("卖点")
     if features:
         parts.append(f"\u5356\u70b9 {features}")
-    if row.get("price_positioning"):
-        parts.append(f"\u4ef7\u683c\u5b9a\u4f4d {row.get('price_positioning')}")
-    scenes = row.get("usage_scenarios") or row.get("usage_scene") or ""
+    price_positioning = row.get("price_positioning") or field_values.get("价格定位")
+    if price_positioning:
+        parts.append(f"\u4ef7\u683c\u5b9a\u4f4d {price_positioning}")
+    scenes = row.get("usage_scenarios") or row.get("usage_scene") or field_values.get("使用场景") or ""
     if scenes:
         parts.append(f"\u573a\u666f {scenes}")
     audience = row.get("target_audience")
