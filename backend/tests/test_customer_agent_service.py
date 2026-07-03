@@ -3575,6 +3575,7 @@ class CustomerAgentEndToEndBehaviorRegressionTest(unittest.IsolatedAsyncioTestCa
         self._add_product("Q04-POT", "测试普通套锅", "锅具", "锅：2000ML", "铝合金", "燃气炉", "套锅", "家庭露营煮汤", 900)
         self._add_product("CF-PG19", "瓦片烤盘", "锅具", "32*32*3.9cm", "铝合金", "卡式炉", "户外烧烤烤盘", "多人烧烤 团建烧烤", 780)
         self._add_product("Q04-STOVE", "测试户外烧烤炉", "炉具", "炉体", "不锈钢", "燃气炉", "烧烤炉 大面积烤网", "公司团建 户外烧烤", 1800)
+        self._add_product("Q04-STOVE-2", "测试桌面烧烤炉", "炉具", "炉体", "不锈钢", "燃气炉", "桌面烧烤炉 火力稳定", "多人烧烤 团建烧烤", 1600)
         self.db.commit()
 
         result = await customer_service_service.ask_customer_service(
@@ -3584,11 +3585,19 @@ class CustomerAgentEndToEndBehaviorRegressionTest(unittest.IsolatedAsyncioTestCa
         )
 
         combined = " ".join([result.get("answer", ""), " ".join(result.get("result_skus") or [])])
+        top_three = result.get("result_skus") or []
+        top_three = top_three[:3]
         self.assertEqual(result.get("answer_type"), "recommendation")
         self.assertRegex(combined, r"(CF-PG19|Q04-STOVE|烤盘|烧烤炉|炉子)")
         self.assertNotEqual((result.get("result_skus") or [None])[0], "Q04-POT")
         self.assertNotRegex(result["answer"], r"优先推荐测试普通套锅")
-        self.assertRegex(result["answer"], r"(团建|十来个人|户外烧烤|烤盘|炉)")
+        self.assertRegex(result["answer"], r"(团建|十来个人|户外烧烤)")
+        self.assertRegex(result["answer"], r"(炉具方向|炉子方向|炉具可以看|炉子可以看)")
+        self.assertRegex(result["answer"], r"(烤盘方向|烤盘可以看|瓦片烤盘|CF-PG19)")
+        self.assertIn("CF-PG19", result.get("result_skus") or [])
+        self.assertIn("CF-PG19", top_three)
+        self.assertNotEqual(top_three, ["Q04-STOVE", "Q04-STOVE-2", "CF-PG19"])
+        self.assertTrue(any(sku == "CF-PG19" for sku in top_three))
         self.assertIn("total_duration_ms", (result.get("answer_metadata") or {}).get("timing") or {})
 
     async def test_phase1_generic_stable_recommendation_prefers_core_cookware_not_accessories(self):

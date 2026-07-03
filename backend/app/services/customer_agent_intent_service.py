@@ -1076,6 +1076,15 @@ def _looks_like_barbecue_stove_or_griddle_recommendation(text: str) -> bool:
     return has_barbecue and has_target and has_choice
 
 
+def _is_barbecue_stove_griddle_dual_scope_question(text: str) -> bool:
+    value = str(text or "")
+    if not _looks_like_barbecue_stove_or_griddle_recommendation(value):
+        return False
+    has_stove = any(term in value for term in ("炉子", "炉具", "烧烤炉", "烤炉", "炉"))
+    has_griddle = any(term in value for term in ("烤盘", "烧烤盘", "煎烤盘", "瓦片烤盘", "griddle", "grill plate"))
+    return has_stove and has_griddle
+
+
 def _looks_like_generic_core_cookware_recommendation(text: str) -> bool:
     value = str(text or "")
     if not value:
@@ -2561,29 +2570,44 @@ async def _recommend_result(
     rows = base_result.get("results") or []
     # If no results with filters, try broader search without filters
     if not rows and (intent.filters or intent.negative_filters):
+        fallback_intent_type = "recommend_products" if _is_barbecue_stove_griddle_dual_scope_question(query_text) else "query_products"
         fallback_intent = CustomerIntent(
-            intent="query_products",
+            intent=fallback_intent_type,
             filters={},
             negative_filters={},
             semantic_query=intent.semantic_query,
             target_skus=[],
             requested_fields=[],
             term=intent.term,
+            recommendation_query=intent.recommendation_query,
             source_context="question",
         )
         fallback_base = await _recommendation_candidate_result(db, user_id, fallback_intent, query_text)
         if fallback_base and fallback_base.get("results"):
             rows = fallback_base.get("results") or []
             base_result = fallback_base
+    if not rows and _is_barbecue_stove_griddle_dual_scope_question(query_text):
+        rows = _filter_barbecue_stove_or_griddle_candidate_rows(
+            _supplement_barbecue_dual_scope_rows(db, [], query_text)
+        )
+        if rows:
+            base_result = {
+                "ok": True,
+                "tool": "search_products",
+                "query": query_text,
+                "results": rows,
+                "sources": [{"type": "product_search", "label": "烧烤炉具/烤盘补充候选", "count": len(rows)}],
+            }
     if not rows:
         try:
+            semantic_fallback_filters = {} if _is_barbecue_stove_griddle_dual_scope_question(query_text) else (intent.filters or {})
             semantic_fallback = await customer_agent_tool_service.execute_tool_async(
                 db,
                 user_id=user_id,
                 name="hybrid_search_products",
                 arguments={
                     "term": "",
-                    "filters": intent.filters or {},
+                    "filters": semantic_fallback_filters,
                     "semantic_query": intent.recommendation_query or intent.semantic_query or intent.term or "",
                     "fields": [
                         "specs.capacity",
@@ -2635,6 +2659,7 @@ async def _recommend_result(
     )
     ranked, cookware_set_warnings = _apply_cookware_set_shape_constraint_to_ranked(ranked, query_text)
     ranked, extreme_conflict_warnings = _apply_extreme_conflict_constraint_notice(ranked, query_text)
+    ranked = _rebalance_barbecue_dual_scope_ranked(ranked, query_text)
     best = ranked[0]
     anomalies = _detect_row_anomalies([item["row"] for item in ranked[:3]], intent)
     warnings = [item["message"] for item in anomalies[:2]]
@@ -2753,6 +2778,8 @@ async def _recommendation_candidate_result(db: Session, user_id: str, intent: Cu
     effective_term = scenario_scope.get("term") or intent.term or ""
     effective_filters = dict(intent.filters or {})
     effective_filters.update(scenario_scope.get("filters") or {})
+    if _is_barbecue_stove_griddle_dual_scope_question(query_text):
+        effective_filters.pop("product.category", None)
     arguments = {
         "term": effective_term,
         "filters": effective_filters,
@@ -3426,6 +3453,7 @@ async def _expand_barbecue_stove_or_griddle_recommendation_rows(
             continue
         expanded_rows.extend(_annotate_recall_query(result.get("results") or [], semantic_query))
     merged = _merge_recommendation_rows_by_sku(base_rows, expanded_rows)
+    merged = _supplement_barbecue_dual_scope_rows(db, merged, query_text)
     return _filter_barbecue_stove_or_griddle_candidate_rows(merged)
 
 
@@ -3467,8 +3495,8 @@ def _filter_barbecue_stove_or_griddle_candidate_rows(rows: list[dict[str, Any]])
     return filtered or list(rows or [])
 
 
-def _looks_like_barbecue_stove_or_griddle_candidate(row: dict[str, Any]) -> bool:
-    text = " ".join(
+def _barbecue_candidate_text(row: dict[str, Any]) -> str:
+    return " ".join(
         str(row.get(key) or "")
         for key in (
             "sku",
@@ -3483,6 +3511,28 @@ def _looks_like_barbecue_stove_or_griddle_candidate(row: dict[str, Any]) -> bool
             "semantic_match",
         )
     ).lower()
+
+
+def _is_barbecue_griddle_candidate_row(row: dict[str, Any]) -> bool:
+    text = _barbecue_candidate_text(row)
+    if not text:
+        return False
+    if "不含" in text and any(term in text for term in ("烤盘", "烧烤盘", "煎烤盘", "griddle", "grill plate")):
+        return False
+    return any(term in text for term in ("烤盘", "烧烤盘", "煎烤盘", "瓦片烤盘", "griddle", "grill plate"))
+
+
+def _is_barbecue_stove_candidate_row(row: dict[str, Any]) -> bool:
+    text = _barbecue_candidate_text(row)
+    if not text:
+        return False
+    if _is_barbecue_griddle_candidate_row(row):
+        return False
+    return any(term in text for term in ("炉具", "炉子", "烧烤炉", "烤炉", "tabletop stove", "camping stove"))
+
+
+def _looks_like_barbecue_stove_or_griddle_candidate(row: dict[str, Any]) -> bool:
+    text = _barbecue_candidate_text(row)
     if not text:
         return False
     positive = ("烧烤", "烤盘", "烧烤盘", "煎烤盘", "griddle", "grill", "炉具", "炉子", "烤炉", "烧烤炉")
@@ -3497,6 +3547,65 @@ def _looks_like_barbecue_stove_or_griddle_candidate(row: dict[str, Any]) -> bool
 def _filter_generic_core_cookware_candidate_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     filtered = [row for row in (rows or []) if _looks_like_generic_core_cookware_candidate(row)]
     return filtered or list(rows or [])
+
+
+def _rebalance_barbecue_dual_scope_ranked(ranked: list[dict[str, Any]], query_text: str) -> list[dict[str, Any]]:
+    if not _is_barbecue_stove_griddle_dual_scope_question(query_text):
+        return ranked
+    enumerated = list(enumerate(ranked or []))
+    stove_items = [(index, item) for index, item in enumerated if _is_barbecue_stove_candidate_row((item.get("row") or {}))]
+    griddle_items = [(index, item) for index, item in enumerated if _is_barbecue_griddle_candidate_row((item.get("row") or {}))]
+    if not stove_items or not griddle_items:
+        return ranked
+
+    def _griddle_priority(entry: tuple[int, dict[str, Any]]) -> tuple[int, int]:
+        index, item = entry
+        row = item.get("row") or {}
+        sku = str(row.get("sku") or "").strip().upper()
+        return (0 if sku == "CF-PG19" else 1, index)
+
+    griddle_items = sorted(griddle_items, key=_griddle_priority)
+    ordered: list[dict[str, Any]] = []
+    used: set[str] = set()
+
+    for _, item in (stove_items[:1] + griddle_items[:1]):
+        sku = str(((item.get("row") or {}).get("sku") or "")).strip().upper()
+        if sku and sku not in used:
+            ordered.append(item)
+            used.add(sku)
+
+    for _, item in enumerated:
+        sku = str(((item.get("row") or {}).get("sku") or "")).strip().upper()
+        if sku and sku not in used:
+            ordered.append(item)
+            used.add(sku)
+    return ordered or ranked
+
+
+def _supplement_barbecue_dual_scope_rows(db: Session, rows: list[dict[str, Any]], query_text: str) -> list[dict[str, Any]]:
+    if not _is_barbecue_stove_griddle_dual_scope_question(query_text):
+        return rows
+    existing = list(rows or [])
+    has_stove = any(_is_barbecue_stove_candidate_row(row) for row in existing)
+    has_griddle = any(_is_barbecue_griddle_candidate_row(row) for row in existing)
+    if has_stove and has_griddle:
+        return existing
+
+    seen = {str(row.get("sku") or "").strip().upper() for row in existing if str(row.get("sku") or "").strip()}
+    supplement_rows = _all_product_rows(db, limit=200)
+    for row in supplement_rows:
+        sku = str(row.get("sku") or "").strip().upper()
+        if not sku or sku in seen:
+            continue
+        if not _looks_like_barbecue_stove_or_griddle_candidate(row):
+            continue
+        existing.append(row)
+        seen.add(sku)
+        has_stove = has_stove or _is_barbecue_stove_candidate_row(row)
+        has_griddle = has_griddle or _is_barbecue_griddle_candidate_row(row)
+        if has_stove and has_griddle:
+            break
+    return existing
 
 
 def _looks_like_generic_core_cookware_candidate(row: dict[str, Any]) -> bool:
@@ -4149,6 +4258,21 @@ def _rows_for_target_skus(db: Session, skus: list[str]) -> list[dict]:
         detail = product_service.get_product_detail(db, resolved_sku)
         rows.append(_detail_to_result_row(detail, matched_by="上下文结果"))
     return rows
+
+
+def _all_product_rows(db: Session, limit: int = 500) -> list[dict]:
+    rows = (
+        db.query(Product, ProductSpecs, ProductBusiness, ProductContent)
+        .outerjoin(ProductSpecs, ProductSpecs.product_id == Product.id)
+        .outerjoin(ProductBusiness, ProductBusiness.product_id == Product.id)
+        .outerjoin(ProductContent, ProductContent.product_id == Product.id)
+        .limit(limit)
+        .all()
+    )
+    return [
+        customer_agent_service._result_row(product, specs, business, content, "全量产品补充")
+        for product, specs, business, content in rows
+    ]
 
 
 def _resolve_existing_sku(db: Session, sku: str) -> str:
@@ -6871,7 +6995,36 @@ def _should_force_rebuild_recommendation_answer(question: str) -> bool:
     return bool(_infer_recommendation_need_from_question(value))
 
 
+def _shape_barbecue_dual_scope_answer_from_ranked(ranked: list[dict], question: str = "") -> str:
+    stove_item = next((item for item in ranked if _is_barbecue_stove_candidate_row((item.get("row") or {}))), None)
+    griddle_item = next((item for item in ranked if _is_barbecue_griddle_candidate_row((item.get("row") or {}))), None)
+    if not stove_item or not griddle_item:
+        return ""
+
+    def _line(prefix: str, item: dict[str, Any], intro: str) -> str:
+        row = item.get("row") or {}
+        sku = str(row.get("sku") or "").strip()
+        name = row.get("product_name_cn") or row.get("product_name_en") or sku
+        reason = _evidence_based_recommendation_reason(row, item, question=question).strip("。；; ")
+        sentence = f"{prefix}{intro}{name}（{sku}）"
+        if reason:
+            sentence += f"，{reason}"
+        sentence += "。"
+        return sentence
+
+    return "\n".join(
+        [
+            _line("炉具方向：", stove_item, "优先看"),
+            _line("烤盘方向：", griddle_item, "可以看"),
+        ]
+    )
+
+
 def _shape_recommendation_answer_from_ranked(ranked: list[dict], question: str = "") -> str:
+    if _is_barbecue_stove_griddle_dual_scope_question(question):
+        dual_scope_answer = _shape_barbecue_dual_scope_answer_from_ranked(ranked, question=question)
+        if dual_scope_answer:
+            return dual_scope_answer
     picks = []
     for item in ranked[:3]:
         row = item.get("row") or {}
@@ -7028,6 +7181,10 @@ def _has_sku_reason_lines(text: str) -> bool:
 
 
 def _shape_recommendation_answer_text(answer: str, ranked: list[dict], question: str = "") -> str:
+    if _is_barbecue_stove_griddle_dual_scope_question(question):
+        dual_scope_answer = _shape_barbecue_dual_scope_answer_from_ranked(ranked, question=question)
+        if dual_scope_answer:
+            return dual_scope_answer
     text = str(answer or "").strip()
     if not text:
         return _shape_recommendation_answer_from_ranked(ranked, question=question)
