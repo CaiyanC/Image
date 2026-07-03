@@ -597,7 +597,7 @@ def _phase1_catalog_count_result(db: Session, plan: dict) -> dict:
     rows = _phase1_catalog_rows(db, product_ref)
     display_ref = _phase1_catalog_display_label(product_ref)
     skus = [str(row.get("sku") or "") for row in rows if row.get("sku")]
-    display_rows = rows[:10]
+    display_rows = _phase1_rank_catalog_display_rows(product_ref, rows)[:10]
     display_skus = [str(row.get("sku") or "") for row in display_rows if row.get("sku")]
     samples = "、".join(
         f"{row.get('sku')} {row.get('product_name_cn')}".strip()
@@ -642,6 +642,39 @@ def _phase1_catalog_display_label(product_ref: str) -> str:
     if ref == "天幕/地垫/帐篷":
         return "天幕、地垫、帐篷"
     return ref
+
+
+def _phase1_rank_catalog_display_rows(product_ref: str, rows: list[dict]) -> list[dict]:
+    ref = str(product_ref or "").strip()
+    if ref not in {"配件", "水具"}:
+        return list(rows or [])
+
+    def _score(row: dict) -> tuple[int, str]:
+        text = " ".join(
+            str(row.get(key) or "").strip()
+            for key in ("product_name_cn", "product_name_en", "category", "sub_category", "features", "usage_scenarios", "positioning")
+        )
+        score = 0
+        if ref == "配件":
+            if any(term in text for term in ("配件", "附件", "收纳", "炉芯", "刀板", "提手", "手夹", "夹", "把手")):
+                score += 8
+            if any(term in text for term in ("锅具配件", "餐厨配件", "炉具配件")):
+                score += 5
+            if any(term in text for term in ("水袋", "雪拉碗", "喷枪", "玩具")):
+                score -= 6
+        elif ref == "水具":
+            if any(term in text for term in ("水具", "水壶", "水杯", "杯", "补水", "饮水", "保温")):
+                score += 8
+            if any(term in text for term in ("便携", "随身", "公园野餐", "徒步补水")):
+                score += 4
+            if any(term in text for term in ("咖啡", "手冲", "细口壶", "煮茶")):
+                score -= 6
+            if any(term in text for term in ("烧水", "加热")):
+                score -= 2
+        sku = str(row.get("sku") or "")
+        return (-score, sku)
+
+    return sorted(list(rows or []), key=_score)
 
 
 def _phase1_explicit_sku_alcohol_people_result(db: Session, question: str) -> dict | None:
@@ -1005,6 +1038,10 @@ def _phase1_structured_recommendation_result(db: Session, plan: dict) -> dict | 
     if not scenario:
         return None
     rows = _phase1_catalog_rows(db, "产品")
+    if _phase1_is_stove_griddle_combo_scenario(scenario):
+        combo_result = _phase1_structured_stove_griddle_result(scenario, rows)
+        if combo_result:
+            return combo_result
     scored: list[tuple[int, dict]] = []
     for row in rows:
         haystack = " ".join(
@@ -1022,6 +1059,11 @@ def _phase1_structured_recommendation_result(db: Session, plan: dict) -> dict | 
         )
         category = str(row.get("category") or "")
         score = 0
+        if any(term in scenario for term in ("锅", "锅具", "套锅", "单锅", "炊具")):
+            if "锅" in category:
+                score += 8
+            elif not _phase1_is_stove_griddle_combo_scenario(scenario):
+                score -= 10
         if any(term in scenario for term in ("套锅", "套装")):
             if any(term in haystack for term in ("套锅", "套装", "锅5件套", "锅7件套", "锅10件套")):
                 score += 8
@@ -1041,8 +1083,18 @@ def _phase1_structured_recommendation_result(db: Session, plan: dict) -> dict | 
             score += 2
         if "徒步" in scenario and "徒步" in haystack:
             score += 8
+        if any(term in scenario for term in ("长途徒步", "只想带一个锅", "一个锅", "单锅")) and any(term in haystack for term in ("单锅", "轻量", "徒步", "套娃")):
+            score += 7
         if any(term in scenario for term in ("一个人", "单人", "1人")) and any(term in haystack for term in ("单人", "1人", "1-2人", "1000ML", "轻量")):
             score += 5
+        if any(term in scenario for term in ("三口之家", "四五个", "多人", "家庭")) and any(term in haystack for term in ("3L", "3700ML", "多人", "家庭", "2-4人")):
+            score += 7
+        if any(term in scenario for term in ("容量", "正餐")) and any(term in haystack for term in ("3L", "3700ML", "大容量", "多人做饭")):
+            score += 6
+        if any(term in scenario for term in ("收纳", "别太差")) and any(term in haystack for term in ("收纳", "套娃", "便携")):
+            score += 4
+        if any(term in scenario for term in ("烧水", "简单餐食")) and any(term in haystack for term in ("水壶", "烧水", "做饭", "套锅")):
+            score += 4
         if "轻量" in haystack or "便携" in haystack:
             score += 2
         if any(term in haystack for term in ("锅", "炉", "水壶", "套装")):
@@ -1087,12 +1139,18 @@ def _phase1_structured_recommendation_result(db: Session, plan: dict) -> dict | 
 
 def _phase1_should_use_structured_recommendation(plan: dict) -> bool:
     scenario = str((plan or {}).get("scenario") or "")
-    return any(term in scenario for term in ("想买套锅", "想买锅", "买套锅", "买锅", "买哪个", "应该买", "该买", "推荐", "怎么选", "希望", "想选"))
+    if not scenario:
+        return False
+    if any(term in scenario for term in ("想买套锅", "想买锅", "买套锅", "买锅", "买哪个", "应该买", "该买", "推荐", "怎么选", "希望", "想选")):
+        return True
+    return any(term in scenario for term in ("露营", "野餐", "徒步", "公园", "自驾", "家庭", "烧烤", "早餐")) and any(
+        term in scenario for term in ("锅", "锅具", "套锅", "单锅", "炊具", "炉具", "炉子", "烤盘", "正餐", "做正餐", "烧水", "做简单餐食", "煎东西")
+    )
 
 
 def _phase1_scenario_labels(scenario: str) -> list[str]:
     labels = []
-    for term in ("家庭", "周末", "两个人", "三个人", "一个人", "野餐", "露营", "徒步", "火锅", "烧烤", "轻量", "轻便", "容量优先", "套锅", "锅具"):
+    for term in ("家庭", "周末", "三口之家", "两个人", "三个人", "一个人", "多人", "野餐", "公园", "露营", "徒步", "自驾", "火锅", "烧烤", "早餐", "轻量", "轻便", "容量优先", "收纳", "套锅", "锅具", "炉具", "烤盘"):
         if term in scenario and term not in labels:
             labels.append(term)
     return labels
@@ -1109,6 +1167,91 @@ def _phase1_repair_recommendation_result(db: Session, agent_result: dict, plan: 
         return agent_result
     rebuilt = _phase1_structured_recommendation_result(db, plan)
     return rebuilt or agent_result
+
+
+def _phase1_is_stove_griddle_combo_scenario(question: str) -> bool:
+    value = str(question or "").strip()
+    if not value:
+        return False
+    if customer_agent_intent_service._is_barbecue_stove_griddle_dual_scope_question(value):
+        return True
+    if not any(term in value for term in ("烤盘", "煎盘", "煎东西")):
+        return False
+    return any(term in value for term in ("烧烤", "炉具", "炉子", "怎么搭", "更合适", "先买哪类", "先买哪个"))
+
+
+def _phase1_structured_stove_griddle_result(scenario: str, rows: list[dict]) -> dict | None:
+    stove_rows = [row for row in rows if customer_agent_intent_service._is_barbecue_stove_candidate_row(row)]
+    griddle_rows = [row for row in rows if customer_agent_intent_service._is_barbecue_griddle_candidate_row(row)]
+    if not stove_rows and not griddle_rows:
+        return None
+
+    def _rank_stove(row: dict) -> tuple[int, str]:
+        text = " ".join(str(row.get(key) or "") for key in ("product_name_cn", "features", "usage_scenarios", "positioning", "category"))
+        score = 0
+        if any(term in text for term in ("烧烤", "火力", "稳定", "桌面炉", "卡式炉", "炉具")):
+            score += 6
+        if any(term in text for term in ("桌面聚餐", "露营烧烤", "家庭露营")):
+            score += 4
+        return (-score, str(row.get("sku") or ""))
+
+    def _rank_griddle(row: dict) -> tuple[int, str]:
+        text = " ".join(str(row.get(key) or "") for key in ("product_name_cn", "features", "usage_scenarios", "positioning", "category"))
+        score = 0
+        if any(term in text for term in ("烤盘", "煎盘", "煎烤", "早餐")):
+            score += 7
+        if "导热盘" in text:
+            score -= 10
+        return (-score, str(row.get("sku") or ""))
+
+    stove_rows = sorted(stove_rows, key=_rank_stove)
+    griddle_rows = sorted(griddle_rows, key=_rank_griddle)
+    selected: list[dict] = []
+    if stove_rows:
+        selected.append(stove_rows[0])
+    if griddle_rows:
+        selected.append(griddle_rows[0])
+    for row in stove_rows[1:] + griddle_rows[1:]:
+        sku = str(row.get("sku") or "").strip().upper()
+        if sku and sku not in {str(item.get("sku") or "").strip().upper() for item in selected}:
+            selected.append(row)
+        if len(selected) >= 4:
+            break
+    if not selected:
+        return None
+
+    stove_row = stove_rows[0] if stove_rows else None
+    griddle_row = griddle_rows[0] if griddle_rows else None
+    parts: list[str] = []
+    if stove_row:
+        stove_name = stove_row.get("product_name_cn") or stove_row.get("sku")
+        stove_sku = stove_row.get("sku")
+        stove_reason = stove_row.get("features") or stove_row.get("usage_scenarios") or "更适合露营烧烤场景"
+        parts.append(f"优先推荐炉具 {stove_name}（{stove_sku}），{stove_reason}。")
+    if griddle_row:
+        griddle_name = griddle_row.get("product_name_cn") or griddle_row.get("sku")
+        griddle_sku = griddle_row.get("sku")
+        griddle_reason = griddle_row.get("features") or griddle_row.get("usage_scenarios") or "适合煎烤搭配"
+        parts.append(f"备选烤盘可以看 {griddle_name}（{griddle_sku}），{griddle_reason}。")
+    if "先买哪类" in scenario or "先买哪个" in scenario:
+        parts.insert(0, "如果你这次只能先补一类，我更建议先把炉具补齐，再搭配烤盘。")
+    elif "煎东西" in scenario or "早餐" in scenario:
+        parts.insert(0, "如果你的重点是煎东西，烤盘会比普通锅具更对路；有稳定火力时再搭配炉具更完整。")
+    else:
+        parts.insert(0, "这类场景更适合按“炉具 + 烤盘”去搭，不建议先回到普通锅具或导热盘。")
+
+    skus = [str(row.get("sku") or "").strip().upper() for row in selected if row.get("sku")]
+    return {
+        "intent": "recommendation",
+        "answer_type": "recommendation",
+        "answer": " ".join(parts),
+        "results": selected,
+        "result_skus": skus,
+        "candidate_skus": skus,
+        "debug": {"agent_mode": "planner_recommendation_guard_rebuild"},
+        "answer_metadata": {"source": "product_catalog_structured_recommendation"},
+        "skip_polish": True,
+    }
 
 
 def _phase1_is_alcohol_stove_cookware_question(
@@ -2172,9 +2315,14 @@ async def ask_customer_service(
             else:
                 raise
         customer_perf_service.log_stage("process_intent_request_pre_runtime", stage_start, hit=bool(agent_result), intent=agent_result.get("intent") if agent_result else None)
+        scenario_recommendation_like = (
+            customer_agent_intent_service._looks_like_scenario_recommendation_question(question)
+            or _phase1_is_stove_griddle_combo_scenario(question)
+            or customer_agent_planner_service._looks_like_scenario_statement_recommendation(question)
+        )
         if (
             (not agent_result or str(agent_result.get("answer_type") or "").strip() in {"", "unknown"})
-            and customer_agent_intent_service._looks_like_scenario_recommendation_question(question)
+            and scenario_recommendation_like
         ):
             rescue_intent = customer_agent_intent_service.CustomerIntent(
                 intent="recommend_products",
@@ -2190,8 +2338,20 @@ async def ask_customer_service(
             )
         if (
             agent_result
+            and str(agent_result.get("answer_type") or "").strip() in {"query_products", "product_query", "product_detail", "knowledge_base_answer"}
+            and scenario_recommendation_like
+            and not customer_agent_intent_service._extract_skus(question)
+        ):
+            rebuilt = _phase1_structured_recommendation_result(
+                db,
+                {"primary_intent": "recommendation", "scenario": question},
+            )
+            if rebuilt and _phase1_result_skus(rebuilt):
+                agent_result = rebuilt
+        if (
+            agent_result
             and str(agent_result.get("answer_type") or "").strip() == "product_detail"
-            and customer_agent_intent_service._looks_like_scenario_recommendation_question(question)
+            and scenario_recommendation_like
             and not customer_agent_intent_service._looks_like_product_detail_question(question)
             and not customer_agent_intent_service._extract_skus(question)
         ):

@@ -60,8 +60,9 @@ def plan_customer_question(
         plan.update(explicit_heat_source_compatibility)
         return plan
 
-    if _is_compare_question(text):
-        products = _extract_compare_product_refs(text)
+    compare_refs = _extract_compare_product_refs(text)
+    if _is_compare_question(text) and not _is_generic_category_compare_recommendation(text, compare_refs):
+        products = compare_refs
         must_make_choice = _is_compare_choice_question(text)
         plan.update(
             {
@@ -282,6 +283,14 @@ def _is_compare_choice_question(text: str) -> bool:
     )
 
 
+def _is_generic_category_compare_recommendation(text: str, refs: list[str] | None = None) -> bool:
+    products = [str(item or "").strip() for item in (refs or _extract_compare_product_refs(text))]
+    generic_categories = {"锅具", "套锅", "单锅", "炊具", "炉具", "炉子", "烤盘", "煎盘", "水具", "水壶"}
+    if len(products) < 2 or not all(item in generic_categories for item in products[:2]):
+        return False
+    return _looks_like_scenario_selection_question(text) or _looks_like_scenario_statement_recommendation(text)
+
+
 def _extract_compare_product_refs(text: str) -> list[str]:
     products: list[str] = []
     sku_refs = re.findall(r"\b[A-Za-z]{1,6}[-_][A-Za-z0-9][A-Za-z0-9_-]{1,40}\b", text)
@@ -369,7 +378,7 @@ def _supports_field_only_plan(text: str, requested_field: str) -> bool:
     field = str(requested_field or "").strip()
     if not value or not field:
         return False
-    if _is_recommendation_question(value):
+    if _is_recommendation_question(value) or _looks_like_scenario_statement_recommendation(value):
         return False
     extra_detail_signals = {
         "\u6750\u8d28": (
@@ -446,7 +455,7 @@ def _strip_trailing_question_phrase(text: str) -> str:
 def _is_recommendation_question(text: str) -> bool:
     if _looks_like_context_ordinal_reference(text):
         return False
-    if _looks_like_scenario_selection_question(text):
+    if _looks_like_scenario_selection_question(text) or _looks_like_scenario_statement_recommendation(text):
         return True
     if any(term in text for term in ("推荐", "买什么", "买哪款", "选哪款", "该买哪", "买什么产品")):
         return True
@@ -489,6 +498,34 @@ def _looks_like_scenario_selection_question(text: str) -> bool:
         and any(term in value for term in constraint_terms)
         and any(term in value for term in people_terms)
     )
+
+
+def _looks_like_scenario_statement_recommendation(text: str) -> bool:
+    value = str(text or "").strip()
+    if not value:
+        return False
+    if EXPLICIT_SKU_RE.search(value):
+        return False
+    product_terms = ("锅", "锅具", "套锅", "单锅", "炊具", "炉具", "炉子", "烤盘")
+    cooking_terms = ("正餐", "做正餐", "烧水", "做简单餐食", "煎东西", "火锅")
+    scene_terms = ("家庭", "周末", "近郊", "露营", "徒步", "自驾", "公园", "营地", "野餐", "烧烤", "早餐", "正餐")
+    people_terms = ("一个人", "单人", "两个人", "两人", "双人", "三口之家", "三个人", "四五个", "多人", "家庭", "带孩子", "新手", "女生")
+    constraint_terms = (
+        "容量", "稳", "稳定", "收纳", "轻", "轻量", "轻便", "别太重", "别太小", "别太差", "别太难清理",
+        "烧水", "做简单餐食", "做正餐", "煎东西", "更看重", "好上手", "最值", "怎么搭", "更合适",
+    )
+    if not any(term in value for term in product_terms) and not any(term in value for term in cooking_terms):
+        return False
+    if not any(term in value for term in scene_terms):
+        return False
+    constraint_hits = sum(1 for term in constraint_terms if term in value)
+    if any(term in value for term in people_terms) and constraint_hits >= 1:
+        return True
+    if constraint_hits >= 2:
+        return True
+    if any(term in value for term in ("怎么搭", "更合适", "先买哪类", "先买哪个", "最值")) and any(term in value for term in ("炉具", "炉子", "烤盘")):
+        return True
+    return False
 
 
 def _looks_like_context_ordinal_reference(text: str) -> bool:

@@ -171,10 +171,19 @@ def _add_product(
 def _seed_route_level_products(db):
     _add_product(db, "ACC-001", "稳稳水袋", "配件", "/", "TPU", "/", "配件收纳补水", "露营收纳", 80)
     _add_product(db, "ACC-CUT-1", "勺叉收纳包", "配件", "/", "牛津布", "/", "勺叉筷集中收纳", "露营用餐收纳", 60)
+    _add_product(db, "ACC-BURN-1", "旋焰炉芯", "配件", "/", "不锈钢", "/", "炉具配件 配件安装", "露营炉具维护", 55)
+    _add_product(db, "ACC-BOARD-1", "拓界刀板套装", "配件", "/", "PP", "/", "餐厨配件 收纳方便", "家庭露营备餐", 140)
+    _add_product(db, "ACC-HANDLE-1", "防烫提手夹", "配件", "/", "硅胶", "/", "锅具配件 防烫夹", "露营做饭", 45)
+    _add_product(db, "ACC-BOWL-1", "方屿雪拉碗", "配件", "500ML", "不锈钢", "/", "边界配件 雪拉碗", "营地分食", 120)
+    _add_product(db, "ACC-GUN-1", "游乐园喷枪", "配件", "/", "塑料", "/", "边界配件 喷枪", "游乐园活动", 150)
     _add_product(db, "CS-G26HM", "湖美林丰X-Power桌面炉（不含炉配件-烤盘）", "炉具", "/", "不锈钢", "气罐", "桌面炉 露营烧烤", "桌面聚餐", 2100)
     _add_product(db, "STV-001", "魔盒卡式炉", "炉具", "/", "不锈钢", "气罐", "炉具火力稳定", "露营烧烤", 2200)
     _add_product(db, "CUT-001", "便携式户外旅行筷", "餐具", "/", "不锈钢", "/", "轻量餐具", "露营用餐", 40)
     _add_product(db, "KTL-001", "悦享杯套装", "水具", "350ML", "304不锈钢", "/", "便携水具", "露营饮水", 180)
+    _add_product(db, "WT-001", "随心杯", "水具", "420ML", "304不锈钢", "/", "随身补水 水具", "公园野餐 徒步补水", 160)
+    _add_product(db, "WT-002", "轻量保温杯", "水具", "500ML", "304不锈钢", "/", "日常补水 水具", "通勤露营", 210)
+    _add_product(db, "KTL-COF-1", "手冲细口壶", "水具", "600ML", "不锈钢", "燃气炉", "偏咖啡冲煮 水具", "露营咖啡", 330)
+    _add_product(db, "KTL-HEAT-1", "烧水壶套装", "水具", "1.1L", "铝合金", "燃气炉", "偏烧水加热 水具", "营地烧水", 420)
     _add_product(db, "KW-K32-黑", "天鹅壶9杯-黑色", "咖啡器具", "900ML", "不锈钢", "气炉", "手冲咖啡器具", "露营咖啡", 420)
     _add_product(db, "TBL-001", "疯狂游乐园泡泡桌-长桌", "桌椅", "/", "铝合金", "/", "折叠桌椅", "家庭露营", 1800)
     _add_product(db, "COF-001", "魔咖旅行咖啡研磨机", "咖啡器具", "/", "不锈钢", "/", "手冲咖啡器具", "露营咖啡", 260)
@@ -184,6 +193,7 @@ def _seed_route_level_products(db):
     _add_product(db, "CW-C83", "炊墨套锅", "锅具", "锅 3700ML", "硬质氧化铝合金", "燃气炉", "多人做饭 稳一点", "家庭露营 2-4人 火锅", 1200)
     _add_product(db, "CW-C83-1", "炊墨炒锅", "锅具", "锅 3700ML", "硬质氧化铝合金", "燃气炉", "大容量", "家庭露营 多人做饭", 1200)
     _add_product(db, "CW-C83-2", "炊墨煎锅", "锅具", "煎盘 2300ML", "硬质氧化铝合金", "燃气炉", "兼容多热源", "家庭露营 早餐煎烤", 980)
+    _add_product(db, "CF-PG19", "瓦片烤盘", "锅具", "8英寸", "硬质氧化铝合金", "燃气炉", "烤盘 煎烤盘 早餐煎东西", "露营烧烤 营地早餐", 760)
     _add_product(db, "CW-S10-1", "激川单锅", "锅具", "锅 1400ML", "硬质氧化铝合金、TRITIAN", "酒精炉, 气炉", "双人需求 不粘", "双人露营 轻量野餐 火锅", 300)
     _add_product(db, "CW-S10-A", "激川单锅", "锅具", "锅 1400ML", "硬质氧化铝合金、TRITIAN", "酒精炉, 气炉", "双人需求 不粘", "双人露营 轻量野餐 火锅", 300)
     _add_product(db, "CW-C01-37", "1－2人野营锅7件套", "锅具", "锅 900ML，碗 450ML", "硬质氧化铝合金", "酒精炉, 燃气炉", "轻量化套娃收纳", "双人露营 周末野餐", 595)
@@ -514,3 +524,93 @@ def test_customer_service_ask_stream_route_level_ct_t04_bm_keeps_exact_sku(
     assert "CT-T04(BM)" in payload["answer"]
     assert "CT-T04）" not in payload["answer"]
     assert debug_plan.get("product_ref") == "CT-T04(BM)"
+
+
+def test_customer_service_ask_route_level_category_accessories_prioritize_clear_accessories(
+    route_client_and_db,
+):
+    client, headers, _ = route_client_and_db
+
+    response = client.post("/api/customer-service/ask?debug=true", json={"question": "有哪些配件产品？"}, headers=headers)
+
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    assert payload["answer_type"] == "query_products"
+    assert payload["answer_type"] != "knowledge_base_answer"
+    assert payload["result_skus"]
+    assert "配件" in payload["answer"]
+    top_three = payload["result_skus"][:3]
+    assert "ACC-BURN-1" in top_three
+    assert "ACC-BOARD-1" in top_three or "ACC-HANDLE-1" in top_three
+    assert "ACC-001" not in top_three
+    assert "ACC-BOWL-1" not in top_three
+    assert "ACC-GUN-1" not in top_three
+
+
+def test_customer_service_ask_route_level_category_waterware_prioritize_drinking_domain(
+    route_client_and_db,
+):
+    client, headers, Session = route_client_and_db
+
+    response = client.post("/api/customer-service/ask?debug=true", json={"question": "有哪些水具产品？"}, headers=headers)
+
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    assert payload["answer_type"] == "query_products"
+    assert payload["answer_type"] != "knowledge_base_answer"
+    assert payload["result_skus"]
+    assert "水具" in payload["answer"]
+    top_three = payload["result_skus"][:3]
+    assert {"WT-001", "WT-002", "KTL-001"} & set(top_three)
+    assert "KTL-COF-1" not in top_three
+
+    with Session() as db:
+        categories = {
+            product.sku: product.category
+            for product in db.query(Product).filter(Product.sku.in_(payload["result_skus"][:5])).all()
+        }
+    assert all(category in {"水具", "水壶"} for category in categories.values()), categories
+
+
+@pytest.mark.parametrize(
+    "question",
+    [
+        "三口之家周末近郊露营，锅具别太重但容量别太小。",
+        "长途徒步只想带一个锅，能烧水也能做简单餐食。",
+        "露营烧烤场景，炉具和烤盘怎么搭更合适？",
+        "营地早餐场景想煎东西，锅具和烤盘哪个更合适？",
+        "女生一个人公园野餐，想轻一点又能烧水的炊具。",
+        "长途自驾露营，人数四五个，锅具更看重容量和稳定性。",
+        "烧烤场景想带炉子和烤盘，先买哪类最值？",
+        "多人露营想做正餐，容量大一点但收纳别太差。",
+    ],
+)
+def test_customer_service_ask_route_level_targeted_warning_scenarios_return_recommendation(
+    route_client_and_db,
+    question,
+):
+    client, headers, Session = route_client_and_db
+
+    response = client.post("/api/customer-service/ask?debug=true", json={"question": question}, headers=headers)
+
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    assert payload["answer_type"] == "recommendation", payload
+    assert payload["answer_type"] != "knowledge_base_answer"
+    assert payload["answer_type"] != "product_detail"
+    assert payload["result_skus"], payload
+    assert re.search(r"(推荐|更推荐|优先推荐)", payload["answer"]), payload["answer"]
+    assert re.search(r"(备选|也可以看|如果你更看重)", payload["answer"]), payload["answer"]
+
+    with Session() as db:
+        categories = {
+            product.sku: product.category
+            for product in db.query(Product).filter(Product.sku.in_(payload["result_skus"][:3])).all()
+        }
+
+    if any(term in question for term in ("烧烤", "烤盘", "炉具", "炉子")):
+        assert payload["result_skus"][0] != "CW-DRP01"
+        assert categories.get(payload["result_skus"][0]) in {"炉具", "锅具"}
+        assert ("炉具" in payload["answer"] or "炉子" in payload["answer"]) and "烤盘" in payload["answer"]
+    else:
+        assert categories.get(payload["result_skus"][0]) == "锅具", categories
