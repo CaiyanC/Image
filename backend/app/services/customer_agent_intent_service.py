@@ -4524,6 +4524,13 @@ def _category_scope_rows(db: Session, category_ref: str) -> list[dict]:
     return [row for row in _all_product_rows(db) if _row_matches_category_scope(row, category_ref)]
 
 
+def _category_scope_display_label(category_ref: str) -> str:
+    ref = str(category_ref or "").strip()
+    if ref == "天幕/地垫/帐篷":
+        return "天幕、地垫、帐篷"
+    return ref
+
+
 def _category_scope_samples(rows: list[dict], limit: int = 5) -> str:
     samples = [
         f"{row.get('sku')} {row.get('product_name_cn')}".strip()
@@ -4571,14 +4578,15 @@ def _category_scope_structured_result(db: Session, question: str) -> dict | None
     if not rows:
         return None
     display_rows = rows[:10]
+    display_label = _category_scope_display_label(category_ref)
     if _is_category_scope_count_question(text):
         samples = _category_scope_samples(display_rows)
-        answer = f"当前产品库里“{category_ref}”类产品共有 {len(rows)} 款。"
+        answer = f"当前产品库里“{display_label}”类产品共有 {len(rows)} 款。"
         if samples:
             answer += f" 当前先列出前 {len(display_rows)} 款：{samples}。"
         debug_mode = "structured_category_catalog_count"
     else:
-        answer = _category_scope_people_answer(category_ref, rows)
+        answer = _category_scope_people_answer(display_label, rows)
         debug_mode = "structured_category_people_scope"
     intent = CustomerIntent(
         intent="query_products",

@@ -50,6 +50,11 @@ def plan_customer_question(
         plan.update(compatibility)
         return plan
 
+    explicit_heat_source_compatibility = _explicit_product_alcohol_stove_compatibility(text)
+    if explicit_heat_source_compatibility:
+        plan.update(explicit_heat_source_compatibility)
+        return plan
+
     if _is_compare_question(text):
         products = _extract_compare_product_refs(text)
         must_make_choice = _is_compare_choice_question(text)
@@ -212,6 +217,45 @@ def _explicit_pan_alcohol_stove_compatibility(text: str) -> dict[str, Any] | Non
         "confidence": "high",
         "tasks": [{"type": "category_compatibility", "category_ref": category_ref, "requested_field": "heat_source"}],
     }
+
+
+def _explicit_product_alcohol_stove_compatibility(text: str) -> dict[str, Any] | None:
+    value = str(text or "").strip()
+    lowered = value.lower()
+    has_alcohol_stove = "酒精炉" in value or "alcohol stove" in lowered
+    has_compatibility = any(term in value for term in ("能不能用", "能否使用", "是否支持", "支不支持", "可不可以放", "可以用", "适用", "兼容"))
+    if not (has_alcohol_stove and has_compatibility):
+        return None
+    product_ref = _explicit_heat_source_product_ref(value)
+    if not product_ref:
+        return None
+    return {
+        "primary_intent": "product_field",
+        "answer_type": "product_detail",
+        "product_ref": product_ref,
+        "requested_field": "heat_source",
+        "field_only": True,
+        "explicit_product_or_category": True,
+        "must_not_recommend_other_categories": True,
+        "confidence": "high",
+        "tasks": [{"type": "product_field", "product_ref": product_ref, "requested_field": "heat_source"}],
+    }
+
+
+def _explicit_heat_source_product_ref(text: str) -> str:
+    value = str(text or "").strip()
+    sku_match = re.search(r"\b[A-Za-z]{1,6}[-_][A-Za-z0-9][A-Za-z0-9_-]{1,40}\b", value)
+    if sku_match:
+        return sku_match.group(0).upper().replace("_", "-")
+    generic_refs = {"锅", "锅具", "套锅", "单锅", "炊具", "产品", "它", "这个", "这款", "刚才那个"}
+    for marker in ("能不能用", "能否使用", "是否支持", "支不支持", "可不可以放", "可以用", "适用", "兼容"):
+        idx = value.find(marker)
+        if idx <= 0:
+            continue
+        candidate = _clean_product_ref_fragment(value[:idx])
+        if candidate and candidate not in generic_refs:
+            return candidate
+    return ""
 
 
 def _is_compare_question(text: str) -> bool:

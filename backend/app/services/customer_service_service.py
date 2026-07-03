@@ -594,6 +594,7 @@ def _phase1_catalog_rows(db: Session, product_ref: str) -> list[dict]:
 def _phase1_catalog_count_result(db: Session, plan: dict) -> dict:
     product_ref = str(plan.get("product_ref") or "").strip() or "产品"
     rows = _phase1_catalog_rows(db, product_ref)
+    display_ref = _phase1_catalog_display_label(product_ref)
     skus = [str(row.get("sku") or "") for row in rows if row.get("sku")]
     display_rows = rows[:10]
     display_skus = [str(row.get("sku") or "") for row in display_rows if row.get("sku")]
@@ -602,7 +603,7 @@ def _phase1_catalog_count_result(db: Session, plan: dict) -> dict:
         for row in display_rows
         if row.get("sku")
     )
-    scope_label = f"【{product_ref}】" if product_ref != "产品" else "【产品】"
+    scope_label = f"【{display_ref}】" if product_ref != "产品" else "【产品】"
     if not rows:
         answer = f"当前产品库里暂未维护明确的{scope_label}类产品。"
         if product_ref != "产品":
@@ -633,6 +634,13 @@ def _phase1_catalog_count_result(db: Session, plan: dict) -> dict:
         "debug": {"agent_mode": "structured_catalog_count"},
         "skip_polish": True,
     }
+
+
+def _phase1_catalog_display_label(product_ref: str) -> str:
+    ref = str(product_ref or "").strip()
+    if ref == "天幕/地垫/帐篷":
+        return "天幕、地垫、帐篷"
+    return ref
 
 
 def _phase1_explicit_sku_alcohol_people_result(db: Session, question: str) -> dict | None:
@@ -3234,13 +3242,14 @@ def _sources_with_result_context(
         and set(result_skus).issubset(set(inherited_candidate_skus))
     )
     if result_skus and agent_result.get("answer_type") in {"product_query", "recommendation", "comparison"}:
+        recommendation_like = agent_result.get("answer_type") == "recommendation"
         candidate_context = {
             "candidate_skus": inherited_candidate_skus if preserve_inherited_candidate_domain else current_ordered_skus,
             "ordered_result_skus": inherited_ordered_skus if preserve_inherited_candidate_domain else current_ordered_skus,
-            "recommended_skus": result_skus if agent_result.get("intent") == "recommend_products" else [],
+            "recommended_skus": result_skus if recommendation_like or agent_result.get("intent") == "recommend_products" else [],
             "user_question": str(user_question or "").strip(),
             "product_scope": product_scope,
-            "source": "recommendation" if agent_result.get("intent") == "recommend_products" else "result",
+            "source": "recommendation" if recommendation_like or agent_result.get("intent") == "recommend_products" else "result",
         }
     elif _is_empty_candidate_subset_result(agent_result, inherited_candidate_skus):
         candidate_context = {
@@ -3285,13 +3294,15 @@ def _sources_with_result_context(
                 else None
             ),
         }
-    if agent_result.get("intent") == "recommend_products" and result_skus:
+    if agent_result.get("answer_type") == "recommendation" and result_skus:
         recommendation_context = {
             "recommended_skus": result_skus,
             "ordered_result_skus": current_ordered_skus,
             "candidate_skus": current_ordered_skus,
             "user_question": str(user_question or "").strip(),
             "product_scope": product_scope,
+            "answer_type": "recommendation",
+            "top_recommended_sku": current_ordered_skus[0] if current_ordered_skus else None,
         }
     elif isinstance(inherited_recommendation_context, dict) and inherited_recommendation_context.get("recommended_skus"):
         recommendation_context = {
@@ -3321,6 +3332,14 @@ def _sources_with_result_context(
             ],
             "user_question": str(inherited_recommendation_context.get("user_question") or "").strip(),
             "product_scope": str(inherited_recommendation_context.get("product_scope") or "").strip(),
+            "answer_type": str(inherited_recommendation_context.get("answer_type") or "recommendation"),
+            "top_recommended_sku": str(
+                inherited_recommendation_context.get("top_recommended_sku")
+                or (
+                    (inherited_recommendation_context.get("ordered_result_skus") or inherited_recommendation_context.get("recommended_skus") or [None])[0]
+                )
+                or ""
+            ).strip().upper() or None,
         }
     if candidate_context and candidate_context.get("empty_subset") and isinstance(existing_candidate_context, dict):
         if not candidate_context.get("candidate_skus"):

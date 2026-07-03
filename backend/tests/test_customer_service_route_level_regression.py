@@ -285,3 +285,94 @@ def test_customer_service_ask_route_level_scenarios_return_recommendation_shape(
     assert payload["result_skus"]
     assert re.search(r"(推荐|更推荐|优先推荐)", payload["answer"]), payload["answer"]
     assert re.search(r"(备选|如果你更看重)", payload["answer"]), payload["answer"]
+
+
+def test_customer_service_ask_route_level_explicit_sku_alcohol_compatibility_beats_recommendation(
+    route_client_and_db,
+):
+    client, headers, _ = route_client_and_db
+
+    response = client.post(
+        "/api/customer-service/ask?debug=true",
+        json={"question": "CW-C83 能不能用酒精炉？如果不能就别推荐错了。"},
+        headers=headers,
+    )
+
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    assert payload["answer_type"] == "product_detail"
+    assert payload["answer_type"] != "recommendation"
+    assert payload["result_skus"] == ["CW-C83"]
+    assert "CW-C83" in payload["answer"]
+    assert "AC-Z13" not in payload["answer"]
+    assert "CB253" not in payload["answer"]
+    assert not re.search(r"明火直烧.*酒精炉|卡式炉.*酒精炉|分体炉.*酒精炉", payload["answer"]), payload["answer"]
+
+
+def test_customer_service_ask_route_level_multiturn_recommendation_context_survives_heat_source_and_alternative_followups(
+    route_client_and_db,
+):
+    client, headers, _ = route_client_and_db
+
+    turn1 = client.post(
+        "/api/customer-service/ask?debug=true",
+        json={"question": "我一个人徒步，想轻一点，推荐一个锅。"},
+        headers=headers,
+    )
+    assert turn1.status_code == 200, turn1.text
+    payload1 = turn1.json()
+    meta1 = next((item for item in payload1["sources"] if item.get("type") == "agent_meta"), {})
+    rec1 = meta1.get("recommendation_context") or {}
+    assert payload1["answer_type"] == "recommendation"
+    assert payload1["result_skus"]
+    assert rec1.get("recommended_skus")
+    assert rec1.get("recommended_skus")[0] == payload1["result_skus"][0]
+    assert rec1.get("answer_type") == "recommendation"
+    conversation_id = payload1["conversation_id"]
+
+    turn2 = client.post(
+        "/api/customer-service/ask?debug=true",
+        json={"question": "它能不能用酒精炉？", "conversation_id": conversation_id},
+        headers=headers,
+    )
+    assert turn2.status_code == 200, turn2.text
+    payload2 = turn2.json()
+    meta2 = next((item for item in payload2["sources"] if item.get("type") == "agent_meta"), {})
+    rec2 = meta2.get("recommendation_context") or {}
+    assert payload2["answer_type"] == "product_detail"
+    assert payload2["answer_type"] != "knowledge_base_answer"
+    assert payload2["result_skus"] == [payload1["result_skus"][0]]
+    assert payload1["result_skus"][0] in payload2["answer"]
+    assert rec2.get("recommended_skus", [None])[0] == payload1["result_skus"][0]
+    assert not (meta2.get("candidate_context") or {}).get("empty_subset")
+
+    turn3 = client.post(
+        "/api/customer-service/ask?debug=true",
+        json={"question": "有没有更便宜一点的替代？", "conversation_id": conversation_id},
+        headers=headers,
+    )
+    assert turn3.status_code == 200, turn3.text
+    payload3 = turn3.json()
+    assert payload3["answer_type"] != "knowledge_base_answer"
+    assert payload3["result_skus"]
+    assert "上一轮在这些候选中已经没有筛到" not in payload3["answer"]
+
+
+def test_customer_service_ask_route_level_shelter_count_keeps_count_and_display_label(
+    route_client_and_db,
+):
+    client, headers, _ = route_client_and_db
+
+    response = client.post(
+        "/api/customer-service/ask?debug=true",
+        json={"question": "你们有多少天幕、地垫、帐篷产品？"},
+        headers=headers,
+    )
+
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    assert payload["answer_type"] == "product_query"
+    assert "183 款" not in payload["answer"]
+    assert "天幕、地垫、帐篷" in payload["answer"]
+    assert re.search(r"共有\s*1\s*款", payload["answer"]), payload["answer"]
+    assert payload["result_skus"] == ["OT-001"]
