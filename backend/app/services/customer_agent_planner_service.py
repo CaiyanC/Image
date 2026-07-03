@@ -104,7 +104,7 @@ def plan_customer_question(
 
     requested_field = _requested_field(text)
     product_ref = _field_product_ref(text, requested_field)
-    if requested_field and product_ref:
+    if requested_field and product_ref and _supports_field_only_plan(text, requested_field):
         conflict = deterministic_intent in {"recommendation", "knowledge_base_answer", "query_products"} or deterministic_answer_type in {
             "recommendation",
             "knowledge_base_answer",
@@ -296,6 +296,57 @@ def _field_product_ref(text: str, requested_field: str) -> str:
     return ""
 
 
+def _supports_field_only_plan(text: str, requested_field: str) -> bool:
+    value = str(text or "").strip()
+    field = str(requested_field or "").strip()
+    if not value or not field:
+        return False
+    extra_detail_signals = {
+        "\u6750\u8d28": (
+            "\u7c98\u9505",
+            "\u4e0d\u7c98",
+            "\u4e0d\u6cbe",
+            "\u6d82\u5c42",
+            "\u51b7\u6c34",
+            "\u70ed\u6c34",
+            "\u6c34\u6e29",
+        ),
+        "\u5bb9\u91cf": (
+            "\u51b7\u6c34",
+            "\u70ed\u6c34",
+            "\u6c34\u6e29",
+            "\u6750\u8d28",
+            "\u7c98\u9505",
+            "\u4e0d\u7c98",
+            "\u4e0d\u6cbe",
+            "\u6d82\u5c42",
+        ),
+        "\u91cd\u91cf": (
+            "\u51b7\u6c34",
+            "\u70ed\u6c34",
+            "\u6c34\u6e29",
+            "\u6750\u8d28",
+            "\u5bb9\u91cf",
+            "\u7c98\u9505",
+            "\u4e0d\u7c98",
+        ),
+        "\u5c3a\u5bf8": (
+            "\u51b7\u6c34",
+            "\u70ed\u6c34",
+            "\u6c34\u6e29",
+            "\u6750\u8d28",
+            "\u5bb9\u91cf",
+            "\u7c98\u9505",
+            "\u4e0d\u7c98",
+        ),
+    }
+    if any(signal in value for signal in extra_detail_signals.get(field, ())):
+        return False
+    if value.count("\uFF1F") + value.count("?") >= 2:
+        return False
+    return True
+
+
 def _clean_product_ref_fragment(value: str) -> str:
     text = str(value or "").strip("「」 ？?。,.，")
     for prefix in ("你们那个", "你们的", "那个", "这款", "这个"):
@@ -304,7 +355,22 @@ def _clean_product_ref_fragment(value: str) -> str:
     for suffix in ("到底", "具体", "大概", "请问"):
         if text.endswith(suffix):
             text = text[: -len(suffix)].strip()
+    text = _strip_trailing_question_phrase(text)
     return text.strip("「」 ？?。,.，")
+
+
+def _strip_trailing_question_phrase(text: str) -> str:
+    value = str(text or "").strip()
+    if not value:
+        return ""
+    trailing_patterns = (
+        r"(?:是|为)?(?:什么|啥|哪种|哪些)$",
+        r"(?:可不可以|可以|能不能|能否|是否)(?:装|用|支持).{0,12}$",
+        r"(?:会不会|是不是).{0,12}$",
+    )
+    for pattern in trailing_patterns:
+        value = re.sub(pattern, "", value).strip()
+    return value
 
 
 def _is_recommendation_question(text: str) -> bool:

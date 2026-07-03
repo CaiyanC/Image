@@ -679,6 +679,7 @@ def parse_intent(question: str, *, sku: str | None = None, previous_result_skus:
     prefixed_material_subject = ""
     if prefixed_material_subject_match:
         prefixed_material_subject = prefixed_material_subject_match.group("subject").strip(" ，。？！；;")
+        prefixed_material_subject = re.sub(r"(?:是|为)?(?:什么|啥|哪种|哪些)$", "", prefixed_material_subject).strip(" ，。？！；;")
     if not requested_fields and _looks_like_product_detail_question(text):
         requested_fields = _requested_fields_for_detail_question(text)
     if (
@@ -1056,9 +1057,39 @@ def _looks_like_recommendation_question(text: str) -> bool:
         return True
     if any(term in value for term in scenario_terms) and "产品" in value and any(term in value for term in ("有哪些", "有哪", "找", "推荐")):
         return True
+    if _looks_like_barbecue_stove_or_griddle_recommendation(value):
+        return True
+    if _looks_like_generic_core_cookware_recommendation(value):
+        return True
     if value.startswith("适合") and any(term in value for term in scenario_terms) and any(term in value for term in product_terms):
         return True
     return any(term in value for term in ("买什么", "有适合")) and any(term in value for term in scenario_terms) and any(term in value for term in product_terms)
+
+
+def _looks_like_barbecue_stove_or_griddle_recommendation(text: str) -> bool:
+    value = str(text or "")
+    if not value:
+        return False
+    has_barbecue = any(term in value for term in ("烧烤", "烤肉", "bbq", "BBQ"))
+    has_target = any(term in value for term in ("炉子", "炉具", "炉", "烤盘", "烧烤盘", "煎烤盘"))
+    has_choice = any(term in value for term in ("有没有", "有没", "推荐", "适合", "哪款", "哪个", "列几个"))
+    return has_barbecue and has_target and has_choice
+
+
+def _looks_like_generic_core_cookware_recommendation(text: str) -> bool:
+    value = str(text or "")
+    if not value:
+        return False
+    has_choice = any(term in value for term in ("买哪个", "买哪款", "选哪个", "选哪款", "哪个最稳", "哪款最稳", "推荐"))
+    if not has_choice:
+        return False
+    signals = sum(
+        1
+        for term in ("不要太贵", "别太贵", "预算", "不贵", "不要太重", "别太重", "轻", "轻便", "收纳", "好收纳", "稳", "稳定")
+        if term in value
+    )
+    explicit_other_scope = any(term in value for term in ("水壶", "咖啡", "杯", "收纳包", "配件", "炉子", "炉具", "烤盘"))
+    return signals >= 3 and not explicit_other_scope
 
 
 def _looks_like_numbered_people_cookware_recommendation(text: str) -> bool:
@@ -1463,6 +1494,8 @@ async def _product_detail_result(db: Session, intent: CustomerIntent, original_q
         for field in (intent.requested_fields or [])
         if str(field or "").strip() and str(field or "").strip().lower() != "none"
     ]
+    if intent.term:
+        intent.term = _clean_detail_subject(str(intent.term))
     detail_question = str(original_question or intent.semantic_query or intent.term or "")
     if not intent.requested_fields and any(term in detail_question for term in ("认证", "出口认证", "FDA", "LFGB")):
         intent.requested_fields = ["认证"]
@@ -2745,6 +2778,24 @@ async def _recommendation_candidate_result(db: Session, user_id: str, intent: Cu
     if scenario_scope.get("guard") == "cooking_set":
         rows = _filter_cooking_set_candidate_rows(rows)
         rows = _filter_picnic_lightweight_set_candidate_rows(query_text, rows)
+    if not intent.target_skus and _looks_like_barbecue_stove_or_griddle_recommendation(query_text):
+        rows = await _expand_barbecue_stove_or_griddle_recommendation_rows(
+            db,
+            user_id=user_id,
+            intent=intent,
+            query_text=query_text,
+            fields=fields,
+            base_rows=rows,
+        )
+    if not intent.target_skus and _looks_like_generic_core_cookware_recommendation(query_text):
+        rows = await _expand_generic_core_cookware_recommendation_rows(
+            db,
+            user_id=user_id,
+            intent=intent,
+            query_text=query_text,
+            fields=fields,
+            base_rows=rows,
+        )
     if rows and not intent.target_skus:
         rows = await _expand_single_person_cookware_recommendation_rows(
             db,
@@ -2779,6 +2830,10 @@ async def _recommendation_candidate_result(db: Session, user_id: str, intent: Cu
         )
     if intent.target_skus:
         rows = _filter_rows(rows or _rows_for_target_skus(db, intent.target_skus), filters=intent.filters, negative_filters=intent.negative_filters, term="")
+    if _looks_like_barbecue_stove_or_griddle_recommendation(query_text):
+        rows = _filter_barbecue_stove_or_griddle_candidate_rows(rows)
+    if _looks_like_generic_core_cookware_recommendation(query_text):
+        rows = _filter_generic_core_cookware_candidate_rows(rows)
     rows = _filter_picnic_lightweight_set_candidate_rows(query_text, rows)
     return {
         "ok": True,
@@ -3341,6 +3396,154 @@ async def _expand_large_group_cookware_recommendation_rows(
     return _merge_recommendation_rows_by_sku(base_rows, expanded_rows)
 
 
+async def _expand_barbecue_stove_or_griddle_recommendation_rows(
+    db: Session,
+    *,
+    user_id: str,
+    intent: CustomerIntent,
+    query_text: str,
+    fields: list[str],
+    base_rows: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    if not intent or intent.intent != "recommend_products" or not _looks_like_barbecue_stove_or_griddle_recommendation(query_text):
+        return base_rows
+    expanded_rows: list[dict[str, Any]] = []
+    for semantic_query in ("户外烧烤 烤盘", "户外烧烤 炉具", "团建 烧烤炉 烤盘"):
+        try:
+            result = await customer_agent_tool_service.execute_tool_async(
+                db,
+                user_id=user_id,
+                name="hybrid_search_products",
+                arguments={
+                    "term": "",
+                    "filters": {},
+                    "semantic_query": semantic_query,
+                    "fields": fields,
+                    "limit": 20,
+                },
+            )
+        except Exception:
+            continue
+        expanded_rows.extend(_annotate_recall_query(result.get("results") or [], semantic_query))
+    merged = _merge_recommendation_rows_by_sku(base_rows, expanded_rows)
+    return _filter_barbecue_stove_or_griddle_candidate_rows(merged)
+
+
+async def _expand_generic_core_cookware_recommendation_rows(
+    db: Session,
+    *,
+    user_id: str,
+    intent: CustomerIntent,
+    query_text: str,
+    fields: list[str],
+    base_rows: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    if not intent or intent.intent != "recommend_products" or not _looks_like_generic_core_cookware_recommendation(query_text):
+        return base_rows
+    expanded_rows: list[dict[str, Any]] = []
+    for semantic_query in ("轻便 收纳 稳定 套锅", "性价比 轻量 锅具", "露营 主锅具 套锅 单锅"):
+        try:
+            result = await customer_agent_tool_service.execute_tool_async(
+                db,
+                user_id=user_id,
+                name="hybrid_search_products",
+                arguments={
+                    "term": "锅",
+                    "filters": {"product.category": "锅具"},
+                    "semantic_query": semantic_query,
+                    "fields": fields,
+                    "limit": 20,
+                },
+            )
+        except Exception:
+            continue
+        expanded_rows.extend(_annotate_recall_query(result.get("results") or [], semantic_query))
+    merged = _merge_recommendation_rows_by_sku(base_rows, expanded_rows)
+    return _filter_generic_core_cookware_candidate_rows(merged)
+
+
+def _filter_barbecue_stove_or_griddle_candidate_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    filtered = [row for row in (rows or []) if _looks_like_barbecue_stove_or_griddle_candidate(row)]
+    return filtered or list(rows or [])
+
+
+def _looks_like_barbecue_stove_or_griddle_candidate(row: dict[str, Any]) -> bool:
+    text = " ".join(
+        str(row.get(key) or "")
+        for key in (
+            "sku",
+            "product_name_cn",
+            "product_name_en",
+            "category",
+            "sub_category",
+            "features",
+            "usage_scenarios",
+            "target_audience",
+            "positioning",
+            "semantic_match",
+        )
+    ).lower()
+    if not text:
+        return False
+    positive = ("烧烤", "烤盘", "烧烤盘", "煎烤盘", "griddle", "grill", "炉具", "炉子", "烤炉", "烧烤炉")
+    if not any(term in text for term in positive):
+        return False
+    if any(term in text for term in ("水壶", "茶壶", "杯", "收纳包", "调料瓶", "燃气罐", "气罐")):
+        return False
+    ordinary_cookware = ("套锅", "单锅", "汤锅", "炒锅")
+    return not (any(term in text for term in ordinary_cookware) and not any(term in text for term in ("烤盘", "烧烤", "grill", "炉")))
+
+
+def _filter_generic_core_cookware_candidate_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    filtered = [row for row in (rows or []) if _looks_like_generic_core_cookware_candidate(row)]
+    return filtered or list(rows or [])
+
+
+def _looks_like_generic_core_cookware_candidate(row: dict[str, Any]) -> bool:
+    text = " ".join(
+        str(row.get(key) or "")
+        for key in (
+            "sku",
+            "product_name_cn",
+            "product_name_en",
+            "category",
+            "sub_category",
+            "capacity",
+            "features",
+            "usage_scenarios",
+            "target_audience",
+            "positioning",
+            "semantic_match",
+        )
+    ).lower()
+    if not text:
+        return False
+    if "锅" not in str(row.get("category") or "") and not any(term in text for term in ("套锅", "单锅", "锅具", "野餐锅", "煮锅")):
+        return False
+    excluded = (
+        "水壶",
+        "茶壶",
+        "杯",
+        "咖啡",
+        "滤杯",
+        "收纳包",
+        "收纳箱",
+        "配件",
+        "调料瓶",
+        "气罐",
+        "燃气罐",
+        "炉具",
+        "炉子",
+        "酒精炉",
+        "烤盘",
+        "煎盘",
+    )
+    if any(term in text for term in excluded):
+        return False
+    main_terms = ("套锅", "单锅", "野餐锅", "煮锅", "锅具", "锅：", "锅 ")
+    return any(term in text for term in main_terms)
+
+
 def _augment_cooking_set_recommendation_candidates(db: Session, query_text: str, rows: list[dict]) -> list[dict]:
     return rows
 
@@ -3825,6 +4028,8 @@ def _parse_semantic_query(text: str) -> str:
 
 
 def _parse_recommendation_query(text: str, semantic_query: str) -> str:
+    if _looks_like_barbecue_stove_or_griddle_recommendation(text) or _looks_like_generic_core_cookware_recommendation(text):
+        return semantic_query or text
     if any(word in text for word in RECOMMEND_WORDS):
         cleaned = re.sub(
             r"(推荐|更适合|最适合|哪个好|哪款更好|优先|这些里|这批里|换一个|不要|排除|去掉|剔除|排掉)",
@@ -3837,6 +4042,8 @@ def _parse_recommendation_query(text: str, semantic_query: str) -> str:
 
 def _parse_term(text: str, filters: dict[str, Any], semantic_query: str) -> str:
     if any(word in text for word in FOLLOWUP_NARROW_WORDS):
+        return ""
+    if _looks_like_barbecue_stove_or_griddle_recommendation(text) or _looks_like_generic_core_cookware_recommendation(text):
         return ""
     quoted = _quoted_product_name(text)
     if quoted:
@@ -4535,6 +4742,7 @@ def _detail_subject_from_question(text: str) -> str:
     )
     if wh_field_match:
         subject = wh_field_match.group("subject").strip(" ，。？！；;")
+        subject = _clean_detail_subject(subject)
         if subject and len(subject) >= 2:
             return subject
     direct_field_match = re.match(
@@ -4543,6 +4751,7 @@ def _detail_subject_from_question(text: str) -> str:
     )
     if direct_field_match:
         subject = direct_field_match.group("subject").strip(" ，。？！；;")
+        subject = _clean_detail_subject(subject)
         if subject and len(subject) >= 2:
             return subject
     patterns = (
@@ -4559,9 +4768,19 @@ def _detail_subject_from_question(text: str) -> str:
         match = re.match(pattern, cleaned)
         if match:
             subject = match.group("subject").strip(" ，。？！；;")
+            subject = _clean_detail_subject(subject)
             if subject and len(subject) >= 2:
                 return subject
     return ""
+
+
+def _clean_detail_subject(subject: str) -> str:
+    value = str(subject or "").strip(" ，。？！；;")
+    value = re.sub(r"^(?:你们那个|你们的|那个|这款|这个)", "", value).strip(" ，。？！；;")
+    value = re.sub(r"(?:是|为)?(?:什么|啥|哪种|哪些)$", "", value).strip(" ，。？！；;")
+    value = re.sub(r"(?:可不可以|可以|能不能|能否|是否)(?:装|用|支持).{0,12}$", "", value).strip(" ，。？！；;")
+    value = re.sub(r"(?:会不会|是不是).{0,12}$", "", value).strip(" ，。？！；;")
+    return value
 
 
 def _fuzzy_people_cookware_subject(text: str) -> str:
@@ -5004,6 +5223,10 @@ def _compound_single_product_detail_answer(
         power = _format_field_value(_value_from_detail(detail, "specs.power"), "specs.power")
         add_line("最大功率", power)
 
+    if "容量" in text or any(term in text for term in ("多少ml", "多少ML", "多少毫升", "多少升", "多大容量")):
+        capacity = _format_field_value(_value_from_detail(detail, "specs.capacity"), "specs.capacity")
+        add_line("容量", capacity)
+
     if any(term in text for term in ("爆炒", "翻炒")):
         stir_fry = _best_same_sku_evidence_text(
             db,
@@ -5020,6 +5243,39 @@ def _compound_single_product_detail_answer(
         add_line("主体材质", material)
         if asks_handle_material and handle_material:
             add_line("手柄材质", f"{handle_material}（手柄{handle_material}）")
+
+    if any(term in text for term in ("粘锅", "不粘", "不沾", "涂层")):
+        coating = _format_field_value(_value_from_detail(detail, "specs.surface_finish"), "specs.surface_finish")
+        evidence = _best_same_sku_evidence_text(
+            db,
+            sku=sku,
+            supporting=supporting,
+            term_groups=[("不粘", "不沾", "粘锅", "涂层")],
+        )
+        combined = " ".join(str(item or "") for item in (coating, evidence, _value_from_detail(detail, "specs.technical_advantages")))
+        if any(term in combined for term in ("不粘", "不沾", "不粘涂层", "不沾涂层", "陶瓷不沾", "陶瓷不粘")):
+            nonstick = evidence or coating or "资料提到不粘/不沾相关说明，粘锅风险相对较低；实际仍取决于火力和用油。"
+        elif coating and coating != "暂无" and any(term in coating for term in ("涂层", "特氟龙", "陶瓷")):
+            nonstick = f"资料显示表面处理/涂层为{coating}；但未直接说明不粘效果，不能保证完全不粘。"
+        else:
+            nonstick = "当前资料未找到不粘或涂层说明，无法保证不粘。"
+        add_line("粘锅/不粘", nonstick)
+
+    if _looks_like_water_container_capability_question(text):
+        capability_label = _water_container_capability_label(text)
+        usage_instruction = _format_field_value(_value_from_detail(detail, "specs.usage_instruction"), "specs.usage_instruction")
+        capability_evidence = _extract_water_container_capability_evidence_from_qa_kb(
+            db=db,
+            sku=sku,
+            question=text,
+        )
+        if capability_evidence:
+            capability_answer = capability_evidence
+        elif usage_instruction and usage_instruction != "暂无":
+            capability_answer = f"当前资料未明确标注{capability_label}限制或适用水温；现有使用说明为{usage_instruction}。"
+        else:
+            capability_answer = f"当前资料未明确标注{capability_label}限制或适用水温。"
+        add_line("冷水/水温", capability_answer)
 
     if "洗碗机" in text:
         dishwasher = _best_same_sku_evidence_text(
@@ -6676,6 +6932,12 @@ def _is_recommendation_noise_text(text: str) -> bool:
     value = str(text or "").strip()
     if not value:
         return True
+    if "??" in value or "？?" in value:
+        return True
+    if re.search(r"\b[A-Z][A-Z0-9 _-]{2,}\s*\?\?[:：]", value):
+        return True
+    if re.search(r"\b[A-Z][A-Z0-9 _-]{2,}\s*[:：].*\b[A-Z][A-Z0-9 _-]{1,}\s*[:：]", value):
+        return True
     noisy_patterns = (
         "首次使用",
         "初次使用",
@@ -7170,7 +7432,7 @@ def _requested_fields(text: str) -> list[str]:
         ("品质情况", ("品质", "品质情况", "坏损")),
         ("类目", ("类目", "品类")),
         ("防水", ("防水", "防泼水")),
-        ("不粘", ("不粘", "不沾")),
+        ("不粘", ("不粘", "不沾", "粘锅", "沾锅")),
         ("禁止操作", ("禁止操作", "禁忌", "不能这样用", "有什么注意事项", "注意事项")),
         ("正品辨别", ("防伪", "真假", "正品辨别", "怎么辨别正品", "如何辨别正品")),
         ("适用场景", ("适用场景", "使用场景", "场景", "适合谁", "适合什么场景", "适合哪些场景", "适合哪些人群", "适用人群")),
@@ -7212,7 +7474,15 @@ def _filter_requested_fields_outside_subject(text: str, subject: str, fields: li
     outside_fields = _requested_fields_for_detail_question(remainder)
     if not outside_fields:
         return fields
-    return [field for field in fields if field in outside_fields]
+    preserved = set(outside_fields)
+    special_signal_terms = {
+        "适配情况": ("冷水", "热水", "水温", "洗碗机"),
+        "不粘": ("粘锅", "不粘", "不沾", "涂层"),
+    }
+    for field, signals in special_signal_terms.items():
+        if field in fields and any(signal in text for signal in signals):
+            preserved.add(field)
+    return [field for field in fields if field in preserved]
 
 
 def _resolve_query_field(field_label: str) -> str | None:

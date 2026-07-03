@@ -3571,6 +3571,167 @@ class CustomerAgentEndToEndBehaviorRegressionTest(unittest.IsolatedAsyncioTestCa
         self.assertNotRegex(combined, r"(Q22-KETTLE|Q22-PAN|Q22-STOVE|Q22-ACC|Q22-CLIP|水壶|烤盘|酒精炉|收纳包|防刮手夹)")
         self.assertIn("total_duration_ms", (result.get("answer_metadata") or {}).get("timing") or {})
 
+    async def test_phase1_barbecue_stove_or_griddle_recommendation_prefers_barbecue_candidates(self):
+        self._add_product("Q04-POT", "测试普通套锅", "锅具", "锅：2000ML", "铝合金", "燃气炉", "套锅", "家庭露营煮汤", 900)
+        self._add_product("CF-PG19", "瓦片烤盘", "锅具", "32*32*3.9cm", "铝合金", "卡式炉", "户外烧烤烤盘", "多人烧烤 团建烧烤", 780)
+        self._add_product("Q04-STOVE", "测试户外烧烤炉", "炉具", "炉体", "不锈钢", "燃气炉", "烧烤炉 大面积烤网", "公司团建 户外烧烤", 1800)
+        self.db.commit()
+
+        result = await customer_service_service.ask_customer_service(
+            self.db,
+            user_id="q04-barbecue-user",
+            question="公司团建十来个人户外烧烤，有没有适合的炉子或者烤盘？",
+        )
+
+        combined = " ".join([result.get("answer", ""), " ".join(result.get("result_skus") or [])])
+        self.assertEqual(result.get("answer_type"), "recommendation")
+        self.assertRegex(combined, r"(CF-PG19|Q04-STOVE|烤盘|烧烤炉|炉子)")
+        self.assertNotEqual((result.get("result_skus") or [None])[0], "Q04-POT")
+        self.assertNotRegex(result["answer"], r"优先推荐测试普通套锅")
+        self.assertRegex(result["answer"], r"(团建|十来个人|户外烧烤|烤盘|炉)")
+        self.assertIn("total_duration_ms", (result.get("answer_metadata") or {}).get("timing") or {})
+
+    async def test_phase1_generic_stable_recommendation_prefers_core_cookware_not_accessories(self):
+        self._add_product("Q19-SET", "测试轻便套锅", "锅具", "锅：1200ML", "铝合金", "燃气炉", "轻量收纳 稳定锅底 高性价比", "露营烹饪 野餐", 620)
+        self._add_product("Q19-KETTLE", "测试水壶", "水壶", "水壶：1000ML", "铝合金", "燃气炉", "便携烧水", "徒步饮水", 300)
+        self._add_product("Q19-ACC", "测试收纳包", "配件", "收纳包", "涤纶", "/", "好收纳", "露营配件", 120)
+        self._add_product("Q19-COFFEE", "测试咖啡滤杯", "咖啡器具", "滤杯", "不锈钢", "/", "咖啡冲煮", "户外咖啡", 100)
+        self.db.commit()
+
+        result = await customer_service_service.ask_customer_service(
+            self.db,
+            user_id="q19-generic-stable-user",
+            question="我不要太贵，也不要太重，还要好收纳，买哪个最稳？",
+        )
+
+        combined = " ".join([result.get("answer", ""), " ".join(result.get("result_skus") or [])])
+        self.assertEqual(result.get("answer_type"), "recommendation")
+        self.assertIn("Q19-SET", combined)
+        self.assertNotRegex(combined, r"(Q19-KETTLE|Q19-ACC|Q19-COFFEE|水壶|收纳包|咖啡滤杯)")
+        self.assertRegex(result["answer"], r"(价格|预算|不贵|重量|轻|收纳|稳定|稳)")
+        self.assertIn("total_duration_ms", (result.get("answer_metadata") or {}).get("timing") or {})
+
+    async def test_phase1_multi_field_material_and_nonstick_answers_both_fields(self):
+        self._add_product(
+            "CW-C06PRO",
+            "轻途套锅",
+            "锅具",
+            "大锅约3.0L，小锅约1.7L",
+            "3003铝合金、硅胶、不锈钢、PP",
+            "酒精炉, 燃气炉",
+            "极致轻量化，套娃式收纳",
+            "轻量徒步，背包旅行",
+            1150,
+        )
+        self.db.commit()
+
+        result = await customer_service_service.ask_customer_service(
+            self.db,
+            user_id="q06-multi-field-user",
+            question="轻途套锅是什么材质？会不会容易粘锅？",
+        )
+
+        self.assertEqual(result.get("answer_type"), "product_detail")
+        self.assertIn("3003铝合金", result["answer"])
+        self.assertRegex(result["answer"], r"(粘锅|不粘|涂层)")
+        self.assertRegex(result["answer"], r"(未找到不粘|未明确.*不粘|无法保证不粘)")
+        self.assertNotRegex(result["answer"], r"核心卖点包括")
+        self.assertIn("total_duration_ms", (result.get("answer_metadata") or {}).get("timing") or {})
+
+    async def test_phase1_xiangye_kettle_cold_water_and_capacity_answers_both_fields(self):
+        self._add_product(
+            "CW-C76",
+            "享野水壶",
+            "水壶",
+            "0.8L",
+            "硬质氧化铝合金",
+            "燃气炉",
+            "户外烧水，便携水壶",
+            "户外饮水，露营烧水",
+            230,
+        )
+        self.db.commit()
+
+        result = await customer_service_service.ask_customer_service(
+            self.db,
+            user_id="q08-kettle-field-user",
+            question="你们那个享野水壶可以装冷水吗？容量是多少？",
+        )
+
+        combined = " ".join([result.get("answer", ""), " ".join(result.get("result_skus") or [])])
+        self.assertEqual(result.get("answer_type"), "product_detail")
+        self.assertRegex(combined, r"(CW-C76|享野水壶)")
+        self.assertRegex(result["answer"], r"(冷水|水温|未明确标注冷水限制|未明确标注适用水温)")
+        self.assertRegex(result["answer"], r"(0\.8L|800ML|容量)")
+        self.assertNotRegex(result["answer"], r"净重")
+        self.assertNotRegex(result["answer"], r"核心卖点包括")
+        self.assertIn("total_duration_ms", (result.get("answer_metadata") or {}).get("timing") or {})
+
+    async def test_phase1_cheaper_alternative_followup_filters_noisy_field_fragments(self):
+        self._add_product(
+            "Q15-CHEAP",
+            "测试便宜单锅",
+            "锅具",
+            "锅：900ML",
+            "铝合金",
+            "燃气炉",
+            "SPIRIT STOVE ??: 轻量低价 单人容量",
+            "单人徒步",
+            260,
+            price_positioning="低端",
+        )
+        conversation = CustomerServiceConversation(id="conv-q15-clean", user_id="q15-clean-user", title="q15")
+        conversation_id = conversation.id
+        self.db.add(conversation)
+        self.db.add(CustomerServiceMessage(
+            conversation_id=conversation.id,
+            role="assistant",
+            content="首推 CW-C01-37 1－2人野营锅7件套。",
+            sources_json=json.dumps([
+                {
+                    "type": "agent_meta",
+                    "intent": "recommend_products",
+                    "answer_type": "recommendation",
+                    "recommendation_context": {
+                        "recommended_skus": ["CW-C01-37"],
+                        "ordered_result_skus": ["CW-C01-37", "CW-C93", "Q15-CHEAP"],
+                        "candidate_skus": ["CW-C01-37", "CW-C93", "Q15-CHEAP"],
+                        "user_question": "我一个人徒步，想轻一点，推荐一个锅。",
+                        "product_scope": "锅",
+                    },
+                    "candidate_context": {
+                        "recommended_skus": ["CW-C01-37"],
+                        "ordered_result_skus": ["CW-C01-37", "CW-C93", "Q15-CHEAP"],
+                        "candidate_skus": ["CW-C01-37", "CW-C93", "Q15-CHEAP"],
+                        "user_question": "我一个人徒步，想轻一点，推荐一个锅。",
+                        "product_scope": "锅",
+                    },
+                }
+            ], ensure_ascii=False),
+        ))
+        self.db.commit()
+
+        turn2 = await customer_service_service.ask_customer_service(
+            self.db,
+            user_id="q15-clean-user",
+            conversation_id=conversation_id,
+            question="它能不能用酒精炉？",
+        )
+        turn3 = await customer_service_service.ask_customer_service(
+            self.db,
+            user_id="q15-clean-user",
+            conversation_id=conversation_id,
+            question="有没有更便宜一点的替代？",
+        )
+
+        self.assertEqual(turn2.get("answer_type"), "product_detail")
+        self.assertIn("CW-C01-37", " ".join([turn2.get("answer", ""), " ".join(turn2.get("result_skus") or [])]))
+        self.assertEqual(turn3.get("answer_type"), "recommendation")
+        self.assertRegex(" ".join(turn3.get("result_skus") or []), r"(Q15-CHEAP|CW-C93|CW-S10-1)")
+        self.assertNotRegex(turn3["answer"], r"(SPIRIT STOVE|\?\?)")
+        self.assertNotRegex(turn3["answer"], r"(列表|列几个|符合条件.*酒精炉)")
+        self.assertIn("total_duration_ms", (turn3.get("answer_metadata") or {}).get("timing") or {})
+
     async def test_phase1_picnic_set_buy_question_routes_to_recommendation(self):
         self._add_product(
             "CW-C19T-37",
