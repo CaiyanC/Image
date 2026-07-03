@@ -226,6 +226,8 @@ async def ask_stream(
                 "message_id": result.get("message_id"),
                 "intent": result.get("intent"),
                 "answer_type": result.get("answer_type"),
+                "result_skus": result.get("result_skus") or [],
+                "candidate_skus": result.get("candidate_skus") or [],
                 "confidence": result.get("confidence"),
                 "uncertainty": result.get("uncertainty"),
                 "needs_clarification": result.get("needs_clarification", False),
