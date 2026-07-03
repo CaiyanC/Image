@@ -499,6 +499,24 @@ def _phase1_category_compatibility_result(db: Session, plan: dict) -> dict:
 
 def _phase1_catalog_rows(db: Session, product_ref: str) -> list[dict]:
     ref = str(product_ref or "").strip()
+    category_aliases = {
+        "配件": ("配件", "收纳包具", "餐厨配件", "附件"),
+        "炉具": ("炉具", "炉子", "酒精炉", "气炉", "卡式炉"),
+        "餐具": ("餐具", "勺", "叉", "筷", "刀具"),
+        "水具": ("水具", "水壶", "水杯", "杯具", "壶"),
+        "桌椅": ("桌椅", "桌", "椅"),
+        "咖啡器具": ("咖啡器具", "咖啡"),
+        "茶具": ("茶具", "茶壶", "茶杯"),
+        "天幕/地垫/帐篷": ("天幕", "地垫", "帐篷"),
+    }
+
+    def _matches_alias_scope(row: dict, aliases: tuple[str, ...]) -> bool:
+        category_text = " ".join(
+            str(row.get(key) or "")
+            for key in ("category", "sub_category", "product_name_cn", "product_name_en", "features", "usage_scenarios")
+        )
+        return any(alias and alias in category_text for alias in aliases)
+
     query = (
         db.query(Product, ProductSpecs, ProductBusiness, ProductContent)
         .outerjoin(ProductSpecs, ProductSpecs.product_id == Product.id)
@@ -525,6 +543,8 @@ def _phase1_catalog_rows(db: Session, product_ref: str) -> list[dict]:
             matched = "水壶" in category_text
         elif ref == "锅具":
             matched = _is_service_pot_or_cookware_set_candidate(row, product)
+        elif ref in category_aliases:
+            matched = _matches_alias_scope(row, category_aliases[ref])
         elif ref == "套锅":
             matched = "套锅" in haystack or "锅" in str(row.get("category") or "") and "套" in haystack
         else:
@@ -545,16 +565,25 @@ def _phase1_catalog_count_result(db: Session, plan: dict) -> dict:
         for row in display_rows
         if row.get("sku")
     )
-    if samples and len(rows) > len(display_rows):
-        suffix = f" 当前先列出前 {len(display_rows)} 个：{samples}。"
-    elif samples:
-        suffix = f" 分别是：{samples}。"
+    scope_label = f"【{product_ref}】" if product_ref != "产品" else "【产品】"
+    if not rows:
+        answer = f"当前产品库里暂未维护明确的{scope_label}类产品。"
+        if product_ref != "产品":
+            answer += " 如果你愿意，我可以改按相近类目或具体用途继续帮你找。"
     else:
-        suffix = ""
+        if samples and len(rows) > len(display_rows):
+            suffix = f"先列前 {len(display_rows)} 款：{samples}。"
+        elif samples:
+            suffix = f"分别是：{samples}。"
+        else:
+            suffix = ""
+        answer = f"当前匹配到{scope_label}类产品共有 {len(rows)} 款。{suffix}"
+        if product_ref != "产品":
+            answer += " 如果你想继续缩小范围，我可以再按用途、人数、容量、重量或收纳继续筛。"
     return {
         "intent": "query_products",
         "answer_type": "query_products",
-        "answer": f"当前产品库里匹配“{product_ref}”的产品共有 {len(rows)} 款。{suffix}",
+        "answer": answer,
         "results": display_rows,
         "result_skus": display_skus,
         "candidate_skus": display_skus,
@@ -704,13 +733,13 @@ def _phase1_compare_choice_result(db: Session, plan: dict) -> dict | None:
     choice = second if _phase1_two_person_score(second) >= _phase1_two_person_score(first) else first
     choice_name = choice.get("product_name_cn") or choice.get("sku")
     answer = (
-        f"{first_name}和{second_name}的区别可以先看容量、重量、材质和使用场景。"
+        f"简单看，{first_name}和{second_name}都能作为候选，区别主要在容量、材质、使用场景和收纳取向。"
         f"{first_name}：{first_evidence or '当前资料未提供足够细项'}。"
         f"{second_name}：{second_evidence or '当前资料未提供足够细项'}。"
     )
     if plan.get("must_make_choice"):
         answer += (
-            f"两个人吃饱更建议选{choice_name}（{choice.get('sku')}）。"
+            f"如果你现在就要做选择，更建议选{choice_name}（{choice.get('sku')}）。"
             "原因是它在现有资料里对两人/容量余量/户外吃饭场景的匹配更稳妥；如果还要精确判断饭量，仍建议以实际容量和菜量为准。"
         )
     return {
@@ -2043,6 +2072,59 @@ async def ask_customer_service(
             else:
                 raise
         customer_perf_service.log_stage("process_intent_request_pre_runtime", stage_start, hit=bool(agent_result), intent=agent_result.get("intent") if agent_result else None)
+        if (
+            (not agent_result or str(agent_result.get("answer_type") or "").strip() in {"", "unknown"})
+            and customer_agent_intent_service._looks_like_scenario_recommendation_question(question)
+        ):
+            rescue_intent = customer_agent_intent_service.CustomerIntent(
+                intent="recommend_products",
+                semantic_query=question,
+                recommendation_query=question,
+                is_single_field_sufficient=False,
+            )
+            agent_result = await customer_agent_intent_service._recommend_result(
+                db,
+                user_id,
+                rescue_intent,
+                scoped_comparison_candidates=False,
+            )
+        if (
+            agent_result
+            and str(agent_result.get("answer_type") or "").strip() == "product_detail"
+            and customer_agent_intent_service._looks_like_scenario_recommendation_question(question)
+            and not customer_agent_intent_service._looks_like_product_detail_question(question)
+            and not customer_agent_intent_service._extract_skus(question)
+        ):
+            result_rows = [row for row in (agent_result.get("results") or []) if isinstance(row, dict)]
+            if not result_rows:
+                result_rows = [
+                    row for row in customer_agent_intent_service._all_product_rows(db)
+                    if "锅" in str(row.get("category") or "")
+                ][:3]
+            if result_rows:
+                top_row = result_rows[0]
+                top_sku = str(top_row.get("sku") or "").strip().upper()
+                top_name = str(top_row.get("product_name_cn") or top_row.get("product_name_en") or top_sku).strip()
+                top_reason = "；".join(
+                    str(top_row.get(key) or "").strip("。；; ")
+                    for key in ("features", "usage_scenarios", "positioning")
+                    if str(top_row.get(key) or "").strip()
+                )
+                answer = f"更推荐{top_name}（{top_sku}）。"
+                if top_reason:
+                    answer += f"它更贴合你当前这类场景，{top_reason[:80].rstrip('；;,，')}。"
+                if len(result_rows) > 1:
+                    backups: list[str] = []
+                    for row in result_rows[1:3]:
+                        sku = str(row.get('sku') or '').strip().upper()
+                        name = str(row.get("product_name_cn") or row.get("product_name_en") or sku).strip()
+                        backups.append(f"{name}（{sku}）")
+                    if backups:
+                        answer += " 备选可以看" + "、".join(backups) + "。"
+                agent_result["intent"] = "recommend_products"
+                agent_result["answer_type"] = "recommendation"
+                agent_result["answer"] = answer
+                agent_result["skip_polish"] = True
     if not agent_result and not followup_runtime_bypass and not bypass_stateless_pre_runtime and not force_runtime_followup and not force_runtime_empty_subset_followup and not force_runtime_ordinal_compare_followup and not bypass_pre_runtime_for_detail_context and not category_reference_detail:
         stage_start = perf_counter()
         agent_result = customer_agent_service.try_numeric_english_name_query(db, question)
@@ -4437,6 +4519,12 @@ def _shape_answer_for_output(result: dict) -> dict:
             result.get("answer"),
             result.get("results") or [],
             result.get("result_skus") or [],
+            question=(
+                (((result.get("debug") or {}).get("intent") or {}).get("recommendation_query"))
+                or (((result.get("debug") or {}).get("intent") or {}).get("semantic_query"))
+                or (((result.get("debug") or {}).get("intent") or {}).get("term"))
+                or str(((result.get("answer_metadata") or {}).get("question")) or "")
+            ),
         )
     elif answer_type == "clarification" or str(result.get("intent") or "").strip() == "clarify":
         result["answer"] = shape_answer_tone(
@@ -4528,7 +4616,7 @@ def _display_source_label(source_type: str) -> str:
 
 def _shape_recommendation_output(answer: str | None, results: list[dict], evidence: list[dict]) -> str:
     text = str(answer or "").strip()
-    if text:
+    if text and not ("先说结论：我找到" in text or "候选产品" in text or re.search(r"^\d+\.", text, flags=re.M)):
         return text
     picks: list[dict[str, str]] = []
     evidence_by_sku: dict[str, list[str]] = {}
@@ -4564,9 +4652,16 @@ def _shape_recommendation_output(answer: str | None, results: list[dict], eviden
     return "\n".join(lines)
 
 
-def _shape_product_query_output(answer: str | None, results: list[dict], result_skus: list[str] | None = None) -> str:
+def _shape_product_query_output(
+    answer: str | None,
+    results: list[dict],
+    result_skus: list[str] | None = None,
+    question: str = "",
+) -> str:
     text = str(answer or "").strip()
-    if text:
+    generic_ranked_list = "先说结论：我找到" in text or "候选产品" in text or re.search(r"^\d+\.", text, flags=re.M)
+    scenario_like = customer_agent_intent_service._looks_like_scenario_recommendation_question(question)
+    if text and not (generic_ranked_list or scenario_like):
         return text
     rows = [row for row in (results or []) if isinstance(row, dict)]
     if not rows:
@@ -4614,6 +4709,36 @@ def _shape_product_query_output(answer: str | None, results: list[dict], result_
         return text
 
     subject = categories[0] if len(categories) == 1 else "相关产品"
+    if scenario_like or generic_ranked_list:
+        top_row = top_rows[0]
+        top_sku = str(top_row.get("sku") or "").strip().upper()
+        top_name = str(top_row.get("product_name_cn") or top_row.get("product_name_en") or top_sku).strip()
+        top_reason = "；".join(
+            str(top_row.get(key) or "").strip("。；; ")
+            for key in ("features", "usage_scenarios", "positioning")
+            if str(top_row.get(key) or "").strip()
+        )
+        lead = f"更推荐{top_name}（{top_sku}）。"
+        if top_reason:
+            lead += f"它更贴合你现在这类场景，{top_reason[:80].rstrip('；;,，')}。"
+        backup = []
+        for row in top_rows[1:3]:
+            sku = str(row.get('sku') or '').strip().upper()
+            name = str(row.get("product_name_cn") or row.get("product_name_en") or sku).strip()
+            reason = "；".join(
+                str(row.get(key) or "").strip("。；; ")
+                for key in ("features", "usage_scenarios", "positioning")
+                if str(row.get(key) or "").strip()
+            )
+            snippet = f"{name}（{sku}）"
+            if reason:
+                snippet += f"：{reason[:60].rstrip('；;,，')}"
+            backup.append(snippet)
+        lines = [lead]
+        if backup:
+            lines.append("备选可以看" + "；".join(backup) + "。")
+        lines.append("如果你更看重容量、重量、收纳或预算，我可以再继续帮你缩小范围。")
+        return "\n".join(lines)
     lines = [f"当前先给你列出几款可参考的{subject}：{'、'.join(picks)}。"]
     if len(ordered_rows) > len(top_rows):
         lines.append("如果你想继续缩小范围，我可以再按人数、重量、容量、收纳或预算继续筛选。")

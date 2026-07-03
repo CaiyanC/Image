@@ -105,7 +105,8 @@ CATEGORY_SCOPE_ALIASES: dict[str, tuple[str, ...]] = {
     "炉具": ("炉具", "炉子", "酒精炉", "卡式炉", "气炉"),
     "餐具": ("餐具",),
     "水壶": ("水壶",),
-    "水具": ("水具", "水杯", "杯具"),
+    "水具": ("水具", "水壶", "水杯", "杯具"),
+    "天幕/地垫/帐篷": ("天幕", "地垫", "帐篷"),
 }
 CATEGORY_SCOPE_COUNT_TERMS = ("有多少", "多少", "几款", "几种", "几个", "多少个")
 CATEGORY_SCOPE_PEOPLE_TERMS = ("适合几个人", "适合几人", "几个人", "几人", "多少人", "人数")
@@ -301,6 +302,26 @@ async def process_intent_request(
     category_scope_result = _category_scope_structured_result(db, question)
     if category_scope_result:
         return category_scope_result
+
+    scenario_rescue = _looks_like_scenario_recommendation_question(question) or (
+        not _extract_skus(question)
+        and "怎么选" in str(question or "")
+        and any(term in str(question or "") for term in ("家庭", "团建", "露营", "野餐", "徒步", "火锅", "烧烤", "容量优先", "稳一点", "轻一点"))
+        and any(term in str(question or "") for term in ("锅", "锅具", "套锅", "单锅", "炉子", "烤盘"))
+    )
+    if intent.intent in {"query_products", "product_detail"} and scenario_rescue:
+        intent = CustomerIntent(
+            intent="recommend_products",
+            filters=dict(intent.filters or {}),
+            negative_filters=dict(intent.negative_filters or {}),
+            semantic_query=question,
+            target_skus=[],
+            requested_fields=[],
+            term="",
+            recommendation_query=question,
+            source_context="question",
+            is_single_field_sufficient=False,
+        )
 
     # Final safety: if intent is still clarify but regex has concrete search params, override
     if intent.intent == "clarify":
@@ -802,6 +823,20 @@ def parse_intent(question: str, *, sku: str | None = None, previous_result_skus:
             is_single_field_sufficient=False,
         )
 
+    if _looks_like_scenario_recommendation_question(text):
+        return CustomerIntent(
+            intent="recommend_products",
+            filters=filters,
+            negative_filters=negative_filters,
+            semantic_query=semantic_query or text,
+            target_skus=[],
+            requested_fields=[],
+            term="",
+            recommendation_query=recommendation_query or semantic_query or text,
+            source_context=source_context,
+            is_single_field_sufficient=False,
+        )
+
     if filters and not target_skus and not negative_filters and (
         not named_detail_term
         or _is_multi_product_filter_query(text, named_detail_term)
@@ -1150,6 +1185,38 @@ def _looks_like_large_group_cookware_recommendation(text: str) -> bool:
     return True
 
 
+def _looks_like_scenario_recommendation_question(text: str) -> bool:
+    value = str(text or "")
+    if not value:
+        return False
+    if _extract_skus(value) or _quoted_subject_from_question(value):
+        return False
+    people_or_scene_terms = (
+        "一个人", "单人", "两人", "双人", "三人", "四人", "家庭", "团建",
+        "露营", "野餐", "徒步", "烧烤", "火锅", "煮汤", "煮面", "烧水",
+    )
+    constraint_terms = ("轻量", "轻便", "好收纳", "收纳", "稳一点", "稳定", "预算", "容量大", "容量优先", "别太难清理", "新手", "小白")
+    product_terms = ("锅", "锅具", "套锅", "单锅", "炉子", "炉具", "烤盘")
+    explicit_choice = any(term in value for term in ("推荐", "哪个", "哪款", "先买", "怎么选", "适合", "想买", "买个", "帮我选", "帮我挑"))
+    return (
+        any(term in value for term in people_or_scene_terms)
+        and any(term in value for term in product_terms)
+        and explicit_choice
+    ) or (
+        any(term in value for term in constraint_terms)
+        and any(term in value for term in product_terms)
+        and explicit_choice
+    ) or (
+        any(term in value for term in ("想买", "买个", "帮我选", "帮我挑"))
+        and any(term in value for term in product_terms)
+        and any(term in value for term in people_or_scene_terms + constraint_terms)
+    ) or (
+        any(term in value for term in people_or_scene_terms)
+        and any(term in value for term in constraint_terms)
+        and any(term in value for term in product_terms)
+    )
+
+
 def _filters_only_define_recommendation_scope(filters: dict[str, Any]) -> bool:
     allowed_scope_keys = {"product.category"}
     return bool(filters) and all(str(key) in allowed_scope_keys for key in (filters or {}).keys())
@@ -1238,6 +1305,21 @@ async def _query_products_result(db: Session, user_id: str, intent: CustomerInte
     # Use the original question for QA/KB search for better context
     search_question_text = (original_question or intent.term or intent.semantic_query or "").strip()
     source_rows_for_context_filter: list[dict] = []
+
+    if _looks_like_scenario_recommendation_question(search_question_text) and not intent.target_skus:
+        recommendation_intent = CustomerIntent(
+            intent="recommend_products",
+            filters=dict(intent.filters or {}),
+            negative_filters=dict(intent.negative_filters or {}),
+            semantic_query=intent.semantic_query or search_question_text,
+            target_skus=[],
+            requested_fields=[],
+            term="",
+            recommendation_query=intent.recommendation_query or intent.semantic_query or search_question_text,
+            source_context=intent.source_context,
+            is_single_field_sufficient=False,
+        )
+        return await _recommend_result(db, user_id, recommendation_intent)
 
     if intent.target_skus:
         source_rows_for_context_filter = _rows_for_target_skus(db, intent.target_skus)
@@ -1988,14 +2070,29 @@ def _compose_compare_answer_template(
 ) -> str:
     if not skus:
         return "没有找到可对比的产品。"
-    lines = [f"先说结论：已对比 {'、'.join(skus)}，建议按客户更看重的容量、材质、卖点和使用场景来选。"]
+    sku_summaries: dict[str, list[str]] = {sku: [] for sku in skus}
+    summary_labels = ("容量", "重量", "材质", "适用场景", "目标人群", "价格定位")
     for item in comparisons:
-        label = item.get("field_label") or "字段"
-        values = []
+        label = str(item.get("field_label") or "").strip()
+        if label not in summary_labels:
+            continue
         for entry in item.get("values") or []:
-            values.append(f"{entry.get('sku')}：{entry.get('value') or '暂无'}")
-        if values:
-            lines.append(f"{label}：" + "；".join(values))
+            sku = str(entry.get("sku") or "").strip().upper()
+            value = str(entry.get("value") or "").strip()
+            if sku in sku_summaries and value and value != "暂无":
+                sku_summaries[sku].append(f"{label}{value}")
+    lines = [f"简单看，{'、'.join(skus)}都能作为候选，区别主要在容量、材质、使用场景和收纳取向。"]
+    for sku in skus[:3]:
+        traits = "；".join(sku_summaries.get(sku) or [])
+        if traits:
+            lines.append(f"{sku}：{traits}。")
+    advice_bits: list[str] = []
+    if sku_summaries.get(skus[0]):
+        advice_bits.append(f"如果你更想先求稳，优先看 {skus[0]}")
+    if len(skus) > 1 and sku_summaries.get(skus[1]):
+        advice_bits.append(f"如果你更看重另一种取向，再看 {skus[1]}")
+    if advice_bits:
+        lines.append("选择建议：" + "；".join(advice_bits) + "。")
     if any("PRO" in sku.upper() for sku in skus):
         lines.append("选择建议：如果客户想要升级款或更强配置，优先介绍 Pro；如果客户要稳妥常规款或基础方案，推荐基础款。")
     if warnings:
@@ -2183,7 +2280,23 @@ async def _finalize_compare_answer(
         )
     except Exception:
         return None
-    return _answer_from_llm_content(content) or None
+    answer = _answer_from_llm_content(content) or ""
+    if not answer:
+        return None
+    if _looks_like_weak_compare_opening(answer):
+        return _compose_compare_answer_template(skus, comparisons, warnings, anomalies, followups)
+    return answer
+
+
+def _looks_like_weak_compare_opening(answer: str) -> bool:
+    text = str(answer or "").strip()
+    if not text:
+        return True
+    if any(marker in text for marker in ("简单看", "先说结论", "选择建议", "更适合", "如果你更看重")):
+        return False
+    stacked_fields = sum(1 for token in ("容量", "材质", "适用场景", "目标人群", "价格定位") if token in text)
+    sku_mentions = len(re.findall(r"\b[A-Z]{2,6}(?:-[A-Z0-9]{1,8})+\b", text))
+    return stacked_fields >= 3 or sku_mentions >= 2
 
 
 def _parse_json_object(content: str) -> dict | None:
@@ -2653,6 +2766,20 @@ async def _recommend_result(
         if semantic_rows:
             rows = semantic_rows
             base_result = semantic_fallback
+    if not rows and _looks_like_scenario_recommendation_question(query_text):
+        broad_rows = [
+            row for row in _all_product_rows(db)
+            if "锅" in str(row.get("category") or "")
+        ]
+        if broad_rows:
+            rows = broad_rows[:50]
+            base_result = {
+                "ok": True,
+                "tool": "broad_cookware_recall",
+                "query": query_text,
+                "results": rows,
+                "sources": [{"type": "product_search", "label": "场景推荐宽松锅具候选", "count": len(rows)}],
+            }
     if not rows:
         return _build_response(
             intent=intent,
@@ -2668,6 +2795,7 @@ async def _recommend_result(
                 "你可以告诉我更具体的场景，比如露营、泡咖啡、多人使用或轻量携带。",
                 "也可以先让我列出这批产品，再继续做推荐。",
             ],
+            answer_type="recommendation",
         )
 
     rows = _filter_picnic_lightweight_set_candidate_rows(query_text, rows)
@@ -7133,6 +7261,12 @@ def _infer_recommendation_need_from_question(question: str) -> str:
     value = str(question or "").strip()
     if not value:
         return ""
+    if any(token in value for token in ("烧烤", "烤盘", "炉子", "炉具")):
+        return "烧烤场景"
+    if any(token in value for token in ("火锅", "煮汤")):
+        return "火锅或多人做饭"
+    if "野餐" in value:
+        return "轻量野餐"
     if any(token in value for token in ("高海拔", "高山")):
         return "高海拔户外做饭"
     if any(token in value for token in ("徒步", "轻量", "越轻越好")):
@@ -7256,19 +7390,27 @@ def _shape_recommendation_answer_from_ranked(ranked: list[dict], question: str =
     if not picks:
         return "目前没有找到合适的产品推荐，你可以换个场景或条件试试。"
     need = _infer_recommendation_need_from_question(question)
-    lines: list[str] = []
-    for index, item in enumerate(picks):
-        intro = "优先推荐" if index == 0 else "也可以考虑"
-        reason = str(item["reason"] or "").strip("。；; ")
-        sentence = f"{intro}{item['name']}（{item['sku']}）"
-        if need:
-            sentence += f"，因为它更贴合你“{need}”的需求"
-        if reason:
-            sentence += f"，{reason}"
-        elif not need:
-            sentence += "，当前资料里对它的使用场景和卖点描述更完整"
-        sentence += "。"
-        lines.append(sentence)
+    primary = picks[0]
+    primary_reason = str(primary["reason"] or "").strip("。；; ")
+    lead = f"更推荐{primary['name']}（{primary['sku']}）。"
+    if need:
+        lead += f"它更贴合你这个“{need}”的使用场景"
+    if primary_reason:
+        lead += f"{'，' if need else '它的优势是'}{primary_reason}"
+    lead = lead.rstrip("，") + "。"
+
+    lines: list[str] = [lead]
+    if len(picks) > 1:
+        backup_lines: list[str] = []
+        for item in picks[1:3]:
+            reason = str(item["reason"] or "").strip("。；; ")
+            snippet = f"{item['name']}（{item['sku']}）"
+            if reason:
+                snippet += f"：{reason}"
+            backup_lines.append(snippet)
+        if backup_lines:
+            lines.append("备选可以看" + "；".join(backup_lines) + "。")
+    lines.append("如果你更看重重量、容量、收纳或预算，我可以再按这个方向继续细分。")
     return "\n".join(lines)
 
 
@@ -7411,6 +7553,8 @@ def _shape_recommendation_answer_text(answer: str, ranked: list[dict], question:
     has_sku_reason_lines = _has_sku_reason_lines(text)
     force_rebuild = _should_force_rebuild_recommendation_answer(question)
     if _should_rebuild_cold_water_recommendation_answer(question, text):
+        force_rebuild = True
+    if "先说结论：我找到" in text or "候选产品" in text or re.search(r"^\d+\.", text, flags=re.M):
         force_rebuild = True
     if (
         lines

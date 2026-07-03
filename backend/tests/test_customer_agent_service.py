@@ -3851,6 +3851,142 @@ class CustomerAgentEndToEndBehaviorRegressionTest(unittest.IsolatedAsyncioTestCa
         self.assertNotRegex(result["answer"], r"核心卖点包括")
         self.assertIn("total_duration_ms", (result.get("answer_metadata") or {}).get("timing") or {})
 
+    async def test_phase1_category_catalog_list_queries_stay_within_target_category(self):
+        additions = [
+            ("ACC-001", "测试调料瓶", "配件", "收纳盒", "PP", "/", "配件收纳", "露营收纳", 80),
+            ("STV-001", "测试分体炉", "炉具", "炉体", "不锈钢", "气炉", "便携炉具", "露营烧水", 320),
+            ("CUT-001", "测试餐具套装", "餐具", "勺叉", "304不锈钢", "/", "餐具套装", "露营用餐", 120),
+            ("KTL-001", "测试轻量水壶", "水壶", "800ML", "铝合金", "燃气炉", "轻量水壶", "露营烧水", 240),
+            ("TBL-001", "测试折叠桌", "桌椅", "桌面", "铝合金", "/", "折叠桌椅", "露营桌椅", 1800),
+            ("COF-001", "测试咖啡研磨器", "咖啡器具", "手摇磨豆", "不锈钢", "/", "咖啡器具", "露营咖啡", 260),
+            ("TEA-001", "测试便携茶具", "茶具", "一壶两杯", "陶瓷", "/", "便携茶具", "露营煮茶", 420),
+        ]
+        for args in additions:
+            self._add_product(*args)
+        self.db.commit()
+
+        cases = {
+            "有哪些配件产品？": ("配件", {"ACC-001"}, {"CW-C69-1", "CW-C06PRO"}),
+            "有哪些炉具产品？": ("炉具", {"STV-001"}, {"CW-C69-1", "CW-C06PRO"}),
+            "有哪些餐具产品？": ("餐具", {"CUT-001"}, {"CW-C69-1", "CW-C06PRO"}),
+            "有哪些水具产品？": ("水具", {"KTL-001"}, {"CW-C69-1", "CW-C06PRO"}),
+            "有哪些桌椅产品？": ("桌椅", {"TBL-001"}, {"CW-C69-1", "CW-C06PRO"}),
+            "有哪些咖啡器具产品？": ("咖啡器具", {"COF-001"}, {"CW-C69-1", "CW-C06PRO"}),
+            "有哪些茶具产品？": ("茶具", {"TEA-001"}, {"CW-C69-1", "CW-C06PRO"}),
+        }
+
+        for question, (category_name, expected_hits, unexpected_hits) in cases.items():
+            result = await customer_service_service.ask_customer_service(
+                self.db,
+                user_id=f"category-{category_name}",
+                question=question,
+            )
+            combined = " ".join([result.get("answer", ""), " ".join(result.get("result_skus") or [])])
+            self.assertIn(result.get("answer_type"), {"query_products", "product_query"}, question)
+            self.assertNotEqual(result.get("answer_type"), "knowledge_base_answer", question)
+            self.assertIn(category_name, result["answer"], question)
+            for sku in expected_hits:
+                self.assertIn(sku, combined, question)
+            for sku in unexpected_hits:
+                self.assertNotIn(sku, combined, question)
+
+        missing = await customer_service_service.ask_customer_service(
+            self.db,
+            user_id="category-shelter",
+            question="有哪些天幕、地垫、帐篷产品？",
+        )
+        self.assertNotIn("183 款", missing["answer"])
+        self.assertRegex(missing["answer"], r"(未维护|没有找到|暂无)")
+        self.assertNotEqual(missing.get("answer_type"), "knowledge_base_answer")
+
+    async def test_phase1_scenario_recommendations_provide_pick_backup_and_reasons(self):
+        self._add_product("SCN-FAM", "家庭露营套锅", "锅具", "锅 2800ML", "硬质氧化铝合金", "燃气炉", "容量大 稳定 易清理", "家庭露营 3-4人 火锅 煮汤", 980, price_positioning="中端")
+        self._add_product("SCN-HIKE", "轻量徒步锅", "锅具", "锅 1200ML", "硬质氧化铝合金", "酒精炉, 气炉", "轻量收纳 适合徒步", "单人徒步 双人徒步 烧水 煮面", 320, price_positioning="中端")
+        self._add_product("SCN-BBQ-STOVE", "团建烧烤炉", "炉具", "炉体", "不锈钢", "燃气炉", "烧烤炉 大火力 稳定", "团建烧烤 多人烧水", 2100, price_positioning="中端")
+        self._add_product("SCN-BBQ-PAN", "团建烤盘", "锅具", "32cm", "铝合金", "燃气炉", "烤盘 易清理", "团建烧烤 多人烧烤", 860, price_positioning="中端")
+        self.db.commit()
+
+        questions = [
+            "四个人露营想做火锅，锅具容量大一点的推荐哪个？",
+            "两个人露营偏爱火锅场景，锅具要稳一点，推荐哪个？",
+            "家庭露营带孩子，锅具要稳一点也别太难清理。",
+            "公园野餐两个人用，想选个好收纳的锅具。",
+            "烧烤场景想带炉子和烤盘，先买哪类最值？",
+            "双人徒步露营，希望锅具和收纳都别太占地方。",
+            "两个人轻露营，希望锅具轻一点但也别太单薄。",
+            "家庭露营偏火锅场景，锅具容量优先怎么选？",
+        ]
+
+        for question in questions:
+            result = await customer_service_service.ask_customer_service(
+                self.db,
+                user_id=f"scenario-{abs(hash(question))}",
+                question=question,
+            )
+            answer = result.get("answer", "")
+            self.assertIn(result.get("answer_type"), {"recommendation", "product_query"}, question)
+            self.assertNotEqual(result.get("answer_type"), "knowledge_base_answer", question)
+            self.assertTrue(answer.strip(), question)
+            self.assertRegex(answer, r"(推荐|优先|更适合)", question)
+            self.assertRegex(answer, r"(也可以考虑|备选|如果你更看重)", question)
+            self.assertTrue(result.get("result_skus"), question)
+            if question == "家庭露营偏火锅场景，锅具容量优先怎么选？":
+                self.assertNotIn("未找到", answer)
+                self.assertNotIn("明确容量", answer)
+                matched_constraints = sum(
+                    1
+                    for term in ("家庭", "露营", "火锅", "容量", "多人")
+                    if term in answer
+                )
+                self.assertGreaterEqual(matched_constraints, 2, question)
+
+    async def test_phase1_multiturn_opening_is_structured_without_breaking_followups(self):
+        self._add_product("CW-C06PRO", "轻途套锅", "锅具", "大锅 3.0L，小锅 1.7L，水壶 0.8L", "3003铝合金、硅胶、不锈钢、PP", "酒精炉, 燃气炉", "极致轻量化 套娃式收纳 硬质氧化工艺", "轻量徒步 背包旅行 单人露营", 1150, price_positioning="中端")
+        self._add_product("CW-C78", "享野套锅", "锅具", "大锅 3L，小锅 1.7L，水壶 0.8L", "硬质氧化铝合金", "燃气炉", "高性价比 2-3人容量 全套收纳", "入门级露营 学生露营 周末野餐", 1320, price_positioning="中端")
+        self._add_product("CW-C19T-37", "旅伴2-3人野餐锅5件套", "锅具", "2升锅，7.5英寸煎盘，1.4升水壶", "硬质氧化铝、耐高温硅胶", "燃气炉", "高性价比 2-3人容量 全套收纳便携", "家庭野餐 学生露营 公园野餐", 1062, price_positioning="中端")
+        self.db.commit()
+
+        comparison_questions = [
+            "轻途套锅和享野套锅有什么区别？",
+            "行山单锅和激川单锅有什么区别？",
+            "比较一下 CW-C06PRO 和 CW-C19T-37。",
+        ]
+        for question in comparison_questions:
+            result = await customer_service_service.ask_customer_service(
+                self.db,
+                user_id=f"opening-{abs(hash(question))}",
+                question=question,
+            )
+            answer = result.get("answer", "")
+            self.assertEqual(result.get("answer_type"), "comparison", question)
+            self.assertNotRegex(answer, r"\[\{", question)
+            self.assertRegex(answer, r"(简单看|先说结论|如果你更看重|更适合)", question)
+
+        recommend = await customer_service_service.ask_customer_service(
+            self.db,
+            user_id="opening-recommend",
+            question="我想买个适合新手的套锅。",
+        )
+        self.assertIn(recommend.get("answer_type"), {"recommendation", "product_query"})
+        self.assertRegex(recommend["answer"], r"(推荐|优先|也可以考虑)")
+
+        catalog = await customer_service_service.ask_customer_service(
+            self.db,
+            user_id="opening-catalog",
+            question="有哪些锅具产品？",
+        )
+        self.assertEqual(catalog.get("answer_type"), "query_products")
+        self.assertRegex(catalog["answer"], r"(共有|先列前)")
+        self.assertRegex(catalog["answer"], r"(继续筛|缩小范围)")
+
+        no_context = await customer_service_service.ask_customer_service(
+            self.db,
+            user_id="opening-no-context",
+            question="你刚才推荐的第一个和第二个哪个好？",
+        )
+        self.assertEqual(no_context.get("answer_type"), "clarification")
+        self.assertRegex(no_context["answer"], r"(没有看到|请把两个产品名或 SKU 发我)")
+
     async def test_phase1_cheaper_alternative_followup_filters_noisy_field_fragments(self):
         self._add_product(
             "Q15-CHEAP",

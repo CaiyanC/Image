@@ -261,6 +261,22 @@ def _is_catalog_count_question(text: str) -> bool:
 
 
 def _catalog_product_ref(text: str) -> str:
+    if "配件" in text:
+        return "配件"
+    if "炉具" in text or "炉子" in text:
+        return "炉具"
+    if "餐具" in text:
+        return "餐具"
+    if "水具" in text:
+        return "水具"
+    if "桌椅" in text:
+        return "桌椅"
+    if "咖啡器具" in text or "咖啡" in text:
+        return "咖啡器具"
+    if "茶具" in text:
+        return "茶具"
+    if any(term in text for term in ("天幕", "地垫", "帐篷")):
+        return "天幕/地垫/帐篷"
     if "套锅" in text:
         return "套锅"
     if "锅具" in text:
@@ -300,6 +316,8 @@ def _supports_field_only_plan(text: str, requested_field: str) -> bool:
     value = str(text or "").strip()
     field = str(requested_field or "").strip()
     if not value or not field:
+        return False
+    if _is_recommendation_question(value):
         return False
     extra_detail_signals = {
         "\u6750\u8d28": (
@@ -376,6 +394,8 @@ def _strip_trailing_question_phrase(text: str) -> str:
 def _is_recommendation_question(text: str) -> bool:
     if _looks_like_context_ordinal_reference(text):
         return False
+    if _looks_like_scenario_selection_question(text):
+        return True
     if any(term in text for term in ("推荐", "买什么", "买哪款", "选哪款", "该买哪", "买什么产品")):
         return True
     product_terms = ("锅", "套锅", "单锅", "炉", "炉具", "水壶", "餐具", "套装")
@@ -385,6 +405,26 @@ def _is_recommendation_question(text: str) -> bool:
         any(term in text for term in purchase_decision_terms)
         and any(term in text for term in product_terms)
         and any(term in text for term in scenario_terms)
+    )
+
+
+def _looks_like_scenario_selection_question(text: str) -> bool:
+    value = str(text or "").strip()
+    if not value:
+        return False
+    if re.search(r"\b[A-Za-z]{1,6}[-_][A-Za-z0-9][A-Za-z0-9_-]{1,40}\b", value):
+        return False
+    choice_terms = ("推荐", "推荐哪个", "选哪个", "怎么选", "该选哪个", "先买哪类", "先买哪个", "更适合哪个")
+    product_terms = ("锅", "锅具", "套锅", "单锅", "炉", "炉具", "烤盘", "水壶", "餐具", "套装")
+    scene_terms = ("家庭", "团建", "露营", "野餐", "徒步", "火锅", "烧烤", "带孩子")
+    constraint_terms = ("轻量", "轻便", "好收纳", "收纳", "稳一点", "稳定", "容量大", "容量优先", "预算", "别太难清理")
+    return (
+        any(term in value for term in choice_terms)
+        and any(term in value for term in product_terms)
+        and (
+            any(term in value for term in scene_terms)
+            or any(term in value for term in constraint_terms)
+        )
     )
 
 

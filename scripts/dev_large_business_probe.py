@@ -1127,6 +1127,13 @@ def classify_case(case: ProbeCase, record: dict[str, Any], history: dict[str, di
                 return "fail", "real_business", ["conversation_id_not_reused"], None
         if answer_type == "knowledge_base_answer":
             return "fail", "real_business", ["multiturn_kb_fallback"], None
+        if (
+            case.expected.get("turn_index") == 1
+            and case.expected.get("total_turns") == 1
+            and answer_type == "clarification"
+            and _contains_any(question, ("刚才推荐的第一个", "第一个和第二个", "刚才那个"))
+        ):
+            return "pass", "probe_rule", [], None
         if case.expected.get("turn_index") == 1 and answer_type not in {"recommendation", "product_query", "product_detail"}:
             return "warning", "real_business", ["multiturn_opening_weak"], None
         return "pass", "ok", [], None
