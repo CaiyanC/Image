@@ -96,6 +96,20 @@ USAGE_CARE_COOKWARE_TERMS = ("锅", "锅具", "不粘锅", "涂层锅", "烤盘"
 USAGE_CARE_NON_COOKWARE_TERMS = ("杯", "水杯", "保温杯", "户外杯", "壶", "水壶")
 WATER_CONTAINER_CAPABILITY_TERMS = ("装冷水", "装凉水", "装热水", "装饮用水", "装水", "盛冷水", "盛热水", "盛水")
 WATER_CONTAINER_CAPABILITY_EXCLUDE_TERMS = ("冲洗", "冷水冲", "洗完", "清洗", "怎么洗", "怎么清洗", "保养", "护理", "骤冷骤热", "热锅骤冷", "刚烧热")
+CATEGORY_SCOPE_ALIASES: dict[str, tuple[str, ...]] = {
+    "配件": ("配件", "收纳包具", "配件"),
+    "桌椅": ("桌椅",),
+    "咖啡器具": ("咖啡器具", "咖啡"),
+    "茶具": ("茶具",),
+    "锅具": ("锅具", "套锅", "单锅", "锅"),
+    "炉具": ("炉具", "炉子", "酒精炉", "卡式炉", "气炉"),
+    "餐具": ("餐具",),
+    "水壶": ("水壶",),
+    "水具": ("水具", "水杯", "杯具"),
+}
+CATEGORY_SCOPE_COUNT_TERMS = ("有多少", "多少", "几款", "几种", "几个", "多少个")
+CATEGORY_SCOPE_PEOPLE_TERMS = ("适合几个人", "适合几人", "几个人", "几人", "多少人", "人数")
+CATEGORY_SCOPE_NON_PEOPLE = {"配件", "桌椅", "咖啡器具", "茶具"}
 FAQ_PURCHASE_TERMS = ("哪里买", "哪儿买", "在哪买", "在哪里买", "可以买到", "购买渠道", "购买链接", "怎么买", "想买", "去哪里", "小程序", "商城", "官方店", "店铺", "店铺入口", "旗舰店", "淘宝", "天猫", "京东", "拼多多", "亚马逊", "Amazon", "amazon", "独立站", "线下", "速卖通", "eBay", "ebay", "阿里国际站", "官方渠道", "哪个平台", "平台可以买", "B2C", "b2c", "下单")
 FAQ_AFTERSALES_TERMS = ("售后", "退换", "退货", "换货", "售后电话", "联系方式", "人工客服", "发票", "开发票", "物流", "快递", "订单", "发错货", "少发", "补寄", "维修", "七天无理由", "买错", "不喜欢")
 FAQ_AFTERSALES_PROBLEM_TERMS = ("问题", "质量", "坏了", "瑕疵", "破损")
@@ -269,6 +283,7 @@ async def process_intent_request(
         )
     if (
         _looks_like_usage_care_question(question)
+        and not _looks_like_water_container_capability_question(question)
         and not _looks_like_usage_care_aftersales_question(question)
         and not _looks_like_product_detail_question(question)
     ):
@@ -282,6 +297,10 @@ async def process_intent_request(
 
     if _looks_like_customer_faq_question(question):
         return None
+
+    category_scope_result = _category_scope_structured_result(db, question)
+    if category_scope_result:
+        return category_scope_result
 
     # Final safety: if intent is still clarify but regex has concrete search params, override
     if intent.intent == "clarify":
@@ -1299,7 +1318,11 @@ async def _query_products_result(db: Session, user_id: str, intent: CustomerInte
             suggested_followups=[],
             answer_type="product_detail",
         )
-    if not rows and _looks_like_usage_care_question(original_question or search_question_text):
+    if (
+        not rows
+        and _looks_like_usage_care_question(original_question or search_question_text)
+        and not _looks_like_water_container_capability_question(original_question or search_question_text)
+    ):
         usage_care_result = await answer_product_usage_care_request(db, question=original_question or search_question_text)
         if usage_care_result:
             return usage_care_result
@@ -4275,6 +4298,127 @@ def _all_product_rows(db: Session, limit: int = 500) -> list[dict]:
     ]
 
 
+def _category_scope_from_question(text: str) -> str:
+    value = str(text or "").strip()
+    if not value or customer_agent_service._extract_skus(value):
+        return ""
+    for category, aliases in CATEGORY_SCOPE_ALIASES.items():
+        if any(alias and alias in value for alias in aliases):
+            return category
+    return ""
+
+
+def _is_category_scope_count_question(text: str) -> bool:
+    value = str(text or "").strip()
+    if not value:
+        return False
+    return any(term in value for term in CATEGORY_SCOPE_COUNT_TERMS) and any(term in value for term in ("产品", "商品", "款", "种", "类"))
+
+
+def _is_category_scope_people_question(text: str) -> bool:
+    value = str(text or "").strip()
+    if not value:
+        return False
+    return any(term in value for term in CATEGORY_SCOPE_PEOPLE_TERMS)
+
+
+def _row_matches_category_scope(row: dict[str, Any], category_ref: str) -> bool:
+    aliases = CATEGORY_SCOPE_ALIASES.get(category_ref, (category_ref,))
+    category_text = " ".join(
+        str(row.get(key) or "")
+        for key in ("category", "sub_category", "product_name_cn", "product_name_en", "features", "usage_scenarios")
+    )
+    return any(alias and alias in category_text for alias in aliases)
+
+
+def _category_scope_rows(db: Session, category_ref: str) -> list[dict]:
+    return [row for row in _all_product_rows(db) if _row_matches_category_scope(row, category_ref)]
+
+
+def _category_scope_samples(rows: list[dict], limit: int = 5) -> str:
+    samples = [
+        f"{row.get('sku')} {row.get('product_name_cn')}".strip()
+        for row in rows[:limit]
+        if str(row.get("sku") or "").strip()
+    ]
+    return "、".join(item for item in samples if item)
+
+
+def _category_scope_people_answer(category_ref: str, rows: list[dict]) -> str:
+    sample_text = _category_scope_samples(rows)
+    if category_ref in CATEGORY_SCOPE_NON_PEOPLE:
+        answer = f"{category_ref}这类产品通常不按人数划分，更适合按用途、场景或功能来选。当前产品库里有 {len(rows)} 款相关产品。"
+        if sample_text:
+            answer += f" 可先参考：{sample_text}。"
+        return answer
+
+    people_matches: list[str] = []
+    for row in rows:
+        evidence_text = " ".join(
+            str(row.get(key) or "")
+            for key in ("usage_scenarios", "target_audience", "features", "capacity")
+        )
+        match = re.search(r"(?:(?:\d+\s*[-~至]\s*\d+)|(?:\d+)|[一二两三四五六七八九十]+)\s*(?:个)?人", evidence_text)
+        if match:
+            people_matches.append(match.group(0))
+    if people_matches:
+        unique = "、".join(list(dict.fromkeys(people_matches))[:3])
+        answer = f"{category_ref}类产品当前能看到的适用人数口径主要有：{unique}。更具体还要看单个 SKU 的容量和使用场景。"
+    else:
+        answer = f"{category_ref}这类产品当前资料里没有统一的适用人数口径，更适合按用途、容量或具体 SKU 来判断。"
+    if sample_text:
+        answer += f" 当前可参考：{sample_text}。"
+    return answer
+
+
+def _category_scope_structured_result(db: Session, question: str) -> dict | None:
+    text = str(question or "").strip()
+    category_ref = _category_scope_from_question(text)
+    if not category_ref:
+        return None
+    if not (_is_category_scope_count_question(text) or _is_category_scope_people_question(text)):
+        return None
+    rows = _category_scope_rows(db, category_ref)
+    if not rows:
+        return None
+    display_rows = rows[:10]
+    if _is_category_scope_count_question(text):
+        samples = _category_scope_samples(display_rows)
+        answer = f"当前产品库里“{category_ref}”类产品共有 {len(rows)} 款。"
+        if samples:
+            answer += f" 当前先列出前 {len(display_rows)} 款：{samples}。"
+        debug_mode = "structured_category_catalog_count"
+    else:
+        answer = _category_scope_people_answer(category_ref, rows)
+        debug_mode = "structured_category_people_scope"
+    intent = CustomerIntent(
+        intent="query_products",
+        filters={"product.category": category_ref},
+        term=category_ref,
+        semantic_query=text,
+        source_context="question",
+        is_single_field_sufficient=False,
+    )
+    response = _build_response(
+        intent=intent,
+        answer=answer,
+        sku=None,
+        sources=[{"type": "product_search", "label": f"{category_ref}类目结构化查询", "count": len(rows)}],
+        results=display_rows,
+        steps=_steps(intent, [{"type": "structured_category_scope", "label": "执行类目结构化查询", "detail": f"{category_ref} 命中 {len(rows)} 条", "ok": True}]),
+        confidence="high",
+        warnings=[],
+        anomalies=[],
+        suggested_followups=[
+            f"如果你想继续缩小范围，我可以再按 {category_ref} 的用途、容量或具体 SKU 继续筛选。",
+        ],
+        answer_type="product_query",
+        debug={"agent_mode": debug_mode},
+    )
+    response["skip_polish"] = True
+    return response
+
+
 def _resolve_existing_sku(db: Session, sku: str) -> str:
     text = str(sku or "").strip()
     product = db.query(Product).filter(Product.sku == text).first()
@@ -5100,7 +5244,20 @@ def _compose_detail_answer(
         capability_label = _water_container_capability_label(question_text)
         if usage_instruction_value and usage_instruction_value != "暂无":
             if any(term in usage_instruction_value for term in ("装冷水", "装凉水", "装热水", "装饮用水", "装水", "盛水")):
-                return f"{prefix}：当前资料显示{usage_instruction_value}。"
+                usage_answer = _water_container_usage_suitability_from_detail(
+                    {
+                        "product_name_cn": row.get("product_name_cn"),
+                        "product_name_en": row.get("product_name_en"),
+                        "category": row.get("category"),
+                        "specs": {
+                            "usage_instruction": usage_instruction_value,
+                            "heat_source": heat_source_value,
+                        },
+                        "business": {},
+                    },
+                    question_text,
+                )
+                return f"{prefix}：当前资料显示{usage_instruction_value}。{usage_answer}".strip()
         evidence_answer = _extract_water_container_capability_evidence_from_qa_kb(
             db=db,
             sku=row.get("sku") or "",
@@ -5108,13 +5265,26 @@ def _compose_detail_answer(
             qa_results=qa_results,
             kb_results=kb_results,
         )
+        usage_answer = _water_container_usage_suitability_from_detail(
+            {
+                "product_name_cn": row.get("product_name_cn"),
+                "product_name_en": row.get("product_name_en"),
+                "category": row.get("category"),
+                "specs": {
+                    "usage_instruction": usage_instruction_value,
+                    "heat_source": heat_source_value,
+                },
+                "business": {},
+            },
+            question_text,
+        )
         if evidence_answer:
             if usage_instruction_value and usage_instruction_value != "暂无":
-                return f"{prefix}：{evidence_answer} 当前资料里的使用说明为{usage_instruction_value}。"
-            return f"{prefix}：{evidence_answer}"
+                return f"{prefix}：{evidence_answer} 当前资料里的使用说明为{usage_instruction_value}。{usage_answer}".strip()
+            return f"{prefix}：{evidence_answer} {usage_answer}".strip()
         if usage_instruction_value and usage_instruction_value != "暂无":
-            return f"{prefix}：当前资料未直接标明是否可以{capability_label}。当前资料里的使用说明为{usage_instruction_value}。"
-        return f"{prefix}：当前资料未直接标明是否可以{capability_label}。"
+            return f"{prefix}：当前资料未直接标明是否可以{capability_label}。当前资料里的使用说明为{usage_instruction_value}。{usage_answer}".strip()
+        return f"{prefix}：当前资料未直接标明是否可以{capability_label}。{usage_answer}".strip()
     if (
         len(rows) == 1
         and any(term in question_text for term in ("酒精炉", "酒精"))
@@ -5266,6 +5436,52 @@ def _water_container_capability_verdict_from_evidence(content: str, question: st
     return None
 
 
+def _water_container_usage_suitability_from_detail(detail: dict[str, Any], question: str) -> str:
+    specs = detail.get("specs") or {}
+    business = detail.get("business") or {}
+    text = " ".join(
+        str(item or "")
+        for item in (
+            detail.get("product_name_cn"),
+            detail.get("product_name_en"),
+            detail.get("category"),
+            specs.get("usage_instruction"),
+            specs.get("heat_source"),
+            business.get("usage_scenarios"),
+            business.get("target_audience"),
+            business.get("positioning"),
+        )
+    )
+    question_text = str(question or "")
+    asks_boiling = any(term in question_text for term in ("烧水", "煮水", "热饮", "开水"))
+    asks_hydration = any(term in question_text for term in ("随身补水", "补水", "直饮", "饮用水"))
+    boil_positive = any(term in text for term in ("烧水", "煮水", "开水", "沸腾", "热饮", "明火", "卡式炉", "分体炉", "一体炉", "壶嘴", "中小火"))
+    hydration_positive = any(term in text for term in ("随身补水", "补水", "直饮", "饮用水", "徒步补水", "运动补水"))
+    hydration_negative = any(term in text for term in ("不建议作为运动随身补水", "不建议随身补水", "不是运动随身补水壶", "更偏向营地烧水", "烧水壶"))
+
+    if asks_boiling and asks_hydration:
+        if boil_positive and hydration_negative:
+            return "从当前资料看，它更偏向烧水/营地热饮使用；当前资料未明确标注适合随身补水。"
+        if boil_positive and not hydration_positive:
+            return "从当前资料看，它更偏向烧水使用；是否适合随身补水，当前资料未明确标注。"
+        if hydration_positive and not boil_positive:
+            return "当前资料更偏向把它描述为补水/饮水容器；是否适合烧水，仍建议以热源和材质说明为准。"
+        if boil_positive and hydration_positive:
+            return "当前资料显示它既可用于烧水，也可覆盖日常补水场景；具体仍要看实际使用水温和携带场景。"
+        return "关于烧水和随身补水，当前资料未给出明确场景结论。"
+    if asks_boiling:
+        if boil_positive:
+            return "从当前资料看，它更偏向烧水/营地热饮使用。"
+        return "当前资料未明确标注是否适合烧水。"
+    if asks_hydration:
+        if hydration_positive:
+            return "当前资料显示它可用于日常补水。"
+        if boil_positive:
+            return "当前资料未明确标注适合随身补水；从热源和使用说明看，它更像营地烧水壶。"
+        return "当前资料未明确标注是否适合随身补水。"
+    return ""
+
+
 def _rewrite_heat_source_support_rows(question: str, rows: list[dict]) -> list[dict]:
     question_text = str(question or "")
     if not any(term in question_text for term in ("酒精炉", "酒精")):
@@ -5400,6 +5616,9 @@ def _compound_single_product_detail_answer(
         else:
             capability_answer = f"当前资料未明确标注{capability_label}限制或适用水温。"
         add_line("冷水/水温", capability_answer)
+        suitability_answer = _water_container_usage_suitability_from_detail(detail, text)
+        if suitability_answer:
+            add_line("烧水/补水", suitability_answer)
 
     if "洗碗机" in text:
         dishwasher = _best_same_sku_evidence_text(

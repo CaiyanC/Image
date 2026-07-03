@@ -35,7 +35,12 @@ from ..models.product_content import ProductContent
 from ..models.product_specs import ProductSpecs
 
 
-SKU_RE = re.compile(r"\b[A-Za-z]{1,6}[-_][A-Za-z0-9][A-Za-z0-9_-]{1,40}\b")
+SKU_RE = re.compile(
+    r"(?<![A-Za-z0-9])("
+    r"(?:[A-Za-z]{1,6}(?:[-_][A-Za-z0-9\u4e00-\u9fff]{1,40})+)"
+    r"|(?:[A-Za-z]{1,6}\d{2,12}[A-Za-z0-9\u4e00-\u9fff]{0,12})"
+    r")(?![A-Za-z0-9])"
+)
 COMPOSITE_RECOMMENDATION_HINTS = (
     "推荐",
     "建议",
@@ -2576,7 +2581,7 @@ def review_samples(db: Session, user_id: str, limit: int = 100) -> dict:
 def _resolve_sku(db: Session, question: str, sku: str | None) -> str | None:
     if sku:
         return sku.strip()
-    candidates = SKU_RE.findall(question)
+    candidates = customer_agent_service._extract_skus(question)
     for candidate in candidates:
         product = db.query(Product).filter(Product.sku.ilike(candidate)).first()
         if product:

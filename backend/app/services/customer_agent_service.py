@@ -13,7 +13,12 @@ from ..models.product_specs import ProductSpecs
 from . import agent_action_service, product_service
 
 
-SKU_RE = re.compile(r"\b[A-Za-z]{1,6}[-_][A-Za-z0-9][A-Za-z0-9_-]{1,40}\b")
+SKU_RE = re.compile(
+    r"(?<![A-Za-z0-9])("
+    r"(?:[A-Za-z]{1,6}(?:[-_][A-Za-z0-9\u4e00-\u9fff]{1,40})+)"
+    r"|(?:[A-Za-z]{1,6}\d{2,12}[A-Za-z0-9\u4e00-\u9fff]{0,12})"
+    r")(?![A-Za-z0-9])"
+)
 def normalize_search_text(value: Any) -> str:
     text = unicodedata.normalize("NFKC", str(value or ""))
     replacements = {
@@ -726,7 +731,8 @@ def _action_response(actions, answer: str) -> dict:
 
 def _extract_skus(text: str) -> list[str]:
     seen = []
-    for item in SKU_RE.findall(text or ""):
+    normalized_text = normalize_search_text(text or "")
+    for item in SKU_RE.findall(normalized_text):
         normalized = item.replace("_", "-").upper()
         if normalized not in seen:
             seen.append(normalized)

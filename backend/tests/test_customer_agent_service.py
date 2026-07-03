@@ -1222,6 +1222,156 @@ class CustomerAgentServiceTest(unittest.TestCase):
         self.assertTrue(result["ok"])
         self.assertEqual([item["sku"] for item in result["results"]], ["CW-C93", "TW-141"])
 
+    def test_category_scope_questions_use_structured_catalog_answers(self):
+        self._add_product("AC-Z08HM", "多功能挂钩", "配件", "铝合金", "配件收纳")
+        self._add_product("DZ-100", "折叠露营桌", "桌椅", "铝合金", "桌面稳固")
+        self._add_product("KW-K25-35", "旅行咖啡研磨机", "咖啡器具", "不锈钢", "手摇研磨")
+        self._add_product("TG-01", "出山茶具套装", "茶具", "陶瓷", "便携煮茶")
+        for sku, usage in {
+            "AC-Z08HM": "适合露营收纳、挂载整理",
+            "DZ-100": "适合露营用餐、摆放装备",
+            "KW-K25-35": "适合户外手冲、磨豆",
+            "TG-01": "适合户外煮茶、休闲品茗",
+        }.items():
+            business = ProductBusiness(
+                id=f"biz-{sku}",
+                product_id=f"id-{sku}",
+                usage_scenarios=usage,
+                target_audience="露营用户",
+                positioning="场景用品",
+            )
+            self.db.add(business)
+        self.db.commit()
+
+        original_execute_tool_async = customer_agent_tool_service.execute_tool_async
+        original_chat_completion = dmxapi_service.chat_completion
+
+        async def fake_execute_tool_async(db, *, user_id, name, arguments):
+            return {
+                "ok": True,
+                "tool": name,
+                "query": arguments.get("term") or arguments.get("semantic_query") or "",
+                "results": [],
+                "sources": [],
+            }
+
+        async def fail_chat_completion(*args, **kwargs):
+            raise RuntimeError("skip llm")
+
+        customer_agent_tool_service.execute_tool_async = fake_execute_tool_async
+        dmxapi_service.chat_completion = fail_chat_completion
+        try:
+            questions = {
+                "你们有多少配件产品？": ("配件", "count"),
+                "配件一般适合几个人？": ("配件", "people"),
+                "你们有多少桌椅产品？": ("桌椅", "count"),
+                "桌椅一般适合几个人？": ("桌椅", "people"),
+                "你们有多少咖啡器具产品？": ("咖啡器具", "count"),
+                "咖啡器具一般适合几个人？": ("咖啡器具", "people"),
+                "你们有多少茶具产品？": ("茶具", "count"),
+                "茶具一般适合几个人？": ("茶具", "people"),
+            }
+            for question, (category, mode) in questions.items():
+                result = self._run_async(customer_agent_intent_service.process_intent_request(
+                    self.db,
+                    user_id="user-1",
+                    question=question,
+                ))
+                self.assertIsNotNone(result, question)
+                self.assertNotEqual(result["answer_type"], "knowledge_base_answer", question)
+                self.assertEqual(result["intent"], "query_products", question)
+                self.assertTrue(result["results"], question)
+                self.assertIn(category, result["answer"], question)
+                if mode == "count":
+                    self.assertTrue(
+                        any(token in result["answer"] for token in ("共有", "有 1 款", "有1款", "有1个", "有 1 个")),
+                        question,
+                    )
+                else:
+                    self.assertTrue(
+                        any(token in result["answer"] for token in ("不按人数", "不按人数划分", "更多按用途", "更适合按用途")),
+                        question,
+                    )
+        finally:
+            customer_agent_tool_service.execute_tool_async = original_execute_tool_async
+            dmxapi_service.chat_completion = original_chat_completion
+
+    def test_explicit_sku_with_chinese_suffix_is_not_truncated(self):
+        self._add_product("TW-422-蓝", "有时搪瓷碗盘套装-迷迭蓝", "餐具", "铁、304不锈钢", "搪瓷餐具")
+        self._add_product("TW-422-绿", "有时搪瓷碗盘套装-竹灰绿", "餐具", "铁、304不锈钢", "搪瓷餐具")
+        for sku in ("TW-422-蓝", "TW-422-绿"):
+            specs = self.db.query(ProductSpecs).filter(ProductSpecs.product_id == f"id-{sku}").first()
+            specs.capacity = '[{"label": "", "value": "450ml", "unit": ""}]'
+            specs.size_info = '[{"label": "搪瓷碗", "value": "14.5*4.7", "unit": "cm"}]'
+        self.db.commit()
+
+        result = self._run_async(customer_agent_intent_service.process_intent_request(
+            self.db,
+            user_id="user-1",
+            question="TW-422-蓝 是什么材质？容量多大？",
+        ))
+
+        self.assertIsNotNone(result)
+        self.assertEqual(result["answer_type"], "product_detail")
+        self.assertEqual([item["sku"] for item in result["results"]], ["TW-422-蓝"])
+        self.assertIn("铁、304不锈钢", result["answer"])
+        self.assertIn("450ml", result["answer"].lower())
+
+    def test_missing_explicit_sku_does_not_jump_to_other_product(self):
+        self._add_product("TW-422-蓝", "有时搪瓷碗盘套装-迷迭蓝", "餐具", "铁、304不锈钢", "搪瓷餐具")
+        self.db.commit()
+
+        result = self._run_async(customer_agent_intent_service.process_intent_request(
+            self.db,
+            user_id="user-1",
+            question="TW-422-紫 是什么材质？容量多大？",
+        ))
+
+        self.assertIsNotNone(result)
+        self.assertEqual(result["answer_type"], "product_detail")
+        self.assertEqual(result["results"], [])
+        self.assertIn("没有找到TW-422-紫的产品资料", result["answer"])
+
+    def test_explicit_sku_overrides_context_and_generic_recommendation_clears_it(self):
+        overridden = customer_agent_intent_service.parse_intent(
+            "那 CW-C76 呢？",
+            previous_result_skus=["CW-C65-4"],
+        )
+        fresh = customer_agent_intent_service.parse_intent(
+            "推荐一个适合两个人露营的锅",
+            previous_result_skus=["CW-C65-4"],
+        )
+
+        self.assertEqual(overridden.target_skus, ["CW-C76"])
+        self.assertEqual(overridden.source_context, "question")
+        self.assertEqual(fresh.intent, "recommend_products")
+        self.assertEqual(fresh.target_skus, [])
+
+    def test_water_container_capability_questions_stay_on_current_sku(self):
+        products = {
+            "CB254": ("激流水壶", "适合烧水；可装冷水和饮用水；更偏向营地烧水，不是运动随身补水壶"),
+            "CW-C65-3": ("城市出逃1L水壶(电光绿)", "可装冷水和饮用水；适合营地烧水，也能短途补水"),
+            "CW-K03-37": ("1.4升户外水壶", "可装冷水；更适合烧水和营地热饮，不建议作为长时间随身补水壶"),
+        }
+        for sku, (name, usage_instruction) in products.items():
+            self._add_product(sku, name, "水壶", "硬质氧化铝合金", "便携烧水")
+            specs = self.db.query(ProductSpecs).filter(ProductSpecs.product_id == f"id-{sku}").first()
+            specs.usage_instruction = usage_instruction
+            specs.heat_source = "明火、卡式炉"
+        self.db.commit()
+
+        for sku in products:
+            result = self._run_async(customer_agent_intent_service.process_intent_request(
+                self.db,
+                user_id="user-1",
+                question=f"{sku} 可以装冷水吗？适合烧水还是随身补水？",
+            ))
+            self.assertIsNotNone(result, sku)
+            self.assertNotEqual(result["answer_type"], "product_usage_care", sku)
+            self.assertEqual(result["results"][0]["sku"], sku, sku)
+            self.assertIn("冷水", result["answer"], sku)
+            self.assertTrue(any(token in result["answer"] for token in ("烧水", "补水")), sku)
+
     def _run_async(self, awaitable):
         import asyncio
 
