@@ -37,7 +37,7 @@ from ..models.product_specs import ProductSpecs
 
 SKU_RE = re.compile(
     r"(?<![A-Za-z0-9])("
-    r"(?:[A-Za-z]{1,6}(?:[-_][A-Za-z0-9\u4e00-\u9fff]{1,40})+)"
+    r"(?:[A-Za-z]{1,6}[A-Za-z0-9]{0,12}(?:[-_][A-Za-z0-9\u4e00-\u9fff()]{1,40})+)"
     r"|(?:[A-Za-z]{1,6}\d{2,12}[A-Za-z0-9\u4e00-\u9fff]{0,12})"
     r")(?![A-Za-z0-9])"
 )

@@ -1317,6 +1317,31 @@ class CustomerAgentServiceTest(unittest.TestCase):
         self.assertIn("铁、304不锈钢", result["answer"])
         self.assertIn("450ml", result["answer"].lower())
 
+    def test_explicit_sku_with_digit_prefix_or_parenthesized_suffix_is_not_truncated(self):
+        products = {
+            "GX14-230G": ("高山气罐230g", "气罐", "丁烷"),
+            "CT-T04(BM)": ("黑色折叠桌", "桌椅", "铝合金"),
+        }
+        for sku, (name, category, material) in products.items():
+            self._add_product(sku, name, category, material, "测试商品")
+            specs = self.db.query(ProductSpecs).filter(ProductSpecs.product_id == f"id-{sku}").first()
+            specs.capacity = '[{"label": "", "value": "1L", "unit": ""}]'
+        self.db.commit()
+
+        gx_result = self._run_async(customer_agent_intent_service.process_intent_request(
+            self.db,
+            user_id="user-1",
+            question="GX14-230G 是什么材质？容量多大？",
+        ))
+        ct_result = self._run_async(customer_agent_intent_service.process_intent_request(
+            self.db,
+            user_id="user-1",
+            question="CT-T04(BM) 是什么材质？容量多大？",
+        ))
+
+        self.assertEqual([item["sku"] for item in gx_result["results"]], ["GX14-230G"])
+        self.assertEqual([item["sku"] for item in ct_result["results"]], ["CT-T04(BM)"])
+
     def test_missing_explicit_sku_does_not_jump_to_other_product(self):
         self._add_product("TW-422-蓝", "有时搪瓷碗盘套装-迷迭蓝", "餐具", "铁、304不锈钢", "搪瓷餐具")
         self.db.commit()
