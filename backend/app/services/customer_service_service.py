@@ -4432,6 +4432,12 @@ def _shape_answer_for_output(result: dict) -> dict:
             result.get("answer"),
             result.get("results") or [],
         )
+    elif answer_type == "product_query":
+        result["answer"] = _shape_product_query_output(
+            result.get("answer"),
+            result.get("results") or [],
+            result.get("result_skus") or [],
+        )
     elif answer_type == "clarification" or str(result.get("intent") or "").strip() == "clarify":
         result["answer"] = shape_answer_tone(
             str(result.get("answer") or ""),
@@ -4556,6 +4562,64 @@ def _shape_recommendation_output(answer: str | None, results: list[dict], eviden
     for item in picks:
         lines.append(f"{item['sku']}：{item['reason']}")
     return "\n".join(lines)
+
+
+def _shape_product_query_output(answer: str | None, results: list[dict], result_skus: list[str] | None = None) -> str:
+    text = str(answer or "").strip()
+    if text:
+        return text
+    rows = [row for row in (results or []) if isinstance(row, dict)]
+    if not rows:
+        return text
+
+    ordered_skus = [
+        str(sku or "").strip().upper()
+        for sku in (result_skus or [])
+        if str(sku or "").strip()
+    ]
+    row_by_sku = {
+        str(row.get("sku") or "").strip().upper(): row
+        for row in rows
+        if str(row.get("sku") or "").strip()
+    }
+    ordered_rows: list[dict] = []
+    seen: set[str] = set()
+    for sku in ordered_skus:
+        row = row_by_sku.get(sku)
+        if row and sku not in seen:
+            ordered_rows.append(row)
+            seen.add(sku)
+    for row in rows:
+        sku = str(row.get("sku") or "").strip().upper()
+        if sku and sku not in seen:
+            ordered_rows.append(row)
+            seen.add(sku)
+
+    top_rows = ordered_rows[:5]
+    picks: list[str] = []
+    categories: list[str] = []
+    for row in top_rows:
+        sku = str(row.get("sku") or "").strip().upper()
+        name = str(row.get("product_name_cn") or row.get("product_name_en") or row.get("name") or "").strip()
+        category = str(row.get("category") or "").strip()
+        if category and category not in categories:
+            categories.append(category)
+        if sku and name:
+            picks.append(f"{name}（{sku}）")
+        elif sku:
+            picks.append(sku)
+        elif name:
+            picks.append(name)
+    if not picks:
+        return text
+
+    subject = categories[0] if len(categories) == 1 else "相关产品"
+    lines = [f"当前先给你列出几款可参考的{subject}：{'、'.join(picks)}。"]
+    if len(ordered_rows) > len(top_rows):
+        lines.append("如果你想继续缩小范围，我可以再按人数、重量、容量、收纳或预算继续筛选。")
+    return "".join(lines)
+
+
 def _shape_product_detail_output(answer: str | None, results: list[dict]) -> str:
     answer_text = str(answer or "").strip()
     if answer_text and (

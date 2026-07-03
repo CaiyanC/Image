@@ -7620,6 +7620,92 @@ class CustomerServiceServiceTest(unittest.IsolatedAsyncioTestCase):
         self.assertIn("主体材质：硬质氧化铝合金", answer)
         self.assertIn("手柄材质：白蜡木", answer)
 
+    def test_service_product_query_shaping_builds_readable_fallback_from_candidates(self):
+        answer = customer_service_service._shape_product_query_output(
+            "",
+            [
+                {"sku": "CW-C06PRO", "product_name_cn": "轻途套锅", "category": "锅具"},
+                {"sku": "CW-C69-1", "product_name_cn": "小方锅套装", "category": "锅具"},
+                {"sku": "CW-C74", "product_name_cn": "8寸煎盘-享野", "category": "锅具"},
+                {"sku": "CW-C78", "product_name_cn": "享野套锅", "category": "锅具"},
+                {"sku": "CW-C82", "product_name_cn": "钛途双锅", "category": "锅具"},
+                {"sku": "CW-C83", "product_name_cn": "炊墨套锅", "category": "锅具"},
+            ],
+            ["CW-C69-1", "CW-C06PRO"],
+        )
+
+        self.assertTrue(answer.strip())
+        self.assertIn("锅具", answer)
+        self.assertIn("小方锅套装（CW-C69-1）", answer)
+        self.assertIn("轻途套锅（CW-C06PRO）", answer)
+        self.assertIn("继续筛选", answer)
+
+    def test_service_product_query_shaping_does_not_fabricate_without_candidates(self):
+        answer = customer_service_service._shape_product_query_output("", [], ["CW-C69-1"])
+
+        self.assertEqual(answer, "")
+
+    def test_shape_answer_for_output_product_query_empty_answer_uses_candidate_fallback(self):
+        finalized = customer_service_service._shape_answer_for_output({
+            "answer": "   ",
+            "intent": "query_products",
+            "answer_type": "product_query",
+            "confidence": "high",
+            "uncertainty": "confirmed",
+            "sources": [{"type": "product_search", "label": "产品检索", "count": 2}],
+            "results": [
+                {"sku": "CW-C69-1", "product_name_cn": "小方锅套装", "category": "锅具"},
+                {"sku": "CW-C06PRO", "product_name_cn": "轻途套锅", "category": "锅具"},
+            ],
+            "result_skus": ["CW-C69-1", "CW-C06PRO"],
+            "candidate_skus": ["CW-C69-1", "CW-C06PRO"],
+            "steps": [],
+            "warnings": [],
+            "evidence": [],
+            "debug": {"agent_mode": "llm_tool_calling"},
+            "skip_polish": True,
+        })
+
+        self.assertEqual(finalized["answer_type"], "product_query")
+        self.assertTrue(finalized["answer"].strip())
+        self.assertIn("CW-C69-1", finalized["answer"])
+        self.assertIn("小方锅套装", finalized["answer"])
+        self.assertNotEqual(finalized["answer_type"], "knowledge_base_answer")
+
+    def test_shape_answer_for_output_scene_product_query_questions_never_return_empty_answer_with_candidates(self):
+        scene_questions = [
+            "双人徒步露营，希望锅具和收纳都别太占地方。",
+            "家庭露营带孩子，锅具要稳一点也别太难清理。",
+            "公园野餐两个人用，想选个好收纳的锅具。",
+            "两个人轻露营，希望锅具轻一点但也别太单薄。",
+        ]
+
+        for question in scene_questions:
+            finalized = customer_service_service._shape_answer_for_output({
+                "answer": "",
+                "question": question,
+                "intent": "query_products",
+                "answer_type": "product_query",
+                "confidence": "high",
+                "uncertainty": "confirmed",
+                "sources": [{"type": "product_search", "label": "产品检索", "count": 3}],
+                "results": [
+                    {"sku": "CW-C69-1", "product_name_cn": "小方锅套装", "category": "锅具"},
+                    {"sku": "CW-C06PRO", "product_name_cn": "轻途套锅", "category": "锅具"},
+                    {"sku": "CW-C74", "product_name_cn": "8寸煎盘-享野", "category": "锅具"},
+                ],
+                "result_skus": ["CW-C69-1", "CW-C06PRO", "CW-C74"],
+                "candidate_skus": ["CW-C69-1", "CW-C06PRO", "CW-C74"],
+                "steps": [],
+                "warnings": [],
+                "evidence": [],
+                "debug": {"agent_mode": "llm_tool_calling"},
+                "skip_polish": True,
+            })
+            self.assertEqual(finalized["answer_type"], "product_query")
+            self.assertTrue(finalized["answer"].strip(), question)
+            self.assertIn("CW-C69-1", finalized["answer"], question)
+
     async def test_named_product_handle_material_question_separates_body_and_handle_material(self):
         product = Product(
             id="detail-CW-C83-handle",
