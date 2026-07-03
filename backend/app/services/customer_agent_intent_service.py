@@ -108,6 +108,58 @@ CATEGORY_SCOPE_ALIASES: dict[str, tuple[str, ...]] = {
     "水具": ("水具", "水壶", "水杯", "杯具"),
     "天幕/地垫/帐篷": ("天幕", "地垫", "帐篷"),
 }
+CATEGORY_SCOPE_STRICT_CONFIG: dict[str, dict[str, Any]] = {
+    "配件": {
+        "categories": {"配件"},
+        "sub_categories": ("收纳包具", "餐厨配件", "附件"),
+        "fallback_terms": ("配件", "附件"),
+    },
+    "桌椅": {
+        "categories": {"桌椅"},
+        "sub_categories": ("桌椅",),
+        "fallback_terms": ("桌椅",),
+    },
+    "咖啡器具": {
+        "categories": {"咖啡器具"},
+        "sub_categories": ("咖啡器具",),
+        "fallback_terms": ("咖啡器具",),
+    },
+    "茶具": {
+        "categories": {"茶具"},
+        "sub_categories": ("茶具",),
+        "fallback_terms": ("茶具",),
+    },
+    "锅具": {
+        "categories": {"锅具"},
+        "sub_categories": ("锅具", "套锅", "单锅"),
+        "fallback_terms": ("锅具", "套锅", "单锅"),
+    },
+    "炉具": {
+        "categories": {"炉具"},
+        "sub_categories": ("炉具", "炉子", "酒精炉", "卡式炉", "气炉"),
+        "fallback_terms": ("炉具", "炉子", "酒精炉", "卡式炉", "气炉"),
+    },
+    "餐具": {
+        "categories": {"餐具"},
+        "sub_categories": ("餐具",),
+        "fallback_terms": ("餐具",),
+    },
+    "水壶": {
+        "categories": {"水壶"},
+        "sub_categories": ("水壶",),
+        "fallback_terms": ("水壶",),
+    },
+    "水具": {
+        "categories": {"水具", "水壶"},
+        "sub_categories": ("水具", "水壶", "水杯", "杯具"),
+        "fallback_terms": ("水具", "水壶", "水杯", "杯具"),
+    },
+    "天幕/地垫/帐篷": {
+        "categories": {"天幕", "地垫", "帐篷", "天幕/地垫/帐篷", "天幕、地垫、帐篷"},
+        "sub_categories": ("天幕", "地垫", "帐篷"),
+        "fallback_terms": ("天幕", "地垫", "帐篷"),
+    },
+}
 CATEGORY_SCOPE_COUNT_TERMS = ("有多少", "多少", "几款", "几种", "几个", "多少个")
 CATEGORY_SCOPE_PEOPLE_TERMS = ("适合几个人", "适合几人", "几个人", "几人", "多少人", "人数")
 CATEGORY_SCOPE_NON_PEOPLE = {"配件", "桌椅", "咖啡器具", "茶具"}
@@ -4451,11 +4503,20 @@ def _is_category_scope_people_question(text: str) -> bool:
 
 
 def _row_matches_category_scope(row: dict[str, Any], category_ref: str) -> bool:
+    scope = CATEGORY_SCOPE_STRICT_CONFIG.get(category_ref)
+    category = str(row.get("category") or "").strip()
+    sub_category = str(row.get("sub_category") or "").strip()
+    if scope:
+        if category in (scope.get("categories") or set()):
+            return True
+        if sub_category and any(term in sub_category for term in (scope.get("sub_categories") or ())):
+            return True
+        if category or sub_category:
+            return False
+        name_text = " ".join(str(row.get(key) or "") for key in ("product_name_cn", "product_name_en"))
+        return any(term and term in name_text for term in (scope.get("fallback_terms") or ()))
     aliases = CATEGORY_SCOPE_ALIASES.get(category_ref, (category_ref,))
-    category_text = " ".join(
-        str(row.get(key) or "")
-        for key in ("category", "sub_category", "product_name_cn", "product_name_en", "features", "usage_scenarios")
-    )
+    category_text = " ".join(str(row.get(key) or "") for key in ("category", "sub_category", "product_name_cn", "product_name_en"))
     return any(alias and alias in category_text for alias in aliases)
 
 

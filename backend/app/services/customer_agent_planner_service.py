@@ -416,15 +416,26 @@ def _looks_like_scenario_selection_question(text: str) -> bool:
         return False
     choice_terms = ("推荐", "推荐哪个", "选哪个", "怎么选", "该选哪个", "先买哪类", "先买哪个", "更适合哪个")
     product_terms = ("锅", "锅具", "套锅", "单锅", "炉", "炉具", "烤盘", "水壶", "餐具", "套装")
-    scene_terms = ("家庭", "团建", "露营", "野餐", "徒步", "火锅", "烧烤", "带孩子")
-    constraint_terms = ("轻量", "轻便", "好收纳", "收纳", "稳一点", "稳定", "容量大", "容量优先", "预算", "别太难清理")
-    return (
+    scene_terms = ("家庭", "团建", "露营", "轻露营", "野餐", "徒步", "火锅", "烧烤", "带孩子", "公园")
+    constraint_terms = ("轻一点", "轻量", "轻便", "好收纳", "收纳", "稳一点", "稳定", "容量大", "容量优先", "预算", "别太难清理", "别太单薄")
+    explicit_choice = (
         any(term in value for term in choice_terms)
         and any(term in value for term in product_terms)
         and (
             any(term in value for term in scene_terms)
             or any(term in value for term in constraint_terms)
         )
+    )
+    if explicit_choice:
+        return True
+    desire_terms = ("希望", "想", "想要", "适合")
+    people_terms = ("两个人", "两人", "双人", "一个人", "单人", "家庭")
+    return (
+        any(term in value for term in desire_terms)
+        and any(term in value for term in product_terms)
+        and any(term in value for term in scene_terms)
+        and any(term in value for term in constraint_terms)
+        and any(term in value for term in people_terms)
     )
 
 

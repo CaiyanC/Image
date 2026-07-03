@@ -499,23 +499,60 @@ def _phase1_category_compatibility_result(db: Session, plan: dict) -> dict:
 
 def _phase1_catalog_rows(db: Session, product_ref: str) -> list[dict]:
     ref = str(product_ref or "").strip()
-    category_aliases = {
-        "配件": ("配件", "收纳包具", "餐厨配件", "附件"),
-        "炉具": ("炉具", "炉子", "酒精炉", "气炉", "卡式炉"),
-        "餐具": ("餐具", "勺", "叉", "筷", "刀具"),
-        "水具": ("水具", "水壶", "水杯", "杯具", "壶"),
-        "桌椅": ("桌椅", "桌", "椅"),
-        "咖啡器具": ("咖啡器具", "咖啡"),
-        "茶具": ("茶具", "茶壶", "茶杯"),
-        "天幕/地垫/帐篷": ("天幕", "地垫", "帐篷"),
+    category_scope_config = {
+        "配件": {
+            "categories": {"配件"},
+            "sub_categories": ("收纳包具", "餐厨配件", "附件"),
+            "fallback_terms": ("配件", "附件"),
+        },
+        "炉具": {
+            "categories": {"炉具"},
+            "sub_categories": ("炉具", "炉子", "酒精炉", "气炉", "卡式炉"),
+            "fallback_terms": ("炉具", "炉子", "酒精炉", "卡式炉", "气炉"),
+        },
+        "餐具": {
+            "categories": {"餐具"},
+            "sub_categories": ("餐具",),
+            "fallback_terms": ("餐具",),
+        },
+        "水具": {
+            "categories": {"水具", "水壶"},
+            "sub_categories": ("水具", "水壶", "水杯", "杯具"),
+            "fallback_terms": ("水具", "水壶", "水杯", "杯具"),
+        },
+        "桌椅": {
+            "categories": {"桌椅"},
+            "sub_categories": ("桌椅",),
+            "fallback_terms": ("桌椅",),
+        },
+        "咖啡器具": {
+            "categories": {"咖啡器具"},
+            "sub_categories": ("咖啡器具",),
+            "fallback_terms": ("咖啡器具",),
+        },
+        "茶具": {
+            "categories": {"茶具"},
+            "sub_categories": ("茶具",),
+            "fallback_terms": ("茶具",),
+        },
+        "天幕/地垫/帐篷": {
+            "categories": {"天幕", "地垫", "帐篷", "天幕/地垫/帐篷", "天幕、地垫、帐篷"},
+            "sub_categories": ("天幕", "地垫", "帐篷"),
+            "fallback_terms": ("天幕", "地垫", "帐篷"),
+        },
     }
 
-    def _matches_alias_scope(row: dict, aliases: tuple[str, ...]) -> bool:
-        category_text = " ".join(
-            str(row.get(key) or "")
-            for key in ("category", "sub_category", "product_name_cn", "product_name_en", "features", "usage_scenarios")
-        )
-        return any(alias and alias in category_text for alias in aliases)
+    def _matches_category_scope(row: dict, scope: dict[str, Any]) -> bool:
+        category = str(row.get("category") or "").strip()
+        sub_category = str(row.get("sub_category") or "").strip()
+        if category in (scope.get("categories") or set()):
+            return True
+        if sub_category and any(term in sub_category for term in (scope.get("sub_categories") or ())):
+            return True
+        if category or sub_category:
+            return False
+        name_text = " ".join(str(row.get(key) or "") for key in ("product_name_cn", "product_name_en"))
+        return any(term and term in name_text for term in (scope.get("fallback_terms") or ()))
 
     query = (
         db.query(Product, ProductSpecs, ProductBusiness, ProductContent)
@@ -543,8 +580,8 @@ def _phase1_catalog_rows(db: Session, product_ref: str) -> list[dict]:
             matched = "水壶" in category_text
         elif ref == "锅具":
             matched = _is_service_pot_or_cookware_set_candidate(row, product)
-        elif ref in category_aliases:
-            matched = _matches_alias_scope(row, category_aliases[ref])
+        elif ref in category_scope_config:
+            matched = _matches_category_scope(row, category_scope_config[ref])
         elif ref == "套锅":
             matched = "套锅" in haystack or "锅" in str(row.get("category") or "") and "套" in haystack
         else:
@@ -966,6 +1003,10 @@ def _phase1_structured_recommendation_result(db: Session, plan: dict) -> dict | 
             score += 6
         if any(term in scenario for term in ("两个人", "2人", "两人", "双人")) and any(term in haystack for term in ("2人", "2-3人", "两人", "两个人", "双人")):
             score += 5
+        if any(term in scenario for term in ("轻露营", "轻一点", "轻量", "轻便")) and any(term in haystack for term in ("轻量", "轻便", "便携", "收纳", "套娃")):
+            score += 4
+        if any(term in scenario for term in ("别太单薄", "稳一点", "稳定")) and any(term in haystack for term in ("稳", "稳定", "硬质氧化", "不锈钢", "厚实")):
+            score += 4
         if "周末" in scenario and any(term in haystack for term in ("周末", "短途", "公园", "家庭野餐")):
             score += 2
         if "徒步" in scenario and "徒步" in haystack:
@@ -987,17 +1028,24 @@ def _phase1_structured_recommendation_result(db: Session, plan: dict) -> dict | 
     if not selected:
         return None
     skus = [str(row.get("sku") or "").strip().upper() for row in selected if row.get("sku")]
-    lines = []
-    for row in selected[:3]:
+    top_row = selected[0]
+    top_name = top_row.get("product_name_cn") or top_row.get("sku")
+    top_sku = top_row.get("sku")
+    top_reason = top_row.get("usage_scenarios") or top_row.get("features") or top_row.get("positioning") or "匹配当前使用场景"
+    answer = f"优先推荐 {top_name}（{top_sku}），因为它更贴合你当前场景，{top_reason}。"
+    backups: list[str] = []
+    for row in selected[1:3]:
         name = row.get("product_name_cn") or row.get("sku")
         sku = row.get("sku")
         reason = row.get("usage_scenarios") or row.get("features") or row.get("positioning") or "匹配当前使用场景"
-        lines.append(f"- {name}（{sku}）：{reason}")
+        backups.append(f"{name}（{sku}），{reason}")
+    if backups:
+        answer += " 备选可以看" + "；".join(backups) + "。"
     scenario_label = "、".join(_phase1_scenario_labels(scenario)) or "当前"
     return {
         "intent": "recommendation",
         "answer_type": "recommendation",
-        "answer": f"按你“{scenario_label}”的需求，可以优先看这些具体产品：\n" + "\n".join(lines),
+        "answer": f"按你“{scenario_label}”的需求，{answer}",
         "results": selected,
         "result_skus": skus,
         "candidate_skus": skus,
@@ -1009,12 +1057,12 @@ def _phase1_structured_recommendation_result(db: Session, plan: dict) -> dict | 
 
 def _phase1_should_use_structured_recommendation(plan: dict) -> bool:
     scenario = str((plan or {}).get("scenario") or "")
-    return any(term in scenario for term in ("想买套锅", "想买锅", "买套锅", "买锅", "买哪个", "应该买", "该买"))
+    return any(term in scenario for term in ("想买套锅", "想买锅", "买套锅", "买锅", "买哪个", "应该买", "该买", "推荐", "怎么选", "希望", "想选"))
 
 
 def _phase1_scenario_labels(scenario: str) -> list[str]:
     labels = []
-    for term in ("周末", "两个人", "三个人", "一个人", "野餐", "露营", "徒步", "轻量", "轻便", "套锅", "锅具"):
+    for term in ("家庭", "周末", "两个人", "三个人", "一个人", "野餐", "露营", "徒步", "火锅", "烧烤", "轻量", "轻便", "容量优先", "套锅", "锅具"):
         if term in scenario and term not in labels:
             labels.append(term)
     return labels
@@ -1023,7 +1071,11 @@ def _phase1_scenario_labels(scenario: str) -> list[str]:
 def _phase1_repair_recommendation_result(db: Session, agent_result: dict, plan: dict) -> dict:
     if not isinstance(agent_result, dict) or (plan or {}).get("primary_intent") != "recommendation":
         return agent_result
-    if _phase1_answer_mentions_product(agent_result) and _phase1_result_skus(agent_result):
+    if (
+        str(agent_result.get("answer_type") or "").strip() == "recommendation"
+        and _phase1_answer_mentions_product(agent_result)
+        and _phase1_result_skus(agent_result)
+    ):
         return agent_result
     rebuilt = _phase1_structured_recommendation_result(db, plan)
     return rebuilt or agent_result
