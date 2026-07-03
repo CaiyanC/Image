@@ -1131,7 +1131,7 @@ def classify_case(case: ProbeCase, record: dict[str, Any], history: dict[str, di
             case.expected.get("turn_index") == 1
             and case.expected.get("total_turns") == 1
             and answer_type == "clarification"
-            and _contains_any(question, ("刚才推荐的第一个", "第一个和第二个", "刚才那个"))
+            and _contains_any(case.question, ("刚才推荐的第一个", "第一个和第二个", "刚才那个"))
         ):
             return "pass", "probe_rule", [], None
         if case.expected.get("turn_index") == 1 and answer_type not in {"recommendation", "product_query", "product_detail"}:
