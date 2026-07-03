@@ -5,6 +5,11 @@ import re
 from typing import Any
 
 
+EXPLICIT_SKU_RE = re.compile(
+    r"\b[A-Za-z]{1,6}[A-Za-z0-9]{0,12}(?:[-_](?:[A-Za-z0-9]{1,24}(?:\([A-Za-z0-9]{1,24}\))?|[\u4e00-\u9fff]{1,8}))+(?=$|[\s，。,；;：:）)\]】>\"'？?])"
+)
+
+
 TIMING_KEYS = (
     "total_duration_ms",
     "planner_duration_ms",
@@ -244,7 +249,7 @@ def _explicit_product_alcohol_stove_compatibility(text: str) -> dict[str, Any] |
 
 def _explicit_heat_source_product_ref(text: str) -> str:
     value = str(text or "").strip()
-    sku_match = re.search(r"\b[A-Za-z]{1,6}[-_][A-Za-z0-9][A-Za-z0-9_-]{1,40}\b", value)
+    sku_match = EXPLICIT_SKU_RE.search(value)
     if sku_match:
         return sku_match.group(0).upper().replace("_", "-")
     generic_refs = {"锅", "锅具", "套锅", "单锅", "炊具", "产品", "它", "这个", "这款", "刚才那个"}
@@ -349,6 +354,9 @@ def _requested_field(text: str) -> str:
 def _field_product_ref(text: str, requested_field: str) -> str:
     if not requested_field:
         return ""
+    explicit_sku = EXPLICIT_SKU_RE.search(text)
+    if explicit_sku:
+        return explicit_sku.group(0).upper().replace("_", "-")
     for suffix in ("尺寸是什么", "多大", "规格是什么", "直径是多少", "容量是多少", "重量是多少", "材质是什么", "尺寸", "规格", "直径", "容量", "重量", "材质"):
         idx = text.find(suffix)
         if idx > 0:

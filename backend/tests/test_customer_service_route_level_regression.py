@@ -1,3 +1,4 @@
+import json
 import re
 import tempfile
 
@@ -39,6 +40,36 @@ from app.models import (
     User,
     UserGroup,
 )
+
+
+def _parse_sse_payload(payload: str) -> dict:
+    current: dict = {}
+    meta: dict = {}
+    answer_parts: list[str] = []
+    trace: dict = {}
+    for raw_line in payload.splitlines():
+        line = raw_line.strip("\r")
+        if not line:
+            event = current.get("event")
+            data = current.get("data") or {}
+            if event in {"content", "answer_delta"}:
+                answer_parts.append(str(data.get("content") or data.get("text") or ""))
+            elif event == "meta" and isinstance(data, dict):
+                meta = data
+            elif event == "trace" and isinstance(data, dict):
+                trace = data
+            current = {}
+            continue
+        if line.startswith("event:"):
+            current["event"] = line.split(":", 1)[1].strip()
+        elif line.startswith("data:"):
+            current["data"] = json.loads(line.split(":", 1)[1].strip())
+    payload_data = dict(meta)
+    if answer_parts and not payload_data.get("answer"):
+        payload_data["answer"] = "".join(answer_parts).strip()
+    if trace and not payload_data.get("debug_trace"):
+        payload_data["debug_trace"] = trace
+    return payload_data
 
 
 def _all_tables():
@@ -376,3 +407,110 @@ def test_customer_service_ask_route_level_shelter_count_keeps_count_and_display_
     assert "天幕、地垫、帐篷" in payload["answer"]
     assert re.search(r"共有\s*1\s*款", payload["answer"]), payload["answer"]
     assert payload["result_skus"] == ["OT-001"]
+
+def test_customer_service_ask_stream_route_level_q17_plural_heat_source_followup_uses_pair_context(
+    route_client_and_db,
+):
+    client, headers, Session = route_client_and_db
+
+    with Session() as db:
+        _add_product(
+            db,
+            "CW-C78",
+            "享野套锅",
+            "锅具",
+            "大锅 3L；小锅 1.7L；水壶 0.8L",
+            "硬质氧化铝合金",
+            "燃气炉",
+            "高性价比 全套收纳",
+            "入门级露营 学生露营 短途露营 基础户外烹饪 周末野餐",
+            1320,
+        )
+        db.commit()
+
+    turn1_response = client.post(
+        "/api/customer-service/ask-stream",
+        json={"question": "轻途套锅和享野套锅有什么区别？"},
+        headers=headers,
+    )
+    assert turn1_response.status_code == 200, turn1_response.text
+    turn1 = _parse_sse_payload(turn1_response.text)
+    assert turn1["answer_type"] == "comparison"
+    assert set(turn1["result_skus"]) == {"CW-C06PRO", "CW-C78"}
+
+    conversation_id = turn1["conversation_id"]
+    turn2_response = client.post(
+        "/api/customer-service/ask-stream",
+        json={"question": "那哪个更适合新手？", "conversation_id": conversation_id},
+        headers=headers,
+    )
+    assert turn2_response.status_code == 200, turn2_response.text
+    turn2 = _parse_sse_payload(turn2_response.text)
+    assert turn2["answer_type"] == "comparison"
+    assert set(turn2["result_skus"]) == {"CW-C06PRO", "CW-C78"}
+
+    turn3_response = client.post(
+        "/api/customer-service/ask-stream",
+        json={"question": "它们能不能用酒精炉？", "conversation_id": conversation_id},
+        headers=headers,
+    )
+    assert turn3_response.status_code == 200, turn3_response.text
+    turn3 = _parse_sse_payload(turn3_response.text)
+    debug_plan = ((turn3.get("debug") or {}).get("plan") or {})
+
+    assert turn3["answer_type"] == "product_detail"
+    assert turn3["answer_type"] != "knowledge_base_answer"
+    assert set(turn3["result_skus"]) == {"CW-C06PRO", "CW-C78"}
+    assert debug_plan.get("product_ref") != "它们"
+    assert "没有找到它们的明确heat_source" not in turn3["answer"]
+    assert re.search(r"(CW-C06PRO|轻途套锅).*(酒精炉)", turn3["answer"]), turn3["answer"]
+    assert re.search(r"(CW-C78|享野套锅).*(酒精炉)", turn3["answer"]), turn3["answer"]
+
+
+def test_customer_service_ask_stream_route_level_ct_t04_bm_keeps_exact_sku(
+    route_client_and_db,
+):
+    client, headers, Session = route_client_and_db
+
+    with Session() as db:
+        _add_product(
+            db,
+            "CT-T04(BM)",
+            "出山-功夫茶具（竹套版）",
+            "茶具",
+            "茶壶和茶杯",
+            "竹、陶瓷",
+            "/",
+            "便携功夫茶具",
+            "露营茶席 公园野餐",
+            980,
+        )
+        _add_product(
+            db,
+            "CT-T04",
+            "出山茶具-旗舰版",
+            "茶具",
+            "茶壶和茶杯",
+            "陶瓷",
+            "/",
+            "旗舰茶具套装",
+            "露营茶席 居家泡茶",
+            1100,
+        )
+        db.commit()
+
+    response = client.post(
+        "/api/customer-service/ask-stream",
+        json={"question": "CT-T04(BM) 适合什么场景？能不能用酒精炉？"},
+        headers=headers,
+    )
+
+    assert response.status_code == 200, response.text
+    payload = _parse_sse_payload(response.text)
+    debug_plan = ((payload.get("debug") or {}).get("plan") or {})
+
+    assert payload["answer_type"] == "product_detail"
+    assert payload["result_skus"] == ["CT-T04(BM)"]
+    assert "CT-T04(BM)" in payload["answer"]
+    assert "CT-T04）" not in payload["answer"]
+    assert debug_plan.get("product_ref") == "CT-T04(BM)"

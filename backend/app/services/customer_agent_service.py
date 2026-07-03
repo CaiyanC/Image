@@ -15,9 +15,9 @@ from . import agent_action_service, product_service
 
 SKU_RE = re.compile(
     r"(?<![A-Za-z0-9])("
-    r"(?:[A-Za-z]{1,6}[A-Za-z0-9]{0,12}(?:[-_][A-Za-z0-9\u4e00-\u9fff()]{1,40})+)"
+    r"(?:[A-Za-z]{1,6}[A-Za-z0-9]{0,12}(?:[-_](?:[A-Za-z0-9]{1,24}(?:\([A-Za-z0-9]{1,24}\))?|[\u4e00-\u9fff]{1,8}))+)"
     r"|(?:[A-Za-z]{1,6}\d{2,12}[A-Za-z0-9\u4e00-\u9fff]{0,12})"
-    r")(?![A-Za-z0-9])"
+    r")(?=$|[\s，。,；;：:）)\]】>\"'？?])"
 )
 def normalize_search_text(value: Any) -> str:
     text = unicodedata.normalize("NFKC", str(value or ""))
