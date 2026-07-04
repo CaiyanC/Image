@@ -1104,7 +1104,12 @@ def classify_case(case: ProbeCase, record: dict[str, Any], history: dict[str, di
             if answer_type == "recommendation" and result_skus:
                 return "pass", "ok", [], None
             return "warning", "real_business", ["category_recommendation_weak"], None
-        if answer_type == "product_query" and result_skus:
+        if (
+            answer_type in {"product_query", "query_products"}
+            and result_skus
+            and answer_type != "knowledge_base_answer"
+            and category in answer
+        ):
             return "pass", "ok", [], None
         return "warning", "real_business", ["category_catalog_weak"], None
 

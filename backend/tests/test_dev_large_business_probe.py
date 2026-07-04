@@ -202,6 +202,54 @@ class DevLargeBusinessProbeTest(unittest.TestCase):
         self.assertEqual(record["audited_judgement"], "warning")
         self.assertFalse(record["business_blocking"])
 
+    def test_category_list_query_products_is_valid_pass(self):
+        case = MODULE.ProbeCase(
+            case_id="cat_1_list",
+            group="categories",
+            sequence_id="cat_1_list",
+            question="有哪些锅具产品？",
+            tags=("category", "catalog"),
+            expected={"category": "锅具", "type": "list", "sample_skus": ["CW-C06PRO"]},
+        )
+        record = {
+            "status": 200,
+            "answer": "当前匹配到【锅具】类产品共有 37 款。先列前 10 款：CW-C06PRO 轻途套锅。",
+            "answer_type": "query_products",
+            "result_skus": ["CW-C06PRO", "CW-C78"],
+            "timing": {},
+            "elapsed_ms_client": 1200,
+        }
+
+        judgement, attribution, issues, _data_issue = MODULE.classify_case(case, record, {})
+
+        self.assertEqual(judgement, "pass")
+        self.assertEqual(attribution, "ok")
+        self.assertEqual(issues, [])
+
+    def test_category_list_kb_answer_still_stays_warning(self):
+        case = MODULE.ProbeCase(
+            case_id="cat_7_list",
+            group="categories",
+            sequence_id="cat_7_list",
+            question="有哪些天幕、地垫、帐篷产品？",
+            tags=("category", "catalog"),
+            expected={"category": "天幕、地垫、帐篷", "type": "list", "sample_skus": ["OT-187HM"]},
+        )
+        record = {
+            "status": 200,
+            "answer": "当然可以。",
+            "answer_type": "knowledge_base_answer",
+            "result_skus": [],
+            "timing": {},
+            "elapsed_ms_client": 1200,
+        }
+
+        judgement, attribution, issues, _data_issue = MODULE.classify_case(case, record, {})
+
+        self.assertEqual(judgement, "warning")
+        self.assertEqual(attribution, "real_business")
+        self.assertEqual(issues, ["category_catalog_weak"])
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -539,12 +539,16 @@ def test_customer_service_ask_route_level_category_accessories_prioritize_clear_
     assert payload["answer_type"] != "knowledge_base_answer"
     assert payload["result_skus"]
     assert "配件" in payload["answer"]
+    assert "明确配件" in payload["answer"]
     top_three = payload["result_skus"][:3]
     assert "ACC-BURN-1" in top_three
     assert "ACC-BOARD-1" in top_three or "ACC-HANDLE-1" in top_three
     assert "ACC-001" not in top_three
     assert "ACC-BOWL-1" not in top_three
     assert "ACC-GUN-1" not in top_three
+    top_five = payload["result_skus"][:5]
+    assert "ACC-BAG-1" not in top_five
+    assert "ACC-BOX-1" not in top_five
 
 
 def test_customer_service_ask_route_level_category_waterware_prioritize_drinking_domain(
@@ -560,9 +564,11 @@ def test_customer_service_ask_route_level_category_waterware_prioritize_drinking
     assert payload["answer_type"] != "knowledge_base_answer"
     assert payload["result_skus"]
     assert "水具" in payload["answer"]
+    assert "通用饮水" in payload["answer"]
     top_three = payload["result_skus"][:3]
     assert {"WT-001", "WT-002", "KTL-001"} & set(top_three)
     assert "KTL-COF-1" not in top_three
+    assert "WT-GIFT-1" not in payload["result_skus"][:5]
 
     with Session() as db:
         categories = {

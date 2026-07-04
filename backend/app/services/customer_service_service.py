@@ -616,6 +616,10 @@ def _phase1_catalog_count_result(db: Session, plan: dict) -> dict:
             suffix = f"分别是：{samples}。"
         else:
             suffix = ""
+        if product_ref == "配件" and samples:
+            suffix = f"先按更像明确配件的小件/附件口径列前 {len(display_rows)} 款：{samples}。"
+        elif product_ref == "水具" and samples:
+            suffix = f"先按通用饮水/补水口径列前 {len(display_rows)} 款：{samples}。"
         answer = f"当前匹配到{scope_label}类产品共有 {len(rows)} 款。{suffix}"
         if product_ref != "产品":
             answer += " 如果你想继续缩小范围，我可以再按用途、人数、容量、重量或收纳继续筛。"
@@ -656,21 +660,21 @@ def _phase1_rank_catalog_display_rows(product_ref: str, rows: list[dict]) -> lis
         )
         score = 0
         if ref == "配件":
-            if any(term in text for term in ("配件", "附件", "收纳", "炉芯", "刀板", "提手", "手夹", "夹", "把手")):
-                score += 8
-            if any(term in text for term in ("锅具配件", "餐厨配件", "炉具配件")):
+            if any(term in text for term in ("配件", "附件", "替换件", "维修件", "炉芯", "防风板", "提手", "手夹", "刀板", "收纳件", "小配件")):
+                score += 10
+            if any(term in text for term in ("锅具配件", "餐厨配件", "炉具配件", "替换配件", "备用配件")):
                 score += 5
-            if any(term in text for term in ("水袋", "雪拉碗", "喷枪", "玩具")):
-                score -= 6
+            if any(term in text for term in ("收纳包", "折叠箱", "保温包", "围裙", "堆堆车", "炊雪盘", "水袋", "雪拉碗", "喷枪")):
+                score -= 8
         elif ref == "水具":
-            if any(term in text for term in ("水具", "水壶", "水杯", "杯", "补水", "饮水", "保温")):
+            if any(term in text for term in ("水具", "水壶", "水杯", "杯", "饮水", "补水", "便携水具", "保温壶", "冷水壶")):
                 score += 8
-            if any(term in text for term in ("便携", "随身", "公园野餐", "徒步补水")):
+            if any(term in text for term in ("便携", "随身", "公园野餐", "徒步补水", "户外补水", "饮水")):
                 score += 4
             if any(term in text for term in ("咖啡", "手冲", "细口壶", "煮茶")):
                 score -= 6
-            if any(term in text for term in ("烧水", "加热")):
-                score -= 2
+            if any(term in text for term in ("烧水", "加热", "套装礼盒", "礼盒")):
+                score -= 3
         sku = str(row.get("sku") or "")
         return (-score, sku)
 
