@@ -1501,12 +1501,18 @@ def _phase1_is_light_budget_cookware_set_scenario(question: str) -> bool:
     value = str(question or "").strip()
     if not value:
         return False
-    has_two_person = any(term in value for term in ("双人", "两人", "两个人", "2人"))
-    has_camping = "露营" in value
+    has_two_person = any(term in value for term in ("双人", "两人", "两个人", "2人", "情侣"))
+    has_camping = any(term in value for term in ("露营", "野营", "户外"))
     has_lightweight = any(term in value for term in ("轻", "轻量", "轻便", "不想太重", "别太重"))
     has_budget = any(term in value for term in ("不想买太贵", "不想太贵", "别太贵", "不太贵", "预算", "入门", "性价比"))
     has_set_selection = any(term in value for term in ("哪套", "推荐哪套", "买哪套", "选哪套", "套锅", "套装"))
-    return has_two_person and has_camping and has_lightweight and has_budget and has_set_selection
+    has_cookware_scope = any(term in value for term in ("锅具", "炊具", "套锅", "锅", "买套", "一套"))
+    has_purchase_or_selection = any(term in value for term in ("想买", "买", "推荐", "怎么选", "该买", "选"))
+    if not (has_two_person and has_camping and has_lightweight):
+        return False
+    if has_budget and (has_set_selection or has_cookware_scope):
+        return True
+    return has_cookware_scope and has_purchase_or_selection
 
 
 def _phase1_is_griddle_vs_cookware_scenario(question: str) -> bool:

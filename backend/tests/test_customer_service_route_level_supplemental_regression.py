@@ -116,6 +116,34 @@ def test_route_level_multiturn_variant_constraint_followup_keeps_same_domain(rou
     assert payload3["result_skus"][0] not in {"CB253", "CB254"}, payload3["result_skus"]
 
 
+def test_route_level_single_turn_lightweight_two_person_cookware_stays_in_cookware_domain(route_client_and_db):
+    client, headers, Session = route_client_and_db
+
+    response = client.post(
+        "/api/customer-service/ask?debug=true",
+        json={"question": "\u53cc\u4eba\u9732\u8425\u60f3\u4e70\u5957\u8f7b\u4fbf\u9505\u5177\u3002"},
+        headers=headers,
+    )
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    assert payload["answer_type"] == "recommendation", payload
+    assert payload["answer_type"] != "knowledge_base_answer"
+    assert payload["result_skus"], payload
+    assert payload["answer"], payload
+    assert payload["result_skus"][0] not in {"CW-C84", "CW-K32", "CB253", "CB254"}, payload["result_skus"]
+    assert "不先把水壶当主推" in payload["answer"], payload["answer"]
+
+    with Session() as db:
+        top_products = {
+            product.sku: product.category
+            for product in db.query(Product).filter(Product.sku.in_(payload["result_skus"][:2])).all()
+        }
+
+    assert top_products, payload
+    assert all("锅" in category for category in top_products.values()), top_products
+    assert re.search(r"(\u53cc\u4eba|\u9732\u8425).*(\u8f7b|\u4fbf|\u5957\u9505|\u9505\u5177)", payload["answer"]), payload["answer"]
+
+
 def test_route_level_multiturn_variant_lightweight_cookware_followups_stay_out_of_waterware(route_client_and_db):
     client, headers, Session = route_client_and_db
 
@@ -130,6 +158,7 @@ def test_route_level_multiturn_variant_lightweight_cookware_followups_stay_out_o
     assert payload1["answer_type"] == "recommendation", payload1
     assert payload1["answer_type"] != "knowledge_base_answer"
     assert payload1["result_skus"], payload1
+    assert payload1["result_skus"][0] not in {"CW-C84", "CW-K32", "CB253", "CB254"}, payload1["result_skus"]
 
     with Session() as db:
         top_products = {

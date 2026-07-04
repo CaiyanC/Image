@@ -13,6 +13,13 @@ assert SPEC and SPEC.loader
 sys.modules[SPEC.name] = MODULE
 SPEC.loader.exec_module(MODULE)
 
+SUPPLEMENTAL_PATH = Path(__file__).resolve().parents[2] / "tmp_supplemental_rerun.py"
+SUPPLEMENTAL_SPEC = importlib.util.spec_from_file_location("tmp_supplemental_rerun", SUPPLEMENTAL_PATH)
+SUPPLEMENTAL = importlib.util.module_from_spec(SUPPLEMENTAL_SPEC)
+assert SUPPLEMENTAL_SPEC and SUPPLEMENTAL_SPEC.loader
+sys.modules[SUPPLEMENTAL_SPEC.name] = SUPPLEMENTAL
+SUPPLEMENTAL_SPEC.loader.exec_module(SUPPLEMENTAL)
+
 
 class FullRegressionRunnerTest(unittest.TestCase):
     def _sample_inventory(self) -> dict:
@@ -399,6 +406,111 @@ class FullRegressionRunnerTest(unittest.TestCase):
         self.assertEqual(classified["judgement"], "fail")
         self.assertEqual(classified["audited_attribution"], "real_business")
         self.assertIn("recommendation_wrong_domain", classified["issues"])
+
+    def test_supplemental_constraint_followup_passes_for_negative_alternative_same_domain(self):
+        sequence = {"sequence_id": "mt_var_09", "kind": "constraint_followup"}
+        records = [
+            {
+                "status": 200,
+                "is_kb_fallback": False,
+                "answer": "t1",
+                "answer_type": "recommendation",
+                "question": "双人露营想买套轻便锅具。",
+                "result_skus": ["CW-C01-37", "TW-141"],
+            },
+            {
+                "status": 200,
+                "is_kb_fallback": False,
+                "answer": "t2",
+                "answer_type": "recommendation",
+                "question": "不要刚才那个，换一个更轻的。",
+                "result_skus": ["TW-141", "CW-C19T-37"],
+            },
+            {
+                "status": 200,
+                "is_kb_fallback": False,
+                "answer": "t3",
+                "answer_type": "recommendation",
+                "question": "再给我一个稍微便宜点的。",
+                "result_skus": ["CW-C19T-37", "CW-C73"],
+            },
+        ]
+        sku_lookup = {
+            "CW-C01-37": {"category": "锅具"},
+            "TW-141": {"category": "锅具"},
+            "CW-C19T-37": {"category": "锅具"},
+            "CW-C73": {"category": "锅具"},
+        }
+
+        judgement, reason = SUPPLEMENTAL._multiturn_issue(sequence, records, sku_lookup)
+
+        self.assertEqual((judgement, reason), ("pass", "ok"))
+
+    def test_supplemental_single_followup_still_requires_same_top_sku(self):
+        sequence = {"sequence_id": "q15_like", "kind": "single_followup"}
+        records = [
+            {
+                "status": 200,
+                "is_kb_fallback": False,
+                "answer": "t1",
+                "answer_type": "recommendation",
+                "question": "我一个人徒步，推荐个轻便锅。",
+                "result_skus": ["CW-C06PRO", "CW-C65-2"],
+            },
+            {
+                "status": 200,
+                "is_kb_fallback": False,
+                "answer": "t2",
+                "answer_type": "product_detail",
+                "question": "这个可以配酒精炉吗？",
+                "result_skus": ["CW-C65-2"],
+            },
+            {
+                "status": 200,
+                "is_kb_fallback": False,
+                "answer": "t3",
+                "answer_type": "recommendation",
+                "question": "不能的话有没有更合适的？",
+                "result_skus": ["CW-C65-2"],
+            },
+        ]
+
+        judgement, reason = SUPPLEMENTAL._multiturn_issue(sequence, records, {})
+
+        self.assertEqual((judgement, reason), ("fail", "pronoun_error"))
+
+    def test_supplemental_ordinal_followup_still_requires_ordered_skus(self):
+        sequence = {"sequence_id": "ordinal_like", "kind": "ordinal_followup"}
+        records = [
+            {
+                "status": 200,
+                "is_kb_fallback": False,
+                "answer": "t1",
+                "answer_type": "recommendation",
+                "question": "推荐几款适合家庭露营的锅具。",
+                "result_skus": ["CW-C01-37", "TW-141", "CW-C19T-37"],
+            },
+            {
+                "status": 200,
+                "is_kb_fallback": False,
+                "answer": "t2",
+                "answer_type": "product_detail",
+                "question": "第一个能不能用酒精炉？",
+                "result_skus": ["TW-141"],
+            },
+            {
+                "status": 200,
+                "is_kb_fallback": False,
+                "answer": "t3",
+                "answer_type": "product_detail",
+                "question": "第二个容量多大？",
+                "result_skus": ["CW-C19T-37"],
+            },
+        ]
+
+        judgement, reason = SUPPLEMENTAL._multiturn_issue(sequence, records, {})
+
+        self.assertEqual((judgement, reason), ("fail", "ordinal_error"))
 
 
 if __name__ == "__main__":
