@@ -264,6 +264,34 @@ def route_client_and_db(monkeypatch):
         tmpdir.cleanup()
 
 
+def test_customer_service_ask_route_level_scene_019_prefers_stove_domain_for_bbq_hot_drink_combo(
+    route_client_and_db,
+):
+    client, headers, Session = route_client_and_db
+    question = "露营烧烤加热饮都要兼顾，炉具怎么搭更稳？"
+
+    response = client.post("/api/customer-service/ask?debug=true", json={"question": question}, headers=headers)
+
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    assert payload["answer_type"] == "recommendation", payload
+    assert payload["answer_type"] != "knowledge_base_answer"
+    assert payload["result_skus"], payload
+    assert payload["result_skus"][0] not in {"AC-Z13", "CB253", "CB254"}
+    assert "炉具" in payload["answer"], payload["answer"]
+    assert re.search(r"(烧烤|热饮|搭配|稳定|火力)", payload["answer"]), payload["answer"]
+
+    with Session() as db:
+        top_category = db.query(Product.category).filter(Product.sku == payload["result_skus"][0]).scalar()
+        front_categories = {
+            product.sku: product.category
+            for product in db.query(Product).filter(Product.sku.in_(payload["result_skus"][:3])).all()
+        }
+
+    assert top_category == "炉具", payload
+    assert all(category == "炉具" for category in front_categories.values()), front_categories
+
+
 @pytest.mark.parametrize(
     ("question", "category_name", "allowed_categories"),
     [

@@ -1042,6 +1042,10 @@ def _phase1_structured_recommendation_result(db: Session, plan: dict) -> dict | 
     if not scenario:
         return None
     rows = _phase1_catalog_rows(db, "产品")
+    if _phase1_is_stove_pairing_scenario(scenario):
+        stove_pairing_result = _phase1_structured_stove_pairing_result(scenario, rows)
+        if stove_pairing_result:
+            return stove_pairing_result
     if _phase1_is_stove_griddle_combo_scenario(scenario):
         combo_result = _phase1_structured_stove_griddle_result(scenario, rows)
         if combo_result:
@@ -1182,6 +1186,82 @@ def _phase1_is_stove_griddle_combo_scenario(question: str) -> bool:
     if not any(term in value for term in ("烤盘", "煎盘", "煎东西")):
         return False
     return any(term in value for term in ("烧烤", "炉具", "炉子", "怎么搭", "更合适", "先买哪类", "先买哪个"))
+
+
+def _phase1_is_stove_pairing_scenario(question: str) -> bool:
+    value = str(question or "").strip()
+    if not value:
+        return False
+    if _phase1_is_stove_griddle_combo_scenario(value):
+        return False
+    return (
+        any(term in value for term in ("烧烤", "加热饮", "热饮", "营地聚餐"))
+        and any(term in value for term in ("炉具", "炉子"))
+        and any(term in value for term in ("怎么搭", "怎么配", "更稳", "稳一点", "兼顾"))
+    )
+
+
+def _phase1_structured_stove_pairing_result(scenario: str, rows: list[dict]) -> dict | None:
+    stove_rows = [
+        row
+        for row in rows
+        if str(row.get("category") or "").strip() == "炉具"
+        and customer_agent_intent_service._is_barbecue_stove_candidate_row(row)
+    ]
+    if not stove_rows:
+        return None
+
+    def _rank_stove(row: dict) -> tuple[int, str]:
+        text = " ".join(
+            str(row.get(key) or "")
+            for key in ("product_name_cn", "features", "usage_scenarios", "positioning", "category")
+        )
+        score = 0
+        if any(term in text for term in ("炉具", "炉子", "桌面炉", "卡式炉", "烧烤炉")):
+            score += 8
+        if any(term in text for term in ("稳定", "火力", "稳", "防风")):
+            score += 6
+        if any(term in text for term in ("烧烤", "桌面聚餐", "露营烧烤", "营地聚餐")):
+            score += 5
+        if any(term in text for term in ("烧水", "热饮", "煮茶", "加热饮")):
+            score += 3
+        return (-score, str(row.get("sku") or ""))
+
+    stove_rows = sorted(stove_rows, key=_rank_stove)
+    selected = stove_rows[:4]
+    if not selected:
+        return None
+
+    top_row = selected[0]
+    top_name = top_row.get("product_name_cn") or top_row.get("sku")
+    top_sku = top_row.get("sku")
+    top_reason = top_row.get("features") or top_row.get("usage_scenarios") or "更适合烧烤主加热场景"
+
+    answer_parts = [
+        f"这类需求我会优先按炉具域来配，先用 {top_name}（{top_sku}）承担烧烤和主加热，{top_reason}。"
+    ]
+    if len(selected) > 1:
+        backup = selected[1]
+        backup_name = backup.get("product_name_cn") or backup.get("sku")
+        backup_sku = backup.get("sku")
+        backup_reason = backup.get("features") or backup.get("usage_scenarios") or "更适合作为同气源备选"
+        answer_parts.append(
+            f"备选炉具可以看 {backup_name}（{backup_sku}），{backup_reason}。"
+        )
+    answer_parts.append("搭配上优先考虑同一气源、稳定支撑和可控火力，这样烧烤和热饮切换会更稳，不建议先把调料瓶、水壶或普通配件放到主推前排。")
+
+    skus = [str(row.get("sku") or "").strip().upper() for row in selected if row.get("sku")]
+    return {
+        "intent": "recommendation",
+        "answer_type": "recommendation",
+        "answer": " ".join(answer_parts),
+        "results": selected,
+        "result_skus": skus,
+        "candidate_skus": skus,
+        "debug": {"agent_mode": "planner_recommendation_guard_rebuild"},
+        "answer_metadata": {"source": "product_catalog_structured_recommendation"},
+        "skip_polish": True,
+    }
 
 
 def _phase1_structured_stove_griddle_result(scenario: str, rows: list[dict]) -> dict | None:
