@@ -10,6 +10,11 @@ EXPLICIT_SKU_RE = re.compile(
 )
 
 
+PLAIN_EXPLICIT_SKU_RE = re.compile(
+    r"(?<![A-Za-z0-9])(?:[A-Za-z]{1,6}\d{2,12}[A-Za-z0-9\u4e00-\u9fff]{0,12})(?=$|[\s锛屻€?锛?锛?锛?\]銆?\"'锛?])"
+)
+
+
 TIMING_KEYS = (
     "total_duration_ms",
     "planner_duration_ms",
@@ -116,6 +121,7 @@ def plan_customer_question(
     requested_field = _requested_field(text)
     product_ref = _field_product_ref(text, requested_field)
     if requested_field and product_ref and _supports_field_only_plan(text, requested_field):
+        explicit_sku = _extract_explicit_sku(text)
         conflict = deterministic_intent in {"recommendation", "knowledge_base_answer", "query_products"} or deterministic_answer_type in {
             "recommendation",
             "knowledge_base_answer",
@@ -126,6 +132,7 @@ def plan_customer_question(
                 "primary_intent": "product_field",
                 "answer_type": "product_detail",
                 "product_ref": product_ref,
+                "sku": explicit_sku if explicit_sku == product_ref else "",
                 "requested_field": requested_field,
                 "field_only": True,
                 "routing_conflict": bool(conflict),
@@ -235,10 +242,12 @@ def _explicit_product_alcohol_stove_compatibility(text: str) -> dict[str, Any] |
     product_ref = _explicit_heat_source_product_ref(value)
     if not product_ref:
         return None
+    explicit_sku = _extract_explicit_sku(value)
     return {
         "primary_intent": "product_field",
         "answer_type": "product_detail",
         "product_ref": product_ref,
+        "sku": explicit_sku or "",
         "requested_field": "heat_source",
         "field_only": True,
         "explicit_product_or_category": True,
@@ -250,9 +259,9 @@ def _explicit_product_alcohol_stove_compatibility(text: str) -> dict[str, Any] |
 
 def _explicit_heat_source_product_ref(text: str) -> str:
     value = str(text or "").strip()
-    sku_match = EXPLICIT_SKU_RE.search(value)
-    if sku_match:
-        return sku_match.group(0).upper().replace("_", "-")
+    explicit_sku = _extract_explicit_sku(value)
+    if explicit_sku:
+        return explicit_sku
     generic_refs = {"锅", "锅具", "套锅", "单锅", "炊具", "产品", "它", "这个", "这款", "刚才那个"}
     for marker in ("能不能用", "能否使用", "是否支持", "支不支持", "可不可以放", "可以用", "适用", "兼容"):
         idx = value.find(marker)
@@ -261,6 +270,15 @@ def _explicit_heat_source_product_ref(text: str) -> str:
         candidate = _clean_product_ref_fragment(value[:idx])
         if candidate and candidate not in generic_refs:
             return candidate
+    return ""
+
+
+def _extract_explicit_sku(text: str) -> str:
+    value = str(text or "").strip()
+    for pattern in (EXPLICIT_SKU_RE, PLAIN_EXPLICIT_SKU_RE):
+        sku_match = pattern.search(value)
+        if sku_match:
+            return sku_match.group(0).upper().replace("_", "-")
     return ""
 
 
@@ -363,9 +381,9 @@ def _requested_field(text: str) -> str:
 def _field_product_ref(text: str, requested_field: str) -> str:
     if not requested_field:
         return ""
-    explicit_sku = EXPLICIT_SKU_RE.search(text)
+    explicit_sku = _extract_explicit_sku(text)
     if explicit_sku:
-        return explicit_sku.group(0).upper().replace("_", "-")
+        return explicit_sku
     for suffix in ("尺寸是什么", "多大", "规格是什么", "直径是多少", "容量是多少", "重量是多少", "材质是什么", "尺寸", "规格", "直径", "容量", "重量", "材质"):
         idx = text.find(suffix)
         if idx > 0:

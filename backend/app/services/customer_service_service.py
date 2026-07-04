@@ -335,6 +335,12 @@ def _phase1_product_bundle_by_ref(db: Session, product_ref: str) -> tuple[Produc
     ref = str(product_ref or "").strip()
     if not ref:
         return None, None, None, None
+    exact_sku = db.query(Product).filter(Product.sku == ref.upper()).first()
+    if exact_sku:
+        specs = db.query(ProductSpecs).filter(ProductSpecs.product_id == exact_sku.id).first()
+        business = db.query(ProductBusiness).filter(ProductBusiness.product_id == exact_sku.id).first()
+        content = db.query(ProductContent).filter(ProductContent.product_id == exact_sku.id).first()
+        return exact_sku, specs, business, content
     product = (
         db.query(Product)
         .filter(
@@ -356,13 +362,15 @@ def _phase1_product_bundle_by_ref(db: Session, product_ref: str) -> tuple[Produc
 
 def _phase1_product_field_result(db: Session, plan: dict) -> dict | None:
     product_ref = str(plan.get("product_ref") or "").strip()
+    explicit_sku = str(plan.get("sku") or "").strip().upper()
     requested_field = str(plan.get("requested_field") or "").strip()
-    product, specs, business, content = _phase1_product_bundle_by_ref(db, product_ref)
+    resolved_ref = explicit_sku or _resolve_sku(db, product_ref, None) or product_ref
+    product, specs, business, content = _phase1_product_bundle_by_ref(db, resolved_ref)
     if not product:
         return {
             "intent": "product_detail",
             "answer_type": "product_detail",
-            "answer": f"当前资料里没有找到{product_ref}的明确{requested_field}。",
+            "answer": f"当前资料里没有找到{resolved_ref}的明确{requested_field}。",
             "results": [],
             "result_skus": [],
             "answer_metadata": {"answer_policy": "field_only_missing"},
@@ -419,8 +427,12 @@ def _phase1_product_field_result(db: Session, plan: dict) -> dict | None:
 def _phase1_alcohol_stove_compatibility_answer(db: Session, row: dict) -> tuple[str, str]:
     name = str(row.get("product_name_cn") or row.get("product_name_en") or row.get("sku") or "该产品").strip()
     sku = str(row.get("sku") or "").strip().upper()
+    category = str(row.get("category") or "").strip()
     heat_source = str(row.get("heat_source") or "").strip()
-    verdict = customer_agent_intent_service._alcohol_stove_support_verdict(heat_source)
+    normalized_heat_source = "" if heat_source in {"", "/", "[]"} else heat_source
+    if not normalized_heat_source and not any(term in category for term in ("锅", "炉", "壶", "酒具", "咖啡")):
+        return f"{name}（{sku}）不是炉具或炊具，当前资料也未标注适用酒精炉；不建议按酒精炉适配产品理解。", "not_applicable"
+    verdict = customer_agent_intent_service._alcohol_stove_support_verdict(normalized_heat_source)
     evidence = ""
     if verdict is None and sku:
         evidence = str(customer_agent_intent_service._best_same_sku_evidence_text(
@@ -434,9 +446,9 @@ def _phase1_alcohol_stove_compatibility_answer(db: Session, row: dict) -> tuple[
         source_text = evidence or heat_source
         return f"{name}（{sku}）当前资料显示支持酒精炉；适用热源/同 SKU 证据为：{source_text}。", "supported"
     if verdict is False:
-        return f"{name}（{sku}）当前资料显示不支持酒精炉；相关证据为：{evidence or heat_source}。", "unsupported"
-    if heat_source and heat_source not in {"/", "[]"}:
-        return f"{name}（{sku}）当前资料显示适用热源为：{heat_source}；当前资料未显示支持酒精炉。", "not_listed"
+        return f"{name}（{sku}）当前资料显示不支持酒精炉；相关证据为：{evidence or normalized_heat_source}。", "unsupported"
+    if normalized_heat_source:
+        return f"{name}（{sku}）当前资料显示适用热源为：{normalized_heat_source}；当前资料未显示支持酒精炉。", "not_listed"
     return f"当前资料里没有找到{name}（{sku}）是否支持酒精炉的明确说明。", "missing"
 
 
@@ -1042,6 +1054,10 @@ def _phase1_structured_recommendation_result(db: Session, plan: dict) -> dict | 
     if not scenario:
         return None
     rows = _phase1_catalog_rows(db, "产品")
+    if _phase1_is_griddle_vs_cookware_scenario(scenario):
+        griddle_vs_cookware_result = _phase1_structured_griddle_vs_cookware_result(scenario, rows)
+        if griddle_vs_cookware_result:
+            return griddle_vs_cookware_result
     if _phase1_is_stove_pairing_scenario(scenario):
         stove_pairing_result = _phase1_structured_stove_pairing_result(scenario, rows)
         if stove_pairing_result:
@@ -1188,17 +1204,80 @@ def _phase1_is_stove_griddle_combo_scenario(question: str) -> bool:
     return any(term in value for term in ("烧烤", "炉具", "炉子", "怎么搭", "更合适", "先买哪类", "先买哪个"))
 
 
+def _phase1_is_griddle_vs_cookware_scenario(question: str) -> bool:
+    value = str(question or "").strip()
+    if not value:
+        return False
+    return (
+        any(term in value for term in ("烤盘", "煎盘"))
+        and any(term in value for term in ("锅具", "锅", "套锅", "单锅"))
+        and any(term in value for term in ("还是", "哪个更合适", "更合适", "推荐"))
+    )
+
+
 def _phase1_is_stove_pairing_scenario(question: str) -> bool:
     value = str(question or "").strip()
     if not value:
         return False
     if _phase1_is_stove_griddle_combo_scenario(value):
         return False
-    return (
-        any(term in value for term in ("烧烤", "加热饮", "热饮", "营地聚餐"))
-        and any(term in value for term in ("炉具", "炉子"))
-        and any(term in value for term in ("怎么搭", "怎么配", "更稳", "稳一点", "兼顾"))
+    has_stove_scope = any(term in value for term in ("炉具", "炉子"))
+    has_pairing_or_selection = any(term in value for term in ("怎么搭", "怎么配", "怎么选", "该怎么选", "更稳", "稳一点", "兼顾"))
+    has_stove_scene_signal = any(term in value for term in ("烧烤", "加热饮", "热饮", "营地聚餐", "烧水", "风大", "防风"))
+    return has_stove_scope and has_pairing_or_selection and has_stove_scene_signal
+
+
+def _phase1_structured_griddle_vs_cookware_result(scenario: str, rows: list[dict]) -> dict | None:
+    griddle_rows = [row for row in rows if customer_agent_intent_service._is_barbecue_griddle_candidate_row(row)]
+    cookware_rows = [row for row in rows if _is_service_pot_or_cookware_set_candidate(row)]
+    if not griddle_rows or not cookware_rows:
+        return None
+
+    def _rank_griddle(row: dict) -> tuple[int, str]:
+        text = " ".join(str(row.get(key) or "") for key in ("product_name_cn", "features", "usage_scenarios", "positioning", "category"))
+        score = 0
+        if any(term in text for term in ("烤盘", "煎盘", "煎烤", "早餐")):
+            score += 8
+        if "导热盘" in text:
+            score -= 8
+        return (-score, str(row.get("sku") or ""))
+
+    def _rank_cookware(row: dict) -> tuple[int, str]:
+        text = " ".join(str(row.get(key) or "") for key in ("product_name_cn", "features", "usage_scenarios", "positioning", "category"))
+        score = 0
+        if any(term in text for term in ("锅", "套锅", "烧水", "正餐", "通用", "多场景")):
+            score += 6
+        if any(term in text for term in ("轻量", "便携", "收纳")):
+            score += 2
+        return (-score, str(row.get("sku") or ""))
+
+    best_griddle = sorted(griddle_rows, key=_rank_griddle)[0]
+    best_cookware = sorted(cookware_rows, key=_rank_cookware)[0]
+    selected = [best_griddle]
+    if str(best_cookware.get("sku") or "").strip().upper() != str(best_griddle.get("sku") or "").strip().upper():
+        selected.append(best_cookware)
+
+    griddle_name = best_griddle.get("product_name_cn") or best_griddle.get("sku")
+    griddle_sku = best_griddle.get("sku")
+    cookware_name = best_cookware.get("product_name_cn") or best_cookware.get("sku")
+    cookware_sku = best_cookware.get("sku")
+    answer = (
+        f"如果你的重点是早餐煎烤，我会优先推荐烤盘 {griddle_name}（{griddle_sku}），配合炉具使用会更贴合煎、烤这类用法。"
+        f"如果你还想兼顾烧水、煮面或正餐，备选可以看锅具 {cookware_name}（{cookware_sku}），会更通用。"
+        "简单说：偏煎烤先烤盘，想一套多用再补锅具。"
     )
+    skus = [str(row.get('sku') or '').strip().upper() for row in selected if row.get('sku')]
+    return {
+        "intent": "recommendation",
+        "answer_type": "recommendation",
+        "answer": answer,
+        "results": selected,
+        "result_skus": skus,
+        "candidate_skus": skus,
+        "debug": {"agent_mode": "planner_recommendation_guard_rebuild"},
+        "answer_metadata": {"source": "product_catalog_structured_recommendation"},
+        "skip_polish": True,
+    }
 
 
 def _phase1_structured_stove_pairing_result(scenario: str, rows: list[dict]) -> dict | None:
@@ -1240,6 +1319,10 @@ def _phase1_structured_stove_pairing_result(scenario: str, rows: list[dict]) -> 
     answer_parts = [
         f"这类需求我会优先按炉具域来配，先用 {top_name}（{top_sku}）承担烧烤和主加热，{top_reason}。"
     ]
+    if any(term in scenario for term in ("烧水", "热饮", "加热饮")):
+        answer_parts.append("如果还要兼顾烧水或热饮，建议在同一套炉具体系下搭配壶或锅处理，不要先把水壶本身当主设备。")
+    if any(term in scenario for term in ("风大", "海边", "防风")):
+        answer_parts.append("风大的场景优先看防风能力、支撑稳定性和低重心结构，先把炉具本体选稳，再考虑其他搭配。")
     if len(selected) > 1:
         backup = selected[1]
         backup_name = backup.get("product_name_cn") or backup.get("sku")

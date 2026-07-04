@@ -186,8 +186,11 @@ def _seed_route_level_products(db):
     _add_product(db, "KTL-HEAT-1", "烧水壶套装", "水具", "1.1L", "铝合金", "燃气炉", "偏烧水加热 水具", "营地烧水", 420)
     _add_product(db, "KW-K32-黑", "天鹅壶9杯-黑色", "咖啡器具", "900ML", "不锈钢", "气炉", "手冲咖啡器具", "露营咖啡", 420)
     _add_product(db, "TBL-001", "疯狂游乐园泡泡桌-长桌", "桌椅", "/", "铝合金", "/", "折叠桌椅", "家庭露营", 1800)
+    _add_product(db, "KD04SS", "奇幻秘境限定系列-755百搭桌(兔子）", "桌椅", "/", "铝合金", "/", "颜值很高的折叠桌 收纳方便", "主题露营 精致露营 家庭野餐", 4200)
+    _add_product(db, "KD20HM", "湖美林丰泡泡桌-长桌", "桌椅", "/", "铝合金", "/", "长桌稳定 六人左右小聚", "主题露营 家庭野餐 户外多人小聚", 5600)
     _add_product(db, "COF-001", "魔咖旅行咖啡研磨机", "咖啡器具", "/", "不锈钢", "/", "手冲咖啡器具", "露营咖啡", 260)
     _add_product(db, "TEA-001", "竹影茶具", "茶具", "/", "陶瓷", "/", "便携茶具", "露营泡茶", 380)
+    _add_product(db, "DV01", "独醒-酒具套装", "酒具", "/", "不锈钢 玻璃", "明火直烧、卡式炉、分体炉、一体炉", "露营品酒酒具 社交小聚", "精致露营 户外小聚 山野小酌", 1280)
     _add_product(db, "OT-001", "湖美林丰天幕", "天幕、地垫、帐篷", "/", "春亚纺", "/", "防晒遮蔽", "家庭露营", 1600)
 
     _add_product(db, "CW-C83", "炊墨套锅", "锅具", "锅 3700ML", "硬质氧化铝合金", "燃气炉", "多人做饭 稳一点", "家庭露营 2-4人 火锅", 1200)
@@ -290,6 +293,124 @@ def test_customer_service_ask_route_level_scene_019_prefers_stove_domain_for_bbq
 
     assert top_category == "炉具", payload
     assert all(category == "炉具" for category in front_categories.values()), front_categories
+
+
+@pytest.mark.parametrize(
+    ("question", "expected_sku", "expected_category", "expect_heat_source_phrase"),
+    [
+        ("KD04SS 适合什么场景？能不能用酒精炉？", "KD04SS", "桌椅", False),
+        ("DV01 适合什么场景？能不能用酒精炉？", "DV01", "酒具", True),
+        ("KD20HM 适合什么场景？能不能用酒精炉？", "KD20HM", "桌椅", False),
+    ],
+)
+def test_customer_service_ask_route_level_explicit_sku_compound_query_keeps_exact_sku(
+    route_client_and_db,
+    question,
+    expected_sku,
+    expected_category,
+    expect_heat_source_phrase,
+):
+    client, headers, Session = route_client_and_db
+
+    response = client.post("/api/customer-service/ask?debug=true", json={"question": question}, headers=headers)
+
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    debug_plan = ((payload.get("debug") or {}).get("plan") or {})
+    assert payload["answer_type"] == "product_detail", payload
+    assert payload["answer_type"] != "knowledge_base_answer"
+    assert payload["result_skus"] == [expected_sku], payload
+    assert payload["answer"]
+    assert "适合什么场景" not in str(debug_plan.get("product_ref") or "")
+    assert debug_plan.get("requested_field") == "heat_source"
+    assert expected_sku in payload["answer"]
+
+    with Session() as db:
+        category = db.query(Product.category).filter(Product.sku == expected_sku).scalar()
+    assert category == expected_category
+
+    if expect_heat_source_phrase:
+        assert re.search(r"(适用热源|明火|卡式炉|分体炉|一体炉)", payload["answer"]), payload["answer"]
+    else:
+        assert re.search(r"(不是炉具|不是炊具|未标注|不建议按酒精炉适配产品理解)", payload["answer"]), payload["answer"]
+
+
+@pytest.mark.parametrize(
+    ("question", "allowed_categories", "forbidden_top_skus", "required_terms"),
+    [
+        (
+            "十来个人公司团建，除了烧烤还要烧水，炉具怎么选？",
+            {"炉具"},
+            {"CB253", "CB254", "AC-Z13"},
+            ("炉具", "烧烤", "烧水", "稳定"),
+        ),
+        (
+            "两个人海边露营，风大一点，炉具该怎么选？",
+            {"炉具"},
+            {"CB253", "CB254", "AC-Z13"},
+            ("炉具", "防风", "稳定"),
+        ),
+        (
+            "双人露营不想太重，也不想买太贵，推荐哪套？",
+            {"锅具"},
+            {"CB253", "CB254", "AC-Z13"},
+            ("双人", "轻", "套装", "取舍"),
+        ),
+    ],
+)
+def test_customer_service_ask_route_level_new_domain_targeted_scenarios_keep_correct_top_domain(
+    route_client_and_db,
+    question,
+    allowed_categories,
+    forbidden_top_skus,
+    required_terms,
+):
+    client, headers, Session = route_client_and_db
+
+    response = client.post("/api/customer-service/ask?debug=true", json={"question": question}, headers=headers)
+
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    assert payload["answer_type"] == "recommendation", payload
+    assert payload["answer_type"] != "knowledge_base_answer"
+    assert payload["result_skus"], payload
+    assert payload["answer"]
+
+    with Session() as db:
+        front_categories = {
+            product.sku: product.category
+            for product in db.query(Product).filter(Product.sku.in_(payload["result_skus"][:2])).all()
+        }
+
+    assert front_categories, payload
+    assert all(category in allowed_categories for category in front_categories.values()), front_categories
+    assert all(sku not in forbidden_top_skus for sku in payload["result_skus"][:2]), payload["result_skus"]
+    assert any(term in payload["answer"] for term in required_terms), payload["answer"]
+
+
+def test_customer_service_ask_route_level_scene_x050_compares_griddle_and_cookware_tradeoffs(
+    route_client_and_db,
+):
+    client, headers, Session = route_client_and_db
+    question = "营地做早餐偏煎烤，推荐烤盘还是锅具？"
+
+    response = client.post("/api/customer-service/ask?debug=true", json={"question": question}, headers=headers)
+
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    assert payload["answer_type"] == "recommendation", payload
+    assert payload["answer_type"] != "knowledge_base_answer"
+    assert payload["result_skus"], payload
+    assert payload["answer"]
+    assert re.search(r"(烤盘|锅具).*(更适合|更通用|优先)", payload["answer"]), payload["answer"]
+
+    with Session() as db:
+        front_categories = [
+            category
+            for category, in db.query(Product.category).filter(Product.sku.in_(payload["result_skus"][:3])).all()
+        ]
+
+    assert "锅具" in front_categories or "炉具" in front_categories
 
 
 @pytest.mark.parametrize(
