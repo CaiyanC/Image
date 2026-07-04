@@ -4618,12 +4618,36 @@ def _category_scope_structured_result(db: Session, question: str) -> dict | None
 
 def _resolve_existing_sku(db: Session, sku: str) -> str:
     text = str(sku or "").strip()
-    product = db.query(Product).filter(Product.sku == text).first()
-    if product:
-        return product.sku
-    product = db.query(Product).filter(Product.sku.ilike(text)).first()
-    if product:
-        return product.sku
+    variants: list[str] = []
+    for candidate in (
+        text,
+        text.upper().replace("_", "-"),
+        text.replace("(", "（").replace(")", "）"),
+        text.replace("（", "(").replace("）", ")"),
+        customer_agent_service.normalize_search_text(text).upper().replace("_", "-"),
+    ):
+        normalized = str(candidate or "").strip()
+        if normalized and normalized not in variants:
+            variants.append(normalized)
+    for candidate in variants:
+        product = db.query(Product).filter(Product.sku == candidate).first()
+        if product:
+            return product.sku
+    normalized_targets = {
+        customer_agent_service.normalize_search_text(candidate).upper().replace("_", "-")
+        for candidate in variants
+    }
+    for product in db.query(Product).all():
+        product_sku = str(getattr(product, "sku", "") or "").strip()
+        if not product_sku:
+            continue
+        normalized_product = customer_agent_service.normalize_search_text(product_sku).upper().replace("_", "-")
+        if normalized_product in normalized_targets:
+            return product_sku
+    for candidate in variants:
+        product = db.query(Product).filter(Product.sku.ilike(candidate)).first()
+        if product:
+            return product.sku
     if text.upper().startswith("MINT-"):
         candidate = text[5:].strip()
         if candidate:

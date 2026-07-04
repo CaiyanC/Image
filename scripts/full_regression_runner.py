@@ -108,6 +108,7 @@ REQUIRED_SKUS = [
     "CW-C97",
     "AC-Z07",
     "CS-B14",
+    "CS-B14（LX）",
 ]
 
 FIELD_ALIASES: dict[str, set[str]] = {
@@ -473,6 +474,137 @@ def build_medium_plan(inventory: dict[str, Any]) -> dict[str, Any]:
         "special_cases": special_cases,
         "multiturn_sequences": multiturn_sequences,
         "parity_cases": parity_cases[:30],
+        "explicit_matrix_skus": explicit_skus,
+        "coverage": coverage,
+    }
+
+
+def build_large_plan(inventory: dict[str, Any]) -> dict[str, Any]:
+    products = _inventory_items(inventory)
+    sku_lookup = _sku_map(products)
+    explicit_skus = _preferred_explicit_skus(products, target=50)
+    explicit_cases: list[dict[str, Any]] = []
+    for sku in explicit_skus:
+        item = sku_lookup[sku]
+        for slot in range(3):
+            question, requested_field = _field_question(item, slot)
+            explicit_cases.append(
+                {
+                    "case_id": f"matrix_{sku}_{slot + 1}",
+                    "group": "explicit_sku_field_matrix",
+                    "question": question,
+                    "expected": {"explicit_sku": sku, "requested_field": requested_field},
+                    "sequence_id": f"matrix_{sku}_{slot + 1}",
+                }
+            )
+
+    category_cases = [
+        {
+            "case_id": case_id,
+            "group": "category_list",
+            "question": question,
+            "expected": {"category": category},
+            "sequence_id": case_id,
+        }
+        for case_id, question, category in CATEGORY_LIST_CASES
+    ]
+    scenario_cases = [
+        {
+            "case_id": case_id,
+            "group": "scenario_recommendation",
+            "question": question,
+            "expected": {"expected_domain": expected_domain},
+            "sequence_id": case_id,
+        }
+        for case_id, question, expected_domain in SCENARIO_CASES
+    ]
+    compare_cases = _compare_cases(products, target=60)
+    generic_target = 500 - len(explicit_cases) - len(category_cases) - len(scenario_cases) - len(compare_cases)
+    generic_cases = _generic_single_turn_cases(products, set(explicit_skus), target=max(generic_target, 0))
+    if len(explicit_cases) + len(category_cases) + len(scenario_cases) + len(compare_cases) + len(generic_cases) < 500:
+        filler_source = _generic_single_turn_cases(products, set(), target=max(len(products), 1))
+        filler_index = 0
+        while len(explicit_cases) + len(category_cases) + len(scenario_cases) + len(compare_cases) + len(generic_cases) < 500 and filler_source:
+            template = dict(filler_source[filler_index % len(filler_source)])
+            template["case_id"] = f"{template['case_id']}_extra_{filler_index + 1:03d}"
+            template["sequence_id"] = template["case_id"]
+            generic_cases.append(template)
+            filler_index += 1
+    special_cases = [
+        {
+            "case_id": "q07",
+            "group": "special_regression",
+            "question": "CW-C83 能不能用酒精炉？如果不能就别推荐错了。",
+            "expected": {"explicit_sku": "CW-C83", "requested_field": "heat_source"},
+            "sequence_id": "q07",
+        }
+    ]
+
+    single_turn_cases = explicit_cases + category_cases + scenario_cases + compare_cases + generic_cases
+    if len(single_turn_cases) < 500:
+        raise RuntimeError(f"expected at least 500 single-turn cases, got {len(single_turn_cases)}")
+
+    multiturn_sequences: list[dict[str, Any]] = []
+    sequence_items = list(MULTITURN_SEQUENCES.items())
+    repeat_index = 0
+    while len(multiturn_sequences) < 50:
+        sequence_id, questions = sequence_items[repeat_index % len(sequence_items)]
+        sequence_key = sequence_id if repeat_index < len(sequence_items) else f"{sequence_id}_r{repeat_index // len(sequence_items) + 1}"
+        turns = []
+        for index, question in enumerate(questions, start=1):
+            turns.append(
+                {
+                    "case_id": f"{sequence_key}_t{index}",
+                    "group": "multiturn",
+                    "question": question,
+                    "sequence_id": sequence_key,
+                    "turn_index": index,
+                    "expected": {"turn_index": index, "total_turns": len(questions)},
+                }
+            )
+        multiturn_sequences.append({"sequence_id": sequence_key, "turns": turns})
+        repeat_index += 1
+
+    parity_cases: list[dict[str, Any]] = []
+    priority_case_ids = {
+        "q07",
+        "cat_1_list",
+        "cat_2_list",
+        "cat_5_list",
+        "scene_019",
+        "scene_x051",
+        "matrix_CT-T04(BM)_3",
+        "matrix_CS-B14（LX）_2",
+        "matrix_CS-B14（LX）_3",
+    }
+    for case in special_cases + single_turn_cases:
+        if case["case_id"] in priority_case_ids:
+            parity_cases.append(case)
+    for sequence_id in ("q15", "q17"):
+        sequence = next(item for item in multiturn_sequences if item["sequence_id"] == sequence_id)
+        parity_cases.extend(sequence["turns"])
+    seen_ids = {case["case_id"] for case in parity_cases}
+    for case in single_turn_cases:
+        if len(parity_cases) >= 50:
+            break
+        if case["case_id"] in seen_ids:
+            continue
+        parity_cases.append(case)
+        seen_ids.add(case["case_id"])
+
+    coverage = {
+        "single_turn": len(single_turn_cases),
+        "special_regressions": len(special_cases),
+        "multiturn_sequences": len(multiturn_sequences),
+        "endpoint_parity": len(parity_cases),
+        "explicit_sku_field_matrix": len(explicit_skus),
+        "total_requests": len(special_cases) + len(single_turn_cases) + sum(len(seq["turns"]) for seq in multiturn_sequences) + len(parity_cases) * 2,
+    }
+    return {
+        "single_turn_cases": single_turn_cases,
+        "special_cases": special_cases,
+        "multiturn_sequences": multiturn_sequences,
+        "parity_cases": parity_cases[:50],
         "explicit_matrix_skus": explicit_skus,
         "coverage": coverage,
     }
@@ -928,8 +1060,9 @@ def _count_summary(records: list[dict[str, Any]]) -> dict[str, int]:
 
 
 def _markdown_report(report: dict[str, Any]) -> str:
+    profile = str(report.get("profile") or "medium").capitalize()
     lines = [
-        "# Medium Full Regression Summary",
+        f"# {profile} Full Regression Summary",
         "",
         f"- commit: `{report['git']['HEAD']}`",
         f"- total requests: `{report['coverage']['total_requests']}`",
@@ -958,12 +1091,12 @@ def _markdown_report(report: dict[str, Any]) -> str:
     return "\n".join(lines) + "\n"
 
 
-def run_medium_full_regression(base_url: str) -> dict[str, Any]:
+def _run_full_regression(base_url: str, *, profile: str) -> dict[str, Any]:
     BASE.DEFAULT_BASE_URL = base_url
     inventory = BASE.load_inventory()
     products = _inventory_items(inventory)
     sku_lookup = _sku_map(products)
-    plan = build_medium_plan(inventory)
+    plan = build_medium_plan(inventory) if profile == "medium" else build_large_plan(inventory)
     token = BASE.login()
 
     started = time.perf_counter()
@@ -1036,6 +1169,7 @@ def run_medium_full_regression(base_url: str) -> dict[str, Any]:
     summaries = _count_summary(classified_records)
 
     report = {
+        "profile": profile,
         "git": {
             "branch": BASE.run_git(["git", "branch", "--show-current"]),
             "HEAD": BASE.run_git(["git", "rev-parse", "HEAD"]),
@@ -1117,17 +1251,26 @@ def run_medium_full_regression(base_url: str) -> dict[str, Any]:
     return report
 
 
+def run_medium_full_regression(base_url: str) -> dict[str, Any]:
+    return _run_full_regression(base_url, profile="medium")
+
+
+def run_large_full_regression(base_url: str) -> dict[str, Any]:
+    return _run_full_regression(base_url, profile="large")
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--profile", default="medium", choices=["medium"])
+    parser.add_argument("--profile", default="medium", choices=["medium", "large"])
     parser.add_argument("--base-url", default="http://127.0.0.1:8001")
     args = parser.parse_args(argv)
 
-    report = run_medium_full_regression(args.base_url)
+    report = run_medium_full_regression(args.base_url) if args.profile == "medium" else run_large_full_regression(args.base_url)
     timestamp = time.strftime("%Y%m%d_%H%M%S")
     commit_short = str(report["git"]["HEAD"])[:8]
-    json_path = REPORT_DIR / f"full_regression_{commit_short}_{timestamp}.json"
-    md_path = REPORT_DIR / f"full_regression_{commit_short}_{timestamp}.md"
+    prefix = "full_regression" if args.profile == "medium" else "large_full_regression"
+    json_path = REPORT_DIR / f"{prefix}_{commit_short}_{timestamp}.json"
+    md_path = REPORT_DIR / f"{prefix}_{commit_short}_{timestamp}.md"
     json_path.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
     md_path.write_text(_markdown_report(report), encoding="utf-8")
     print(json.dumps({"json": str(json_path), "md": str(md_path), "summary": report["summary"]}, ensure_ascii=False, indent=2))

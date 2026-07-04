@@ -3184,9 +3184,55 @@ def review_samples(db: Session, user_id: str, limit: int = 100) -> dict:
 
 def _resolve_sku(db: Session, question: str, sku: str | None) -> str | None:
     if sku:
-        return sku.strip()
+        resolved = _resolve_exact_sku_variant(db, sku)
+        return resolved or sku.strip()
     candidates = customer_agent_service._extract_skus(question)
     for candidate in candidates:
+        resolved = _resolve_exact_sku_variant(db, candidate)
+        if resolved:
+            return resolved
+    return None
+
+
+def _sku_lookup_variants(value: str | None) -> list[str]:
+    raw = str(value or "").strip()
+    if not raw:
+        return []
+    variants: list[str] = []
+    candidates = [
+        raw,
+        raw.upper().replace("_", "-"),
+        raw.replace("(", "（").replace(")", "）"),
+        raw.replace("（", "(").replace("）", ")"),
+        customer_agent_service.normalize_search_text(raw).upper().replace("_", "-"),
+    ]
+    for candidate in candidates:
+        normalized = str(candidate or "").strip()
+        if normalized and normalized not in variants:
+            variants.append(normalized)
+    return variants
+
+
+def _resolve_exact_sku_variant(db: Session, sku: str | None) -> str | None:
+    variants = _sku_lookup_variants(sku)
+    if not variants:
+        return None
+    for candidate in variants:
+        product = db.query(Product).filter(Product.sku == candidate).first()
+        if product:
+            return product.sku
+    normalized_targets = {
+        customer_agent_service.normalize_search_text(candidate).upper().replace("_", "-")
+        for candidate in variants
+    }
+    for product in db.query(Product).all():
+        product_sku = str(getattr(product, "sku", "") or "").strip()
+        if not product_sku:
+            continue
+        normalized_product = customer_agent_service.normalize_search_text(product_sku).upper().replace("_", "-")
+        if normalized_product in normalized_targets:
+            return product_sku
+    for candidate in variants:
         product = db.query(Product).filter(Product.sku.ilike(candidate)).first()
         if product:
             return product.sku

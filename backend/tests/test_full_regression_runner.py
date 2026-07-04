@@ -55,6 +55,7 @@ class FullRegressionRunnerTest(unittest.TestCase):
             "CW-C97",
             "AC-Z07",
             "CS-B14",
+            "CS-B14（LX）",
             "CB254",
             "CF-PG19",
             "CF-PG11-42",
@@ -116,6 +117,22 @@ class FullRegressionRunnerTest(unittest.TestCase):
         self.assertIn("cat_1_list", {case["case_id"] for case in plan["single_turn_cases"]})
         matrix_cases = [case for case in plan["single_turn_cases"] if case["group"] == "explicit_sku_field_matrix"]
         self.assertEqual(len(matrix_cases), 90)
+
+    def test_build_large_plan_matches_requested_scale_and_keeps_unicode_safe_q07(self):
+        plan = MODULE.build_large_plan(self._sample_inventory())
+
+        self.assertGreaterEqual(plan["coverage"]["single_turn"], 500)
+        self.assertGreaterEqual(plan["coverage"]["multiturn_sequences"], 50)
+        self.assertGreaterEqual(plan["coverage"]["endpoint_parity"], 50)
+        self.assertGreaterEqual(plan["coverage"]["explicit_sku_field_matrix"], 50)
+        self.assertGreaterEqual(plan["coverage"]["total_requests"], 700)
+        self.assertIn("CS-B14（LX）", plan["explicit_matrix_skus"])
+
+        q07 = next(case for case in plan["special_cases"] if case["case_id"] == "q07")
+        self.assertEqual(q07["question"], "CW-C83 能不能用酒精炉？如果不能就别推荐错了。")
+        self.assertNotIn("?", q07["question"])
+        self.assertEqual(q07["expected"]["explicit_sku"], "CW-C83")
+        self.assertEqual(q07["expected"]["requested_field"], "heat_source")
 
     def test_summarize_timing_stats_computes_percentiles_and_slow_buckets(self):
         stats = MODULE.summarize_timing_stats(

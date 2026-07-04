@@ -190,6 +190,7 @@ def _seed_route_level_products(db):
     _add_product(db, "TBL-001", "疯狂游乐园泡泡桌-长桌", "桌椅", "/", "铝合金", "/", "折叠桌椅", "家庭露营", 1800)
     _add_product(db, "KD04SS", "奇幻秘境限定系列-755百搭桌(兔子）", "桌椅", "/", "铝合金", "/", "颜值很高的折叠桌 收纳方便", "主题露营 精致露营 家庭野餐", 4200)
     _add_product(db, "KD20HM", "湖美林丰泡泡桌-长桌", "桌椅", "/", "铝合金", "/", "长桌稳定 六人左右小聚", "主题露营 家庭野餐 户外多人小聚", 5600)
+    _add_product(db, "CS-B14（LX）", "旋焰炉芯（作为熊猫大侠套装赠品）", "配件", "/", "不锈钢", "/", "炉具配件 炉芯替换件", "炉具维护 套装赠品", 80)
     _add_product(db, "COF-001", "魔咖旅行咖啡研磨机", "咖啡器具", "/", "不锈钢", "/", "手冲咖啡器具", "露营咖啡", 260)
     _add_product(db, "TEA-001", "竹影茶具", "茶具", "/", "陶瓷", "/", "便携茶具", "露营泡茶", 380)
     _add_product(db, "DV01", "独醒-酒具套装", "酒具", "/", "不锈钢 玻璃", "明火直烧、卡式炉、分体炉、一体炉", "露营品酒酒具 社交小聚", "精致露营 户外小聚 山野小酌", 1280)
@@ -300,6 +301,8 @@ def test_customer_service_ask_route_level_scene_019_prefers_stove_domain_for_bbq
 @pytest.mark.parametrize(
     ("question", "expected_sku", "expected_category", "expect_heat_source_phrase"),
     [
+        ("CS-B14（LX） 容量多大？", "CS-B14（LX）", "配件", False),
+        ("CS-B14（LX） 适合什么场景？能不能用酒精炉？", "CS-B14（LX）", "配件", False),
         ("KD04SS 适合什么场景？能不能用酒精炉？", "KD04SS", "桌椅", False),
         ("DV01 适合什么场景？能不能用酒精炉？", "DV01", "酒具", True),
         ("KD20HM 适合什么场景？能不能用酒精炉？", "KD20HM", "桌椅", False),
@@ -324,14 +327,19 @@ def test_customer_service_ask_route_level_explicit_sku_compound_query_keeps_exac
     assert payload["result_skus"] == [expected_sku], payload
     assert payload["answer"]
     assert "适合什么场景" not in str(debug_plan.get("product_ref") or "")
-    assert debug_plan.get("requested_field") == "heat_source"
+    if "酒精炉" in question:
+        assert debug_plan.get("requested_field") == "heat_source"
+    elif "容量" in question:
+        assert debug_plan.get("requested_field") in {"容量", ""}
     assert expected_sku in payload["answer"]
 
     with Session() as db:
         category = db.query(Product.category).filter(Product.sku == expected_sku).scalar()
     assert category == expected_category
 
-    if expect_heat_source_phrase:
+    if "容量" in question:
+        assert re.search(r"(容量|未标注|/)", payload["answer"]), payload["answer"]
+    elif expect_heat_source_phrase:
         assert re.search(r"(适用热源|明火|卡式炉|分体炉|一体炉)", payload["answer"]), payload["answer"]
     else:
         assert re.search(r"(不是炉具|不是炊具|未标注|不建议按酒精炉适配产品理解)", payload["answer"]), payload["answer"]
