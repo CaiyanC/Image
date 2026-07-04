@@ -1054,6 +1054,10 @@ def _phase1_structured_recommendation_result(db: Session, plan: dict) -> dict | 
     if not scenario:
         return None
     rows = _phase1_catalog_rows(db, "产品")
+    if _phase1_is_light_budget_cookware_set_scenario(scenario):
+        light_budget_set_result = _phase1_structured_light_budget_cookware_set_result(scenario, rows)
+        if light_budget_set_result:
+            return light_budget_set_result
     if _phase1_is_griddle_vs_cookware_scenario(scenario):
         griddle_vs_cookware_result = _phase1_structured_griddle_vs_cookware_result(scenario, rows)
         if griddle_vs_cookware_result:
@@ -1204,6 +1208,18 @@ def _phase1_is_stove_griddle_combo_scenario(question: str) -> bool:
     return any(term in value for term in ("烧烤", "炉具", "炉子", "怎么搭", "更合适", "先买哪类", "先买哪个"))
 
 
+def _phase1_is_light_budget_cookware_set_scenario(question: str) -> bool:
+    value = str(question or "").strip()
+    if not value:
+        return False
+    has_two_person = any(term in value for term in ("双人", "两人", "两个人", "2人"))
+    has_camping = "露营" in value
+    has_lightweight = any(term in value for term in ("轻", "轻量", "轻便", "不想太重", "别太重"))
+    has_budget = any(term in value for term in ("不想买太贵", "不想太贵", "别太贵", "不太贵", "预算", "入门", "性价比"))
+    has_set_selection = any(term in value for term in ("哪套", "推荐哪套", "买哪套", "选哪套", "套锅", "套装"))
+    return has_two_person and has_camping and has_lightweight and has_budget and has_set_selection
+
+
 def _phase1_is_griddle_vs_cookware_scenario(question: str) -> bool:
     value = str(question or "").strip()
     if not value:
@@ -1225,6 +1241,85 @@ def _phase1_is_stove_pairing_scenario(question: str) -> bool:
     has_pairing_or_selection = any(term in value for term in ("怎么搭", "怎么配", "怎么选", "该怎么选", "更稳", "稳一点", "兼顾"))
     has_stove_scene_signal = any(term in value for term in ("烧烤", "加热饮", "热饮", "营地聚餐", "烧水", "风大", "防风"))
     return has_stove_scope and has_pairing_or_selection and has_stove_scene_signal
+
+
+def _phase1_structured_light_budget_cookware_set_result(scenario: str, rows: list[dict]) -> dict | None:
+    cookware_rows = [row for row in rows if _is_service_pot_or_cookware_set_candidate(row)]
+    if not cookware_rows:
+        return None
+
+    def _rank(row: dict) -> tuple[int, str]:
+        text = " ".join(
+            str(row.get(key) or "")
+            for key in (
+                "product_name_cn",
+                "category",
+                "capacity",
+                "features",
+                "usage_scenarios",
+                "positioning",
+                "price_positioning",
+                "long_description_cn",
+            )
+        )
+        score = 0
+        if any(term in text for term in ("套锅", "套装", "锅5件套", "锅7件套", "锅10件套", "野餐锅")):
+            score += 10
+        if any(term in text for term in ("双人", "两人", "两个人", "2人", "2-3人")):
+            score += 8
+        if any(term in text for term in ("轻量", "轻便", "便携", "收纳", "套娃")):
+            score += 6
+        if any(term in text for term in ("入门", "性价比", "基础", "中端", "周末野餐")):
+            score += 4
+        if any(term in text for term in ("高端", "礼盒")):
+            score -= 3
+        weight = row.get("gross_weight_g")
+        try:
+            weight_value = float(weight or 0)
+        except (TypeError, ValueError):
+            weight_value = 0
+        if 0 < weight_value <= 800:
+            score += 5
+        elif 800 < weight_value <= 1200:
+            score += 3
+        elif weight_value >= 1800:
+            score -= 3
+        return (-score, str(row.get("sku") or ""))
+
+    selected = sorted(cookware_rows, key=_rank)[:5]
+    if not selected:
+        return None
+    top_row = selected[0]
+    top_name = top_row.get("product_name_cn") or top_row.get("sku")
+    top_sku = str(top_row.get("sku") or "").strip().upper()
+    top_reason = str(top_row.get("usage_scenarios") or top_row.get("features") or top_row.get("positioning") or "").strip("。；; ")
+    answer = (
+        f"这类需求我会优先从双人露营的轻量锅具/套锅里选，不先把水壶当主推。"
+        f" 主推 {top_name}（{top_sku}），更贴合“双人露营、别太重、先看入门取舍”这类需求。"
+    )
+    if top_reason:
+        answer += f" 主要理由是：{top_reason}。"
+    backups: list[str] = []
+    for row in selected[1:3]:
+        name = row.get("product_name_cn") or row.get("sku")
+        sku = str(row.get("sku") or "").strip().upper()
+        reason = str(row.get("usage_scenarios") or row.get("features") or row.get("positioning") or "更偏向双人露营的套装取舍").strip("。；; ")
+        backups.append(f"{name}（{sku}），{reason}")
+    if backups:
+        answer += " 备选可以看" + "；".join(backups) + "。"
+    answer += " 如果你更在意极致轻量，就优先看更轻便的小套锅；如果更在意两个人做饭的完整度，再看容量和组件更全的套装。"
+    skus = [str(row.get("sku") or "").strip().upper() for row in selected if row.get("sku")]
+    return {
+        "intent": "recommendation",
+        "answer_type": "recommendation",
+        "answer": answer,
+        "results": selected,
+        "result_skus": skus,
+        "candidate_skus": skus,
+        "debug": {"agent_mode": "planner_recommendation_guard_rebuild"},
+        "answer_metadata": {"source": "product_catalog_structured_recommendation"},
+        "skip_polish": True,
+    }
 
 
 def _phase1_structured_griddle_vs_cookware_result(scenario: str, rows: list[dict]) -> dict | None:

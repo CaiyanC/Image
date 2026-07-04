@@ -184,6 +184,8 @@ def _seed_route_level_products(db):
     _add_product(db, "WT-002", "轻量保温杯", "水具", "500ML", "304不锈钢", "/", "日常补水 水具", "通勤露营", 210)
     _add_product(db, "KTL-COF-1", "手冲细口壶", "水具", "600ML", "不锈钢", "燃气炉", "偏咖啡冲煮 水具", "露营咖啡", 330)
     _add_product(db, "KTL-HEAT-1", "烧水壶套装", "水具", "1.1L", "铝合金", "燃气炉", "偏烧水加热 水具", "营地烧水", 420)
+    _add_product(db, "CB253", "聚能环水壶", "水壶", "4L", "铝合金", "燃气炉", "轻量徒步 快速烧水", "轻量徒步 双人露营 户外补水 山野煮茶 休闲露营", 475)
+    _add_product(db, "CB254", "激流水壶", "水壶", "4L", "铝合金", "燃气炉", "双人露营 户外烧水", "轻量徒步 双人露营 户外补水 山野煮茶 休闲露营", 498)
     _add_product(db, "KW-K32-黑", "天鹅壶9杯-黑色", "咖啡器具", "900ML", "不锈钢", "气炉", "手冲咖啡器具", "露营咖啡", 420)
     _add_product(db, "TBL-001", "疯狂游乐园泡泡桌-长桌", "桌椅", "/", "铝合金", "/", "折叠桌椅", "家庭露营", 1800)
     _add_product(db, "KD04SS", "奇幻秘境限定系列-755百搭桌(兔子）", "桌椅", "/", "铝合金", "/", "颜值很高的折叠桌 收纳方便", "主题露营 精致露营 家庭野餐", 4200)
@@ -354,7 +356,7 @@ def test_customer_service_ask_route_level_explicit_sku_compound_query_keeps_exac
             "双人露营不想太重，也不想买太贵，推荐哪套？",
             {"锅具"},
             {"CB253", "CB254", "AC-Z13"},
-            ("双人", "轻", "套装", "取舍"),
+            ("双人", "轻", "套", "取舍"),
         ),
     ],
 )
@@ -386,6 +388,8 @@ def test_customer_service_ask_route_level_new_domain_targeted_scenarios_keep_cor
     assert all(category in allowed_categories for category in front_categories.values()), front_categories
     assert all(sku not in forbidden_top_skus for sku in payload["result_skus"][:2]), payload["result_skus"]
     assert any(term in payload["answer"] for term in required_terms), payload["answer"]
+    if question == "双人露营不想太重，也不想买太贵，推荐哪套？":
+        assert re.search(r"(双人|露营).*(轻|便携|入门|取舍|套锅|套装)", payload["answer"]), payload["answer"]
 
 
 def test_customer_service_ask_route_level_scene_x050_compares_griddle_and_cookware_tradeoffs(

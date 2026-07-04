@@ -210,6 +210,7 @@ SCENARIO_CASES = [
     ("scene_018", "家庭露营偏火锅场景，锅具容量优先怎么选？", "锅具"),
     ("scene_019", "露营烧烤加热饮都要兼顾，炉具怎么搭更稳？", "炉具"),
     ("scene_020", "两个人露营偏爱火锅场景，锅具要稳一点，推荐哪个？", "锅具"),
+    ("scene_x051", "双人露营不想太重，也不想买太贵，推荐哪套？", "锅具"),
 ]
 
 MULTITURN_SEQUENCES = {
@@ -402,7 +403,8 @@ def build_medium_plan(inventory: dict[str, Any]) -> dict[str, Any]:
         for case_id, question, expected_domain in SCENARIO_CASES
     ]
     compare_cases = _compare_cases(products, target=20)
-    generic_cases = _generic_single_turn_cases(products, set(explicit_skus), target=60)
+    generic_target = 200 - len(explicit_cases) - len(category_cases) - len(scenario_cases) - len(compare_cases)
+    generic_cases = _generic_single_turn_cases(products, set(explicit_skus), target=generic_target)
     special_cases = [
         {
             "case_id": "q07",
