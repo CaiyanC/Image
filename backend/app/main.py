@@ -194,20 +194,27 @@ def _run_git(args: list[str]) -> str:
     return (result.stdout or "").strip() or "unknown"
 
 
-def _runtime_version_payload() -> dict:
-    commit = (
+def _get_current_git_head() -> str:
+    return (
         os.getenv("APP_COMMIT")
         or os.getenv("GIT_COMMIT")
         or _run_git(["rev-parse", "HEAD"])
-    )
-    branch = (
+    ) or "unknown"
+
+
+def _get_current_git_branch() -> str:
+    return (
         os.getenv("APP_BRANCH")
         or os.getenv("GIT_BRANCH")
         or _run_git(["rev-parse", "--abbrev-ref", "HEAD"])
-    )
+    ) or "unknown"
+
+
+def _build_startup_runtime_info() -> dict:
     return {
-        "commit": commit or "unknown",
-        "branch": branch or "unknown",
+        "version": app.version,
+        "startup_commit": _get_current_git_head(),
+        "startup_branch": _get_current_git_branch(),
         "code_root": BACKEND_ROOT,
         "cwd": os.getcwd(),
         "python_executable": sys.executable,
@@ -218,12 +225,41 @@ def _runtime_version_payload() -> dict:
     }
 
 
+STARTUP_RUNTIME_INFO = _build_startup_runtime_info()
+
+
+def _runtime_version_payload() -> dict:
+    current_git_head = _get_current_git_head()
+    current_git_branch = _get_current_git_branch()
+    startup_commit = STARTUP_RUNTIME_INFO.get("startup_commit") or "unknown"
+    startup_branch = STARTUP_RUNTIME_INFO.get("startup_branch") or "unknown"
+    return {
+        "version": STARTUP_RUNTIME_INFO.get("version") or app.version,
+        "startup_commit": startup_commit,
+        "current_git_head": current_git_head or "unknown",
+        "commit": startup_commit,
+        "commit_source": "startup_commit",
+        "branch": startup_branch,
+        "current_git_branch": current_git_branch or "unknown",
+        "code_root": STARTUP_RUNTIME_INFO.get("code_root") or BACKEND_ROOT,
+        "cwd": STARTUP_RUNTIME_INFO.get("cwd") or os.getcwd(),
+        "python_executable": STARTUP_RUNTIME_INFO.get("python_executable") or sys.executable,
+        "pid": STARTUP_RUNTIME_INFO.get("pid") or os.getpid(),
+        "started_at": STARTUP_RUNTIME_INFO.get("started_at") or STARTED_AT,
+        "env": STARTUP_RUNTIME_INFO.get("env") or settings.APP_ENV,
+        "backend_port": STARTUP_RUNTIME_INFO.get("backend_port") or settings.BACKEND_PORT,
+    }
+
+
 def _log_version_check() -> None:
     payload = _runtime_version_payload()
     message = (
         "RUNNING VERSION CHECK "
         f"commit={payload['commit']} "
         f"branch={payload['branch']} "
+        f"current_git_head={payload['current_git_head']} "
+        f"current_git_branch={payload['current_git_branch']} "
+        f"commit_source={payload['commit_source']} "
         f"code_root={payload['code_root']} "
         f"cwd={payload['cwd']} "
         f"pid={payload['pid']} "
