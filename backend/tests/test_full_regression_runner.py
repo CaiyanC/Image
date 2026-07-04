@@ -227,5 +227,162 @@ class FullRegressionRunnerTest(unittest.TestCase):
         self.assertFalse(classified["field_wrong"])
 
 
+    def test_missing_requested_field_with_semantic_answer_downgrades_to_runner_noise_warning(self):
+        case = {
+            "case_id": "matrix_CW-C83_missing_field",
+            "group": "explicit_sku_field_matrix",
+            "question": "CW-C83 \u5bb9\u91cf\u591a\u5927\uff1f",
+            "expected": {
+                "explicit_sku": "CW-C83",
+                "requested_field": "capacity",
+            },
+        }
+        record = {
+            "case_id": "matrix_CW-C83_missing_field",
+            "question": case["question"],
+            "conversation_id": "conv-1",
+            "answer_type": "product_detail",
+            "intent": "product_detail",
+            "result_skus": ["CW-C83"],
+            "answer": "CW-C83 \u5bb9\u91cf\u7ea62L\u3002",
+            "warnings": [],
+            "debug_plan": {"product_ref": "CW-C83", "requested_field": ""},
+            "debug_trace": {},
+            "duration_ms": 9.0,
+            "llm_call_count": 0,
+            "status": 200,
+        }
+
+        classified = MODULE._classify_explicit_matrix(case, record)
+
+        self.assertEqual(classified["judgement"], "warning")
+        self.assertEqual(classified["audited_attribution"], "runner_noise")
+        self.assertIn("missing_requested_field_warning", classified["issues"])
+        self.assertFalse(classified["field_wrong"])
+
+    def test_missing_requested_field_without_semantic_answer_is_true_field_wrong(self):
+        case = {
+            "case_id": "matrix_CW-C83_missing_wrong",
+            "group": "explicit_sku_field_matrix",
+            "question": "CW-C83 \u5bb9\u91cf\u591a\u5927\uff1f",
+            "expected": {
+                "explicit_sku": "CW-C83",
+                "requested_field": "capacity",
+            },
+        }
+        record = {
+            "case_id": "matrix_CW-C83_missing_wrong",
+            "question": case["question"],
+            "conversation_id": "conv-1",
+            "answer_type": "product_detail",
+            "intent": "product_detail",
+            "result_skus": ["CW-C83"],
+            "answer": "CW-C83 \u91c7\u7528\u786c\u8d28\u6c27\u5316\u94dd\u5408\u91d1\u3002",
+            "warnings": [],
+            "debug_plan": {"product_ref": "CW-C83", "requested_field": ""},
+            "debug_trace": {},
+            "duration_ms": 9.0,
+            "llm_call_count": 0,
+            "status": 200,
+        }
+
+        classified = MODULE._classify_explicit_matrix(case, record)
+
+        self.assertEqual(classified["judgement"], "fail")
+        self.assertEqual(classified["audited_attribution"], "real_business")
+        self.assertIn("field_wrong", classified["issues"])
+        self.assertTrue(classified["field_wrong"])
+
+    def test_explicit_matrix_supports_legacy_field_key(self):
+        case = {
+            "case_id": "matrix_CW-C83_legacy_field",
+            "group": "explicit_sku_field_matrix",
+            "question": "CW-C83 \u6750\u8d28\u662f\u4ec0\u4e48\uff1f",
+            "expected": {
+                "explicit_sku": "CW-C83",
+                "field": "material",
+            },
+        }
+        record = {
+            "case_id": "matrix_CW-C83_legacy_field",
+            "question": case["question"],
+            "conversation_id": "conv-1",
+            "answer_type": "product_detail",
+            "intent": "product_detail",
+            "result_skus": ["CW-C83"],
+            "answer": "CW-C83 \u6750\u8d28\u662f\u786c\u8d28\u6c27\u5316\u94dd\u5408\u91d1\u3002",
+            "warnings": [],
+            "debug_plan": {"product_ref": "CW-C83", "requested_field": ""},
+            "debug_trace": {},
+            "duration_ms": 8.0,
+            "llm_call_count": 0,
+            "status": 200,
+        }
+
+        classified = MODULE._classify_explicit_matrix(case, record)
+
+        self.assertEqual(classified["judgement"], "warning")
+        self.assertIn("missing_requested_field_warning", classified["issues"])
+        self.assertEqual(classified["expected_field"], "material")
+
+    def test_stove_expected_domain_is_downgraded_for_pot_question_shape(self):
+        sku_lookup = {
+            "CW-C06PRO": type(
+                "Item",
+                (),
+                {"sku": "CW-C06PRO", "name": "\u8f7b\u9014\u5957\u9505", "category": "\u9505\u5177", "sub_category": ""},
+            )()
+        }
+        case = {
+            "case_id": "scene_x048",
+            "group": "scenario_recommendation",
+            "question": "\u5973\u751f\u4e00\u4e2a\u4eba\u5468\u672b\u51fa\u6e38\uff0c\u60f3\u9009\u4e2a\u80fd\u70e7\u6c34\u7684\u8f7b\u91cf\u9505\u3002",
+            "expected": {"expected_domain": "\u7089\u5177"},
+        }
+        record = {
+            "case_id": "scene_x048",
+            "question": case["question"],
+            "answer_type": "recommendation",
+            "result_skus": ["CW-C06PRO"],
+            "answer": "\u9996\u9009\u8f7b\u91cf\u9505\u5177 CW-C06PRO\u3002",
+            "duration_ms": 120.0,
+        }
+
+        classified = MODULE._classify_single_turn(case, record, sku_lookup)
+
+        self.assertEqual(classified["judgement"], "warning")
+        self.assertEqual(classified["audited_attribution"], "runner_noise")
+        self.assertIn("scenario_expected_domain_overstrict", classified["issues"])
+
+    def test_true_stove_question_still_fails_when_top_sku_drifts_to_water_domain(self):
+        sku_lookup = {
+            "CB253": type(
+                "Item",
+                (),
+                {"sku": "CB253", "name": "\u805a\u80fd\u73af\u6c34\u58f6", "category": "\u6c34\u5177", "sub_category": ""},
+            )()
+        }
+        case = {
+            "case_id": "scene_x023",
+            "group": "scenario_recommendation",
+            "question": "\u4e24\u4e2a\u4eba\u6d77\u8fb9\u9732\u8425\uff0c\u98ce\u5927\u4e00\u70b9\uff0c\u7089\u5177\u8be5\u600e\u4e48\u9009\uff1f",
+            "expected": {"expected_domain": "\u7089\u5177"},
+        }
+        record = {
+            "case_id": "scene_x023",
+            "question": case["question"],
+            "answer_type": "recommendation",
+            "result_skus": ["CB253"],
+            "answer": "\u9996\u9009\u805a\u80fd\u73af\u6c34\u58f6 CB253\u3002",
+            "duration_ms": 120.0,
+        }
+
+        classified = MODULE._classify_single_turn(case, record, sku_lookup)
+
+        self.assertEqual(classified["judgement"], "fail")
+        self.assertEqual(classified["audited_attribution"], "real_business")
+        self.assertIn("recommendation_wrong_domain", classified["issues"])
+
+
 if __name__ == "__main__":
     unittest.main()

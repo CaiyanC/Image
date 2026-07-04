@@ -552,6 +552,25 @@ def _domain_matches(item: BASE.InventoryItem | None, expected_domain: str) -> bo
     return _contains_any(haystack, [expected_domain])
 
 
+def _scenario_expected_domain_overstrict(question: str, expected_domain: str, item: BASE.InventoryItem | None) -> bool:
+    if not item or expected_domain != "\u7089\u5177":
+        return False
+    question_text = str(question or "")
+    item_domain = f"{item.category} {item.sub_category} {item.name}"
+    pot_question = _contains_any(
+        question_text,
+        ["\u9505\u5177", "\u9505", "\u54ea\u5957", "\u6c34\u58f6\u8fd8\u662f\u9505"],
+    )
+    stove_question = _contains_any(
+        question_text,
+        ["\u7089\u5177", "\u70e7\u70e4", "\u70e4\u76d8"],
+    )
+    return pot_question and not stove_question and _contains_any(
+        item_domain,
+        ["\u9505\u5177", "\u6c34\u58f6", "\u6c34\u5177"],
+    )
+
+
 def _classify_explicit_matrix(case: dict[str, Any], record: dict[str, Any]) -> dict[str, Any]:
     expected_sku = str(case["expected"]["explicit_sku"]).upper()
     answer = str(record.get("answer") or "")
@@ -560,7 +579,7 @@ def _classify_explicit_matrix(case: dict[str, Any], record: dict[str, Any]) -> d
     extracted_sku = (_normalize_skus(BASE._extract_question_skus(case["question"])) or [""])[0]
     planner_product_ref = str(debug_plan.get("product_ref") or "")
     requested_field = str(debug_plan.get("requested_field") or "")
-    expected_field = str(case["expected"].get("requested_field") or "")
+    expected_field = str(case["expected"].get("requested_field") or case["expected"].get("field") or "")
     normalized_requested_field = normalize_field_label(requested_field)
     expected_fields = _expected_field_labels(expected_field)
     semantic_hits = _field_semantics_present(answer, expected_fields)
@@ -573,7 +592,7 @@ def _classify_explicit_matrix(case: dict[str, Any], record: dict[str, Any]) -> d
         and normalized_requested_field not in expected_fields
     )
     compound_field_overstrict = False
-    field_wrong = bool(expected_fields and not semantic_hits and field_alias_mismatch)
+    field_wrong = False
     slow = float(record.get("duration_ms") or 0) >= 20000
     judgement = "pass"
     audited = "ok"
@@ -590,14 +609,19 @@ def _classify_explicit_matrix(case: dict[str, Any], record: dict[str, Any]) -> d
         judgement = "fail"
         audited = "real_business"
         issues.append("explicit_sku_mismatch")
-    elif not semantic_hits and not normalized_requested_field:
-        judgement = "fail"
+    elif semantic_hits and not normalized_requested_field:
+        judgement = "warning"
         audited = "runner_noise"
-        issues.append("missing_requested_field")
-    elif field_wrong:
+        issues.append("missing_requested_field_warning")
+    elif expected_fields and not semantic_hits:
         judgement = "fail"
-        audited = "runner_noise"
+        audited = "real_business"
+        field_wrong = True
         issues.append("field_wrong")
+        if not normalized_requested_field:
+            issues.append("missing_requested_field")
+        elif field_alias_mismatch:
+            issues.append("field_alias_mismatch")
     elif field_alias_mismatch:
         judgement = "warning"
         audited = "runner_noise"
@@ -678,6 +702,10 @@ def _classify_single_turn(case: dict[str, Any], record: dict[str, Any], sku_look
             judgement = "warning"
             audited = "probe_rule"
             issues.append("scenario_answer_type_shape")
+        elif _scenario_expected_domain_overstrict(case["question"], str(case["expected"].get("expected_domain") or ""), top_item):
+            judgement = "warning"
+            audited = "runner_noise"
+            issues.append("scenario_expected_domain_overstrict")
         elif not _domain_matches(top_item, str(case["expected"].get("expected_domain") or "")):
             judgement = "fail"
             audited = "real_business"
