@@ -3,6 +3,7 @@ from __future__ import annotations
 import re
 
 from typing import Any
+from . import customer_agent_service
 
 
 EXPLICIT_SKU_RE = re.compile(
@@ -12,6 +13,14 @@ EXPLICIT_SKU_RE = re.compile(
 
 PLAIN_EXPLICIT_SKU_RE = re.compile(
     r"(?<![A-Za-z0-9])(?:[A-Za-z]{1,6}\d{2,12}[A-Za-z0-9\u4e00-\u9fff]{0,12})(?=$|[\s锛屻€?锛?锛?锛?\]銆?\"'锛?])"
+)
+
+
+SKU_PREFIX_RE = re.compile(
+    r"(?<![A-Za-z0-9])(?:[A-Za-z]{1,6}[A-Za-z0-9]{0,12}(?:[-_](?:[A-Za-z0-9]{1,24}(?:[\(\uFF08][A-Za-z0-9]{1,24}[\)\uFF09])?|[\u4e00-\u9fff]{1,2}))+ )".replace("+ )", "+)")
+)
+PLAIN_SKU_PREFIX_RE = re.compile(
+    r"(?<![A-Za-z0-9])(?:[A-Za-z]{1,6}\d{2,12}[A-Za-z0-9]{0,12}(?:[\(\uFF08][A-Za-z0-9]{1,24}[\)\uFF09])?)"
 )
 
 
@@ -54,6 +63,7 @@ def plan_customer_question(
 ) -> dict[str, Any]:
     text = str(question or "").strip()
     plan = _base_plan()
+    plan["raw_question"] = text
 
     compatibility = _explicit_pan_alcohol_stove_compatibility(text)
     if compatibility:
@@ -275,7 +285,20 @@ def _explicit_heat_source_product_ref(text: str) -> str:
 
 def _extract_explicit_sku(text: str) -> str:
     value = str(text or "").strip()
+    clean_patterns = (
+        re.compile(r"^[A-Z]{1,6}[A-Z0-9]{0,12}(?:-[A-Z0-9]{1,24})+(?:[(（][A-Z0-9]{1,24}[)）])?$"),
+        re.compile(r"^[A-Z]{1,6}[A-Z0-9]{0,12}(?:-[A-Z0-9]{1,24})*-[\u4e00-\u9fff]$"),
+        re.compile(r"^[A-Z]{1,6}\d{2,12}[A-Z0-9]{0,12}$"),
+    )
+    for candidate in customer_agent_service._extract_skus(value):
+        normalized = str(candidate or "").strip().upper().replace("_", "-")
+        if normalized and any(pattern.fullmatch(normalized) for pattern in clean_patterns):
+            return normalized
     for pattern in (EXPLICIT_SKU_RE, PLAIN_EXPLICIT_SKU_RE):
+        sku_match = pattern.search(value)
+        if sku_match:
+            return sku_match.group(0).upper().replace("_", "-")
+    for pattern in (SKU_PREFIX_RE, PLAIN_SKU_PREFIX_RE):
         sku_match = pattern.search(value)
         if sku_match:
             return sku_match.group(0).upper().replace("_", "-")
@@ -375,6 +398,10 @@ def _requested_field(text: str) -> str:
         return "重量"
     if any(term in text for term in ("材质", "什么材料", "材料")):
         return "材质"
+    if any(term in text for term in ("适合什么场景", "适合哪些场景", "适合露营用", "适合几个人", "适合几人", "适用人群", "干嘛用")):
+        return "适用场景"
+    if any(term in text for term in ("酒精炉", "明火", "热源", "燃料", "能不能用", "能否用", "可以用", "支持")):
+        return "热源"
     return ""
 
 

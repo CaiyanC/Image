@@ -118,54 +118,50 @@ def _add_product(
     sub_category=None,
     price_positioning="中端",
 ):
-    product = Product(
-        id=f"route-{sku}",
-        sku=sku,
-        barcode=f"barcode-{sku}",
-        product_name_cn=name,
-        product_name_en=name,
-        brand="alocs爱路客",
-        category=category,
-        sub_category=sub_category,
-        product_level="A类品",
-        lifecycle_status="常规品",
-        person_in_charge="RouteTest",
-    )
-    db.add(product)
-    db.add(
-        ProductSpecs(
-            id=f"route-specs-{sku}",
-            product_id=product.id,
-            capacity=capacity,
-            gross_weight_g=weight,
-            body_material=material,
-            color="本色",
-            surface_finish="硬质氧化",
-            heat_source=heat_source,
-            power="/",
-            technical_advantages=features,
-        )
-    )
-    db.add(
-        ProductBusiness(
-            id=f"route-biz-{sku}",
-            product_id=product.id,
-            top_selling_points=features,
-            target_audience="户外用户",
-            positioning=features,
-            price_positioning=price_positioning,
-            usage_scenarios=scenarios,
-        )
-    )
-    db.add(
-        ProductContent(
-            id=f"route-content-{sku}",
-            product_id=product.id,
-            title_cn=name,
-            long_description_cn=f"{name} {features} {scenarios}",
-            search_keywords=f"{name},{category},{heat_source}",
-        )
-    )
+    product = db.query(Product).filter(Product.sku == sku).first()
+    if product is None:
+        product = Product(id=f"route-{sku}", sku=sku)
+        db.add(product)
+    product.barcode = f"barcode-{sku}"
+    product.product_name_cn = name
+    product.product_name_en = name
+    product.brand = "alocs爱路客"
+    product.category = category
+    product.sub_category = sub_category
+    product.product_level = "A类品"
+    product.lifecycle_status = "常规品"
+    product.person_in_charge = "RouteTest"
+
+    specs = db.query(ProductSpecs).filter(ProductSpecs.product_id == product.id).first()
+    if specs is None:
+        specs = ProductSpecs(id=f"route-specs-{sku}", product_id=product.id)
+        db.add(specs)
+    specs.capacity = capacity
+    specs.gross_weight_g = weight
+    specs.body_material = material
+    specs.color = "本色"
+    specs.surface_finish = "硬质氧化"
+    specs.heat_source = heat_source
+    specs.power = "/"
+    specs.technical_advantages = features
+
+    business = db.query(ProductBusiness).filter(ProductBusiness.product_id == product.id).first()
+    if business is None:
+        business = ProductBusiness(id=f"route-biz-{sku}", product_id=product.id)
+        db.add(business)
+    business.top_selling_points = features
+    business.target_audience = "户外用户"
+    business.positioning = features
+    business.price_positioning = price_positioning
+    business.usage_scenarios = scenarios
+
+    content = db.query(ProductContent).filter(ProductContent.product_id == product.id).first()
+    if content is None:
+        content = ProductContent(id=f"route-content-{sku}", product_id=product.id)
+        db.add(content)
+    content.title_cn = name
+    content.long_description_cn = f"{name} {features} {scenarios}"
+    content.search_keywords = f"{name},{category},{heat_source}"
 
 
 def _seed_route_level_products(db):
@@ -207,6 +203,17 @@ def _seed_route_level_products(db):
     _add_product(db, "CW-C19T-37", "旅伴2-3人野餐锅5件套", "锅具", "2升锅", "硬质氧化铝", "燃气炉", "全套收纳便携", "双人露营 公园野餐", 1062)
     _add_product(db, "CW-C06PRO", "轻途套锅", "锅具", "大锅 3.0L，小锅 1.7L，水壶 0.8L", "3003铝合金、硅胶、不锈钢、PP", "酒精炉, 燃气炉", "极致轻量化 套娃式收纳", "轻量徒步 背包旅行 单人露营", 1150)
     _add_product(db, "CW-C69-1", "小方锅套装", "锅具", "大锅 1.7L，水壶 1.0L", "304不锈钢", "燃气炉", "方形设计 易收纳", "精致露营 户外小份烹饪", 1320)
+    _add_product(db, "TW-422-蓝", "随行保温杯-蓝", "水具", "500ML", "304不锈钢", "/", "便携补水 保温杯", "通勤露营 日常饮水", 210)
+    _add_product(db, "TW-422-绿", "随行保温杯-绿", "水具", "500ML", "304不锈钢", "/", "便携补水 保温杯", "通勤露营 日常饮水", 210)
+    _add_product(db, "TW-422-粉", "随行保温杯-粉", "水具", "500ML", "304不锈钢", "/", "便携补水 保温杯", "公园野餐 日常饮水", 210)
+    _add_product(db, "KW-K31-白", "轻享随行杯-白", "水具", "650ML", "304不锈钢", "/", "便携饮水 冷热两用", "通勤补水 轻露营", 260)
+    _add_product(db, "KW-K31-黑", "轻享随行杯-黑", "水具", "650ML", "304不锈钢", "/", "便携饮水 冷热两用", "通勤补水 轻露营", 260)
+    _add_product(db, "KW-K32-白", "天鹅壶9杯-白色", "咖啡器具", "900ML", "不锈钢", "气炉", "手冲咖啡器具", "露营咖啡", 420)
+    _add_product(db, "GX15-450G", "高山气罐450G", "配件", "/", "钢", "/", "燃气配件 长时使用", "露营做饭 多人露营", 450)
+    _add_product(db, "CW-C97", "行山双耳锅", "锅具", "1.8L", "硬质氧化铝", "气炉", "轻量单锅 易收纳", "单人露营 双人简餐 徒步煮面", 420)
+    _add_product(db, "AC-Z07", "钛夹", "配件", "/", "钛", "/", "小配件 夹取食材", "露营做饭 餐厨配件", 55)
+    _add_product(db, "CS-B14", "旋焰炉芯", "配件", "/", "不锈钢", "/", "炉具配件 炉芯替换件", "炉具维护", 80)
+    _add_product(db, "CT-T04(BM)", "出山-功夫茶具（竹套版）", "茶具", "/", "竹、陶瓷", "/", "便携功夫茶具", "露营茶席 公园野餐", 980)
     db.commit()
 
 
@@ -400,6 +407,54 @@ def test_customer_service_ask_route_level_new_domain_targeted_scenarios_keep_cor
         assert re.search(r"(双人|露营).*(轻|便携|入门|取舍|套锅|套装)", payload["answer"]), payload["answer"]
 
 
+@pytest.mark.parametrize(
+    ("question", "expected_sku", "requested_field"),
+    [
+        ("CT-T04(BM)适合什么场景？能不能用酒精炉？", "CT-T04(BM)", "heat_source"),
+        ("CT-T04-BM适合什么场景？能不能用酒精炉？", "CT-T04(BM)", "heat_source"),
+        ("KD04SS适合露营用吗？", "KD04SS", ""),
+        ("KD04SS适合什么场景？能不能用酒精炉？", "KD04SS", "heat_source"),
+        ("KD20HM适合什么场景？能不能用酒精炉？", "KD20HM", "heat_source"),
+        ("DV01适合什么场景？", "DV01", ""),
+        ("DV01能不能用明火？", "DV01", ""),
+        ("TW-422-蓝能装多少水？", "TW-422-蓝", "容量"),
+        ("TW-422-绿是什么材质？", "TW-422-绿", "材质"),
+        ("TW-422-粉能装多少水？", "TW-422-粉", "容量"),
+        ("KW-K31-白容量多大？", "KW-K31-白", "容量"),
+        ("KW-K31-黑容量多少？", "KW-K31-黑", "容量"),
+        ("KW-K32-白容量多大？", "KW-K32-白", "容量"),
+        ("KW-K32-黑容量多少？", "KW-K32-黑", "容量"),
+        ("GX15-450G适合几个人用？", "GX15-450G", ""),
+        ("CW-C97适合什么场景？", "CW-C97", ""),
+        ("AC-Z07是什么材质？", "AC-Z07", "材质"),
+        ("CS-B14容量多少？", "CS-B14", "容量"),
+        ("CS-B14适合什么场景？能不能用酒精炉？", "CS-B14", "heat_source"),
+    ],
+)
+def test_customer_service_ask_route_level_explicit_sku_generalization_keeps_exact_sku(
+    route_client_and_db,
+    question,
+    expected_sku,
+    requested_field,
+):
+    client, headers, _ = route_client_and_db
+
+    response = client.post("/api/customer-service/ask?debug=true", json={"question": question}, headers=headers)
+
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    debug_plan = ((payload.get("debug") or {}).get("plan") or {})
+
+    assert payload["answer_type"] == "product_detail", payload
+    assert payload["answer_type"] != "knowledge_base_answer"
+    assert payload["result_skus"] == [expected_sku], payload
+    assert payload["answer"], payload
+    assert expected_sku in payload["answer"], payload["answer"]
+    assert debug_plan.get("product_ref") == expected_sku, debug_plan
+    if requested_field:
+        assert debug_plan.get("requested_field") in {requested_field, ""}, debug_plan
+
+
 def test_customer_service_ask_route_level_scene_x050_compares_griddle_and_cookware_tradeoffs(
     route_client_and_db,
 ):
@@ -509,6 +564,88 @@ def test_customer_service_ask_route_level_explicit_sku_alcohol_compatibility_bea
     assert "AC-Z13" not in payload["answer"]
     assert "CB253" not in payload["answer"]
     assert not re.search(r"明火直烧.*酒精炉|卡式炉.*酒精炉|分体炉.*酒精炉", payload["answer"]), payload["answer"]
+
+
+def test_customer_service_ask_route_level_multiturn_variant_pronoun_heat_source_followup_anchors_top_sku(
+    route_client_and_db,
+):
+    client, headers, _ = route_client_and_db
+
+    turn1 = client.post(
+        "/api/customer-service/ask?debug=true",
+        json={"question": "我一个人露营，想要轻一点的锅具，先推一个。"},
+        headers=headers,
+    )
+    assert turn1.status_code == 200, turn1.text
+    payload1 = turn1.json()
+    assert payload1["answer_type"] == "recommendation"
+    assert payload1["result_skus"]
+    conversation_id = payload1["conversation_id"]
+    top_sku = payload1["result_skus"][0]
+
+    turn2 = client.post(
+        "/api/customer-service/ask?debug=true",
+        json={"question": "这个可以配酒精炉吗？", "conversation_id": conversation_id},
+        headers=headers,
+    )
+    assert turn2.status_code == 200, turn2.text
+    payload2 = turn2.json()
+    assert payload2["answer_type"] == "product_detail", payload2
+    assert payload2["answer_type"] != "clarification"
+    assert payload2["answer_type"] != "knowledge_base_answer"
+    assert payload2["result_skus"] == [top_sku], payload2
+
+    turn3 = client.post(
+        "/api/customer-service/ask?debug=true",
+        json={"question": "不能的话有没有更合适的？", "conversation_id": conversation_id},
+        headers=headers,
+    )
+    assert turn3.status_code == 200, turn3.text
+    payload3 = turn3.json()
+    assert payload3["answer_type"] == "recommendation", payload3
+    assert payload3["answer_type"] != "knowledge_base_answer"
+    assert payload3["result_skus"], payload3
+
+
+def test_customer_service_ask_route_level_multiturn_variant_ordinal_followups_anchor_recommended_order(
+    route_client_and_db,
+):
+    client, headers, _ = route_client_and_db
+
+    turn1 = client.post(
+        "/api/customer-service/ask?debug=true",
+        json={"question": "推荐几款适合家庭露营的锅具。"},
+        headers=headers,
+    )
+    assert turn1.status_code == 200, turn1.text
+    payload1 = turn1.json()
+    assert payload1["answer_type"] == "recommendation"
+    assert len(payload1["result_skus"]) >= 2, payload1
+    conversation_id = payload1["conversation_id"]
+
+    turn2 = client.post(
+        "/api/customer-service/ask?debug=true",
+        json={"question": "第一个能不能用酒精炉？", "conversation_id": conversation_id},
+        headers=headers,
+    )
+    assert turn2.status_code == 200, turn2.text
+    payload2 = turn2.json()
+    assert payload2["answer_type"] == "product_detail", payload2
+    assert payload2["answer_type"] != "clarification"
+    assert payload2["answer_type"] != "knowledge_base_answer"
+    assert payload2["result_skus"] == [payload1["result_skus"][0]], payload2
+
+    turn3 = client.post(
+        "/api/customer-service/ask?debug=true",
+        json={"question": "第二个容量多大？", "conversation_id": conversation_id},
+        headers=headers,
+    )
+    assert turn3.status_code == 200, turn3.text
+    payload3 = turn3.json()
+    assert payload3["answer_type"] == "product_detail", payload3
+    assert payload3["answer_type"] != "clarification"
+    assert payload3["answer_type"] != "knowledge_base_answer"
+    assert payload3["result_skus"] == [payload1["result_skus"][1]], payload3
 
 
 def test_customer_service_ask_route_level_multiturn_recommendation_context_survives_heat_source_and_alternative_followups(
@@ -685,6 +822,42 @@ def test_customer_service_ask_stream_route_level_ct_t04_bm_keeps_exact_sku(
     assert "CT-T04(BM)" in payload["answer"]
     assert "CT-T04）" not in payload["answer"]
     assert debug_plan.get("product_ref") == "CT-T04(BM)"
+
+
+@pytest.mark.parametrize(
+    "question",
+    [
+        "公司十几个人露营烧烤，还要烧水泡茶，炉具怎么配？",
+        "露营烧烤加煮水，先买炉具还是水壶？",
+        "海边风大，想烧烤又想烧热水，用什么炉具更稳？",
+        "多人营地聚餐，有烤肉也有热饮，炉子怎么选？",
+        "风比较大的营地，炉具和烤盘怎么搭？",
+    ],
+)
+def test_customer_service_ask_route_level_stove_combo_generalization_stays_in_stove_domain(
+    route_client_and_db,
+    question,
+):
+    client, headers, Session = route_client_and_db
+
+    response = client.post("/api/customer-service/ask?debug=true", json={"question": question}, headers=headers)
+
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    assert payload["answer_type"] == "recommendation", payload
+    assert payload["answer_type"] != "knowledge_base_answer"
+    assert payload["result_skus"], payload
+    assert payload["result_skus"][0] not in {"AC-Z13", "CB253", "CB254"}, payload["result_skus"]
+    assert payload["answer"], payload
+
+    with Session() as db:
+        front_categories = {
+            product.sku: product.category
+            for product in db.query(Product).filter(Product.sku.in_(payload["result_skus"][:2])).all()
+        }
+
+    assert front_categories, payload
+    assert all(category == "炉具" for category in front_categories.values()), front_categories
 
 
 def test_customer_service_ask_route_level_category_accessories_prioritize_clear_accessories(

@@ -335,7 +335,8 @@ def _phase1_product_bundle_by_ref(db: Session, product_ref: str) -> tuple[Produc
     ref = str(product_ref or "").strip()
     if not ref:
         return None, None, None, None
-    exact_sku = db.query(Product).filter(Product.sku == ref.upper()).first()
+    exact_sku_value = _resolve_exact_sku_variant(db, ref) or ref.upper()
+    exact_sku = db.query(Product).filter(Product.sku == exact_sku_value).first()
     if exact_sku:
         specs = db.query(ProductSpecs).filter(ProductSpecs.product_id == exact_sku.id).first()
         business = db.query(ProductBusiness).filter(ProductBusiness.product_id == exact_sku.id).first()
@@ -364,7 +365,17 @@ def _phase1_product_field_result(db: Session, plan: dict) -> dict | None:
     product_ref = str(plan.get("product_ref") or "").strip()
     explicit_sku = str(plan.get("sku") or "").strip().upper()
     requested_field = str(plan.get("requested_field") or "").strip()
-    resolved_ref = explicit_sku or _resolve_sku(db, product_ref, None) or product_ref
+    raw_question = str(plan.get("raw_question") or "").strip()
+    resolved_ref = (
+        _resolve_exact_sku_variant(db, explicit_sku or product_ref or raw_question)
+        or explicit_sku
+        or _resolve_sku(db, raw_question or product_ref, product_ref or None)
+        or _resolve_sku(db, product_ref, None)
+        or product_ref
+    )
+    if resolved_ref:
+        plan["product_ref"] = resolved_ref
+        plan["sku"] = resolved_ref
     product, specs, business, content = _phase1_product_bundle_by_ref(db, resolved_ref)
     if not product:
         return {
@@ -732,6 +743,82 @@ def _phase1_explicit_sku_alcohol_people_result(db: Session, question: str) -> di
     }
 
 
+def _explicit_sku_detail_requested_fields(question: str) -> list[str]:
+    text = str(question or "").strip()
+    if not text:
+        return []
+    fields = list(customer_agent_intent_service._requested_fields_for_detail_question(text))
+    if any(term in text for term in ("酒精炉", "明火", "热源", "燃料", "火源", "能用", "能不能用", "可以用")) and "热源" not in fields:
+        fields.append("热源")
+    if any(term in text for term in ("适合", "场景", "干嘛用", "露营用", "几个人", "几人用", "适用人群")) and "适用场景" not in fields:
+        fields.append("适用场景")
+    return fields
+
+
+def _is_explicit_sku_detail_question(question: str) -> bool:
+    text = str(question or "").strip()
+    if not text:
+        return False
+    if customer_agent_intent_service._is_compare_question(text):
+        return False
+    if any(term in text for term in ("有哪些", "列出", "推荐哪套", "推荐哪个", "推荐哪款", "怎么选", "先买哪个")):
+        return False
+    fields = _explicit_sku_detail_requested_fields(text)
+    if fields:
+        return True
+    return any(term in text for term in ("适合什么场景", "适合露营", "适合几个人", "干嘛用", "能不能用明火", "能不能用酒精炉"))
+
+
+async def _try_explicit_sku_detail_shortcut(db: Session, question: str) -> dict | None:
+    text = str(question or "").strip()
+    explicit_skus = customer_agent_service._extract_skus(text)
+    if not text or not explicit_skus:
+        return None
+    if not _is_explicit_sku_detail_question(text):
+        return None
+    resolved_candidates: list[str] = []
+    for candidate in explicit_skus:
+        resolved_candidate = _resolve_exact_sku_variant(db, candidate)
+        if resolved_candidate and resolved_candidate not in resolved_candidates:
+            resolved_candidates.append(resolved_candidate)
+    resolved_sku = resolved_candidates[0] if len(resolved_candidates) == 1 else _resolve_sku(db, text, None)
+    if not resolved_sku:
+        return None
+    requested_fields = _explicit_sku_detail_requested_fields(text)
+    intent = customer_agent_intent_service.CustomerIntent(
+        intent="product_detail",
+        target_skus=[resolved_sku],
+        requested_fields=requested_fields,
+        semantic_query=text,
+        term=resolved_sku,
+        source_context="question",
+        is_single_field_sufficient=customer_agent_intent_service._is_single_field_sufficient(text, requested_fields, [resolved_sku]),
+    )
+    result = await customer_agent_intent_service._product_detail_result(
+        db,
+        intent,
+        original_question=text,
+    )
+    debug = result.get("debug") if isinstance(result.get("debug"), dict) else {}
+    requested_field = ""
+    if "热源" in requested_fields:
+        requested_field = "heat_source"
+    elif requested_fields:
+        requested_field = requested_fields[0]
+    debug["agent_mode"] = "explicit_sku_detail_shortcut"
+    debug["plan"] = {
+        "primary_intent": "product_field",
+        "product_ref": resolved_sku,
+        "requested_field": requested_field,
+        "raw_question": text,
+    }
+    result["debug"] = debug
+    result["sku"] = resolved_sku
+    result["result_skus"] = [resolved_sku]
+    result["candidate_skus"] = [resolved_sku]
+    return result
+
+
 def _phase1_people_capacity_answer(row: dict[str, Any]) -> str:
     name = str(row.get("product_name_cn") or row.get("product_name_en") or row.get("sku") or "该产品").strip()
     usage = str(row.get("usage_scenarios") or "").strip()
@@ -895,12 +982,18 @@ def _looks_like_context_required_ordinal_compare(question: str) -> bool:
 def _pronoun_heat_source_followup_target_sku(question: str, recommendation_context: dict[str, Any] | None) -> str:
     text = str(question or "")
     if not (
-        any(term in text for term in ("它", "这个", "这款", "刚才推荐"))
+        any(term in text for term in ("它", "这个", "这款", "刚才推荐", "刚才那个", "前面那个"))
         and any(term in text for term in ("酒精炉", "酒精"))
-        and any(term in text for term in ("能不能", "能用", "可以用", "支持", "是否支持"))
+        and any(term in text for term in ("能不能", "能用", "可以用", "可以配", "配", "支持", "是否支持"))
     ):
         return ""
     context = recommendation_context if isinstance(recommendation_context, dict) else {}
+    last_referenced_sku = str(context.get("last_referenced_sku") or "").strip().upper()
+    if last_referenced_sku:
+        return last_referenced_sku
+    top_recommended_sku = str(context.get("top_recommended_sku") or "").strip().upper()
+    if top_recommended_sku:
+        return top_recommended_sku
     for key in ("recommended_skus", "ordered_result_skus", "candidate_skus"):
         for sku in context.get(key) or []:
             value = str(sku or "").strip().upper()
@@ -909,25 +1002,191 @@ def _pronoun_heat_source_followup_target_sku(question: str, recommendation_conte
     return ""
 
 
-def _product_heat_source_followup_result(db: Session, question: str, sku: str) -> dict | None:
-    if not sku:
+def _followup_requested_field(question: str) -> str:
+    text = str(question or "")
+    if any(term in text for term in ("酒精炉", "酒精", "热源")):
+        return "heat_source"
+    return customer_agent_planner_service._requested_field(text)
+
+
+def _ordered_context_skus(*contexts: dict[str, Any] | None) -> list[str]:
+    for context in contexts:
+        if not isinstance(context, dict):
+            continue
+        for key in ("ordered_result_skus", "recommended_skus", "candidate_skus"):
+            ordered = [
+                str(sku or "").strip().upper()
+                for sku in context.get(key) or []
+                if str(sku or "").strip()
+            ]
+            if ordered:
+                return ordered
+    return []
+
+
+def _ordinal_followup_target_sku(
+    question: str,
+    recommendation_context: dict[str, Any] | None,
+    candidate_context: dict[str, Any] | None,
+) -> str:
+    text = str(question or "")
+    ordered = _ordered_context_skus(recommendation_context, candidate_context)
+    if not ordered:
+        return ""
+    if any(term in text for term in ("最后一个", "最后一款", "最后那个")):
+        return ordered[-1]
+    mapping = (
+        ("第一个", 0),
+        ("第一款", 0),
+        ("最前面那个", 0),
+        ("第二个", 1),
+        ("第二款", 1),
+        ("第三个", 2),
+        ("第三款", 2),
+    )
+    for token, index in mapping:
+        if token in text and index < len(ordered):
+            return ordered[index]
+    return ""
+
+
+def _ordinal_followup_target_sku_from_ordered(question: str, ordered_skus: list[str]) -> str:
+    ordered = [
+        str(sku or "").strip().upper()
+        for sku in (ordered_skus or [])
+        if str(sku or "").strip()
+    ]
+    if not ordered:
+        return ""
+    text = str(question or "")
+    ordinal_hits: list[tuple[int, int]] = []
+    for token in ("最后一个", "最后一款", "最后那个"):
+        position = text.rfind(token)
+        if position >= 0:
+            ordinal_hits.append((position, len(ordered) - 1))
+    mapping = (
+        ("第一个", 0),
+        ("第一款", 0),
+        ("最前面那个", 0),
+        ("第二个", 1),
+        ("第二款", 1),
+        ("第三个", 2),
+        ("第三款", 2),
+    )
+    for token, index in mapping:
+        position = text.rfind(token)
+        if position >= 0 and index < len(ordered):
+            ordinal_hits.append((position, index))
+    if ordinal_hits:
+        ordinal_hits.sort(key=lambda item: item[0])
+        return ordered[ordinal_hits[-1][1]]
+    return ""
+
+
+def _looks_like_ordinal_product_field_followup(question: str) -> bool:
+    text = str(question or "")
+    return any(term in text for term in ("第一个", "第一款", "最前面那个", "第二个", "第二款", "第三个", "第三款", "最后一个", "最后一款", "最后那个"))
+
+
+def _product_field_followup_result(db: Session, sku: str, requested_field: str, question: str) -> dict | None:
+    if not sku or not requested_field:
         return None
     plan = {
         "primary_intent": "product_field",
         "answer_type": "product_detail",
         "product_ref": sku,
-        "requested_field": "heat_source",
+        "sku": sku,
+        "requested_field": requested_field,
         "field_only": True,
         "confidence": "high",
-        "tasks": [{"type": "product_field", "product_ref": sku, "requested_field": "heat_source"}],
+        "raw_question": question,
+        "tasks": [{"type": "product_field", "product_ref": sku, "requested_field": requested_field}],
     }
     result = _phase1_product_field_result(db, plan)
     if not result:
         return None
     debug = result.get("debug") if isinstance(result.get("debug"), dict) else {}
-    debug["agent_mode"] = "recommendation_context_product_compatibility"
+    debug["agent_mode"] = "recommendation_context_product_field"
     result["debug"] = debug
     return result
+
+
+def _product_heat_source_followup_result(db: Session, question: str, sku: str) -> dict | None:
+    result = _product_field_followup_result(db, sku, "heat_source", question)
+    if isinstance(result, dict):
+        debug = result.get("debug") if isinstance(result.get("debug"), dict) else {}
+        debug["agent_mode"] = "recommendation_context_product_compatibility"
+        result["debug"] = debug
+    return result
+
+
+def _alternative_recommendation_followup_result(
+    db: Session,
+    question: str,
+    recommendation_context: dict[str, Any] | None,
+    candidate_context: dict[str, Any] | None,
+) -> dict | None:
+    ordered = _ordered_context_skus(recommendation_context, candidate_context)
+    if len(ordered) < 2:
+        return None
+    context = recommendation_context if isinstance(recommendation_context, dict) else {}
+    anchor_sku = str(
+        context.get("last_referenced_sku")
+        or context.get("top_recommended_sku")
+        or (ordered[0] if ordered else "")
+    ).strip().upper()
+    alternative_skus = [sku for sku in ordered if sku and sku != anchor_sku]
+    if not alternative_skus:
+        alternative_skus = ordered[1:]
+    alternative_skus = alternative_skus[:3]
+    if not alternative_skus:
+        return None
+
+    products = db.query(Product).filter(Product.sku.in_(alternative_skus)).all()
+    by_sku = {str(product.sku or "").strip().upper(): product for product in products}
+    rows: list[dict] = []
+    for sku in alternative_skus:
+        product = by_sku.get(sku)
+        if not product:
+            continue
+        specs = db.query(ProductSpecs).filter(ProductSpecs.product_id == product.id).first()
+        business = db.query(ProductBusiness).filter(ProductBusiness.product_id == product.id).first()
+        content = db.query(ProductContent).filter(ProductContent.product_id == product.id).first()
+        rows.append(_product_row_from_model(product, specs, business, content))
+    if not rows:
+        return None
+
+    top_row = rows[0]
+    top_name = top_row.get("product_name_cn") or top_row.get("sku")
+    top_sku = str(top_row.get("sku") or "").strip().upper()
+    top_reason = str(
+        top_row.get("usage_scenarios")
+        or top_row.get("features")
+        or top_row.get("positioning")
+        or "会更适合作为替代方向"
+    ).strip("。；; ")
+    answer = f"如果不继续用刚才那款，我会先把替代建议收回到同一批候选里。主推 {top_name}（{top_sku}），{top_reason}。"
+    backups: list[str] = []
+    for row in rows[1:3]:
+        name = row.get("product_name_cn") or row.get("sku")
+        sku = str(row.get("sku") or "").strip().upper()
+        reason = str(row.get("usage_scenarios") or row.get("features") or row.get("positioning") or "也可以作为同场景备选").strip("。；; ")
+        backups.append(f"{name}（{sku}），{reason}")
+    if backups:
+        answer += " 备选可以看" + "；".join(backups) + "。"
+
+    result_skus = [str(row.get("sku") or "").strip().upper() for row in rows if str(row.get("sku") or "").strip()]
+    return {
+        "intent": "recommendation",
+        "answer_type": "recommendation",
+        "answer": answer,
+        "results": rows,
+        "result_skus": result_skus,
+        "candidate_skus": result_skus,
+        "debug": {"agent_mode": "recommendation_context_alternative_followup"},
+        "answer_metadata": {"source": "recommendation_context_alternative_followup"},
+        "skip_polish": True,
+    }
 
 
 def _context_skus_for_pair_followup(*contexts: dict[str, Any] | None) -> list[str]:
@@ -1050,7 +1309,7 @@ def _phase1_answer_mentions_product(agent_result: dict) -> bool:
 
 
 def _phase1_structured_recommendation_result(db: Session, plan: dict) -> dict | None:
-    scenario = str(plan.get("scenario") or "").strip()
+    scenario = str(plan.get("scenario") or plan.get("raw_question") or "").strip()
     if not scenario:
         return None
     rows = _phase1_catalog_rows(db, "产品")
@@ -1166,13 +1425,38 @@ def _phase1_structured_recommendation_result(db: Session, plan: dict) -> dict | 
 
 
 def _phase1_should_use_structured_recommendation(plan: dict) -> bool:
-    scenario = str((plan or {}).get("scenario") or "")
+    scenario = str((plan or {}).get("scenario") or (plan or {}).get("raw_question") or "")
     if not scenario:
         return False
+    if any(
+        checker(scenario)
+        for checker in (
+            _phase1_is_light_budget_cookware_set_scenario,
+            _phase1_is_griddle_vs_cookware_scenario,
+            _phase1_is_stove_pairing_scenario,
+            _phase1_is_stove_griddle_combo_scenario,
+        )
+    ):
+        return True
     if any(term in scenario for term in ("想买套锅", "想买锅", "买套锅", "买锅", "买哪个", "应该买", "该买", "推荐", "怎么选", "希望", "想选")):
         return True
     return any(term in scenario for term in ("露营", "野餐", "徒步", "公园", "自驾", "家庭", "烧烤", "早餐")) and any(
         term in scenario for term in ("锅", "锅具", "套锅", "单锅", "炊具", "炉具", "炉子", "烤盘", "正餐", "做正餐", "烧水", "做简单餐食", "煎东西")
+    )
+
+
+def _phase1_force_structured_recommendation_rebuild(question: str) -> bool:
+    scenario = str(question or "").strip()
+    if not scenario:
+        return False
+    return any(
+        checker(scenario)
+        for checker in (
+            _phase1_is_light_budget_cookware_set_scenario,
+            _phase1_is_griddle_vs_cookware_scenario,
+            _phase1_is_stove_pairing_scenario,
+            _phase1_is_stove_griddle_combo_scenario,
+        )
     )
 
 
@@ -1185,13 +1469,18 @@ def _phase1_scenario_labels(scenario: str) -> list[str]:
 
 
 def _phase1_repair_recommendation_result(db: Session, agent_result: dict, plan: dict) -> dict:
-    if not isinstance(agent_result, dict) or (plan or {}).get("primary_intent") != "recommendation":
+    if not isinstance(agent_result, dict) or not _phase1_should_use_structured_recommendation(plan):
         return agent_result
+    scenario = str((plan or {}).get("scenario") or (plan or {}).get("raw_question") or "")
+    force_rebuild = _phase1_force_structured_recommendation_rebuild(scenario)
     if (
         str(agent_result.get("answer_type") or "").strip() == "recommendation"
         and _phase1_answer_mentions_product(agent_result)
         and _phase1_result_skus(agent_result)
+        and not force_rebuild
     ):
+        return agent_result
+    if (plan or {}).get("primary_intent") not in {"recommendation", "product_query"} and str(agent_result.get("answer_type") or "").strip() not in {"query_products", "product_query", "recommendation"}:
         return agent_result
     rebuilt = _phase1_structured_recommendation_result(db, plan)
     return rebuilt or agent_result
@@ -1224,10 +1513,18 @@ def _phase1_is_griddle_vs_cookware_scenario(question: str) -> bool:
     value = str(question or "").strip()
     if not value:
         return False
+    has_griddle_scope = any(term in value for term in ("烤盘", "煎盘"))
+    has_cookware_scope = any(term in value for term in ("锅具", "锅", "套锅", "单锅"))
+    has_compare_or_selection = any(
+        term in value
+        for term in ("还是", "哪个更合适", "更合适", "推荐", "更实用", "更好", "优先选", "更适用")
+    )
+    has_grill_breakfast_signal = any(term in value for term in ("煎烤", "煎东西", "煎烤食物", "早餐"))
     return (
-        any(term in value for term in ("烤盘", "煎盘"))
-        and any(term in value for term in ("锅具", "锅", "套锅", "单锅"))
-        and any(term in value for term in ("还是", "哪个更合适", "更合适", "推荐"))
+        has_griddle_scope
+        and has_cookware_scope
+        and has_compare_or_selection
+        and has_grill_breakfast_signal
     )
 
 
@@ -1238,8 +1535,13 @@ def _phase1_is_stove_pairing_scenario(question: str) -> bool:
     if _phase1_is_stove_griddle_combo_scenario(value):
         return False
     has_stove_scope = any(term in value for term in ("炉具", "炉子"))
-    has_pairing_or_selection = any(term in value for term in ("怎么搭", "怎么配", "怎么选", "该怎么选", "更稳", "稳一点", "兼顾"))
-    has_stove_scene_signal = any(term in value for term in ("烧烤", "加热饮", "热饮", "营地聚餐", "烧水", "风大", "防风"))
+    has_pairing_or_selection = any(
+        term in value
+        for term in ("怎么搭", "怎么配", "怎么选", "该怎么选", "更稳", "稳一点", "兼顾", "先买", "先补", "先选", "先选什么", "先选哪个", "还是水壶")
+    )
+    has_bbq_signal = any(term in value for term in ("烧烤", "烤肉", "烤东西"))
+    has_water_signal = any(term in value for term in ("烧水", "煮水", "热饮", "加热饮", "泡茶", "热水"))
+    has_stove_scene_signal = any(term in value for term in ("营地聚餐", "风大", "防风")) or (has_bbq_signal and has_water_signal)
     return has_stove_scope and has_pairing_or_selection and has_stove_scene_signal
 
 
@@ -1395,9 +1697,9 @@ def _phase1_structured_stove_pairing_result(scenario: str, rows: list[dict]) -> 
             score += 8
         if any(term in text for term in ("稳定", "火力", "稳", "防风")):
             score += 6
-        if any(term in text for term in ("烧烤", "桌面聚餐", "露营烧烤", "营地聚餐")):
+        if any(term in text for term in ("烧烤", "烤肉", "桌面聚餐", "露营烧烤", "营地聚餐")):
             score += 5
-        if any(term in text for term in ("烧水", "热饮", "煮茶", "加热饮")):
+        if any(term in text for term in ("烧水", "煮水", "热饮", "煮茶", "泡茶", "加热饮", "热水")):
             score += 3
         return (-score, str(row.get("sku") or ""))
 
@@ -1414,7 +1716,7 @@ def _phase1_structured_stove_pairing_result(scenario: str, rows: list[dict]) -> 
     answer_parts = [
         f"这类需求我会优先按炉具域来配，先用 {top_name}（{top_sku}）承担烧烤和主加热，{top_reason}。"
     ]
-    if any(term in scenario for term in ("烧水", "热饮", "加热饮")):
+    if any(term in scenario for term in ("烧水", "煮水", "热饮", "加热饮", "泡茶", "热水")):
         answer_parts.append("如果还要兼顾烧水或热饮，建议在同一套炉具体系下搭配壶或锅处理，不要先把水壶本身当主设备。")
     if any(term in scenario for term in ("风大", "海边", "防风")):
         answer_parts.append("风大的场景优先看防风能力、支撑稳定性和低重心结构，先把炉具本体选稳，再考虑其他搭配。")
@@ -1471,9 +1773,11 @@ def _phase1_structured_stove_griddle_result(scenario: str, rows: list[dict]) -> 
     selected: list[dict] = []
     if stove_rows:
         selected.append(stove_rows[0])
+    if len(stove_rows) > 1:
+        selected.append(stove_rows[1])
     if griddle_rows:
         selected.append(griddle_rows[0])
-    for row in stove_rows[1:] + griddle_rows[1:]:
+    for row in stove_rows[2:] + griddle_rows[1:]:
         sku = str(row.get("sku") or "").strip().upper()
         if sku and sku not in {str(item.get("sku") or "").strip().upper() for item in selected}:
             selected.append(row)
@@ -1925,13 +2229,50 @@ async def ask_customer_service(
     phase1_plan = customer_agent_planner_service.plan_customer_question(question)
     planner_duration_ms = round((perf_counter() - planner_start) * 1000, 2)
 
+    explicit_sku_direct_result = await _try_explicit_sku_detail_shortcut(db, question)
+    if explicit_sku_direct_result:
+        return await _save_agent_result_and_return(
+            db,
+            user_id=user_id,
+            question=question,
+            conversation_id=conversation_id,
+            agent_result=explicit_sku_direct_result,
+            request_start=request_start,
+            branch="phase1_explicit_sku_detail",
+        )
+
     phase1_direct_result = None
     executor_start = perf_counter()
+    if (
+        conversation_id
+        and phase1_plan.get("primary_intent") == "product_field"
+        and _looks_like_ordinal_product_field_followup(question)
+    ):
+        ordinal_recommendation_context = _latest_recommendation_context_for_sources(db, conversation_id)
+        ordinal_candidate_context = _latest_candidate_context_for_sources(db, conversation_id)
+        ordinal_followup_sku = _ordinal_followup_target_sku(
+            question,
+            ordinal_recommendation_context,
+            ordinal_candidate_context,
+        )
+        if not ordinal_followup_sku:
+            ordinal_followup_sku = _ordinal_followup_target_sku_from_ordered(
+                question,
+                _latest_ordered_result_skus_for_followup(db, conversation_id, user_id),
+            )
+        ordinal_requested_field = _followup_requested_field(question)
+        if ordinal_followup_sku and ordinal_requested_field:
+            phase1_direct_result = _product_field_followup_result(
+                db,
+                ordinal_followup_sku,
+                ordinal_requested_field,
+                question,
+            )
     plural_heat_source_followup = bool(
         phase1_plan.get("primary_intent") == "product_field"
         and _is_plural_heat_source_followup(question)
     )
-    if phase1_plan.get("primary_intent") == "product_field" and not plural_heat_source_followup:
+    if not phase1_direct_result and phase1_plan.get("primary_intent") == "product_field" and not plural_heat_source_followup:
         phase1_direct_result = _phase1_product_field_result(db, phase1_plan)
     elif phase1_plan.get("primary_intent") == "category_compatibility":
         phase1_direct_result = _phase1_category_compatibility_result(db, phase1_plan)
@@ -2354,6 +2695,18 @@ async def ask_customer_service(
         agent_mode=(explicit_multi_field_result.get("debug") or {}).get("agent_mode") if explicit_multi_field_result else None,
     )
 
+    explicit_detail_start = perf_counter()
+    explicit_detail_result = None
+    if not agent_result:
+        explicit_detail_result = await _try_explicit_sku_detail_shortcut(db, question)
+        agent_result = explicit_detail_result
+    customer_perf_service.log_stage(
+        "explicit_sku_detail_shortcut",
+        explicit_detail_start,
+        hit=bool(explicit_detail_result),
+        agent_mode=(explicit_detail_result.get("debug") or {}).get("agent_mode") if explicit_detail_result else None,
+    )
+
     alcohol_exclusion_start = perf_counter()
     alcohol_exclusion_result = None
     if not agent_result:
@@ -2425,9 +2778,70 @@ async def ask_customer_service(
         if pair_skus:
             agent_result = _context_pair_followup_result(db, question, pair_skus)
     if not agent_result:
-        heat_source_followup_sku = _pronoun_heat_source_followup_target_sku(question, recommendation_followup_context)
-        if heat_source_followup_sku:
-            agent_result = _product_heat_source_followup_result(db, question, heat_source_followup_sku)
+        requested_followup_field = _followup_requested_field(question)
+        ordinal_followup_sku = _ordinal_followup_target_sku(
+            question,
+            recommendation_followup_context,
+            candidate_followup_context,
+        )
+        if not ordinal_followup_sku and any(term in question for term in ("第一个", "第一款", "最前面那个", "第二个", "第二款", "第三个", "第三款", "最后一个", "最后一款", "最后那个")):
+            ordinal_followup_sku = _ordinal_followup_target_sku_from_ordered(
+                question,
+                _latest_ordered_result_skus_for_followup(
+                    db,
+                    conversation_id=conversation_id,
+                    user_id=user_id,
+                ),
+            )
+        if ordinal_followup_sku and requested_followup_field:
+            agent_result = _product_field_followup_result(db, ordinal_followup_sku, requested_followup_field, question)
+    if not agent_result:
+        heat_source_followup_sku = ""
+        latest_ordered_followup_skus: list[str] = []
+        if conversation_id:
+            latest_ordered_followup_skus = _latest_ordered_result_skus_for_followup(
+                db,
+                conversation_id,
+                user_id,
+            )
+            previous_user_question = _latest_user_question_for_followup(
+                db,
+                conversation_id,
+                user_id,
+                question,
+            )
+            heat_source_followup_sku = _ordinal_followup_target_sku_from_ordered(
+                previous_user_question,
+                latest_ordered_followup_skus,
+            )
+        if isinstance(candidate_followup_context, dict):
+            candidate_ordered_skus = _ordered_context_skus(candidate_followup_context)
+            if not heat_source_followup_sku:
+                heat_source_followup_sku = _ordinal_followup_target_sku_from_ordered(
+                    str(candidate_followup_context.get("user_question") or ""),
+                    candidate_ordered_skus,
+                )
+            if not heat_source_followup_sku:
+                heat_source_followup_sku = str(candidate_followup_context.get("last_referenced_sku") or "").strip().upper()
+        if not heat_source_followup_sku:
+            heat_source_followup_sku = _pronoun_heat_source_followup_target_sku(question, recommendation_followup_context)
+        if not heat_source_followup_sku and isinstance(candidate_followup_context, dict):
+            heat_source_followup_sku = str(candidate_followup_context.get("last_referenced_sku") or "").strip().upper()
+        if not heat_source_followup_sku and isinstance(candidate_followup_context, dict):
+            ordered_candidate_skus = _ordered_context_skus(candidate_followup_context)
+            if ordered_candidate_skus:
+                heat_source_followup_sku = ordered_candidate_skus[0]
+        if not heat_source_followup_sku and latest_ordered_followup_skus:
+            heat_source_followup_sku = latest_ordered_followup_skus[0]
+        if heat_source_followup_sku and requested_followup_field:
+            agent_result = _product_field_followup_result(db, heat_source_followup_sku, requested_followup_field, question)
+    if not agent_result and _asks_for_alternative_recommendation(question):
+        agent_result = _alternative_recommendation_followup_result(
+            db,
+            question,
+            recommendation_followup_context,
+            candidate_followup_context,
+        )
     vague_price_start = perf_counter()
     vague_price_clarification = bool(
         not agent_result
@@ -2796,6 +3210,32 @@ async def ask_customer_service(
             candidate_context=candidate_context,
         )
         customer_perf_service.log_stage("process_agent_request_followup", stage_start, hit=bool(agent_result), intent=agent_result.get("intent") if agent_result else None, agent_mode=(agent_result.get("debug") or {}).get("agent_mode") if agent_result else None)
+    if (
+        agent_result
+        and str(agent_result.get("answer_type") or "").strip() == "product_detail"
+        and not (agent_result.get("result_skus") or [])
+        and _looks_like_ordinal_product_field_followup(question)
+    ):
+        ordered_followup_sku = _ordinal_followup_target_sku(
+            question,
+            recommendation_followup_context,
+            candidate_followup_context,
+        )
+        if not ordered_followup_sku:
+            ordered_followup_sku = _ordinal_followup_target_sku_from_ordered(
+                question,
+                _latest_ordered_result_skus_for_followup(db, conversation_id, user_id),
+            )
+        requested_followup_field = _followup_requested_field(question)
+        if ordered_followup_sku and requested_followup_field:
+            repaired_followup_result = _product_field_followup_result(
+                db,
+                ordered_followup_sku,
+                requested_followup_field,
+                question,
+            )
+            if repaired_followup_result:
+                agent_result = repaired_followup_result
     agent_result = _phase1_filter_alcohol_stove_cookware_result(
         db,
         agent_result,
@@ -3199,12 +3639,26 @@ def _sku_lookup_variants(value: str | None) -> list[str]:
     if not raw:
         return []
     variants: list[str] = []
+    compact_raw = raw.upper().replace("_", "-")
+    parenthetical_variants: list[str] = []
+    paren_match = re.match(r"^(?P<prefix>[A-Z0-9]+(?:-[A-Z0-9]+)+)[-](?P<suffix>[A-Z0-9]{2,8})$", compact_raw)
+    if paren_match:
+        parenthetical_variants.extend(
+            [
+                f"{paren_match.group('prefix')}({paren_match.group('suffix')})",
+                f"{paren_match.group('prefix')}（{paren_match.group('suffix')}）",
+            ]
+        )
+    suffix_match = re.match(r"^(?P<prefix>[A-Z0-9]+(?:-[A-Z0-9]+)+)[(（](?P<suffix>[A-Z0-9]{2,8})[)）]$", compact_raw)
+    if suffix_match:
+        parenthetical_variants.append(f"{suffix_match.group('prefix')}-{suffix_match.group('suffix')}")
     candidates = [
         raw,
-        raw.upper().replace("_", "-"),
+        compact_raw,
         raw.replace("(", "（").replace(")", "）"),
         raw.replace("（", "(").replace("）", ")"),
         customer_agent_service.normalize_search_text(raw).upper().replace("_", "-"),
+        *parenthetical_variants,
     ]
     for candidate in candidates:
         normalized = str(candidate or "").strip()
@@ -3752,6 +4206,11 @@ def _sources_with_result_context(
     if result_skus and agent_result.get("answer_type") in {"product_query", "recommendation", "comparison"}:
         recommendation_like = agent_result.get("answer_type") == "recommendation"
         comparison_like = agent_result.get("answer_type") == "comparison"
+        last_referenced_sku = current_ordered_skus[0] if current_ordered_skus else None
+        if comparison_like:
+            ordinal_target = _ordinal_followup_target_sku_from_ordered(str(user_question or ""), current_ordered_skus)
+            if ordinal_target:
+                last_referenced_sku = ordinal_target
         candidate_context = {
             "candidate_skus": inherited_candidate_skus if preserve_inherited_candidate_domain else current_ordered_skus,
             "ordered_result_skus": inherited_ordered_skus if preserve_inherited_candidate_domain else current_ordered_skus,
@@ -3759,6 +4218,7 @@ def _sources_with_result_context(
             "pair_skus": current_ordered_skus[:2] if comparison_like and len(current_ordered_skus) >= 2 else [],
             "user_question": str(user_question or "").strip(),
             "product_scope": product_scope,
+            "last_referenced_sku": last_referenced_sku,
             "source": (
                 "recommendation"
                 if recommendation_like or agent_result.get("intent") == "recommend_products"
@@ -3819,6 +4279,7 @@ def _sources_with_result_context(
             "product_scope": product_scope,
             "answer_type": "recommendation",
             "top_recommended_sku": current_ordered_skus[0] if current_ordered_skus else None,
+            "last_referenced_sku": current_ordered_skus[0] if current_ordered_skus else None,
         }
     elif isinstance(inherited_recommendation_context, dict) and inherited_recommendation_context.get("recommended_skus"):
         recommendation_context = {
@@ -3856,7 +4317,14 @@ def _sources_with_result_context(
                 )
                 or ""
             ).strip().upper() or None,
+            "last_referenced_sku": str(inherited_recommendation_context.get("last_referenced_sku") or "").strip().upper() or None,
         }
+        if agent_result.get("answer_type") == "product_detail" and len(result_skus) == 1:
+            recommendation_context["last_referenced_sku"] = result_skus[0]
+        elif agent_result.get("answer_type") == "comparison" and current_ordered_skus:
+            referenced_sku = _ordinal_followup_target_sku_from_ordered(str(user_question or ""), current_ordered_skus)
+            if referenced_sku:
+                recommendation_context["last_referenced_sku"] = referenced_sku
     if candidate_context and candidate_context.get("empty_subset") and isinstance(existing_candidate_context, dict):
         if not candidate_context.get("candidate_skus"):
             candidate_context["candidate_skus"] = [
@@ -4045,6 +4513,7 @@ def _latest_candidate_context_for_sources(db: Session, conversation_id: str | No
                     "product_scope": str(context.get("product_scope") or "").strip(),
                     "empty_subset": bool(context.get("empty_subset")),
                     "applied_filter": context.get("applied_filter") if isinstance(context.get("applied_filter"), dict) else None,
+                    "last_referenced_sku": str(context.get("last_referenced_sku") or "").strip().upper() or None,
                 }
     return {}
 
@@ -4361,7 +4830,11 @@ def _asks_for_alternative_recommendation(question: str) -> bool:
         "\u522b\u8981\u521a\u624d",
         "\u66ff\u4ee3",
         "\u66f4\u4fbf\u5b9c",
+        "\u4fbf\u5b9c\u70b9",
+        "\u7a0d\u5fae\u4fbf\u5b9c",
         "\u66f4\u8f7b",
+        "\u66f4\u5408\u9002",
+        "\u66f4\u9002\u5408",
     )
     return any(term in text for term in terms)
 
@@ -5935,6 +6408,86 @@ def _latest_active_product_skus(db: Session, conversation_id: str | None, user_i
         if primary_sku:
             return [primary_sku]
     return []
+
+
+def _latest_ordered_result_skus_for_followup(db: Session, conversation_id: str | None, user_id: str) -> list[str]:
+    if not conversation_id:
+        return []
+    conversation = db.query(CustomerServiceConversation).filter(
+        CustomerServiceConversation.id == conversation_id,
+        CustomerServiceConversation.user_id == str(user_id),
+    ).first()
+    if not conversation:
+        return []
+    messages = db.query(CustomerServiceMessage).filter(
+        CustomerServiceMessage.conversation_id == conversation_id,
+        CustomerServiceMessage.role == "assistant",
+    ).order_by(CustomerServiceMessage.created_at.desc(), CustomerServiceMessage.id.desc()).limit(5).all()
+    for message in messages:
+        sources = _safe_json(message.sources_json, [])
+        for source in sources:
+            if not isinstance(source, dict):
+                continue
+            if source.get("type") == "agent_meta":
+                for context_key in ("candidate_context", "recommendation_context"):
+                    context = source.get(context_key)
+                    if not isinstance(context, dict):
+                        continue
+                    ordered = [
+                        str(sku or "").strip().upper()
+                        for sku in (
+                            context.get("ordered_result_skus")
+                            or context.get("recommended_skus")
+                            or context.get("candidate_skus")
+                            or []
+                        )
+                        if str(sku or "").strip()
+                    ]
+                    if ordered:
+                        return ordered
+            if source.get("type") == "agent_context":
+                ordered = [
+                    str(sku or "").strip().upper()
+                    for sku in (source.get("result_skus") or [])
+                    if str(sku or "").strip()
+                ]
+                if ordered:
+                    return ordered
+    return []
+
+
+def _latest_user_question_for_followup(
+    db: Session,
+    conversation_id: str | None,
+    user_id: str,
+    current_question: str | None = None,
+) -> str:
+    if not conversation_id:
+        return ""
+    conversation = db.query(CustomerServiceConversation).filter(
+        CustomerServiceConversation.id == conversation_id,
+        CustomerServiceConversation.user_id == str(user_id),
+    ).first()
+    if not conversation:
+        return ""
+    current_text = str(current_question or "").strip()
+    messages = (
+        db.query(CustomerServiceMessage)
+        .filter(
+            CustomerServiceMessage.conversation_id == conversation_id,
+            CustomerServiceMessage.role == "user",
+        )
+        .order_by(CustomerServiceMessage.created_at.desc(), CustomerServiceMessage.id.desc())
+        .limit(5)
+        .all()
+    )
+    for message in messages:
+        content = str(message.content or "").strip()
+        if current_text and content == current_text:
+            continue
+        if content:
+            return content
+    return ""
 
 
 def _latest_entity_stack(db: Session, conversation_id: str | None, user_id: str, limit: int = 30) -> list[dict]:

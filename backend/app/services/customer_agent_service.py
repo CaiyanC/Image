@@ -19,6 +19,42 @@ SKU_RE = re.compile(
     r"|(?:[A-Za-z]{1,6}\d{2,12}[A-Za-z0-9\u4e00-\u9fff]{0,12})"
     r")(?=$|[\s，。,；;：:）)\]】>\"'？?])"
 )
+SKU_PREFIX_RE = re.compile(
+    r"(?<![A-Za-z0-9])(?:[A-Za-z]{1,6}[A-Za-z0-9]{0,12}(?:[-_](?:[A-Za-z0-9]{1,24}(?:\([A-Za-z0-9]{1,24}\))?|[\u4e00-\u9fff]{1,2}))+)"
+)
+PLAIN_SKU_PREFIX_RE = re.compile(
+    r"(?<![A-Za-z0-9])(?:[A-Za-z]{1,6}\d{2,12}[A-Za-z0-9]{0,12}(?:\([A-Za-z0-9]{1,24}\))?)"
+)
+SKU_TAIL_TRIM_PATTERNS = (
+    re.compile(r"^([A-Z]{1,6}[A-Z0-9]{0,12}(?:-[A-Z0-9]{1,24})+[（(][A-Z0-9]{1,24}[)）])[\u4e00-\u9fff].*$"),
+    re.compile(r"^([A-Z]{1,6}[A-Z0-9]{0,12}(?:-[A-Z0-9]{1,24})+-[\u4e00-\u9fff]{1,2})[\u4e00-\u9fff].*$"),
+    re.compile(r"^([A-Z]{1,6}[A-Z0-9]{0,12}(?:-[A-Z0-9]{1,24})+)[\u4e00-\u9fff].*$"),
+    re.compile(r"^([A-Z]{1,6}\d{2,12}[A-Z0-9]{0,12}(?:[（(][A-Z0-9]{1,24}[)）])?)[\u4e00-\u9fff].*$"),
+)
+
+
+def _trim_sku_tail_candidate(candidate: str) -> str:
+    value = str(candidate or "").strip().replace("_", "-").upper()
+    if not value:
+        return ""
+    for pattern in SKU_TAIL_TRIM_PATTERNS:
+        match = pattern.match(value)
+        if match:
+            return str(match.group(1) or "").strip()
+    return value
+
+
+def _extract_sku_prefix_candidates(text: str) -> list[str]:
+    normalized_text = normalize_search_text(text or "")
+    candidates: list[str] = []
+    for pattern in (SKU_PREFIX_RE, PLAIN_SKU_PREFIX_RE):
+        for match in pattern.finditer(normalized_text):
+            candidate = _trim_sku_tail_candidate(str(match.group(0) or ""))
+            if candidate and candidate not in candidates:
+                candidates.append(candidate)
+    return candidates
+
+
 def normalize_search_text(value: Any) -> str:
     text = unicodedata.normalize("NFKC", str(value or ""))
     replacements = {
@@ -733,9 +769,12 @@ def _extract_skus(text: str) -> list[str]:
     seen = []
     normalized_text = normalize_search_text(text or "")
     for item in SKU_RE.findall(normalized_text):
-        normalized = item.replace("_", "-").upper()
+        normalized = _trim_sku_tail_candidate(item)
         if normalized not in seen:
             seen.append(normalized)
+    for candidate in _extract_sku_prefix_candidates(normalized_text):
+        if candidate not in seen:
+            seen.append(candidate)
     return seen
 
 
