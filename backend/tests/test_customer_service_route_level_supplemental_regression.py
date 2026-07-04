@@ -234,3 +234,82 @@ def test_route_level_multiturn_variant_ordinal_compare_followup_keeps_second_cho
     assert payload3["answer_type"] != "clarification"
     assert payload3["answer_type"] != "knowledge_base_answer"
     assert payload3["result_skus"] == [ordered[1]], (ordered, payload2, payload3)
+
+
+@pytest.mark.parametrize(
+    "question",
+    [
+        "\u60c5\u4fa3\u9732\u8425\u4e3b\u8981\u559d\u70ed\u6c34\uff0c\u6c34\u58f6\u600e\u4e48\u9009\uff1f",
+        "\u4e24\u4e2a\u4eba\u9732\u8425\u4e3b\u8981\u6ce1\u8336\uff0c\u63a8\u8350\u4e2a\u8f7b\u4fbf\u6c34\u58f6\u3002",
+        "\u53cc\u4eba\u9732\u8425\uff0c\u60f3\u4e70\u4e2a\u80fd\u70e7\u6c34\u7684\u58f6\u3002",
+        "\u4e24\u4e2a\u4eba\u9732\u8425\uff0c\u6c34\u5177\u8981\u8f7b\u4fbf\u4e00\u70b9\u3002",
+        "\u6237\u5916\u559d\u70ed\u6c34\u6bd4\u8f83\u591a\uff0c\u6c34\u58f6\u600e\u4e48\u9009\uff1f",
+    ],
+)
+def test_route_level_water_kettle_selection_prefers_waterware_domain(route_client_and_db, question):
+    client, headers, Session = route_client_and_db
+
+    response = client.post(
+        "/api/customer-service/ask?debug=true",
+        json={"question": question},
+        headers=headers,
+    )
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    assert payload["answer_type"] == "recommendation", payload
+    assert payload["answer_type"] != "knowledge_base_answer"
+    assert payload["result_skus"], payload
+    assert payload["answer"], payload
+    assert payload["result_skus"][0] != "AC-Z13", payload["result_skus"]
+
+    with Session() as db:
+        categories = {
+            product.sku: product.category
+            for product in db.query(Product).filter(Product.sku.in_(payload["result_skus"][:2])).all()
+        }
+
+    assert categories, payload
+    assert all(category in {"\u6c34\u5177", "\u6c34\u58f6"} for category in categories.values()), categories
+
+
+@pytest.mark.parametrize(
+    ("question", "forbidden_top"),
+    [
+        ("\u53cc\u4eba\u9732\u8425\u60f3\u4e70\u5957\u8f7b\u4fbf\u9505\u5177\u3002", {"CW-K03-37", "CW-K04PRO-37", "CB253", "CB254", "AC-Z13"}),
+        (
+            "\u4e24\u4e2a\u4eba\u5468\u672b\u9732\u8425\uff0c\u60f3\u4e70\u8f7b\u4e00\u70b9\u53c8\u522b\u592a\u8d35\u7684\u9505\u5177\u5957\u88c5\uff0c\u600e\u4e48\u9009\uff1f",
+            {"CW-K03-37", "CW-K04PRO-37", "CB253", "CB254", "AC-Z13"},
+        ),
+        (
+            "\u516c\u53f8\u5341\u51e0\u4e2a\u4eba\u9732\u8425\u70e7\u70e4\uff0c\u8fd8\u8981\u70e7\u6c34\u6ce1\u8336\uff0c\u7089\u5177\u600e\u4e48\u914d\uff1f",
+            {"CW-K03-37", "CW-K04PRO-37", "CB253", "CB254", "AC-Z13"},
+        ),
+        (
+            "\u9732\u8425\u70e7\u70e4\u52a0\u716e\u6c34\uff0c\u5148\u4e70\u7089\u5177\u8fd8\u662f\u6c34\u58f6\uff1f",
+            {"AC-Z13"},
+        ),
+        (
+            "\u4e24\u4e2a\u4eba\u6237\u5916\u6ce1\u8336\uff0c\u63a8\u8350\u8f7b\u4e00\u70b9\u7684\u6c34\u58f6\u3002",
+            {"AC-Z13"},
+        ),
+    ],
+)
+def test_route_level_water_kettle_guard_does_not_break_cookware_or_stove_domains(
+    route_client_and_db,
+    question,
+    forbidden_top,
+):
+    client, headers, _ = route_client_and_db
+
+    response = client.post(
+        "/api/customer-service/ask?debug=true",
+        json={"question": question},
+        headers=headers,
+    )
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    assert payload["answer_type"] in {"recommendation", "product_query"}, payload
+    assert payload["answer_type"] != "knowledge_base_answer"
+    assert payload["result_skus"], payload
+    assert payload["answer"], payload
+    assert payload["result_skus"][0] not in forbidden_top, payload["result_skus"]

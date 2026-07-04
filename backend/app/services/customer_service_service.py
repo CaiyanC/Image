@@ -1313,6 +1313,10 @@ def _phase1_structured_recommendation_result(db: Session, plan: dict) -> dict | 
     if not scenario:
         return None
     rows = _phase1_catalog_rows(db, "产品")
+    if _phase1_is_water_kettle_selection_scenario(scenario):
+        water_kettle_result = _phase1_structured_water_kettle_result(scenario, rows)
+        if water_kettle_result:
+            return water_kettle_result
     if _phase1_is_light_budget_cookware_set_scenario(scenario):
         light_budget_set_result = _phase1_structured_light_budget_cookware_set_result(scenario, rows)
         if light_budget_set_result:
@@ -1515,6 +1519,24 @@ def _phase1_is_light_budget_cookware_set_scenario(question: str) -> bool:
     return has_cookware_scope and has_purchase_or_selection
 
 
+def _phase1_is_water_kettle_selection_scenario(question: str) -> bool:
+    value = str(question or "").strip()
+    if not value:
+        return False
+    if _phase1_is_stove_pairing_scenario(value) or _phase1_is_stove_griddle_combo_scenario(value):
+        return False
+    has_water_scope = any(term in value for term in ("水壶", "烧水壶", "茶壶", "水具", "壶"))
+    if not has_water_scope:
+        return False
+    has_selection = any(term in value for term in ("怎么选", "推荐", "买", "想买", "选", "哪个", "哪款", "更稳"))
+    has_water_usage = any(term in value for term in ("喝热水", "热水", "烧水", "煮水", "泡茶", "热饮", "饮水", "补水"))
+    has_lightweight = any(term in value for term in ("轻", "轻量", "轻便", "好带", "便携"))
+    has_outdoor = any(term in value for term in ("露营", "野营", "户外", "野餐"))
+    if has_selection and (has_water_usage or (has_lightweight and has_outdoor)):
+        return True
+    return has_lightweight and has_outdoor and any(term in value for term in ("水具", "水壶", "壶"))
+
+
 def _phase1_is_griddle_vs_cookware_scenario(question: str) -> bool:
     value = str(question or "").strip()
     if not value:
@@ -1532,6 +1554,108 @@ def _phase1_is_griddle_vs_cookware_scenario(question: str) -> bool:
         and has_compare_or_selection
         and has_grill_breakfast_signal
     )
+
+
+def _phase1_is_water_kettle_candidate(row: dict[str, Any]) -> bool:
+    if not isinstance(row, dict):
+        return False
+    category = str(row.get("category") or "").strip()
+    text = " ".join(
+        str(row.get(key) or "")
+        for key in (
+            "sku",
+            "product_name_cn",
+            "product_name_en",
+            "category",
+            "sub_category",
+            "capacity",
+            "features",
+            "usage_scenarios",
+            "positioning",
+            "long_description_cn",
+        )
+    )
+    if any(term in text for term in ("调料瓶", "配件", "三角架", "收纳袋", "收纳包", "点火器", "炉具")):
+        return False
+    if category in {"水具", "水壶"}:
+        return True
+    return any(term in text for term in ("水壶", "烧水壶", "保温壶", "冷水壶", "便携水具", "户外杯", "保温杯"))
+
+
+def _phase1_structured_water_kettle_result(scenario: str, rows: list[dict]) -> dict | None:
+    water_rows = [row for row in rows if _phase1_is_water_kettle_candidate(row)]
+    if not water_rows:
+        return None
+
+    def _rank(row: dict) -> tuple[int, str]:
+        category = str(row.get("category") or "").strip()
+        text = " ".join(
+            str(row.get(key) or "")
+            for key in (
+                "product_name_cn",
+                "category",
+                "capacity",
+                "features",
+                "usage_scenarios",
+                "positioning",
+                "price_positioning",
+                "long_description_cn",
+            )
+        )
+        score = 0
+        if category == "水壶":
+            score += 9
+        elif category == "水具":
+            score += 7
+        if any(term in text for term in ("烧水", "煮水", "热水", "泡茶", "热饮", "煮茶")):
+            score += 6
+        if any(term in text for term in ("轻量", "轻便", "便携", "随行", "补水")):
+            score += 4
+        if any(term in scenario for term in ("双人", "两人", "两个人", "情侣")) and any(term in text for term in ("双人", "两人", "两个人", "情侣")):
+            score += 3
+        if any(term in scenario for term in ("泡茶", "热饮")) and any(term in text for term in ("泡茶", "煮茶", "热饮")):
+            score += 3
+        try:
+            weight_value = float(row.get("gross_weight_g") or 0)
+        except (TypeError, ValueError):
+            weight_value = 0
+        if 0 < weight_value <= 250:
+            score += 3
+        elif 250 < weight_value <= 400:
+            score += 2
+        return (-score, str(row.get("sku") or ""))
+
+    selected = sorted(water_rows, key=_rank)[:5]
+    if not selected:
+        return None
+    top_row = selected[0]
+    top_name = top_row.get("product_name_cn") or top_row.get("sku")
+    top_sku = str(top_row.get("sku") or "").strip().upper()
+    top_reason = str(top_row.get("usage_scenarios") or top_row.get("features") or top_row.get("positioning") or "更适合露营热饮和烧水场景").strip("。；; ")
+    answer = f"这类需求我会优先从水壶/水具域里选，不把调料瓶或普通配件放到主推前排。主推 {top_name}（{top_sku}），更贴合喝热水、烧水或泡茶这类场景。"
+    if top_reason:
+        answer += f" 主要理由是：{top_reason}。"
+    backups: list[str] = []
+    for row in selected[1:3]:
+        name = row.get("product_name_cn") or row.get("sku")
+        sku = str(row.get("sku") or "").strip().upper()
+        reason = str(row.get("usage_scenarios") or row.get("features") or row.get("positioning") or "可作为同域备选").strip("。；; ")
+        backups.append(f"{name}（{sku}），{reason}")
+    if backups:
+        answer += " 备选可以看" + "；".join(backups) + "。"
+    answer += " 如果你更偏向频繁烧水或泡茶，优先看壶型和热饮场景更明确的款；如果更偏向日常补水，再看轻便杯具。"
+    skus = [str(row.get("sku") or "").strip().upper() for row in selected if row.get("sku")]
+    return {
+        "intent": "recommendation",
+        "answer_type": "recommendation",
+        "answer": answer,
+        "results": selected,
+        "result_skus": skus,
+        "candidate_skus": skus,
+        "debug": {"agent_mode": "planner_recommendation_guard_rebuild"},
+        "answer_metadata": {"source": "product_catalog_structured_recommendation"},
+        "skip_polish": True,
+    }
 
 
 def _phase1_is_stove_pairing_scenario(question: str) -> bool:
@@ -2999,6 +3123,7 @@ async def ask_customer_service(
         customer_perf_service.log_stage("process_intent_request_pre_runtime", stage_start, hit=bool(agent_result), intent=agent_result.get("intent") if agent_result else None)
         scenario_recommendation_like = (
             customer_agent_intent_service._looks_like_scenario_recommendation_question(question)
+            or _phase1_is_water_kettle_selection_scenario(question)
             or _phase1_is_stove_griddle_combo_scenario(question)
             or customer_agent_planner_service._looks_like_scenario_statement_recommendation(question)
         )
