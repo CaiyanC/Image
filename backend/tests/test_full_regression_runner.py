@@ -1,0 +1,231 @@
+from __future__ import annotations
+
+import importlib.util
+import sys
+import unittest
+from pathlib import Path
+
+
+SCRIPT_PATH = Path(__file__).resolve().parents[2] / "scripts" / "full_regression_runner.py"
+SPEC = importlib.util.spec_from_file_location("full_regression_runner", SCRIPT_PATH)
+MODULE = importlib.util.module_from_spec(SPEC)
+assert SPEC and SPEC.loader
+sys.modules[SPEC.name] = MODULE
+SPEC.loader.exec_module(MODULE)
+
+
+class FullRegressionRunnerTest(unittest.TestCase):
+    def _sample_inventory(self) -> dict:
+        products = []
+        categories = [
+            "锅具",
+            "配件",
+            "炉具",
+            "餐具",
+            "水具",
+            "水壶",
+            "天幕/地垫/帐篷",
+            "桌椅",
+            "咖啡器具",
+            "茶具",
+        ]
+        special_skus = [
+            "CW-C83",
+            "CW-C06PRO",
+            "CW-C78",
+            "CW-C19T-37",
+            "CW-C69-1",
+            "CW-C93",
+            "CW-C76",
+            "CS-G25",
+            "CS-G18-28",
+            "TW-422-蓝",
+            "TW-422-绿",
+            "TW-422-粉",
+            "KW-K31-白",
+            "KW-K31-黑",
+            "KW-K32-白",
+            "KW-K32-黑",
+            "CT-T04(BM)",
+            "CW-C65-4",
+            "GX14-230G",
+            "GX15-450G",
+            "TW-139",
+            "TW-503",
+            "CW-C97",
+            "AC-Z07",
+            "CS-B14",
+            "CB254",
+            "CF-PG19",
+            "CF-PG11-42",
+            "CW-C65-3",
+            "CW-C65-5",
+            "CW-C70",
+            "CW-C71",
+            "CW-C99",
+            "CW-C85-A",
+            "TW-141",
+            "CS-G25-B",
+        ]
+        for index, sku in enumerate(special_skus):
+            category = categories[index % len(categories)]
+            products.append(
+                {
+                    "sku": sku,
+                    "name": f"{category}样品{index}",
+                    "category": category,
+                    "sub_category": "",
+                    "capacity": "1L",
+                    "material": "铝合金",
+                    "weight_g": 500.0 + index,
+                    "heat_source": "明火 卡式炉 酒精炉" if "CW-C" in sku else "明火 卡式炉",
+                    "size_info": "20cm",
+                    "usage_instruction": "可装冷水 适合烧水 随身补水",
+                    "usage_scenarios": "露营 野餐 徒步 自驾",
+                }
+            )
+        for index in range(80):
+            category = categories[index % len(categories)]
+            products.append(
+                {
+                    "sku": f"EX-{index:03d}",
+                    "name": f"{category}扩展样品{index}",
+                    "category": category,
+                    "sub_category": "",
+                    "capacity": "900ml",
+                    "material": "不锈钢",
+                    "weight_g": 300.0 + index,
+                    "heat_source": "明火 卡式炉",
+                    "size_info": "18cm",
+                    "usage_instruction": "可装冷水",
+                    "usage_scenarios": "露营 野餐",
+                }
+            )
+        return {"total_products": len(products), "products": products}
+
+    def test_build_medium_plan_matches_requested_scale(self):
+        plan = MODULE.build_medium_plan(self._sample_inventory())
+
+        self.assertEqual(plan["coverage"]["single_turn"], 200)
+        self.assertEqual(plan["coverage"]["multiturn_sequences"], 20)
+        self.assertEqual(plan["coverage"]["endpoint_parity"], 30)
+        self.assertEqual(plan["coverage"]["explicit_sku_field_matrix"], 30)
+        self.assertGreaterEqual(plan["coverage"]["total_requests"], 290)
+        self.assertEqual(len(plan["explicit_matrix_skus"]), 30)
+        self.assertNotIn("q07", {case["case_id"] for case in plan["single_turn_cases"]})
+        self.assertIn("cat_1_list", {case["case_id"] for case in plan["single_turn_cases"]})
+        matrix_cases = [case for case in plan["single_turn_cases"] if case["group"] == "explicit_sku_field_matrix"]
+        self.assertEqual(len(matrix_cases), 90)
+
+    def test_summarize_timing_stats_computes_percentiles_and_slow_buckets(self):
+        stats = MODULE.summarize_timing_stats(
+            [
+                {"case_id": "a", "duration_ms": 1000, "answer_type": "product_detail", "llm_call_count": 0},
+                {"case_id": "b", "duration_ms": 25000, "answer_type": "recommendation", "llm_call_count": 0},
+                {"case_id": "c", "duration_ms": 35000, "answer_type": "recommendation", "llm_call_count": 1},
+                {"case_id": "d", "duration_ms": 65000, "answer_type": "query_products", "llm_call_count": 0},
+            ]
+        )
+
+        self.assertEqual(stats["slow_20s_count"], 3)
+        self.assertEqual(stats["slow_30s_count"], 2)
+        self.assertEqual(stats["slow_60s_count"], 1)
+        self.assertEqual(stats["max"], 65000)
+        self.assertEqual(stats["llm_call_count_distribution"]["0"], 3)
+        self.assertEqual(stats["llm_call_count_distribution"]["1"], 1)
+        self.assertEqual(stats["top_10_slowest"][0]["case_id"], "d")
+
+    def test_summarize_explicit_matrix_counts_fail_modes(self):
+        summary = MODULE.summarize_explicit_matrix(
+            [
+                {"judgement": "pass", "mismatch": False, "kb_fallback": False, "empty_answer": False, "field_wrong": False, "slow": False},
+                {"judgement": "warning", "mismatch": False, "kb_fallback": True, "empty_answer": False, "field_wrong": False, "slow": False},
+                {"judgement": "fail", "mismatch": True, "kb_fallback": False, "empty_answer": False, "field_wrong": True, "slow": True, "case_id": "sku_bad"},
+            ]
+        )
+
+        self.assertEqual(summary["total"], 3)
+        self.assertEqual(summary["pass"], 1)
+        self.assertEqual(summary["warning"], 1)
+        self.assertEqual(summary["fail"], 1)
+        self.assertEqual(summary["mismatch"], 1)
+        self.assertEqual(summary["kb_fallback"], 1)
+        self.assertEqual(summary["field_wrong"], 1)
+        self.assertEqual(summary["slow"], 1)
+        self.assertEqual(summary["top_failures"][0]["case_id"], "sku_bad")
+
+    def test_field_alias_normalization_accepts_cn_and_en_equivalents(self):
+        self.assertEqual(MODULE.normalize_field_label("material"), "material")
+        self.assertEqual(MODULE.normalize_field_label("材质"), "material")
+        self.assertEqual(MODULE.normalize_field_label("热源"), "heat_source")
+        self.assertEqual(MODULE.normalize_field_label("酒精炉"), "alcohol_stove")
+        self.assertEqual(MODULE.normalize_field_label("随身补水"), "hydration")
+
+    def test_compound_field_judgement_does_not_fail_when_answer_covers_expected_semantics(self):
+        case = {
+            "case_id": "matrix_CW-C83_1",
+            "group": "explicit_sku_field_matrix",
+            "question": "CW-C83 是什么材质？容量多大？",
+            "expected": {
+                "explicit_sku": "CW-C83",
+                "requested_field": "material_capacity",
+            },
+        }
+        record = {
+            "case_id": "matrix_CW-C83_1",
+            "question": case["question"],
+            "conversation_id": "conv-1",
+            "answer_type": "product_detail",
+            "intent": "product_detail",
+            "result_skus": ["CW-C83"],
+            "answer": "炊墨套锅（CW-C83）的材质是硬质氧化铝合金，容量约 2L。",
+            "warnings": [],
+            "debug_plan": {"product_ref": "CW-C83", "requested_field": "材质"},
+            "debug_trace": {},
+            "duration_ms": 12.0,
+            "llm_call_count": 0,
+            "status": 200,
+        }
+
+        classified = MODULE._classify_explicit_matrix(case, record)
+
+        self.assertEqual(classified["judgement"], "pass")
+        self.assertFalse(classified["field_wrong"])
+        self.assertFalse(classified["field_alias_mismatch"])
+        self.assertFalse(classified["compound_field_overstrict"])
+
+    def test_alias_mismatch_only_warns_when_answer_semantics_are_present(self):
+        case = {
+            "case_id": "matrix_CW-C83_3",
+            "group": "explicit_sku_field_matrix",
+            "question": "CW-C83 适合什么场景？能不能用酒精炉？",
+            "expected": {
+                "explicit_sku": "CW-C83",
+                "requested_field": "scene_alcohol_stove",
+            },
+        }
+        record = {
+            "case_id": "matrix_CW-C83_3",
+            "question": case["question"],
+            "conversation_id": "conv-1",
+            "answer_type": "product_detail",
+            "intent": "product_detail",
+            "result_skus": ["CW-C83"],
+            "answer": "当前资料未显示支持酒精炉，适用热源为明火直烧、燃气炉、卡式炉、电磁炉。",
+            "warnings": [],
+            "debug_plan": {"product_ref": "CW-C83", "requested_field": "heat_source"},
+            "debug_trace": {},
+            "duration_ms": 18.0,
+            "llm_call_count": 0,
+            "status": 200,
+        }
+
+        classified = MODULE._classify_explicit_matrix(case, record)
+
+        self.assertEqual(classified["judgement"], "warning")
+        self.assertTrue(classified["field_alias_mismatch"])
+        self.assertFalse(classified["field_wrong"])
+
+
+if __name__ == "__main__":
+    unittest.main()
