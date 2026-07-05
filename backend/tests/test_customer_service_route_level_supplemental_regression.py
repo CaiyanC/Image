@@ -72,6 +72,36 @@ def test_semantic_preplan_repair_recovers_truncated_json(monkeypatch):
     assert result["llm_call_count_delta"] == 2
 
 
+def test_semantic_preplan_label_fallback_recovers_empty_json_outputs(monkeypatch):
+    calls = []
+
+    async def fake_chat_completion(db, messages, model=None, temperature=0.2, max_tokens=1200, *, purpose="chat"):
+        calls.append(purpose)
+        if purpose in {"semantic_preplan", "semantic_preplan_repair"}:
+            return ""
+        return "query_products"
+
+    monkeypatch.setattr(customer_agent_planner_service.customer_llm_service, "chat_completion", fake_chat_completion)
+
+    result = asyncio.run(
+        customer_agent_planner_service.plan_customer_question_semantic(
+            db=None,
+            question="\u6709\u54ea\u4e9b\u6c34\u5177\u66f4\u504f\u51b7\u6c34\u968f\u8eab\u8865\u6c34\uff1f",
+            deterministic_plan={"primary_intent": "", "answer_type": ""},
+            context={},
+        )
+    )
+
+    assert calls == ["semantic_preplan", "semantic_preplan_repair", "semantic_preplan_label"]
+    assert result["called"] is True
+    assert result["route_hint"] == "query_products"
+    assert result["question_type"] == "filter"
+    assert result["confidence"] > 0
+    assert result["fallback_reason"] == ""
+    assert result["llm_call_count"] == 3
+    assert result["llm_call_count_delta"] == 3
+
+
 def test_semantic_preplan_forbidden_keys_still_fallback(monkeypatch):
     async def fake_chat_completion(db, messages, model=None, temperature=0.2, max_tokens=1200, *, purpose="chat"):
         return '{"route_hint":"comparison","question_type":"comparison","entities":[],"field_hint":null,"qa_or_usage_care":false,"unknown_field":false,"confidence":0.9,"reason":"x","candidate_skus":["BAD-1"]}'

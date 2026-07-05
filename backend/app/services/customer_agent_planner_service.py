@@ -278,6 +278,65 @@ def _semantic_preplan_messages(
     ]
 
 
+def _semantic_preplan_feature_summary(question: str, deterministic_plan: dict[str, Any], context: dict[str, Any]) -> str:
+    text = str(question or "")
+    features = {
+        "has_conversation": bool(context.get("conversation_id")),
+        "has_recommendation_context": bool(context.get("has_recommendation_context")),
+        "deterministic_intent": str(deterministic_plan.get("primary_intent") or ""),
+        "deterministic_answer_type": str(deterministic_plan.get("answer_type") or ""),
+        "mentions_griddle": any(term in text for term in ("烤盘", "煎烤", "煎蛋", "煎培根")),
+        "mentions_cookware": any(term in text for term in ("锅", "锅具", "炊具", "煮面", "正餐")),
+        "mentions_filter": any(term in text for term in ("有哪些", "哪几", "更偏", "适合", "推荐")),
+        "mentions_waterware": any(term in text for term in ("水具", "水杯", "水壶", "冷水", "补水", "随身")),
+        "mentions_coffee": any(term in text for term in ("咖啡", "咖啡器具", "手冲")),
+        "mentions_usage_restriction": any(term in text for term in ("使用限制", "注意事项", "禁忌")),
+        "mentions_alternative": any(term in text for term in ("不要刚才那个", "换个", "换一个", "更轻", "更便宜", "还有别的")),
+    }
+    return "; ".join(f"{key}={str(value).lower()}" for key, value in features.items())
+
+
+def _question_type_for_route(route_hint: str, feature_summary: str) -> str:
+    if "mentions_alternative=true" in feature_summary:
+        return "followup"
+    if route_hint == "comparison":
+        return "comparison"
+    if route_hint == "query_products":
+        if "deterministic_intent=catalog_count" in feature_summary:
+            return "count"
+        return "filter"
+    if route_hint == "usage_care":
+        return "usage"
+    if route_hint == "product_detail":
+        return "field"
+    if route_hint == "unknown_field":
+        return "unknown_field"
+    if route_hint == "recommendation":
+        return "recommendation"
+    return "recommendation"
+
+
+def _validate_semantic_preplan_label(content: str, *, feature_summary: str) -> dict[str, Any]:
+    label = str(content or "").strip().lower()
+    label = re.sub(r"[^a-z_]+", "", label.splitlines()[0] if label else "")
+    if label not in SEMANTIC_PREPLAN_ROUTE_HINTS:
+        result = _empty_semantic_preplan(called=True, fallback_reason="invalid_label")
+        result["raw_preview"] = _safe_preview(content)
+        return result
+    question_type = _question_type_for_route(label, feature_summary)
+    result = _empty_semantic_preplan(called=True)
+    result.update(
+        {
+            "route_hint": label,
+            "question_type": question_type,
+            "confidence": 0.72,
+            "reason": "semantic label fallback",
+            "raw_preview": _safe_preview(content),
+        }
+    )
+    return result
+
+
 async def _repair_semantic_preplan_output(db, *, question: str, raw_content: str) -> str:
     return await customer_llm_service.chat_completion(
         db,
@@ -306,6 +365,38 @@ async def _repair_semantic_preplan_output(db, *, question: str, raw_content: str
     )
 
 
+async def _semantic_preplan_label_output(
+    db,
+    *,
+    feature_summary: str,
+) -> str:
+    return await customer_llm_service.chat_completion(
+        db,
+        [
+            {
+                "role": "system",
+                "content": (
+                    "Choose exactly one route label. Output only the label token. "
+                    "Allowed labels: usage_care, recommendation, product_detail, query_products, "
+                    "knowledge_base_answer, comparison, unknown_field, clarification. "
+                    "Do not answer the user. Do not output products, SKUs, fields, prices, stock, sales, certification, warranty, or facts."
+                ),
+            },
+            {
+                "role": "user",
+                "content": (
+                    f"features: {feature_summary}\n"
+                    "Rules: griddle+cookware choice => comparison; filter+waterware or filter+coffee => query_products; "
+                    "usage_restriction => product_detail; alternative followup => recommendation."
+                ),
+            },
+        ],
+        temperature=0,
+        max_tokens=40,
+        purpose="semantic_preplan_label",
+    )
+
+
 async def plan_customer_question_semantic(
     db,
     question: str,
@@ -319,6 +410,7 @@ async def plan_customer_question_semantic(
     deterministic_plan = deterministic_plan if isinstance(deterministic_plan, dict) else {}
     context = context if isinstance(context, dict) else {}
     messages = _semantic_preplan_messages(question=text, deterministic_plan=deterministic_plan, context=context)
+    feature_summary = _semantic_preplan_feature_summary(text, deterministic_plan, context)
     llm_call_count = 0
     try:
         content = await customer_llm_service.chat_completion(
@@ -345,6 +437,17 @@ async def plan_customer_question_semantic(
             result["llm_call_count_delta"] = llm_call_count
             return result
         result = _validate_semantic_preplan(_extract_json_object(repaired), raw_content=repaired)
+    if result.get("fallback_reason") == "invalid_json":
+        try:
+            label_content = await _semantic_preplan_label_output(db, feature_summary=feature_summary)
+            llm_call_count += 1
+        except Exception as exc:
+            result["fallback_reason"] = f"label_error:{type(exc).__name__}"
+            result["error"] = str(exc)[:240]
+            result["llm_call_count"] = llm_call_count
+            result["llm_call_count_delta"] = llm_call_count
+            return result
+        result = _validate_semantic_preplan_label(label_content, feature_summary=feature_summary)
     result["llm_call_count"] = llm_call_count
     result["llm_call_count_delta"] = llm_call_count
     if not result.get("route_hint"):
