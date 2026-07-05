@@ -1945,7 +1945,7 @@ def _phase1_is_light_budget_cookware_set_scenario(question: str) -> bool:
     has_purchase_or_selection = any(term in value for term in ("想买", "买", "推荐", "怎么选", "该买", "选"))
     if not (has_two_person and has_camping):
         return False
-    if has_cookware_scope and has_purchase_or_selection and (has_lightweight or has_budget or has_set_selection or has_cooking_usage):
+    if has_cookware_scope and has_purchase_or_selection:
         return True
     if has_budget and (has_set_selection or has_cookware_scope):
         return True
@@ -2177,7 +2177,7 @@ def _phase1_structured_light_budget_cookware_set_result(scenario: str, rows: lis
     demand_label = "、".join(dict.fromkeys(demand_bits))
     answer = (
         f"这类需求我会优先从双人露营的锅具/套锅里选，不先把水壶当主推。"
-        f" 主推 {top_name}（{top_sku}），更贴合“{demand_label}”这类需求。"
+        f" 优先推荐 {top_name}（{top_sku}），更贴合“{demand_label}”这类需求。"
     )
     if top_reason:
         answer += f" 主要理由是：{top_reason}。"
