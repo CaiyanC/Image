@@ -1,3 +1,4 @@
+import asyncio
 import json
 import re
 
@@ -11,6 +12,84 @@ from test_customer_service_route_level_regression import route_client_and_db
 def _semantic_preplan_debug(payload: dict) -> dict:
     debug = payload.get("debug") if isinstance(payload.get("debug"), dict) else {}
     return debug.get("semantic_preplan") if isinstance(debug.get("semantic_preplan"), dict) else {}
+
+
+def test_semantic_preplan_parser_accepts_code_fence_and_tracks_llm_calls(monkeypatch):
+    calls = []
+
+    async def fake_chat_completion(db, messages, model=None, temperature=0.2, max_tokens=1200, *, purpose="chat"):
+        calls.append(purpose)
+        return """```json
+{"route_hint":"comparison","question_type":"comparison","entities":[],"field_hint":null,"qa_or_usage_care":false,"unknown_field":false,"confidence":0.84,"reason":"pan vs cookware"}
+```"""
+
+    monkeypatch.setattr(customer_agent_planner_service.customer_llm_service, "chat_completion", fake_chat_completion)
+
+    result = asyncio.run(
+        customer_agent_planner_service.plan_customer_question_semantic(
+            db=None,
+            question="\u4e3b\u8981\u505a\u714e\u70e4\u65e9\u9910\uff0c\u9505\u548c\u70e4\u76d8\u54ea\u4e2a\u66f4\u503c\u5f97\u5148\u4e70\uff1f",
+            deterministic_plan={"primary_intent": "comparison", "answer_type": "comparison"},
+            context={},
+        )
+    )
+
+    assert calls == ["semantic_preplan"]
+    assert result["called"] is True
+    assert result["route_hint"] == "comparison"
+    assert result["confidence"] > 0
+    assert result["fallback_reason"] == ""
+    assert result["llm_call_count"] == 1
+    assert result["llm_call_count_delta"] == 1
+
+
+def test_semantic_preplan_repair_recovers_truncated_json(monkeypatch):
+    calls = []
+
+    async def fake_chat_completion(db, messages, model=None, temperature=0.2, max_tokens=1200, *, purpose="chat"):
+        calls.append(purpose)
+        if purpose == "semantic_preplan":
+            return '{\n  "route_hint": "query_products",\n  "question_type": "filter",\n  "entities": [],\n'
+        return '{"route_hint":"query_products","question_type":"filter","entities":[],"field_hint":null,"qa_or_usage_care":false,"unknown_field":false,"confidence":0.77,"reason":"waterware capability"}'
+
+    monkeypatch.setattr(customer_agent_planner_service.customer_llm_service, "chat_completion", fake_chat_completion)
+
+    result = asyncio.run(
+        customer_agent_planner_service.plan_customer_question_semantic(
+            db=None,
+            question="\u6709\u54ea\u4e9b\u6c34\u5177\u66f4\u504f\u51b7\u6c34\u968f\u8eab\u8865\u6c34\uff1f",
+            deterministic_plan={"primary_intent": "", "answer_type": ""},
+            context={},
+        )
+    )
+
+    assert calls == ["semantic_preplan", "semantic_preplan_repair"]
+    assert result["called"] is True
+    assert result["route_hint"] == "query_products"
+    assert result["confidence"] == pytest.approx(0.77)
+    assert result["fallback_reason"] == ""
+    assert result["llm_call_count"] == 2
+    assert result["llm_call_count_delta"] == 2
+
+
+def test_semantic_preplan_forbidden_keys_still_fallback(monkeypatch):
+    async def fake_chat_completion(db, messages, model=None, temperature=0.2, max_tokens=1200, *, purpose="chat"):
+        return '{"route_hint":"comparison","question_type":"comparison","entities":[],"field_hint":null,"qa_or_usage_care":false,"unknown_field":false,"confidence":0.9,"reason":"x","candidate_skus":["BAD-1"]}'
+
+    monkeypatch.setattr(customer_agent_planner_service.customer_llm_service, "chat_completion", fake_chat_completion)
+
+    result = asyncio.run(
+        customer_agent_planner_service.plan_customer_question_semantic(
+            db=None,
+            question="\u4e3b\u8981\u505a\u714e\u70e4\u65e9\u9910\uff0c\u9505\u548c\u70e4\u76d8\u54ea\u4e2a\u66f4\u503c\u5f97\u5148\u4e70\uff1f",
+            deterministic_plan={"primary_intent": "comparison", "answer_type": "comparison"},
+            context={},
+        )
+    )
+
+    assert result["called"] is True
+    assert result["route_hint"] == ""
+    assert result["fallback_reason"].startswith("forbidden_keys:")
 
 
 @pytest.mark.parametrize(
@@ -57,6 +136,7 @@ def test_route_level_semantic_preplan_triggers_only_for_ambiguous_routes(
     assert semantic_debug.get("called") is True, payload.get("debug")
     assert semantic_debug.get("route_hint") == route_hint, semantic_debug
     assert semantic_debug.get("accepted_or_overridden") in {"accepted", "overridden"}, semantic_debug
+    assert int(semantic_debug.get("llm_call_count_delta") or 0) >= 1, semantic_debug
     assert payload["answer"], payload
     assert "candidate_skus" not in semantic_debug
     assert "recommended_skus" not in semantic_debug

@@ -1,4 +1,4 @@
-import json
+﻿import json
 import re
 import tempfile
 
@@ -1032,3 +1032,37 @@ def test_customer_service_ask_route_level_targeted_warning_scenarios_return_reco
         assert ("炉具" in payload["answer"] or "炉子" in payload["answer"]) and "烤盘" in payload["answer"]
     else:
         assert categories.get(payload["result_skus"][0]) == "锅具", categories
+
+
+@pytest.mark.parametrize(
+    "question",
+    [
+        "有哪些配件更偏收纳？",
+        "有哪些配件适合收纳？",
+        "收纳类配件有哪些？",
+        "露营收纳配件有哪些？",
+    ],
+)
+def test_customer_service_ask_route_level_accessory_storage_queries_stay_structured(
+    route_client_and_db,
+    question,
+):
+    client, headers, Session = route_client_and_db
+
+    response = client.post("/api/customer-service/ask?debug=true", json={"question": question}, headers=headers)
+
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    assert payload["answer_type"] in {"query_products", "product_query"}, payload
+    assert payload["answer_type"] != "knowledge_base_answer"
+    assert payload["result_skus"], payload
+    assert payload["answer"], payload
+
+    with Session() as db:
+        categories = {
+            product.sku: product.category
+            for product in db.query(Product).filter(Product.sku.in_(payload["result_skus"][:3])).all()
+        }
+
+    assert categories, payload
+    assert all(category == "配件" for category in categories.values()), categories

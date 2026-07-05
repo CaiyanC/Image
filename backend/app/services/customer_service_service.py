@@ -374,8 +374,11 @@ def _attach_semantic_preplan_debug(agent_result: dict | None, semantic_preplan: 
         for container in (debug, answer_metadata):
             timing = container.get("timing") if isinstance(container.get("timing"), dict) else None
             if timing:
-                timing["llm_call_count"] = int(timing.get("llm_call_count") or 0) + int(semantic_preplan.get("llm_call_count") or 0)
+                timing["llm_call_count"] = int(timing.get("llm_call_count") or 0) + int(semantic_preplan.get("llm_call_count_delta") or semantic_preplan.get("llm_call_count") or 0)
                 timing["llm_duration_ms"] = timing.get("llm_duration_ms") or 0
+        trace = debug.get("trace") if isinstance(debug.get("trace"), dict) else None
+        if trace is not None:
+            trace["llm_call_count"] = int(trace.get("llm_call_count") or 0) + int(semantic_preplan.get("llm_call_count_delta") or semantic_preplan.get("llm_call_count") or 0)
     agent_result["debug"] = debug
     agent_result["answer_metadata"] = answer_metadata
     return agent_result
@@ -1073,6 +1076,34 @@ def _semantic_structured_query_result(db: Session, question: str) -> dict | None
             rows=rows,
             source="structured_griddle_stove_query",
             reason_label="烤盘 + 炉具搭配语义",
+        )
+    if (
+        any(term in text for term in ("配件", "附件"))
+        and any(term in text for term in ("收纳", "整理", "归纳"))
+        and any(term in text for term in ("有哪些", "推荐", "适合", "更偏"))
+    ):
+        rows = []
+        for row in _phase1_catalog_rows(db, "配件"):
+            row_text = _structured_query_row_text(row)
+            score = 0
+            if any(term in row_text for term in ("收纳", "整理", "归纳", "好收纳", "收纳包", "收纳方便", "集中收纳")):
+                score += 8
+            if any(term in row_text for term in ("配件", "附件", "餐厨配件", "露营收纳")):
+                score += 4
+            if any(term in row_text for term in ("调料瓶", "喷枪", "水壶", "水具")):
+                score -= 5
+            if score <= 0:
+                continue
+            new_row = dict(row)
+            new_row["_score"] = score
+            rows.append(new_row)
+        rows.sort(key=lambda item: (-int(item.get("_score") or 0), str(item.get("sku") or "")))
+        return _structured_product_query_result(
+            question=text,
+            product_ref="配件",
+            rows=rows,
+            source="structured_accessory_storage_query",
+            reason_label="配件 / 收纳语义",
         )
     if _looks_like_semantic_catalog_query(text):
         return _phase1_catalog_count_result(db, {"product_ref": _semantic_catalog_product_ref(text)})

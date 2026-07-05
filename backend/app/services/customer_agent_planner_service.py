@@ -72,6 +72,16 @@ SEMANTIC_PREPLAN_FORBIDDEN_KEYS = {
     "certification",
     "warranty",
 }
+SEMANTIC_PREPLAN_ALLOWED_KEYS = {
+    "route_hint",
+    "question_type",
+    "entities",
+    "field_hint",
+    "qa_or_usage_care",
+    "unknown_field",
+    "confidence",
+    "reason",
+}
 
 
 def empty_timing() -> dict[str, float | int | None]:
@@ -109,6 +119,8 @@ def _empty_semantic_preplan(*, called: bool = False, fallback_reason: str = "") 
         "override_reason": "",
         "fallback_reason": fallback_reason,
         "llm_call_count": 1 if called else 0,
+        "llm_call_count_delta": 1 if called else 0,
+        "raw_preview": "",
     }
 
 
@@ -125,30 +137,61 @@ def _extract_json_object(text: str) -> dict[str, Any] | None:
     except json.JSONDecodeError:
         pass
     start = raw.find("{")
-    end = raw.rfind("}")
-    if start >= 0 and end > start:
-        try:
-            data = json.loads(raw[start : end + 1])
-            return data if isinstance(data, dict) else None
-        except json.JSONDecodeError:
-            return None
+    if start >= 0:
+        depth = 0
+        in_string = False
+        escaped = False
+        for index, char in enumerate(raw[start:], start=start):
+            if in_string:
+                if escaped:
+                    escaped = False
+                elif char == "\\":
+                    escaped = True
+                elif char == '"':
+                    in_string = False
+                continue
+            if char == '"':
+                in_string = True
+            elif char == "{":
+                depth += 1
+            elif char == "}":
+                depth -= 1
+                if depth == 0:
+                    try:
+                        data = json.loads(raw[start : index + 1])
+                        return data if isinstance(data, dict) else None
+                    except json.JSONDecodeError:
+                        return None
     return None
 
 
-def _validate_semantic_preplan(data: dict[str, Any] | None) -> dict[str, Any]:
+def _safe_preview(value: str, limit: int = 200) -> str:
+    text = str(value or "").replace("\r", " ").replace("\n", " ").strip()
+    return text[:limit]
+
+
+def _validate_semantic_preplan(data: dict[str, Any] | None, *, raw_content: str = "") -> dict[str, Any]:
     if not isinstance(data, dict):
-        return _empty_semantic_preplan(called=True, fallback_reason="invalid_json")
+        result = _empty_semantic_preplan(called=True, fallback_reason="invalid_json")
+        result["raw_preview"] = _safe_preview(raw_content)
+        return result
     forbidden = sorted(key for key in data if key in SEMANTIC_PREPLAN_FORBIDDEN_KEYS)
     route_hint = str(data.get("route_hint") or "").strip()
     question_type = str(data.get("question_type") or "").strip()
     try:
         confidence = float(data.get("confidence") or 0)
     except (TypeError, ValueError):
-        confidence = 0.0
+        result = _empty_semantic_preplan(called=True, fallback_reason="invalid_confidence")
+        result["raw_preview"] = _safe_preview(raw_content)
+        return result
     if route_hint not in SEMANTIC_PREPLAN_ROUTE_HINTS:
-        route_hint = ""
+        result = _empty_semantic_preplan(called=True, fallback_reason="invalid_route_hint")
+        result["raw_preview"] = _safe_preview(raw_content)
+        return result
     if question_type not in SEMANTIC_PREPLAN_QUESTION_TYPES:
-        question_type = ""
+        result = _empty_semantic_preplan(called=True, fallback_reason="invalid_question_type")
+        result["raw_preview"] = _safe_preview(raw_content)
+        return result
     entities = data.get("entities") if isinstance(data.get("entities"), list) else []
     entities = [str(item).strip() for item in entities[:8] if str(item or "").strip()]
     field_hint = data.get("field_hint")
@@ -164,13 +207,77 @@ def _validate_semantic_preplan(data: dict[str, Any] | None) -> dict[str, Any]:
             "unknown_field": bool(data.get("unknown_field")),
             "confidence": max(0.0, min(1.0, confidence)),
             "reason": str(data.get("reason") or "")[:300],
+            "raw_preview": _safe_preview(raw_content),
         }
     )
     if forbidden:
         result["fallback_reason"] = "forbidden_keys:" + ",".join(forbidden)
         result["route_hint"] = ""
         result["confidence"] = 0.0
+    extra_keys = sorted(key for key in data if key not in SEMANTIC_PREPLAN_ALLOWED_KEYS and key not in SEMANTIC_PREPLAN_FORBIDDEN_KEYS)
+    if extra_keys:
+        result["fallback_reason"] = "unexpected_keys:" + ",".join(extra_keys[:8])
+        result["route_hint"] = ""
+        result["confidence"] = 0.0
     return result
+
+
+def _semantic_preplan_messages(
+    *,
+    question: str,
+    deterministic_plan: dict[str, Any],
+    context: dict[str, Any],
+) -> list[dict[str, str]]:
+    return [
+        {
+            "role": "system",
+            "content": (
+                "Semantic route preplanner. Return exactly one compact JSON object and nothing else. "
+                "No markdown. No code fence. No explanation. "
+                "Never answer the user. Never output SKU facts, field facts, candidate_skus, recommended_skus, result_skus, "
+                "price, stock, sales, certification, warranty, or final answers. "
+                "Allowed route_hint values: usage_care,recommendation,product_detail,query_products,knowledge_base_answer,comparison,unknown_field,clarification. "
+                "Allowed question_type values: safety,count,filter,field,comparison,recommendation,usage,unknown_field,followup. "
+                "confidence must be a number between 0 and 1."
+            ),
+        },
+        {
+            "role": "user",
+            "content": (
+                f"question: {question}\n"
+                f"deterministic_primary_intent: {deterministic_plan.get('primary_intent') or ''}\n"
+                f"deterministic_answer_type: {deterministic_plan.get('answer_type') or ''}\n"
+                f"deterministic_requested_field: {deterministic_plan.get('requested_field') or ''}\n"
+                f"deterministic_product_ref: {deterministic_plan.get('product_ref') or ''}\n"
+                f"has_conversation_id: {bool(context.get('conversation_id'))}\n"
+                f"has_recommendation_context: {bool(context.get('has_recommendation_context'))}\n"
+                'output_schema: {"route_hint":"","question_type":"","entities":[],"field_hint":null,"qa_or_usage_care":false,"unknown_field":false,"confidence":0.0,"reason":""}'
+            ),
+        },
+    ]
+
+
+async def _repair_semantic_preplan_output(db, *, raw_content: str) -> str:
+    return await customer_llm_service.chat_completion(
+        db,
+        [
+            {
+                "role": "system",
+                "content": (
+                    "Repair the assistant output into exactly one valid compact JSON object. "
+                    "No markdown. No code fence. No explanation. "
+                    "Allowed keys only: route_hint,question_type,entities,field_hint,qa_or_usage_care,unknown_field,confidence,reason."
+                ),
+            },
+            {
+                "role": "user",
+                "content": f"Return only repaired JSON.\nbroken_output: {raw_content}",
+            },
+        ],
+        temperature=0,
+        max_tokens=220,
+        purpose="semantic_preplan_repair",
+    )
 
 
 async def plan_customer_question_semantic(
@@ -185,60 +292,35 @@ async def plan_customer_question_semantic(
         return _empty_semantic_preplan(fallback_reason="empty_question")
     deterministic_plan = deterministic_plan if isinstance(deterministic_plan, dict) else {}
     context = context if isinstance(context, dict) else {}
-    schema = {
-        "route_hint": "usage_care|recommendation|product_detail|query_products|knowledge_base_answer|comparison|unknown_field|clarification",
-        "question_type": "safety|count|filter|field|comparison|recommendation|usage|unknown_field|followup",
-        "entities": [],
-        "field_hint": None,
-        "qa_or_usage_care": False,
-        "unknown_field": False,
-        "confidence": 0.0,
-        "reason": "",
-    }
-    messages = [
-        {
-            "role": "system",
-            "content": (
-                "You are a route preplanner for a customer-service product QA system. "
-                "Return JSON only. You may only infer route intent. Do not answer the user. "
-                "Do not output SKU facts, candidate_skus, recommended_skus, field facts, price, stock, sales, "
-                "certification, warranty, or final answers. If unsure, use low confidence."
-            ),
-        },
-        {
-            "role": "user",
-            "content": json.dumps(
-                {
-                    "question": text,
-                    "deterministic_plan": {
-                        "primary_intent": deterministic_plan.get("primary_intent") or "",
-                        "answer_type": deterministic_plan.get("answer_type") or "",
-                        "requested_field": deterministic_plan.get("requested_field") or "",
-                        "product_ref": deterministic_plan.get("product_ref") or "",
-                    },
-                    "context": {
-                        "has_conversation_id": bool(context.get("conversation_id")),
-                        "has_recommendation_context": bool(context.get("has_recommendation_context")),
-                    },
-                    "schema": schema,
-                },
-                ensure_ascii=False,
-            ),
-        },
-    ]
+    messages = _semantic_preplan_messages(question=text, deterministic_plan=deterministic_plan, context=context)
+    llm_call_count = 0
     try:
         content = await customer_llm_service.chat_completion(
             db,
             messages,
             temperature=0,
-            max_tokens=450,
+            max_tokens=220,
             purpose="semantic_preplan",
         )
+        llm_call_count += 1
     except Exception as exc:
         result = _empty_semantic_preplan(called=True, fallback_reason=f"llm_error:{type(exc).__name__}")
         result["error"] = str(exc)[:240]
         return result
-    result = _validate_semantic_preplan(_extract_json_object(content))
+    result = _validate_semantic_preplan(_extract_json_object(content), raw_content=content)
+    if result.get("fallback_reason") == "invalid_json":
+        try:
+            repaired = await _repair_semantic_preplan_output(db, raw_content=content)
+            llm_call_count += 1
+        except Exception as exc:
+            result["fallback_reason"] = f"repair_error:{type(exc).__name__}"
+            result["error"] = str(exc)[:240]
+            result["llm_call_count"] = llm_call_count
+            result["llm_call_count_delta"] = llm_call_count
+            return result
+        result = _validate_semantic_preplan(_extract_json_object(repaired), raw_content=repaired)
+    result["llm_call_count"] = llm_call_count
+    result["llm_call_count_delta"] = llm_call_count
     if not result.get("route_hint"):
         result["fallback_reason"] = result.get("fallback_reason") or "empty_route_hint"
     return result
