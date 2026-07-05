@@ -330,6 +330,7 @@ def _attach_phase1_plan_and_timing(agent_result: dict, plan: dict, timing: dict)
     debug["timing"] = merged_timing
     debug["plan"] = existing_plan if existing_plan.get("source") == "context_pair_followup" else plan
     if isinstance(plan, dict) and isinstance(plan.get("semantic_preplan"), dict):
+        already_attached = bool((debug.get("semantic_preplan") or {}).get("called")) if isinstance(debug.get("semantic_preplan"), dict) else False
         preplan_debug = dict(plan["semantic_preplan"])
         if not preplan_debug.get("accepted_or_overridden"):
             final_route = str(agent_result.get("answer_type") or agent_result.get("intent") or "").strip()
@@ -338,7 +339,12 @@ def _attach_phase1_plan_and_timing(agent_result: dict, plan: dict, timing: dict)
             preplan_debug["accepted_or_overridden"] = "accepted" if accepted else "overridden"
             if not accepted:
                 preplan_debug["override_reason"] = preplan_debug.get("fallback_reason") or "deterministic_guard_final_route"
-        debug.setdefault("semantic_preplan", preplan_debug)
+        debug["semantic_preplan"] = preplan_debug
+        if not already_attached and preplan_debug.get("called"):
+            delta = int(preplan_debug.get("llm_call_count_delta") or preplan_debug.get("llm_call_count") or 0)
+            if delta:
+                debug["timing"]["llm_call_count"] = int(debug["timing"].get("llm_call_count") or 0) + delta
+                answer_metadata["timing"]["llm_call_count"] = int(answer_metadata["timing"].get("llm_call_count") or 0) + delta
     agent_result["answer_metadata"] = answer_metadata
     agent_result["debug"] = debug
     return agent_result
