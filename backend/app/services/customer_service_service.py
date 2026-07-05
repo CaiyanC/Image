@@ -339,6 +339,7 @@ def _attach_phase1_plan_and_timing(agent_result: dict, plan: dict, timing: dict)
             preplan_debug["accepted_or_overridden"] = "accepted" if accepted else "overridden"
             if not accepted:
                 preplan_debug["override_reason"] = preplan_debug.get("fallback_reason") or "deterministic_guard_final_route"
+        plan["semantic_preplan"] = preplan_debug
         debug["semantic_preplan"] = preplan_debug
         if not already_attached and preplan_debug.get("called"):
             delta = int(preplan_debug.get("llm_call_count_delta") or preplan_debug.get("llm_call_count") or 0)
