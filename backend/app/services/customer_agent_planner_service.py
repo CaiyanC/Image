@@ -81,6 +81,24 @@ SEMANTIC_PREPLAN_ALLOWED_KEYS = {
     "unknown_field",
     "confidence",
     "reason",
+    "r",
+    "q",
+    "e",
+    "f",
+    "u",
+    "n",
+    "c",
+    "why",
+}
+SEMANTIC_PREPLAN_SHORT_KEY_MAP = {
+    "r": "route_hint",
+    "q": "question_type",
+    "e": "entities",
+    "f": "field_hint",
+    "u": "qa_or_usage_care",
+    "n": "unknown_field",
+    "c": "confidence",
+    "why": "reason",
 }
 
 
@@ -175,6 +193,10 @@ def _validate_semantic_preplan(data: dict[str, Any] | None, *, raw_content: str 
         result = _empty_semantic_preplan(called=True, fallback_reason="invalid_json")
         result["raw_preview"] = _safe_preview(raw_content)
         return result
+    data = dict(data)
+    for short_key, long_key in SEMANTIC_PREPLAN_SHORT_KEY_MAP.items():
+        if long_key not in data and short_key in data:
+            data[long_key] = data[short_key]
     forbidden = sorted(key for key in data if key in SEMANTIC_PREPLAN_FORBIDDEN_KEYS)
     route_hint = str(data.get("route_hint") or "").strip()
     question_type = str(data.get("question_type") or "").strip()
@@ -232,13 +254,12 @@ def _semantic_preplan_messages(
         {
             "role": "system",
             "content": (
-                "Semantic route preplanner. Return exactly one compact JSON object and nothing else. "
-                "No markdown. No code fence. No explanation. "
-                "Never answer the user. Never output SKU facts, field facts, candidate_skus, recommended_skus, result_skus, "
-                "price, stock, sales, certification, warranty, or final answers. "
-                "Allowed route_hint values: usage_care,recommendation,product_detail,query_products,knowledge_base_answer,comparison,unknown_field,clarification. "
-                "Allowed question_type values: safety,count,filter,field,comparison,recommendation,usage,unknown_field,followup. "
-                "confidence must be a number between 0 and 1."
+                "Return only JSON, no markdown. You classify route only, not facts or answer. "
+                "Use short keys exactly: r,q,e,f,u,n,c,why. "
+                "r enum: usage_care,recommendation,product_detail,query_products,knowledge_base_answer,comparison,unknown_field,clarification. "
+                "q enum: safety,count,filter,field,comparison,recommendation,usage,unknown_field,followup. "
+                "e is entity words only, f is field hint or null, u/n booleans, c 0..1. "
+                "Never output answer, SKU facts, candidate_skus, recommended_skus, result_skus, price, stock, sales, certification, warranty."
             ),
         },
         {
@@ -251,31 +272,36 @@ def _semantic_preplan_messages(
                 f"deterministic_product_ref: {deterministic_plan.get('product_ref') or ''}\n"
                 f"has_conversation_id: {bool(context.get('conversation_id'))}\n"
                 f"has_recommendation_context: {bool(context.get('has_recommendation_context'))}\n"
-                'output_schema: {"route_hint":"","question_type":"","entities":[],"field_hint":null,"qa_or_usage_care":false,"unknown_field":false,"confidence":0.0,"reason":""}'
+                'JSON shape: {"r":"recommendation","q":"recommendation","e":[],"f":null,"u":false,"n":false,"c":0.8,"why":"short"}'
             ),
         },
     ]
 
 
-async def _repair_semantic_preplan_output(db, *, raw_content: str) -> str:
+async def _repair_semantic_preplan_output(db, *, question: str, raw_content: str) -> str:
     return await customer_llm_service.chat_completion(
         db,
         [
             {
                 "role": "system",
                 "content": (
-                    "Repair the assistant output into exactly one valid compact JSON object. "
-                    "No markdown. No code fence. No explanation. "
-                    "Allowed keys only: route_hint,question_type,entities,field_hint,qa_or_usage_care,unknown_field,confidence,reason."
+                    "Return only one compact JSON object with keys r,q,e,f,u,n,c,why. "
+                    "Classify route only; never answer or output SKU facts/candidates. "
+                    "r enum: usage_care,recommendation,product_detail,query_products,knowledge_base_answer,comparison,unknown_field,clarification. "
+                    "q enum: safety,count,filter,field,comparison,recommendation,usage,unknown_field,followup."
                 ),
             },
             {
                 "role": "user",
-                "content": f"Return only repaired JSON.\nbroken_output: {raw_content}",
+                "content": (
+                    f"question: {question}\n"
+                    f"previous_output_preview: {_safe_preview(raw_content, 120)}\n"
+                    'JSON shape: {"r":"query_products","q":"filter","e":[],"f":null,"u":false,"n":false,"c":0.8,"why":"short"}'
+                ),
             },
         ],
         temperature=0,
-        max_tokens=220,
+        max_tokens=120,
         purpose="semantic_preplan_repair",
     )
 
@@ -310,7 +336,7 @@ async def plan_customer_question_semantic(
     result = _validate_semantic_preplan(_extract_json_object(content), raw_content=content)
     if result.get("fallback_reason") == "invalid_json":
         try:
-            repaired = await _repair_semantic_preplan_output(db, raw_content=content)
+            repaired = await _repair_semantic_preplan_output(db, question=text, raw_content=content)
             llm_call_count += 1
         except Exception as exc:
             result["fallback_reason"] = f"repair_error:{type(exc).__name__}"
