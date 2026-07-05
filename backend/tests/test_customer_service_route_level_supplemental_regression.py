@@ -392,6 +392,33 @@ def test_route_level_single_turn_lightweight_two_person_cookware_stays_in_cookwa
     assert re.search(r"(\u53cc\u4eba|\u9732\u8425).*(\u8f7b|\u4fbf|\u5957\u9505|\u9505\u5177)", payload["answer"]), payload["answer"]
 
 
+def test_route_level_single_turn_two_person_cookware_recommendation_stays_in_cookware_domain(route_client_and_db):
+    client, headers, Session = route_client_and_db
+
+    response = client.post(
+        "/api/customer-service/ask?debug=true",
+        json={"question": "给我推荐几款双人露营锅具。"},
+        headers=headers,
+    )
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    assert payload["answer_type"] == "recommendation", payload
+    assert payload["answer_type"] != "knowledge_base_answer"
+    assert payload["result_skus"], payload
+    assert payload["answer"], payload
+    assert payload["result_skus"][0] not in {"CW-C84", "CW-K32", "CB253", "CB254"}, payload["result_skus"]
+
+    with Session() as db:
+        top_products = {
+            product.sku: product.category
+            for product in db.query(Product).filter(Product.sku.in_(payload["result_skus"][:2])).all()
+        }
+
+    assert top_products, payload
+    assert all(category == "锅具" for category in top_products.values()), top_products
+    assert re.search(r"(双人|两人|情侣|露营).*(锅具|套锅|炊具|做饭)", payload["answer"]), payload["answer"]
+
+
 def test_route_level_multiturn_variant_lightweight_cookware_followups_stay_out_of_waterware(route_client_and_db):
     client, headers, Session = route_client_and_db
 
@@ -442,6 +469,53 @@ def test_route_level_multiturn_variant_lightweight_cookware_followups_stay_out_o
     assert payload3["answer_type"] != "knowledge_base_answer"
     assert payload3["result_skus"], payload3
     assert payload3["result_skus"][0] not in {"CB253", "CB254"}, payload3["result_skus"]
+
+
+def test_route_level_mt_o2_ordinal_followups_stay_in_cookware_domain(route_client_and_db):
+    client, headers, Session = route_client_and_db
+
+    response1 = client.post(
+        "/api/customer-service/ask?debug=true",
+        json={"question": "给我推荐几款双人露营锅具。"},
+        headers=headers,
+    )
+    assert response1.status_code == 200, response1.text
+    payload1 = response1.json()
+    conversation_id = payload1["conversation_id"]
+    assert payload1["answer_type"] == "recommendation", payload1
+    assert len(payload1["result_skus"]) >= 2, payload1
+
+    with Session() as db:
+        top_categories = {
+            product.sku: product.category
+            for product in db.query(Product).filter(Product.sku.in_(payload1["result_skus"][:2])).all()
+        }
+
+    assert top_categories and all(category == "锅具" for category in top_categories.values()), top_categories
+
+    response2 = client.post(
+        "/api/customer-service/ask?debug=true",
+        json={"question": "第二个是什么材质？", "conversation_id": conversation_id},
+        headers=headers,
+    )
+    assert response2.status_code == 200, response2.text
+    payload2 = response2.json()
+    assert payload2["answer_type"] == "product_detail", payload2
+    assert payload2["answer_type"] != "clarification"
+    assert payload2["answer_type"] != "knowledge_base_answer"
+    assert payload2["result_skus"] == [payload1["result_skus"][1]], payload2
+
+    response3 = client.post(
+        "/api/customer-service/ask?debug=true",
+        json={"question": "最后一个适合什么场景？", "conversation_id": conversation_id},
+        headers=headers,
+    )
+    assert response3.status_code == 200, response3.text
+    payload3 = response3.json()
+    assert payload3["answer_type"] == "product_detail", payload3
+    assert payload3["answer_type"] != "clarification"
+    assert payload3["answer_type"] != "knowledge_base_answer"
+    assert payload3["result_skus"] == [payload1["result_skus"][-1]], payload3
 
 
 def test_route_level_multiturn_variant_ordinal_compare_followup_keeps_second_choice(route_client_and_db):

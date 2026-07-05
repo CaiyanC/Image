@@ -1941,12 +1941,15 @@ def _phase1_is_light_budget_cookware_set_scenario(question: str) -> bool:
     has_budget = any(term in value for term in ("不想买太贵", "不想太贵", "别太贵", "不太贵", "预算", "入门", "性价比"))
     has_set_selection = any(term in value for term in ("哪套", "推荐哪套", "买哪套", "选哪套", "套锅", "套装"))
     has_cookware_scope = any(term in value for term in ("锅具", "炊具", "套锅", "锅", "买套", "一套"))
+    has_cooking_usage = any(term in value for term in ("做饭", "煮饭", "煮面", "正餐", "烹饪"))
     has_purchase_or_selection = any(term in value for term in ("想买", "买", "推荐", "怎么选", "该买", "选"))
-    if not (has_two_person and has_camping and has_lightweight):
+    if not (has_two_person and has_camping):
         return False
+    if has_cookware_scope and has_purchase_or_selection and (has_lightweight or has_budget or has_set_selection or has_cooking_usage):
+        return True
     if has_budget and (has_set_selection or has_cookware_scope):
         return True
-    return has_cookware_scope and has_purchase_or_selection
+    return has_lightweight and has_cookware_scope and has_purchase_or_selection
 
 
 def _phase1_is_water_kettle_selection_scenario(question: str) -> bool:
@@ -2109,6 +2112,11 @@ def _phase1_structured_light_budget_cookware_set_result(scenario: str, rows: lis
     cookware_rows = [row for row in rows if _is_service_pot_or_cookware_set_candidate(row)]
     if not cookware_rows:
         return None
+    scenario_text = str(scenario or "")
+    has_lightweight = any(term in scenario_text for term in ("轻", "轻量", "轻便", "不想太重", "别太重"))
+    has_budget = any(term in scenario_text for term in ("不想买太贵", "不想太贵", "别太贵", "不太贵", "预算", "入门", "性价比"))
+    has_set_selection = any(term in scenario_text for term in ("哪套", "推荐哪套", "买哪套", "选哪套", "套锅", "套装"))
+    has_cooking_usage = any(term in scenario_text for term in ("做饭", "煮饭", "煮面", "正餐", "烹饪"))
 
     def _rank(row: dict) -> tuple[int, str]:
         text = " ".join(
@@ -2131,6 +2139,8 @@ def _phase1_structured_light_budget_cookware_set_result(scenario: str, rows: lis
             score += 8
         if any(term in text for term in ("轻量", "轻便", "便携", "收纳", "套娃")):
             score += 6
+        if has_cooking_usage and any(term in text for term in ("做饭", "煮饭", "煮面", "正餐", "烹饪")):
+            score += 4
         if any(term in text for term in ("入门", "性价比", "基础", "中端", "周末野餐")):
             score += 4
         if any(term in text for term in ("高端", "礼盒")):
@@ -2155,9 +2165,19 @@ def _phase1_structured_light_budget_cookware_set_result(scenario: str, rows: lis
     top_name = top_row.get("product_name_cn") or top_row.get("sku")
     top_sku = str(top_row.get("sku") or "").strip().upper()
     top_reason = str(top_row.get("usage_scenarios") or top_row.get("features") or top_row.get("positioning") or "").strip("。；; ")
+    demand_bits = ["双人露营"]
+    if has_lightweight:
+        demand_bits.append("轻便好带")
+    if has_budget:
+        demand_bits.append("入门取舍")
+    if has_set_selection:
+        demand_bits.append("套锅/套装")
+    if has_cooking_usage:
+        demand_bits.append("做饭用锅")
+    demand_label = "、".join(dict.fromkeys(demand_bits))
     answer = (
-        f"这类需求我会优先从双人露营的轻量锅具/套锅里选，不先把水壶当主推。"
-        f" 主推 {top_name}（{top_sku}），更贴合“双人露营、别太重、先看入门取舍”这类需求。"
+        f"这类需求我会优先从双人露营的锅具/套锅里选，不先把水壶当主推。"
+        f" 主推 {top_name}（{top_sku}），更贴合“{demand_label}”这类需求。"
     )
     if top_reason:
         answer += f" 主要理由是：{top_reason}。"
@@ -2169,7 +2189,12 @@ def _phase1_structured_light_budget_cookware_set_result(scenario: str, rows: lis
         backups.append(f"{name}（{sku}），{reason}")
     if backups:
         answer += " 备选可以看" + "；".join(backups) + "。"
-    answer += " 如果你更在意极致轻量，就优先看更轻便的小套锅；如果更在意两个人做饭的完整度，再看容量和组件更全的套装。"
+    if has_lightweight:
+        answer += " 如果你更在意极致轻量，就优先看更轻便的小套锅；"
+    if has_cooking_usage or not has_lightweight:
+        answer += " 如果你更在意两个人做饭的完整度，再看容量和组件更全的套装。"
+    else:
+        answer += " 如果你更在意两个人做饭的完整度，再看容量和组件更全的套装。"
     skus = [str(row.get("sku") or "").strip().upper() for row in selected if row.get("sku")]
     return {
         "intent": "recommendation",
