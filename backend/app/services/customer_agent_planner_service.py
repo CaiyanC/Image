@@ -360,7 +360,7 @@ async def _repair_semantic_preplan_output(db, *, question: str, raw_content: str
             },
         ],
         temperature=0,
-        max_tokens=500,
+        max_tokens=1200,
         purpose="semantic_preplan_repair",
     )
 
@@ -392,7 +392,7 @@ async def _semantic_preplan_label_output(
             },
         ],
         temperature=0,
-        max_tokens=300,
+        max_tokens=800,
         purpose="semantic_preplan_label",
     )
 
@@ -417,7 +417,7 @@ async def plan_customer_question_semantic(
             db,
             messages,
             temperature=0,
-            max_tokens=500,
+            max_tokens=1200,
             purpose="semantic_preplan",
         )
         llm_call_count += 1
