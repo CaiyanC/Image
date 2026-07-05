@@ -1,9 +1,147 @@
+import json
 import re
 
 import pytest
 
 from app.models import Product
+from app.services import customer_agent_planner_service
 from test_customer_service_route_level_regression import route_client_and_db
+
+
+def _semantic_preplan_debug(payload: dict) -> dict:
+    debug = payload.get("debug") if isinstance(payload.get("debug"), dict) else {}
+    return debug.get("semantic_preplan") if isinstance(debug.get("semantic_preplan"), dict) else {}
+
+
+@pytest.mark.parametrize(
+    ("question", "route_hint"),
+    [
+        ("主要做煎烤早餐，锅和烤盘哪个更值得先买？", "comparison"),
+        ("有哪些水具更偏冷水随身补水？", "query_products"),
+        ("有哪些咖啡器具适合手冲？", "query_products"),
+        ("CT-T04(BM) 有什么使用限制？", "product_detail"),
+    ],
+)
+def test_route_level_semantic_preplan_triggers_only_for_ambiguous_routes(
+    route_client_and_db,
+    monkeypatch,
+    question,
+    route_hint,
+):
+    client, headers, _ = route_client_and_db
+    calls = []
+
+    async def fake_chat_completion(db, messages, model=None, temperature=0.2, max_tokens=1200, *, purpose="chat"):
+        calls.append({"purpose": purpose, "messages": messages})
+        return json.dumps(
+            {
+                "route_hint": route_hint,
+                "question_type": "comparison" if route_hint == "comparison" else "filter",
+                "entities": [],
+                "field_hint": None,
+                "qa_or_usage_care": route_hint == "usage_care",
+                "unknown_field": route_hint == "unknown_field",
+                "confidence": 0.88,
+                "reason": "ambiguous route smoke",
+            },
+            ensure_ascii=False,
+        )
+
+    monkeypatch.setattr(customer_agent_planner_service.customer_llm_service, "chat_completion", fake_chat_completion)
+
+    response = client.post("/api/customer-service/ask?debug=true", json={"question": question}, headers=headers)
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    assert calls and calls[0]["purpose"] == "semantic_preplan"
+    semantic_debug = _semantic_preplan_debug(payload)
+    assert semantic_debug.get("called") is True, payload.get("debug")
+    assert semantic_debug.get("route_hint") == route_hint, semantic_debug
+    assert semantic_debug.get("accepted_or_overridden") in {"accepted", "overridden"}, semantic_debug
+    assert payload["answer"], payload
+    assert "candidate_skus" not in semantic_debug
+    assert "recommended_skus" not in semantic_debug
+
+
+def test_route_level_semantic_preplan_triggers_for_alternative_followup(route_client_and_db, monkeypatch):
+    client, headers, _ = route_client_and_db
+    calls = []
+
+    async def fake_chat_completion(db, messages, model=None, temperature=0.2, max_tokens=1200, *, purpose="chat"):
+        calls.append({"purpose": purpose, "messages": messages})
+        return json.dumps(
+            {
+                "route_hint": "recommendation",
+                "question_type": "followup",
+                "entities": [],
+                "field_hint": None,
+                "qa_or_usage_care": False,
+                "unknown_field": False,
+                "confidence": 0.86,
+                "reason": "negative alternative follow-up",
+            },
+            ensure_ascii=False,
+        )
+
+    monkeypatch.setattr(customer_agent_planner_service.customer_llm_service, "chat_completion", fake_chat_completion)
+
+    response1 = client.post(
+        "/api/customer-service/ask?debug=true",
+        json={"question": "双人露营想买套轻便锅具。"},
+        headers=headers,
+    )
+    assert response1.status_code == 200, response1.text
+    payload1 = response1.json()
+    conversation_id = payload1["conversation_id"]
+    first_top = payload1["result_skus"][0]
+
+    response2 = client.post(
+        "/api/customer-service/ask?debug=true",
+        json={"question": "不要刚才那个，换个更轻的", "conversation_id": conversation_id},
+        headers=headers,
+    )
+    assert response2.status_code == 200, response2.text
+    payload2 = response2.json()
+    assert calls and calls[-1]["purpose"] == "semantic_preplan"
+    semantic_debug = _semantic_preplan_debug(payload2)
+    assert semantic_debug.get("called") is True, payload2.get("debug")
+    assert semantic_debug.get("route_hint") == "recommendation", semantic_debug
+    assert payload2["answer_type"] == "recommendation", payload2
+    assert payload2["result_skus"], payload2
+    assert payload2["result_skus"][0] != first_top, (payload1, payload2)
+
+
+@pytest.mark.parametrize(
+    "question",
+    [
+        "CS-B14（LX）能不能用酒精炉？",
+        "CW-C83 容量是多少？",
+        "现在有多少款水具？",
+        "CW-C83有库存吗？",
+        "炉具点不着怎么办？",
+    ],
+)
+def test_route_level_semantic_preplan_skips_clear_deterministic_routes(
+    route_client_and_db,
+    monkeypatch,
+    question,
+):
+    client, headers, _ = route_client_and_db
+    calls = []
+
+    async def fake_chat_completion(db, messages, model=None, temperature=0.2, max_tokens=1200, *, purpose="chat"):
+        if purpose == "semantic_preplan":
+            calls.append({"purpose": purpose, "messages": messages})
+            raise AssertionError("semantic_preplan should not run for clear deterministic routes")
+        return "{}"
+
+    monkeypatch.setattr(customer_agent_planner_service.customer_llm_service, "chat_completion", fake_chat_completion)
+
+    response = client.post("/api/customer-service/ask?debug=true", json={"question": question}, headers=headers)
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    assert not calls, payload.get("debug")
+    assert not _semantic_preplan_debug(payload), payload.get("debug")
+    assert payload["answer"], payload
 
 
 @pytest.mark.parametrize(
@@ -313,3 +451,183 @@ def test_route_level_water_kettle_guard_does_not_break_cookware_or_stove_domains
     assert payload["result_skus"], payload
     assert payload["answer"], payload
     assert payload["result_skus"][0] not in forbidden_top, payload["result_skus"]
+
+
+@pytest.mark.parametrize(
+    ("question", "expected_sku", "required_terms"),
+    [
+        ("KW-K31-白适合冷水还是热水？", "KW-K31-白", ("冷水", "热水")),
+        ("KW-K31-黑是烧水还是补水？", "KW-K31-黑", ("烧水", "补水")),
+        ("KW-K32-白适合冷水还是热水？", "KW-K32-白", ("冷水", "热水")),
+        ("KW-K32-黑是烧水还是补水？", "KW-K32-黑", ("烧水", "补水")),
+        ("TW-422-蓝能不能装热水？", "TW-422-蓝", ("热水",)),
+        ("TW-422-绿适合冷水还是热水？", "TW-422-绿", ("冷水", "热水")),
+        ("TW-422-粉能不能补水用？", "TW-422-粉", ("补水",)),
+    ],
+)
+def test_route_level_waterware_capability_questions_keep_exact_sku_and_answer_capability(
+    route_client_and_db,
+    question,
+    expected_sku,
+    required_terms,
+):
+    client, headers, _ = route_client_and_db
+
+    response = client.post("/api/customer-service/ask?debug=true", json={"question": question}, headers=headers)
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    debug_plan = ((payload.get("debug") or {}).get("plan") or {})
+
+    assert payload["answer_type"] == "product_detail", payload
+    assert payload["answer_type"] != "knowledge_base_answer"
+    assert payload["result_skus"] == [expected_sku], payload
+    assert payload["answer"], payload
+    assert debug_plan.get("product_ref") == expected_sku, debug_plan
+    for term in required_terms:
+        assert term in payload["answer"], payload["answer"]
+
+
+@pytest.mark.parametrize(
+    ("question", "required_answer_type", "required_terms", "forbidden_terms"),
+    [
+        ("现在有多少款水具？", "query_products", ("当前匹配到", "水具"), ("天气", "实时", "unsupported")),
+        ("水壶有多少款？", "query_products", ("当前匹配到", "水壶"), ("天气", "实时", "unsupported")),
+        ("有哪些咖啡器具适合手冲？", "product_query", ("咖啡器具",), ("knowledge_base_answer",)),
+        ("有哪些水具更偏冷水随身补水？", "product_query", ("补水", "水具"), ("清洗", "冷水冲")),
+        ("有哪些烤盘能配露营炉具？", "product_query", ("烤盘",), ()),
+        ("露营烧烤用，能配炉具的烤盘有哪些？", "product_query", ("烤盘", "炉具"), ()),
+        ("CW-C83有库存吗？", "product_detail", ("未标注", "库存"), ("Product not found", "天气")),
+        ("销量最高的是哪个锅？", "product_detail", ("未标注", "销量"), ("推荐", "天气")),
+        ("客户评价最好的水壶是哪款？", "product_detail", ("未标注", "评价"), ("推荐", "天气")),
+        ("价格现在多少？", "product_detail", ("未标注", "价格"), ("天气", "实时天气")),
+    ],
+)
+def test_route_level_structured_and_unknown_field_questions_route_conservatively(
+    route_client_and_db,
+    question,
+    required_answer_type,
+    required_terms,
+    forbidden_terms,
+):
+    client, headers, _ = route_client_and_db
+
+    response = client.post("/api/customer-service/ask?debug=true", json={"question": question}, headers=headers)
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    assert payload["answer_type"] == required_answer_type, payload
+    assert payload["answer"], payload
+    for term in required_terms:
+        assert term in payload["answer"], payload["answer"]
+    for term in forbidden_terms:
+        assert term not in payload["answer"], payload["answer"]
+
+
+@pytest.mark.parametrize(
+    ("question", "expected_answer_type", "expected_sku", "required_terms"),
+    [
+        ("炉具点不着怎么办？", "product_usage_care", None, ("关闭阀门", "检查")),
+        ("气罐和炉具连接要注意什么？", "product_usage_care", None, ("连接", "注意")),
+        ("炉具使用安全吗？", "product_usage_care", None, ("安全", "明火")),
+        ("户外使用炉具有什么安全注意事项？", "product_usage_care", None, ("安全", "气罐")),
+        ("气罐怎么存放？", "product_usage_care", None, ("阴凉通风", "火源")),
+        ("CT-T04(BM) 有什么使用限制？", "product_detail", "CT-T04(BM)", ("茶具", "未标注适用酒精炉")),
+        ("CW-C83 有没有官方说明书？", "product_detail", "CW-C83", ("未维护", "说明书")),
+        ("DV01有没有保修？", "product_detail", "DV01", ("未标注", "保修")),
+        ("KD20HM有没有安装视频？", "product_detail", "KD20HM", ("未维护", "安装视频")),
+    ],
+)
+def test_route_level_qa_usage_care_and_sku_knowledge_boundary(
+    route_client_and_db,
+    question,
+    expected_answer_type,
+    expected_sku,
+    required_terms,
+):
+    client, headers, _ = route_client_and_db
+
+    response = client.post("/api/customer-service/ask?debug=true", json={"question": question}, headers=headers)
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    assert payload["answer_type"] == expected_answer_type, payload
+    assert payload["answer"], payload
+    if expected_sku:
+        assert payload["result_skus"] == [expected_sku], payload
+    for term in required_terms:
+        assert term in payload["answer"], payload["answer"]
+
+
+@pytest.mark.parametrize(
+    "question",
+    [
+        "主要做煎烤早餐，锅和烤盘哪个更值得先买？",
+        "如果早餐主要煎蛋煎培根，先买锅还是烤盘更合适？",
+    ],
+)
+def test_route_level_pan_vs_cookware_comparison_answers_tradeoff_not_plain_list(route_client_and_db, question):
+    client, headers, _ = route_client_and_db
+
+    response = client.post("/api/customer-service/ask?debug=true", json={"question": question}, headers=headers)
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    assert payload["answer_type"] == "recommendation", payload
+    assert payload["answer"], payload
+    assert "烤盘" in payload["answer"], payload["answer"]
+    assert ("锅具" in payload["answer"] or "锅" in payload["answer"]), payload["answer"]
+    assert re.search(r"(更值得先买|更合适|更通用|优先)", payload["answer"]), payload["answer"]
+
+
+@pytest.mark.parametrize(
+    "followups",
+    [
+        ("不要刚才那个，换个更轻的。", "再给我一个稍微便宜点的。"),
+        ("换个更轻一点的。", "还有别的吗？"),
+        ("不要这个了，换一个。", "再来一个更适合新手的。"),
+        ("这个太重了，换个轻便点的。", "更便宜点还有吗？"),
+    ],
+)
+def test_route_level_alternative_followups_stay_in_same_recommendation_domain(route_client_and_db, followups):
+    client, headers, Session = route_client_and_db
+
+    response1 = client.post(
+        "/api/customer-service/ask?debug=true",
+        json={"question": "双人露营想买套轻便锅具。"},
+        headers=headers,
+    )
+    assert response1.status_code == 200, response1.text
+    payload1 = response1.json()
+    conversation_id = payload1["conversation_id"]
+    first_top = payload1["result_skus"][0]
+    assert payload1["answer_type"] == "recommendation", payload1
+
+    response2 = client.post(
+        "/api/customer-service/ask?debug=true",
+        json={"question": followups[0], "conversation_id": conversation_id},
+        headers=headers,
+    )
+    assert response2.status_code == 200, response2.text
+    payload2 = response2.json()
+    assert payload2["answer_type"] == "recommendation", payload2
+    assert payload2["answer_type"] != "knowledge_base_answer"
+    assert payload2["answer_type"] != "clarification"
+    assert payload2["result_skus"], payload2
+    assert payload2["result_skus"][0] != first_top, (payload1, payload2)
+
+    with Session() as db:
+        top_categories = {
+            product.sku: product.category
+            for product in db.query(Product).filter(Product.sku.in_(payload2["result_skus"][:2])).all()
+        }
+    assert top_categories and all(category == "锅具" for category in top_categories.values()), top_categories
+
+    response3 = client.post(
+        "/api/customer-service/ask?debug=true",
+        json={"question": followups[1], "conversation_id": conversation_id},
+        headers=headers,
+    )
+    assert response3.status_code == 200, response3.text
+    payload3 = response3.json()
+    assert payload3["answer_type"] == "recommendation", payload3
+    assert payload3["answer_type"] != "knowledge_base_answer"
+    assert payload3["answer_type"] != "clarification"
+    assert payload3["result_skus"], payload3
+    assert payload3["result_skus"][0] not in {"CB253", "CB254", "AC-Z13", "CW-C84", "CW-K32"}, payload3["result_skus"]

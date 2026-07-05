@@ -164,6 +164,55 @@ def _add_product(
     content.search_keywords = f"{name},{category},{heat_source}"
 
 
+def _add_product_qa(db, sku, question, answer, *, tags="", priority=100):
+    product = db.query(Product).filter(Product.sku == sku).first()
+    assert product is not None, sku
+    db.add(
+        ProductQa(
+            id=f"route-qa-{sku}-{abs(hash((question, answer))) % 10_000_000}",
+            product_id=product.id,
+            question=question,
+            answer=answer,
+            tags=tags,
+            priority=priority,
+        )
+    )
+
+
+def _add_knowledge_chunk(db, *, chunk_id, sku, title, content, source_type="sku_manual", metadata=None):
+    document_id = f"route-doc-{chunk_id}"
+    db.add(
+        KnowledgeDocument(
+            id=document_id,
+            source_type=source_type,
+            source_id=sku,
+            sku=sku,
+            title=title,
+            content=content,
+            metadata_json=json.dumps(metadata or {}, ensure_ascii=False),
+            file_name=f"{chunk_id}.md",
+            file_path=f"/route-tests/{chunk_id}.md",
+            file_type="md",
+            file_hash=f"hash-{chunk_id}",
+            parse_status="parsed",
+            related_skus_json=json.dumps([sku], ensure_ascii=False),
+            is_active=True,
+        )
+    )
+    db.add(
+        KnowledgeChunk(
+            id=f"route-chunk-{chunk_id}",
+            document_id=document_id,
+            sku=sku,
+            source_type=source_type,
+            chunk_index=0,
+            content=content,
+            metadata_json=json.dumps(metadata or {}, ensure_ascii=False),
+            embedding_status="pending",
+        )
+    )
+
+
 def _seed_route_level_products(db):
     _add_product(db, "ACC-001", "稳稳水袋", "配件", "/", "TPU", "/", "配件收纳补水", "露营收纳", 80)
     _add_product(db, "ACC-CUT-1", "勺叉收纳包", "配件", "/", "牛津布", "/", "勺叉筷集中收纳", "露营用餐收纳", 60)
@@ -216,6 +265,33 @@ def _seed_route_level_products(db):
     _add_product(db, "CT-T04(BM)", "出山-功夫茶具（竹套版）", "茶具", "/", "竹、陶瓷", "/", "便携功夫茶具", "露营茶席 公园野餐", 980)
     _add_product(db, "CW-C84", "楦ｆ硥姘村６", "姘村６", "1.0L", "纭川姘у寲閾濆悎閲?", "鐕冩皵鐐?", "杞婚噺寰掓 蹇€熺儳姘?", "鎴峰闇茶惀鐓尪 鍙屼汉闇茶惀 灞遍噹鍝佽寗", 320)
     _add_product(db, "CW-K32", "浜喅Plus姘村６", "姘村６", "900ML", "纭川姘у寲閾濆悎閲?", "鐕冩皵鐐?", "绮捐嚧闇茶惀鐓尪 渚挎惡", "绮捐嚧闇茶惀鐓尪 鍙屼汉闇茶惀 鎴峰琛ユ按", 340)
+    _add_product_qa(db, "CW-C83", "CW-C83 能不能用酒精炉？", "当前资料未显示 CW-C83 支持酒精炉；现有热源资料为明火直烧、卡式炉、分体炉、一体炉。", tags="热源,酒精炉", priority=200)
+    _add_product_qa(db, "CW-C83", "CW-C83 有没有官方说明书？", "当前资料里暂未维护 CW-C83 的官方说明书信息；如需正式说明书，请联系人工客服或后台资料管理员查询。", tags="说明书,资料缺失", priority=180)
+    _add_product_qa(db, "CT-T04(BM)", "CT-T04(BM) 有什么使用限制？", "CT-T04(BM) 属于茶具套装，当前资料更偏露营茶席和公园野餐使用；它不是炉具或炊具，资料里也未标注适用酒精炉。", tags="使用限制,茶具", priority=180)
+    _add_product_qa(db, "DV01", "DV01 有没有保修？", "当前资料未标注 DV01 的保修政策；如需售后和保修信息，建议联系人工客服确认。", tags="保修,售后", priority=170)
+    _add_product_qa(db, "KD20HM", "KD20HM 有没有安装视频？", "当前资料未维护 KD20HM 的安装视频链接；如果你需要安装说明或演示资料，建议联系人工客服进一步确认。", tags="安装视频,资料缺失", priority=170)
+    _add_product_qa(db, "KW-K31-白", "KW-K31-白 可以装热水吗？", "当前资料将 KW-K31-白 描述为便携饮水、冷热两用；可按装热水/饮水容器理解，但资料未标注可直接上火加热。", tags="热水,饮水,冷热两用", priority=190)
+    _add_product_qa(db, "KW-K32-黑", "KW-K32-黑 是烧水还是补水？", "当前资料更偏手冲咖啡和营地热饮场景，属于可加热烧水类器具；并未把它标注为随身补水杯。", tags="烧水,热饮,补水", priority=190)
+    _add_product_qa(db, "TW-422-蓝", "TW-422-蓝 能不能装热水？", "当前资料显示 TW-422-蓝 为保温杯，可装热水饮用；但它不是直接加热烧水的器具。", tags="热水,保温杯", priority=190)
+    _add_product_qa(db, "GX15-450G", "GX15-450G 适合几个人用？", "GX15-450G 是燃气配件，当前资料没有按人数标注；更适合从气罐规格和使用时长来判断。", tags="人数,配件", priority=150)
+    _add_knowledge_chunk(
+        db,
+        chunk_id="stove-safety-1",
+        sku="CS-G26HM",
+        title="炉具安全注意事项",
+        content="户外使用炉具前先确认气罐与接口连接到位，远离明火和密闭空间；遇到点不着火时，先关闭阀门，检查气源、点火器和接口，再重新尝试，不要连续空放气。",
+        source_type="usage_care",
+        metadata={"topic": "safety"},
+    )
+    _add_knowledge_chunk(
+        db,
+        chunk_id="gas-storage-1",
+        sku="GX15-450G",
+        title="气罐存放注意事项",
+        content="气罐应放在阴凉通风处，避免高温暴晒、靠近火源或车内长期密闭存放；运输和收纳前先确认阀门关闭、接口无泄漏。",
+        source_type="usage_care",
+        metadata={"topic": "storage"},
+    )
     db.commit()
 
 

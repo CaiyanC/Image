@@ -1,9 +1,10 @@
 from __future__ import annotations
 
+import json
 import re
 
 from typing import Any
-from . import customer_agent_service
+from . import customer_agent_service, customer_llm_service
 
 
 EXPLICIT_SKU_RE = re.compile(
@@ -36,6 +37,43 @@ TIMING_KEYS = (
 )
 
 
+SEMANTIC_PREPLAN_ROUTE_HINTS = {
+    "usage_care",
+    "recommendation",
+    "product_detail",
+    "query_products",
+    "knowledge_base_answer",
+    "comparison",
+    "unknown_field",
+    "clarification",
+}
+SEMANTIC_PREPLAN_QUESTION_TYPES = {
+    "safety",
+    "count",
+    "filter",
+    "field",
+    "comparison",
+    "recommendation",
+    "usage",
+    "unknown_field",
+    "followup",
+}
+SEMANTIC_PREPLAN_FORBIDDEN_KEYS = {
+    "answer",
+    "final_answer",
+    "candidate_skus",
+    "recommended_skus",
+    "result_skus",
+    "sku",
+    "skus",
+    "price",
+    "stock",
+    "sales",
+    "certification",
+    "warranty",
+}
+
+
 def empty_timing() -> dict[str, float | int | None]:
     timing: dict[str, float | int | None] = {key: 0 for key in TIMING_KEYS}
     timing["llm_call_count"] = 0
@@ -53,6 +91,157 @@ def merge_timing(existing: dict | None, updates: dict | None = None) -> dict:
             if key in updates:
                 timing[key] = updates[key]
     return timing
+
+
+def _empty_semantic_preplan(*, called: bool = False, fallback_reason: str = "") -> dict[str, Any]:
+    return {
+        "called": called,
+        "purpose": "semantic_preplan",
+        "route_hint": "",
+        "question_type": "",
+        "entities": [],
+        "field_hint": None,
+        "qa_or_usage_care": False,
+        "unknown_field": False,
+        "confidence": 0.0,
+        "reason": "",
+        "accepted_or_overridden": "",
+        "override_reason": "",
+        "fallback_reason": fallback_reason,
+        "llm_call_count": 1 if called else 0,
+    }
+
+
+def _extract_json_object(text: str) -> dict[str, Any] | None:
+    raw = str(text or "").strip()
+    if not raw:
+        return None
+    if raw.startswith("```"):
+        raw = re.sub(r"^```(?:json)?\s*", "", raw, flags=re.IGNORECASE)
+        raw = re.sub(r"\s*```$", "", raw)
+    try:
+        data = json.loads(raw)
+        return data if isinstance(data, dict) else None
+    except json.JSONDecodeError:
+        pass
+    start = raw.find("{")
+    end = raw.rfind("}")
+    if start >= 0 and end > start:
+        try:
+            data = json.loads(raw[start : end + 1])
+            return data if isinstance(data, dict) else None
+        except json.JSONDecodeError:
+            return None
+    return None
+
+
+def _validate_semantic_preplan(data: dict[str, Any] | None) -> dict[str, Any]:
+    if not isinstance(data, dict):
+        return _empty_semantic_preplan(called=True, fallback_reason="invalid_json")
+    forbidden = sorted(key for key in data if key in SEMANTIC_PREPLAN_FORBIDDEN_KEYS)
+    route_hint = str(data.get("route_hint") or "").strip()
+    question_type = str(data.get("question_type") or "").strip()
+    try:
+        confidence = float(data.get("confidence") or 0)
+    except (TypeError, ValueError):
+        confidence = 0.0
+    if route_hint not in SEMANTIC_PREPLAN_ROUTE_HINTS:
+        route_hint = ""
+    if question_type not in SEMANTIC_PREPLAN_QUESTION_TYPES:
+        question_type = ""
+    entities = data.get("entities") if isinstance(data.get("entities"), list) else []
+    entities = [str(item).strip() for item in entities[:8] if str(item or "").strip()]
+    field_hint = data.get("field_hint")
+    field_hint = str(field_hint).strip() if field_hint is not None and str(field_hint).strip() else None
+    result = _empty_semantic_preplan(called=True)
+    result.update(
+        {
+            "route_hint": route_hint,
+            "question_type": question_type,
+            "entities": entities,
+            "field_hint": field_hint,
+            "qa_or_usage_care": bool(data.get("qa_or_usage_care")),
+            "unknown_field": bool(data.get("unknown_field")),
+            "confidence": max(0.0, min(1.0, confidence)),
+            "reason": str(data.get("reason") or "")[:300],
+        }
+    )
+    if forbidden:
+        result["fallback_reason"] = "forbidden_keys:" + ",".join(forbidden)
+        result["route_hint"] = ""
+        result["confidence"] = 0.0
+    return result
+
+
+async def plan_customer_question_semantic(
+    db,
+    question: str,
+    deterministic_plan: dict | None,
+    context: dict | None = None,
+) -> dict[str, Any]:
+    """Ask the LLM only for an ambiguous-route hint; never for facts or SKUs."""
+    text = str(question or "").strip()
+    if not text:
+        return _empty_semantic_preplan(fallback_reason="empty_question")
+    deterministic_plan = deterministic_plan if isinstance(deterministic_plan, dict) else {}
+    context = context if isinstance(context, dict) else {}
+    schema = {
+        "route_hint": "usage_care|recommendation|product_detail|query_products|knowledge_base_answer|comparison|unknown_field|clarification",
+        "question_type": "safety|count|filter|field|comparison|recommendation|usage|unknown_field|followup",
+        "entities": [],
+        "field_hint": None,
+        "qa_or_usage_care": False,
+        "unknown_field": False,
+        "confidence": 0.0,
+        "reason": "",
+    }
+    messages = [
+        {
+            "role": "system",
+            "content": (
+                "You are a route preplanner for a customer-service product QA system. "
+                "Return JSON only. You may only infer route intent. Do not answer the user. "
+                "Do not output SKU facts, candidate_skus, recommended_skus, field facts, price, stock, sales, "
+                "certification, warranty, or final answers. If unsure, use low confidence."
+            ),
+        },
+        {
+            "role": "user",
+            "content": json.dumps(
+                {
+                    "question": text,
+                    "deterministic_plan": {
+                        "primary_intent": deterministic_plan.get("primary_intent") or "",
+                        "answer_type": deterministic_plan.get("answer_type") or "",
+                        "requested_field": deterministic_plan.get("requested_field") or "",
+                        "product_ref": deterministic_plan.get("product_ref") or "",
+                    },
+                    "context": {
+                        "has_conversation_id": bool(context.get("conversation_id")),
+                        "has_recommendation_context": bool(context.get("has_recommendation_context")),
+                    },
+                    "schema": schema,
+                },
+                ensure_ascii=False,
+            ),
+        },
+    ]
+    try:
+        content = await customer_llm_service.chat_completion(
+            db,
+            messages,
+            temperature=0,
+            max_tokens=450,
+            purpose="semantic_preplan",
+        )
+    except Exception as exc:
+        result = _empty_semantic_preplan(called=True, fallback_reason=f"llm_error:{type(exc).__name__}")
+        result["error"] = str(exc)[:240]
+        return result
+    result = _validate_semantic_preplan(_extract_json_object(content))
+    if not result.get("route_hint"):
+        result["fallback_reason"] = result.get("fallback_reason") or "empty_route_hint"
+    return result
 
 
 def plan_customer_question(

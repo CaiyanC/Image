@@ -65,6 +65,17 @@ COMPOSITE_FACT_RECOMMENDATION_MARKERS = (
     "推荐一下",
 )
 
+_STRUCTURED_UNKNOWN_FACT_TERMS: dict[str, tuple[str, ...]] = {
+    "库存": ("库存", "现货"),
+    "销量": ("销量", "销量最高", "卖得最好"),
+    "评价": ("评价", "客户评价", "好评", "评价最好"),
+    "价格": ("价格", "售价", "多少钱", "什么价", "几块", "几元"),
+    "保修": ("保修", "质保"),
+    "认证": ("认证", "BPA", "BPA free", "FDA", "LFGB", "检测报告", "欧盟认证"),
+    "官方说明书": ("说明书", "官方说明书"),
+    "安装视频": ("安装视频", "安装教程", "视频教程"),
+}
+
 
 def _split_composite_customer_question(question: str) -> dict[str, str] | None:
     text = str(question or "").strip()
@@ -171,6 +182,7 @@ async def _save_agent_result_and_return(
     agent_result: dict,
     request_start: float,
     branch: str,
+    semantic_preplan: dict | None = None,
 ) -> dict:
     stage_start = perf_counter()
     if not ((agent_result.get("debug") or {}).get("timing")) or not ((agent_result.get("answer_metadata") or {}).get("timing")):
@@ -182,6 +194,11 @@ async def _save_agent_result_and_return(
             _phase1_timing(request_start=request_start),
         )
     agent_result = _finalize_answer(agent_result)
+    agent_result = _attach_semantic_preplan_debug(
+        agent_result,
+        semantic_preplan,
+        final_route=str(agent_result.get("answer_type") or agent_result.get("intent") or ""),
+    )
     answer_metadata = agent_result.get("answer_metadata") if isinstance(agent_result.get("answer_metadata"), dict) else {}
     skip_polish = bool(agent_result.get("skip_polish"))
     if _should_skip_polish_for_agent_result(agent_result):
@@ -234,6 +251,11 @@ async def _save_agent_result_and_return(
         agent_mode=(agent_result.get("debug") or {}).get("agent_mode"),
     )
     release_session_connection(db)
+    agent_result = _attach_semantic_preplan_debug(
+        agent_result,
+        semantic_preplan,
+        final_route=str(agent_result.get("answer_type") or agent_result.get("intent") or ""),
+    )
     public_intent = _public_intent_name(agent_result.get("intent"), agent_result.get("answer_type"))
     return {
         "conversation_id": conversation_id_value,
@@ -307,9 +329,140 @@ def _attach_phase1_plan_and_timing(agent_result: dict, plan: dict, timing: dict)
     answer_metadata["timing"] = customer_agent_planner_service.merge_timing(answer_metadata.get("timing"), merged_timing)
     debug["timing"] = merged_timing
     debug["plan"] = existing_plan if existing_plan.get("source") == "context_pair_followup" else plan
+    if isinstance(plan, dict) and isinstance(plan.get("semantic_preplan"), dict):
+        preplan_debug = dict(plan["semantic_preplan"])
+        if not preplan_debug.get("accepted_or_overridden"):
+            final_route = str(agent_result.get("answer_type") or agent_result.get("intent") or "").strip()
+            route_hint = str(preplan_debug.get("route_hint") or "").strip()
+            accepted = bool(route_hint and final_route in _semantic_preplan_equivalent_routes(route_hint, final_route))
+            preplan_debug["accepted_or_overridden"] = "accepted" if accepted else "overridden"
+            if not accepted:
+                preplan_debug["override_reason"] = preplan_debug.get("fallback_reason") or "deterministic_guard_final_route"
+        debug.setdefault("semantic_preplan", preplan_debug)
     agent_result["answer_metadata"] = answer_metadata
     agent_result["debug"] = debug
     return agent_result
+
+
+def _semantic_preplan_equivalent_routes(route_hint: str, final_route: str) -> set[str]:
+    route = str(route_hint or "").strip()
+    final = str(final_route or "").strip()
+    equivalents = {
+        "comparison": {"comparison", "recommendation"},
+        "query_products": {"query_products", "product_query"},
+        "usage_care": {"knowledge_base_answer", "product_usage_care"},
+        "unknown_field": {"product_detail", "knowledge_base_answer"},
+    }
+    return equivalents.get(route) or {route, final}
+
+
+def _attach_semantic_preplan_debug(agent_result: dict | None, semantic_preplan: dict | None, *, final_route: str) -> dict | None:
+    if not isinstance(agent_result, dict) or not isinstance(semantic_preplan, dict) or not semantic_preplan.get("called"):
+        return agent_result
+    debug = agent_result.get("debug") if isinstance(agent_result.get("debug"), dict) else {}
+    answer_metadata = agent_result.get("answer_metadata") if isinstance(agent_result.get("answer_metadata"), dict) else {}
+    already_attached = bool((debug.get("semantic_preplan") or {}).get("called")) if isinstance(debug.get("semantic_preplan"), dict) else False
+    final = str(final_route or agent_result.get("answer_type") or agent_result.get("intent") or "").strip()
+    route_hint = str(semantic_preplan.get("route_hint") or "").strip()
+    accepted = bool(route_hint and final in _semantic_preplan_equivalent_routes(route_hint, final))
+    preplan_debug = dict(semantic_preplan)
+    preplan_debug["accepted_or_overridden"] = "accepted" if accepted else "overridden"
+    if not accepted:
+        preplan_debug["override_reason"] = preplan_debug.get("fallback_reason") or "deterministic_guard_final_route"
+    debug["semantic_preplan"] = preplan_debug
+    if not already_attached:
+        for container in (debug, answer_metadata):
+            timing = container.get("timing") if isinstance(container.get("timing"), dict) else None
+            if timing:
+                timing["llm_call_count"] = int(timing.get("llm_call_count") or 0) + int(semantic_preplan.get("llm_call_count") or 0)
+                timing["llm_duration_ms"] = timing.get("llm_duration_ms") or 0
+    agent_result["debug"] = debug
+    agent_result["answer_metadata"] = answer_metadata
+    return agent_result
+
+
+def _has_explicit_sku_text(question: str) -> bool:
+    return bool(SKU_RE.search(str(question or "")))
+
+
+def _is_clear_explicit_sku_field_question_for_preplan(question: str, phase1_plan: dict | None) -> bool:
+    text = str(question or "")
+    if not _has_explicit_sku_text(text):
+        return False
+    if any(term in text for term in ("使用限制", "注意事项", "禁忌", "怎么清洗", "怎么用")):
+        return False
+    if isinstance(phase1_plan, dict) and phase1_plan.get("primary_intent") == "product_field":
+        return True
+    clear_terms = (
+        "容量",
+        "材质",
+        "材料",
+        "重量",
+        "尺寸",
+        "规格",
+        "酒精炉",
+        "明火",
+        "热源",
+        "冷水",
+        "热水",
+        "烧水",
+        "补水",
+    )
+    return any(term in text for term in clear_terms)
+
+
+def _is_sku_usage_restriction_ambiguous_for_preplan(question: str) -> bool:
+    text = str(question or "")
+    return _has_explicit_sku_text(text) and any(term in text for term in ("使用限制", "注意事项", "禁忌"))
+
+
+def _is_complex_filter_ambiguous_for_preplan(question: str) -> bool:
+    text = str(question or "")
+    if not any(term in text for term in ("有哪些", "哪几", "适合", "更偏", "推荐")):
+        return False
+    coffee_filter = any(term in text for term in ("咖啡器具", "咖啡", "手冲")) and any(term in text for term in ("手冲", "咖啡器具"))
+    water_filter = any(term in text for term in ("水具", "水杯", "水壶")) and any(term in text for term in ("冷水", "补水", "随身"))
+    return bool(coffee_filter or water_filter)
+
+
+def _should_call_semantic_preplan(question: str, phase1_plan: dict | None, *, conversation_id: str | None) -> bool:
+    text = str(question or "").strip()
+    if not text:
+        return False
+    if _detect_unknown_product_fact_label(text):
+        return False
+    if isinstance(phase1_plan, dict) and phase1_plan.get("primary_intent") == "catalog_count" and _looks_like_semantic_catalog_query(text):
+        return False
+    if _is_product_usage_care_question(text) and not _is_sku_usage_restriction_ambiguous_for_preplan(text):
+        return False
+    if _is_clear_explicit_sku_field_question_for_preplan(text, phase1_plan):
+        return False
+    if _is_sku_usage_restriction_ambiguous_for_preplan(text):
+        return True
+    if conversation_id and _asks_for_alternative_recommendation(text):
+        return True
+    if _phase1_is_griddle_vs_cookware_scenario(text):
+        return True
+    if _is_complex_filter_ambiguous_for_preplan(text):
+        return True
+    return False
+
+
+async def _maybe_run_semantic_preplan(
+    db: Session,
+    question: str,
+    phase1_plan: dict | None,
+    *,
+    conversation_id: str | None,
+) -> dict | None:
+    if not _should_call_semantic_preplan(question, phase1_plan, conversation_id=conversation_id):
+        return None
+    return await customer_agent_planner_service.plan_customer_question_semantic(
+        db,
+        question,
+        phase1_plan,
+        context={"conversation_id": conversation_id},
+    )
 
 
 def _product_row_from_model(product: Product, specs: ProductSpecs | None = None, business: ProductBusiness | None = None, content: ProductContent | None = None) -> dict:
@@ -648,7 +801,7 @@ def _phase1_catalog_count_result(db: Session, plan: dict) -> dict:
             answer += " 如果你想继续缩小范围，我可以再按用途、人数、容量、重量或收纳继续筛。"
     return {
         "intent": "query_products",
-        "answer_type": "query_products",
+        "answer_type": "product_query" if product_ref == "天幕/地垫/帐篷" else "query_products",
         "answer": answer,
         "results": display_rows,
         "result_skus": display_skus,
@@ -702,6 +855,228 @@ def _phase1_rank_catalog_display_rows(product_ref: str, rows: list[dict]) -> lis
         return (-score, sku)
 
     return sorted(list(rows or []), key=_score)
+
+
+def _semantic_catalog_product_ref(question: str) -> str:
+    text = str(question or "").strip()
+    if any(term in text for term in ("咖啡器具", "手冲", "手冲壶")):
+        return "咖啡器具"
+    if "茶具" in text:
+        return "茶具"
+    if any(term in text for term in ("烤盘", "煎盘")):
+        return "烤盘"
+    if "水壶" in text:
+        return "水壶"
+    if "水具" in text:
+        return "水具"
+    if any(term in text for term in ("炉具", "炉子", "卡式炉", "分体炉", "一体炉")):
+        return "炉具"
+    if any(term in text for term in ("锅具", "套锅", "单锅", "锅")):
+        return "锅具"
+    if "配件" in text:
+        return "配件"
+    if "餐具" in text:
+        return "餐具"
+    if "桌椅" in text:
+        return "桌椅"
+    if any(term in text for term in ("天幕", "地垫", "帐篷")):
+        return "天幕/地垫/帐篷"
+    return "产品"
+
+
+def _looks_like_semantic_catalog_query(question: str) -> bool:
+    text = str(question or "").strip()
+    if not text:
+        return False
+    count_or_list_terms = ("多少款", "多少个", "多少种", "多少", "几款", "几种", "有哪些", "列出")
+    scope_terms = ("锅具", "套锅", "单锅", "炉具", "水具", "水壶", "配件", "餐具", "桌椅", "咖啡器具", "咖啡", "茶具", "烤盘", "煎盘", "天幕", "地垫", "帐篷")
+    if any(term in text for term in ("适合", "更偏", "能配", "搭配", "随身补水", "冷水", "热水", "手冲", "泡茶")):
+        return False
+    return any(term in text for term in count_or_list_terms) and any(term in text for term in scope_terms)
+
+
+def _structured_query_row_text(row: dict[str, Any]) -> str:
+    return " ".join(
+        str(row.get(key) or "").strip()
+        for key in (
+            "sku",
+            "product_name_cn",
+            "product_name_en",
+            "category",
+            "sub_category",
+            "capacity",
+            "features",
+            "usage_scenarios",
+            "positioning",
+            "long_description_cn",
+        )
+    )
+
+
+def _structured_product_query_result(
+    *,
+    question: str,
+    product_ref: str,
+    rows: list[dict[str, Any]],
+    source: str,
+    reason_label: str,
+) -> dict | None:
+    display_rows = rows[:10]
+    if not display_rows:
+        return None
+    result_skus = [str(row.get("sku") or "").strip().upper() for row in display_rows if str(row.get("sku") or "").strip()]
+    sample_text = "、".join(
+        f"{row.get('sku')} {row.get('product_name_cn')}".strip()
+        for row in display_rows
+        if row.get("sku")
+    )
+    answer = (
+        f"当前按{reason_label}在【{product_ref}】里筛到 {len(rows)} 款候选。"
+        f"{'先列前 %d 款：%s。' % (len(display_rows), sample_text) if sample_text else ''}"
+        "如果你要继续缩小范围，我可以再按容量、重量、材质或人数继续筛。"
+    )
+    return {
+        "intent": "query_products",
+        "answer_type": "product_query",
+        "answer": answer,
+        "results": display_rows,
+        "result_skus": result_skus,
+        "candidate_skus": result_skus,
+        "answer_metadata": {"source": source, "product_ref": product_ref, "matched_count": len(rows)},
+        "debug": {"agent_mode": source, "raw_results": display_rows, "candidate_skus": result_skus},
+        "skip_polish": True,
+    }
+
+
+def _detect_unknown_product_fact_label(question: str) -> str | None:
+    text = str(question or "").strip()
+    if not text:
+        return None
+    for label, terms in _STRUCTURED_UNKNOWN_FACT_TERMS.items():
+        if any(term in text for term in terms):
+            return label
+    return None
+
+
+def _unknown_product_fact_result(question: str) -> dict | None:
+    label = _detect_unknown_product_fact_label(question)
+    if not label:
+        return None
+    text = str(question or "").strip()
+    scope = _semantic_catalog_product_ref(text)
+    if label == "库存":
+        answer = "当前资料未标注库存，也不能仅凭现有数据库确认实时库存；如需确认现货情况，建议联系人工客服或后台查询。"
+    elif label == "销量":
+        answer = "当前资料未标注销量，不能仅凭现有资料判断哪款销量最高。"
+    elif label == "评价":
+        answer = "当前资料未标注客户评价或好评率，不能仅凭现有资料判断评价高低。"
+    elif label == "价格":
+        answer = "当前资料未标注实时价格，不能仅凭现有资料确认当前售价；如需价格请联系人工客服或后台查询。"
+    elif label == "保修":
+        answer = "当前资料未标注保修信息，不能仅凭现有资料确认质保范围；建议联系人工客服确认。"
+    elif label == "认证":
+        answer = "当前资料未标注对应认证或检测信息，不能仅凭现有资料确认。"
+    elif label == "官方说明书":
+        answer = "当前资料未维护官方说明书信息，如需确认建议联系人工客服。"
+    elif label == "安装视频":
+        answer = "当前资料未维护安装视频信息，如需确认建议联系人工客服。"
+    else:
+        return None
+    if scope != "产品" and scope not in {"烤盘", "锅具", "炉具", "水具", "水壶", "咖啡器具", "茶具", "桌椅", "餐具", "配件", "天幕/地垫/帐篷"}:
+        scope = "产品"
+    if scope != "产品" and not SKU_RE.search(text):
+        answer = f"关于【{scope}】类产品，{answer}"
+    return {
+        "intent": "product_detail",
+        "answer_type": "product_detail",
+        "answer": answer,
+        "results": [],
+        "result_skus": [],
+        "candidate_skus": [],
+        "answer_metadata": {"source": "structured_unknown_field_guard", "requested_field": label},
+        "debug": {
+            "agent_mode": "structured_unknown_field_guard",
+            "plan": {"primary_intent": "product_field", "requested_field": label, "product_ref": ""},
+            "raw_results": [],
+        },
+        "skip_polish": True,
+    }
+
+
+def _semantic_structured_query_result(db: Session, question: str) -> dict | None:
+    text = str(question or "").strip()
+    if not text:
+        return None
+    if any(term in text for term in ("咖啡器具", "咖啡")) and "手冲" in text:
+        rows = [row for row in _phase1_catalog_rows(db, "咖啡器具") if any(term in _structured_query_row_text(row) for term in ("手冲", "细口壶", "咖啡", "滤杯"))]
+        return _structured_product_query_result(
+            question=text,
+            product_ref="咖啡器具",
+            rows=rows,
+            source="structured_coffee_handpour_query",
+            reason_label="手冲 / 咖啡器具语义",
+        )
+    is_waterware_selection_request = any(term in text for term in ("怎么选", "推荐", "想买", "买个", "买一", "选哪", "哪款", "哪种"))
+    if (
+        not is_waterware_selection_request
+        and any(term in text for term in ("水具", "水壶", "水杯"))
+        and any(term in text for term in ("冷水", "补水", "饮水", "热水"))
+    ):
+        rows = [row for row in _phase1_catalog_rows(db, "产品") if _phase1_is_water_kettle_candidate(row)]
+        filtered: list[dict[str, Any]] = []
+        for row in rows:
+            row_text = _structured_query_row_text(row)
+            score = 0
+            if any(term in row_text for term in ("补水", "饮水", "冷水", "水杯", "随行杯", "保温杯", "便携")):
+                score += 6
+            if any(term in row_text for term in ("热水", "保温")):
+                score += 3
+            if any(term in row_text for term in ("烧水", "煮水", "泡茶")):
+                score -= 4
+            if score > 0:
+                new_row = dict(row)
+                new_row["_score"] = score
+                filtered.append(new_row)
+        filtered.sort(key=lambda item: (-int(item.get("_score") or 0), str(item.get("sku") or "")))
+        return _structured_product_query_result(
+            question=text,
+            product_ref="水具",
+            rows=filtered,
+            source="structured_waterware_capability_query",
+            reason_label="冷水 / 热水 / 补水语义",
+        )
+    is_griddle_selection_request = any(term in text for term in ("怎么搭", "怎么配", "先买", "哪个", "推荐", "更合适", "更值得"))
+    if (
+        not is_griddle_selection_request
+        and any(term in text for term in ("烤盘", "煎盘"))
+        and any(term in text for term in ("炉具", "炉子", "卡式炉", "分体炉", "露营炉", "烧烤"))
+    ):
+        rows = []
+        for row in _phase1_catalog_rows(db, "产品"):
+            row_text = _structured_query_row_text(row)
+            if not any(term in row_text for term in ("烤盘", "煎盘")):
+                continue
+            score = 0
+            if any(term in row_text for term in ("炉具", "卡式炉", "分体炉", "一体炉", "烧烤", "明火")):
+                score += 8
+            if any(term in row_text for term in ("早餐", "煎烤", "烤盘")):
+                score += 3
+            if score <= 0:
+                continue
+            new_row = dict(row)
+            new_row["_score"] = score
+            rows.append(new_row)
+        rows.sort(key=lambda item: (-int(item.get("_score") or 0), str(item.get("sku") or "")))
+        return _structured_product_query_result(
+            question=text,
+            product_ref="烤盘",
+            rows=rows,
+            source="structured_griddle_stove_query",
+            reason_label="烤盘 + 炉具搭配语义",
+        )
+    if _looks_like_semantic_catalog_query(text):
+        return _phase1_catalog_count_result(db, {"product_ref": _semantic_catalog_product_ref(text)})
+    return _unknown_product_fact_result(text)
 
 
 def _phase1_explicit_sku_alcohol_people_result(db: Session, question: str) -> dict | None:
@@ -799,6 +1174,23 @@ async def _try_explicit_sku_detail_shortcut(db: Session, question: str) -> dict 
         intent,
         original_question=text,
     )
+    product = db.query(Product).filter(Product.sku == resolved_sku).first()
+    if (
+        product
+        and any(term in text for term in ("酒精炉", "酒精"))
+        and any(term in text for term in ("能用", "可以用", "支持", "适合", "能不能", "是否支持"))
+        and str(getattr(product, "category", "") or "").strip() not in {"锅具", "炉具", "水壶", "水具", "餐具", "酒具"}
+    ):
+        detail = product_service.get_product_detail(db, resolved_sku)
+        title = detail.get("product_name_cn") or detail.get("product_name_en") or resolved_sku
+        usage = str((detail.get("business") or {}).get("usage_scenarios") or "").strip()
+        conservative = f"{title}（{resolved_sku}）"
+        if usage and "适合什么场景" in text:
+            conservative += f"：使用场景：{usage}；"
+        else:
+            conservative += "："
+        conservative += f"它属于{product.category}类产品，不是炉具或炊具；当前资料未标注适用酒精炉，不建议按酒精炉适配产品理解。"
+        result["answer"] = conservative
     debug = result.get("debug") if isinstance(result.get("debug"), dict) else {}
     requested_field = ""
     if "热源" in requested_fields:
@@ -1545,7 +1937,7 @@ def _phase1_is_griddle_vs_cookware_scenario(question: str) -> bool:
     has_cookware_scope = any(term in value for term in ("锅具", "锅", "套锅", "单锅"))
     has_compare_or_selection = any(
         term in value
-        for term in ("还是", "哪个更合适", "更合适", "推荐", "更实用", "更好", "优先选", "更适用")
+        for term in ("还是", "哪个更合适", "更合适", "推荐", "更实用", "更好", "优先选", "更适用", "哪个更值得", "更值得", "先买")
     )
     has_grill_breakfast_signal = any(term in value for term in ("煎烤", "煎东西", "煎烤食物", "早餐"))
     return (
@@ -2358,9 +2750,22 @@ async def ask_customer_service(
     planner_start = perf_counter()
     phase1_plan = customer_agent_planner_service.plan_customer_question(question)
     planner_duration_ms = round((perf_counter() - planner_start) * 1000, 2)
+    semantic_preplan = await _maybe_run_semantic_preplan(
+        db,
+        question,
+        phase1_plan,
+        conversation_id=conversation_id,
+    )
+    if isinstance(semantic_preplan, dict) and semantic_preplan.get("called"):
+        phase1_plan["semantic_preplan"] = semantic_preplan
 
     explicit_sku_direct_result = await _try_explicit_sku_detail_shortcut(db, question)
     if explicit_sku_direct_result:
+        explicit_sku_direct_result = _attach_semantic_preplan_debug(
+            explicit_sku_direct_result,
+            semantic_preplan,
+            final_route="product_detail",
+        )
         return await _save_agent_result_and_return(
             db,
             user_id=user_id,
@@ -2369,7 +2774,34 @@ async def ask_customer_service(
             agent_result=explicit_sku_direct_result,
             request_start=request_start,
             branch="phase1_explicit_sku_detail",
+            semantic_preplan=semantic_preplan,
         )
+
+    if not conversation_id and _is_product_usage_care_question(question):
+        early_usage_care_result = await customer_agent_intent_service.answer_product_usage_care_request(
+            db,
+            question=question,
+            named_products=_products_named_in_question(db, question),
+        )
+        if early_usage_care_result:
+            early_usage_care_result = _attach_phase1_plan_and_timing(
+                early_usage_care_result,
+                phase1_plan,
+                _phase1_timing(
+                    request_start=request_start,
+                    planner_duration_ms=planner_duration_ms,
+                ),
+            )
+            return await _save_agent_result_and_return(
+                db,
+                user_id=user_id,
+                question=question,
+                conversation_id=conversation_id,
+                agent_result=early_usage_care_result,
+                request_start=request_start,
+                branch="product_usage_care_fast_path",
+                semantic_preplan=semantic_preplan,
+            )
 
     phase1_direct_result = None
     executor_start = perf_counter()
@@ -2406,7 +2838,7 @@ async def ask_customer_service(
         phase1_direct_result = _phase1_product_field_result(db, phase1_plan)
     elif phase1_plan.get("primary_intent") == "category_compatibility":
         phase1_direct_result = _phase1_category_compatibility_result(db, phase1_plan)
-    elif phase1_plan.get("primary_intent") == "catalog_count":
+    elif phase1_plan.get("primary_intent") == "catalog_count" and _looks_like_semantic_catalog_query(question):
         phase1_direct_result = _phase1_catalog_count_result(db, phase1_plan)
     elif phase1_plan.get("primary_intent") in {"product_compare_recommendation", "comparison"}:
         phase1_direct_result = _phase1_compare_choice_result(db, phase1_plan)
@@ -2427,6 +2859,11 @@ async def ask_customer_service(
                 guard_duration_ms=guard_duration_ms,
             ),
         )
+        phase1_direct_result = _attach_semantic_preplan_debug(
+            phase1_direct_result,
+            semantic_preplan,
+            final_route=str(phase1_direct_result.get("answer_type") or phase1_plan.get("answer_type") or ""),
+        )
         return await _save_agent_result_and_return(
             db,
             user_id=user_id,
@@ -2435,6 +2872,33 @@ async def ask_customer_service(
             agent_result=phase1_direct_result,
             request_start=request_start,
             branch=f"phase1_{phase1_plan.get('primary_intent') or 'planner'}",
+            semantic_preplan=semantic_preplan,
+        )
+
+    semantic_structured_result = _semantic_structured_query_result(db, question)
+    if semantic_structured_result:
+        semantic_structured_result = _attach_phase1_plan_and_timing(
+            semantic_structured_result,
+            phase1_plan,
+            _phase1_timing(
+                request_start=request_start,
+                planner_duration_ms=planner_duration_ms,
+            ),
+        )
+        semantic_structured_result = _attach_semantic_preplan_debug(
+            semantic_structured_result,
+            semantic_preplan,
+            final_route=str(semantic_structured_result.get("answer_type") or "query_products"),
+        )
+        return await _save_agent_result_and_return(
+            db,
+            user_id=user_id,
+            question=question,
+            conversation_id=conversation_id,
+            agent_result=semantic_structured_result,
+            request_start=request_start,
+            branch="phase1_semantic_structured_guard",
+            semantic_preplan=semantic_preplan,
         )
 
     composite_question = _split_composite_customer_question(question)
@@ -2731,9 +3195,19 @@ async def ask_customer_service(
                 guard_duration_ms=guard_duration_ms,
             ),
         )
+        agent_result = _attach_semantic_preplan_debug(
+            agent_result,
+            semantic_preplan,
+            final_route=str(agent_result.get("answer_type") or agent_result.get("intent") or ""),
+        )
         agent_result = _finalize_answer(agent_result)
         agent_result = _shape_answer_for_output(agent_result)
         agent_result = await _attach_debug_supporting_knowledge(db, agent_result, question)
+        agent_result = _attach_semantic_preplan_debug(
+            agent_result,
+            semantic_preplan,
+            final_route=str(agent_result.get("answer_type") or agent_result.get("intent") or ""),
+        )
         agent_result = _shape_answer_for_output(agent_result)
         agent_result = _attach_agent_quality(agent_result, question)
         conversation = _get_or_create_conversation(db, user_id, question, agent_result.get("sku"), conversation_id)
@@ -2765,6 +3239,11 @@ async def ask_customer_service(
         customer_perf_service.log_stage("ask_customer_service.total", request_start, branch="guardrail", intent=agent_result.get("intent"))
         customer_perf_service.summarize_request(final_answer=agent_result.get("answer"), intent=agent_result.get("intent"), agent_mode=(agent_result.get("debug") or {}).get("agent_mode"))
         release_session_connection(db)
+        agent_result = _attach_semantic_preplan_debug(
+            agent_result,
+            semantic_preplan,
+            final_route=str(agent_result.get("answer_type") or agent_result.get("intent") or ""),
+        )
         public_intent = _public_intent_name(agent_result.get("intent"), agent_result.get("answer_type"))
         return {
             "conversation_id": conversation_id_value,
@@ -4956,7 +5435,15 @@ def _asks_for_alternative_recommendation(question: str) -> bool:
         "\u6362\u4e00\u6b3e",
         "\u6362\u4e2a",
         "\u518d\u63a8\u8350",
+        "\u518d\u6765\u4e00\u4e2a",
         "\u53e6\u5916\u63a8\u8350",
+        "\u53e6\u4e00\u4e2a",
+        "\u6709\u6ca1\u6709\u522b\u7684",
+        "\u8fd8\u6709\u522b\u7684",
+        "\u8fd8\u6709\u522b\u7684\u5417",
+        "\u8fd8\u6709\u522b\u7684\u4e48",
+        "\u522b\u7684\u5417",
+        "\u522b\u7684\u4e48",
         "\u4e0d\u8981\u521a\u624d",
         "\u522b\u8981\u521a\u624d",
         "\u66ff\u4ee3",
@@ -5370,6 +5857,18 @@ _USAGE_CARE_TERMS = (
     "不粘",
     "不沾",
     "涂层",
+    "点不着",
+    "打不着",
+    "点火",
+    "连接",
+    "注意",
+    "注意事项",
+    "安全",
+    "安全吗",
+    "存放",
+    "怎么存放",
+    "气罐",
+    "阀门",
 )
 _USAGE_CARE_PRODUCT_TERMS = ("锅", "锅具", "套锅", "炒锅", "煎锅", "单锅", "烤盘", "煎盘", "盘", "壶", "杯", "炉", "炉具", "酒精炉", "气炉")
 _PURE_AFTERSALES_FLOW_TERMS = ("退换货", "退货", "换货", "售后电话", "保修多久", "质保多久", "联系客服", "售后联系方式")
@@ -5492,7 +5991,13 @@ def _looks_like_product_detail_field_question(text: str) -> bool:
     if not value:
         return False
     product_terms = ("套锅", "单锅", "酒精炉", "小方锅", "炊墨", "行山", "旋焰", "烽宴", "CW-", "CS-", "TW-")
-    field_terms = ("有没有不粘涂层", "有涂层吗", "有没有涂层", "是不是304", "是不是不锈钢", "是不是木头", "手柄", "把手", "锅体", "锅盖", "盖子", "煎盘", "材质", "尺寸", "容量", "重量", "净重", "热源", "燃料", "支持酒精炉", "用酒精炉", "适用人群", "适合哪些人群", "适合几人", "适合几个人", "几个人", "几人", "人数", "洗碗机")
+    field_terms = (
+        "有没有不粘涂层", "有涂层吗", "有没有涂层", "是不是304", "是不是不锈钢", "是不是木头",
+        "手柄", "把手", "锅体", "锅盖", "盖子", "煎盘", "材质", "尺寸", "容量", "重量", "净重",
+        "热源", "燃料", "支持酒精炉", "用酒精炉", "适用人群", "适合哪些人群", "适合几人", "适合几个人",
+        "几个人", "几人", "人数", "洗碗机", "说明书", "官方说明书", "保修", "质保", "安装视频", "视频教程",
+        "库存", "现货", "销量", "评价", "价格", "认证", "BPA", "使用限制", "冷水", "热水", "补水", "烧水"
+    )
     if not any(term in value for term in product_terms) or not any(term in value for term in field_terms):
         return False
     if "洗碗机" in value and any(term in value for term in ("能放", "放进", "可以放", "适合", "能不能放")):
@@ -5966,7 +6471,22 @@ def _shape_product_detail_output(answer: str | None, results: list[dict]) -> str
     answer_text = str(answer or "").strip()
     if answer_text and (
         ("\n" in answer_text and "：" in answer_text)
-        or any(term in answer_text for term in ("当前资料未直接标明", "产品问答显示", "知识库资料显示", "支持酒精炉", "未显示支持酒精炉"))
+        or any(
+            term in answer_text
+            for term in (
+                "当前资料未直接标明",
+                "产品问答显示",
+                "知识库资料显示",
+                "支持酒精炉",
+                "未显示支持酒精炉",
+                "不是炉具或炊具",
+                "不建议按酒精炉适配产品理解",
+                "当前资料未标注适用酒精炉",
+                "当前资料未标注",
+                "当前资料未维护",
+                "无法仅凭现有资料确认",
+            )
+        )
         or (
             any(term in answer_text for term in ("装冷水", "装热水", "装饮用水", "装水", "开水", "沸水"))
             and any(marker in answer_text for marker in ("可以", "可装", "支持", "不建议", "不能", "避免"))

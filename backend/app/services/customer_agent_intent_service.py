@@ -78,6 +78,18 @@ USAGE_CARE_TERMS = (
     "不粘",
     "不沾",
     "涂层",
+    "点不着",
+    "打不着",
+    "点火",
+    "连接",
+    "注意",
+    "注意事项",
+    "安全",
+    "安全吗",
+    "存放",
+    "怎么存放",
+    "气罐",
+    "阀门",
 )
 USAGE_CARE_SCRIPT_TERMS = ("客服怎么回复", "怎么回复客户", "客户说")
 USAGE_CARE_CLEANING_TERMS = ("清洗", "清洁", "怎么洗", "怎么清洗", "洗完", "冷水冲", "软刷", "温水", "擦干", "烘干", "钢丝球", "硬物刮擦")
@@ -87,14 +99,33 @@ USAGE_CARE_BURNT_TERMS = ("糊锅", "锅糊", "烧糊", "烧焦", "焦糊")
 USAGE_CARE_COATING_TERMS = ("涂层", "不粘涂层", "防粘涂层")
 USAGE_CARE_REPLY_TERMS = ("客服怎么回复", "怎么回复客户", "客户说", "用户说")
 USAGE_CARE_AFTERSALES_TERMS = ("质保", "保修", "售后", "退换", "退货", "换货", "售后电话", "联系方式")
-USAGE_CARE_SAFETY_TERMS = ("安全", "危险", "中毒", "火灾", "帐篷", "密闭", "一氧化碳", "爆炸")
+USAGE_CARE_SAFETY_TERMS = ("安全", "危险", "中毒", "火灾", "帐篷", "密闭", "一氧化碳", "爆炸", "点不着", "打不着", "点火", "连接", "气罐", "阀门", "存放", "火源", "明火")
 USAGE_CARE_GENERAL_TERMS = ("卖点", "介绍", "品牌", "官方", "旗舰店")
 USAGE_CARE_MAINTENANCE_ACTION_TERMS = ("清洗", "保养", "擦干", "烘干", "存放", "钢丝球", "硬物刮擦", "浸泡", "骤冷骤热", "涂层", "使用后")
 USAGE_CARE_MAINTENANCE_WEAK_TERMS = ("能用多久", "使用多年", "耐用", "越用越顺手")
 USAGE_CARE_BURNT_ACTION_TERMS = ("糊锅", "烧焦", "焦糊", "粘底", "残渍", "锅底", "清洗", "浸泡", "软刷", "钢丝球", "不粘涂层", "涂层保护")
 USAGE_CARE_COOKWARE_TERMS = ("锅", "锅具", "不粘锅", "涂层锅", "烤盘", "煎盘", "套锅", "炒锅")
 USAGE_CARE_NON_COOKWARE_TERMS = ("杯", "水杯", "保温杯", "户外杯", "壶", "水壶")
-WATER_CONTAINER_CAPABILITY_TERMS = ("装冷水", "装凉水", "装热水", "装饮用水", "装水", "盛冷水", "盛热水", "盛水")
+WATER_CONTAINER_CAPABILITY_TERMS = (
+    "装冷水",
+    "装凉水",
+    "装热水",
+    "装饮用水",
+    "装水",
+    "盛冷水",
+    "盛热水",
+    "盛水",
+    "冷水还是热水",
+    "适合冷水",
+    "适合热水",
+    "喝热水",
+    "补水",
+    "随身补水",
+    "烧水还是补水",
+    "烧水",
+    "煮水",
+    "热饮",
+)
 WATER_CONTAINER_CAPABILITY_EXCLUDE_TERMS = ("冲洗", "冷水冲", "洗完", "清洗", "怎么洗", "怎么清洗", "保养", "护理", "骤冷骤热", "热锅骤冷", "刚烧热")
 CATEGORY_SCOPE_ALIASES: dict[str, tuple[str, ...]] = {
     "配件": ("配件", "收纳包具", "配件"),
@@ -412,6 +443,33 @@ async def process_intent_request(
     return None
 
 
+def _compose_safety_usage_care_answer(question: str) -> str:
+    text = str(question or "")
+    if any(term in text for term in ("点不着", "打不着", "点火")):
+        return "\n".join([
+            "处理建议：先关闭阀门，停止继续点火，确认周围通风后再检查气罐连接、接口密封和炉具开关。",
+            "注意事项：如果闻到明显燃气味、听到漏气声或连接处异常，不要继续尝试点火。",
+            "安全提醒：当前资料不足以判断具体故障原因，建议查看说明书或联系人工客服确认。",
+        ])
+    if "存放" in text:
+        return "\n".join([
+            "存放建议：气罐应放在阴凉通风处，远离火源、热源和阳光直晒。",
+            "注意事项：不要放在车内高温环境或靠近明火的位置。",
+            "安全提醒：当前资料未维护更细的存放规范，建议以气罐说明书为准。",
+        ])
+    if any(term in text for term in ("连接", "气罐")):
+        return "\n".join([
+            "处理建议：连接前先确认阀门关闭，检查气罐接口、密封圈和炉具连接位置是否对齐。",
+            "注意事项：连接后如有异味、漏气声或松动，应立即停止使用并移到通风处。",
+            "安全提醒：当前资料未提供更细的单品连接步骤，建议以产品说明书和人工客服确认结果为准。",
+        ])
+    return "\n".join([
+        "安全建议：户外使用炉具时应保持通风，远离易燃物，并注意明火和气罐连接状态。",
+        "注意事项：使用前检查阀门、接口和炉体稳定性，异常时不要继续使用。",
+        "安全提醒：当前资料未维护更细的安全说明，建议查看说明书或联系人工客服。",
+    ])
+
+
 async def answer_product_usage_care_request(
     db: Session,
     *,
@@ -439,6 +497,50 @@ async def answer_product_usage_care_request(
     response_style = "customer_service_script" if usage_subtype == "customer_reply" else "usage_guidance"
     qa_hits, knowledge_hits, search_debug = await _search_usage_care_qa(db, text, intent.target_skus, usage_subtype=usage_subtype)
     compose_start = perf_counter()
+    if usage_subtype == "safety":
+        answer = _compose_safety_usage_care_answer(text)
+        compose_answer_ms = customer_perf_service.perf_ms(compose_start)
+        results = _usage_care_results_for_response(qa_hits, knowledge_hits)
+        sources: list[dict] = []
+        if qa_hits:
+            sources.append({"type": "product_qa", "label": "产品 QA", "count": len(qa_hits), "skus": sorted({item.get('sku') for item in qa_hits if item.get('sku')})})
+        if knowledge_hits:
+            sources.append({"type": "usage_care_knowledge", "label": "使用/清洗保养知识库", "count": len(knowledge_hits), "skus": sorted({item.get('sku') for item in knowledge_hits if item.get('sku')})})
+        steps = _steps(intent, [{"type": "usage_care_search", "label": "检索使用/安全注意资料", "detail": f"命中 QA {len(qa_hits)} 条，知识库 {len(knowledge_hits)} 条；安全类问题使用保守安全答复", "ok": True}])
+        total_ms = customer_perf_service.perf_ms(request_start)
+        return _build_response(
+            intent=intent,
+            answer=answer,
+            sku=intent.target_skus[0] if len(intent.target_skus) == 1 else None,
+            sources=sources or [{"type": "usage_care_knowledge", "label": "使用/安全注意检索", "count": 0}],
+            results=results,
+            steps=steps,
+            confidence="medium",
+            warnings=[] if (qa_hits or knowledge_hits) else ["usage_care_data_missing"],
+            anomalies=[],
+            suggested_followups=["如果你告诉我具体 SKU，我可以再按该产品说明补充更精确的安全注意事项。"],
+            answer_type="product_usage_care",
+            debug={
+                "intent": intent.as_dict(),
+                "steps": steps,
+                "warnings": [] if (qa_hits or knowledge_hits) else ["usage_care_data_missing"],
+                "anomalies": [],
+                "raw_results": results,
+                "agent_mode": "product_usage_care_fast_path",
+                "usage_care_subtype": usage_subtype,
+                "response_style": response_style,
+                "qa_result_count": len(qa_hits),
+                "knowledge_result_count": len(knowledge_hits),
+                "safety_answer_guard": True,
+                "product_qa_ms": search_debug["product_qa_ms"],
+                "knowledge_search_ms": search_debug["knowledge_search_ms"],
+                "rerank_ms": search_debug["rerank_ms"],
+                "compose_answer_ms": round(compose_answer_ms, 2),
+                "total_ms": round(total_ms, 2),
+                "filtered_or_downgraded": search_debug["filtered_or_downgraded"],
+                "final_used_sources_count": len(qa_hits) + len(knowledge_hits),
+            },
+        )
     if not qa_hits and not knowledge_hits:
         if usage_subtype == "burnt":
             answer = "\n".join([
@@ -1299,7 +1401,21 @@ def _looks_like_water_container_capability_question(text: str) -> bool:
     product_hint = bool(_extract_skus(value) or _detail_subject_from_question(value))
     if not product_hint:
         return False
-    return any(term in value for term in ("能不能", "能否", "是否", "可以", "可不可以", "能装", "装"))
+    decision_terms = (
+        "能不能",
+        "能否",
+        "是否",
+        "可以",
+        "可不可以",
+        "能装",
+        "装",
+        "适合",
+        "还是",
+        "偏",
+        "用于",
+        "用来",
+    )
+    return any(term in value for term in decision_terms)
 
 
 def _requested_fields_for_detail_question(text: str) -> list[str]:
@@ -1310,6 +1426,7 @@ def _requested_fields_for_detail_question(text: str) -> list[str]:
         ("重量", ("多重", "净重", "毛重", "重不重", "重量多少")),
         ("材质", ("是什么材料", "什么材料", "是不是木头", "木头", "不锈钢", "304", "锅体", "手柄", "把手", "盖子", "锅盖")),
         ("适配情况", ("洗碗机", "能放进洗碗机", "能放洗碗机", "是否适合洗碗机")),
+        ("适配情况", ("冷水还是热水", "适合冷水", "适合热水", "喝热水", "补水", "随身补水", "烧水还是补水", "能不能装热水", "能不能补水用")),
         ("表面处理", ("涂层", "不粘涂层", "有涂层", "不粘吗", "不沾吗")),
         ("卖点", ("是什么产品", "产品参数", "参数", "有什么特点")),
         ("适用场景", ("适合几个人", "适合几人", "几个人", "几人使用", "适合什么", "适合哪些人群", "适用人群")),
@@ -1318,6 +1435,14 @@ def _requested_fields_for_detail_question(text: str) -> list[str]:
         ("配件", ("几个锅", "几件", "包装里", "包装内", "配件", "包含什么")),
         ("功率", ("最大功率", "功率是多少", "火力多大")),
         ("认证", ("有哪些认证", "什么认证", "出口认证", "认证信息")),
+        ("官方说明书", ("说明书", "官方说明书", "使用手册")),
+        ("保修", ("保修", "质保", "售后保修")),
+        ("安装视频", ("安装视频", "安装教程", "视频教程")),
+        ("库存", ("库存", "现货")),
+        ("销量", ("销量", "卖得最好", "销量最高")),
+        ("评价", ("评价", "好评", "客户评价", "评价最好")),
+        ("价格", ("价格", "售价", "多少钱", "什么价", "几块", "几元")),
+        ("使用限制", ("使用限制", "限制", "注意事项", "禁忌")),
     ]
     for label, aliases in additions:
         if any(alias in value for alias in aliases) and label not in fields:
@@ -1693,6 +1818,7 @@ async def _product_detail_result(db: Session, intent: CustomerIntent, original_q
             "sku": sku,
             "product_name_cn": detail.get("product_name_cn"),
             "product_name_en": detail.get("product_name_en"),
+            "category": detail.get("category") or getattr(product, "category", ""),
             "field_values": {},
         }
         for field_path in field_paths:
@@ -5511,6 +5637,12 @@ def _compose_detail_answer(
         and any(term in question_text for term in ("酒精炉", "酒精"))
         and any(term in question_text for term in ("能用", "可以用", "支持", "适合", "能不能", "是否支持"))
     ):
+        category_value = str(row.get("category") or "").strip()
+        if category_value and category_value not in {"锅具", "炉具", "水壶", "水具", "餐具", "酒具"}:
+            return (
+                f"{prefix}：它属于{category_value}类产品，不是炉具或炊具。"
+                "当前资料未标注适用酒精炉，不建议按酒精炉适配产品理解。"
+            )
         if heat_source_value and heat_source_value != "暂无":
             if "酒精炉" in heat_source_value or "酒精" in heat_source_value:
                 return f"{prefix}：支持酒精炉。当前资料显示适用热源为{heat_source_value}。"
@@ -5560,6 +5692,14 @@ def _compose_detail_answer(
 
 
 def _water_container_capability_label(question_text: str) -> str:
+    if any(term in question_text for term in ("冷水", "凉水")) and any(term in question_text for term in ("热水", "开水", "沸水")):
+        return "装冷水还是热水"
+    if "烧水" in question_text and "补水" in question_text:
+        return "烧水还是补水"
+    if any(term in question_text for term in ("补水", "随身补水", "饮水")):
+        return "随身补水"
+    if any(term in question_text for term in ("烧水", "煮水", "热饮")):
+        return "烧水"
     if any(term in question_text for term in ("冷水", "凉水")):
         return "装冷水"
     if any(term in question_text for term in ("热水", "开水", "沸水", "保温")):
@@ -5690,6 +5830,14 @@ def _water_container_usage_suitability_from_detail(detail: dict[str, Any], quest
         if boil_positive and hydration_positive:
             return "当前资料显示它既可用于烧水，也可覆盖日常补水场景；具体仍要看实际使用水温和携带场景。"
         return "关于烧水和随身补水，当前资料未给出明确场景结论。"
+    if any(term in question_text for term in ("冷水", "凉水")) and any(term in question_text for term in ("热水", "开水", "沸水")):
+        if hydration_positive and not boil_positive:
+            return "当前资料更偏向把它描述为冷水/日常补水容器；是否适合长时间装热水，当前资料未明确标注。"
+        if boil_positive and not hydration_positive:
+            return "当前资料更偏向把它描述为热饮/烧水相关容器；是否更适合冷水随身补水，当前资料未明确标注。"
+        if hydration_positive and boil_positive:
+            return "当前资料同时出现了补水和热饮相关描述；如果你更关注直接加热能力，仍要以热源和使用说明为准。"
+        return "当前资料未明确区分它更偏冷水还是热水场景。"
     if asks_boiling:
         if boil_positive:
             return "从当前资料看，它更偏向烧水/营地热饮使用。"
@@ -5840,6 +5988,14 @@ def _compound_single_product_detail_answer(
         suitability_answer = _water_container_usage_suitability_from_detail(detail, text)
         if suitability_answer:
             add_line("烧水/补水", suitability_answer)
+
+    if any(term in text for term in ("酒精炉", "酒精")) and any(term in text for term in ("能用", "可以用", "支持", "适合", "能不能", "是否支持")):
+        category_value = str(detail.get("category") or "").strip()
+        if category_value and category_value not in {"锅具", "炉具", "水壶", "水具", "餐具", "酒具"}:
+            add_line(
+                "酒精炉适配",
+                f"它属于{category_value}类产品，不是炉具或炊具；当前资料未标注适用酒精炉，不建议按酒精炉适配产品理解。",
+            )
 
     if "洗碗机" in text:
         dishwasher = _best_same_sku_evidence_text(
@@ -6108,6 +6264,17 @@ def _normalize_requested_field_label(label: str) -> str:
         "禁忌": "禁止操作",
         "防伪": "正品辨别",
         "真假": "正品辨别",
+        "手册": "官方说明书",
+        "说明": "官方说明书",
+        "质保": "保修",
+        "售后保修": "保修",
+        "安装教程": "安装视频",
+        "视频教程": "安装视频",
+        "客户评价": "评价",
+        "好评": "评价",
+        "现货": "库存",
+        "使用限制": "使用限制",
+        "限制": "使用限制",
     }
     return aliases.get(value, value or "该字段")
 
@@ -6304,6 +6471,22 @@ def _field_evidence_terms(requested_fields: list[str]) -> set[str]:
             terms.update(("认证", "食品级", "FDA", "LFGB", "food grade", "food-grade", "certification", "certified", "检测"))
         elif label == "适配情况":
             terms.update(("使用说明", "适配", "可装", "装冷水", "装凉水", "装热水", "装饮用水", "装水", "冷水", "热水", "饮用水"))
+        elif label == "官方说明书":
+            terms.update(("说明书", "使用手册", "官方说明书", "manual"))
+        elif label == "保修":
+            terms.update(("保修", "质保", "售后"))
+        elif label == "安装视频":
+            terms.update(("安装视频", "安装教程", "视频教程"))
+        elif label == "库存":
+            terms.update(("库存", "现货", "有货"))
+        elif label == "销量":
+            terms.update(("销量", "卖得最好", "销量最高"))
+        elif label == "评价":
+            terms.update(("评价", "好评", "客户评价", "评价最好"))
+        elif label == "价格":
+            terms.update(("价格", "售价", "多少钱", "什么价", "几块", "几元"))
+        elif label == "使用限制":
+            terms.update(("使用限制", "限制", "注意事项", "禁忌"))
         else:
             terms.add(label)
     return {term for term in terms if term}
@@ -6402,6 +6585,19 @@ def _compose_missing_field_answer(row: dict[str, Any], requested_fields: list[st
     name = row.get("product_name_cn") or row.get("product_name_en") or ""
     sku = row.get("sku") or ""
     prefix = f"{name}（{sku}）" if name else sku
+    special_missing = {
+        "库存": f"{prefix}\n当前资料未标注{label}，也不能仅凭现有数据库确认实时{label}。",
+        "销量": f"{prefix}\n当前资料未标注{label}，不能仅凭现有资料判断哪款销量最高。",
+        "评价": f"{prefix}\n当前资料未标注{label}，不能仅凭现有资料判断客户评价高低。",
+        "价格": f"{prefix}\n当前资料未标注{label}，也不能仅凭现有资料确认实时价格。",
+        "保修": f"{prefix}\n当前资料未标注{label}信息，如需确认建议联系人工客服。",
+        "认证": f"{prefix}\n当前资料未标注{label}信息，不能仅凭现有资料确认。",
+        "官方说明书": f"{prefix}\n当前资料未维护{label}资料，如需确认建议联系人工客服。",
+        "安装视频": f"{prefix}\n当前资料未维护{label}资料，如需确认建议联系人工客服。",
+        "使用限制": f"{prefix}\n当前资料未标注明确的{label}信息。",
+    }
+    if label in special_missing:
+        return special_missing[label]
     return f"{prefix}\n当前资料中暂未找到{prefix}的明确{label}信息。"
 
 
@@ -6981,6 +7177,8 @@ async def _search_usage_care_knowledge(db: Session, question: str, target_skus: 
 
 def _detect_usage_care_subtype(question: str) -> str:
     text = str(question or "")
+    if any(term in text for term in ("点不着", "打不着", "点火", "连接", "安全", "注意事项", "气罐", "存放", "阀门")):
+        return "safety"
     if any(term in text for term in USAGE_CARE_REPLY_TERMS):
         return "customer_reply"
     if any(term in text for term in USAGE_CARE_BURNT_TERMS):
@@ -7005,6 +7203,8 @@ def _usage_care_focus_terms(subtype: str) -> tuple[str, ...]:
         return USAGE_CARE_STICKING_TERMS + USAGE_CARE_CLEANING_TERMS + USAGE_CARE_COATING_TERMS
     if subtype == "maintenance":
         return USAGE_CARE_MAINTENANCE_TERMS + USAGE_CARE_MAINTENANCE_ACTION_TERMS + USAGE_CARE_CLEANING_TERMS
+    if subtype == "safety":
+        return USAGE_CARE_SAFETY_TERMS + ("点不着", "打不着", "点火", "连接", "气罐", "阀门", "存放", "阴凉通风", "火源", "关闭阀门", "检查")
     return USAGE_CARE_CLEANING_TERMS + USAGE_CARE_MAINTENANCE_TERMS
 
 
@@ -8037,6 +8237,14 @@ def _requested_fields(text: str) -> list[str]:
         ("表面处理", ("表面处理", "表面工艺", "工艺", "涂层", "有涂层")),
         ("价格定位", ("价格定位", "价位", "价格带")),
         ("认证", ("认证", "出口认证", "认证信息", "食品级", "FDA", "LFGB", "food grade", "certification", "certified")),
+        ("官方说明书", ("说明书", "官方说明书", "使用手册")),
+        ("保修", ("保修", "质保", "售后保修")),
+        ("安装视频", ("安装视频", "安装教程", "视频教程")),
+        ("库存", ("库存", "现货")),
+        ("销量", ("销量", "销量最高", "卖得最好")),
+        ("评价", ("评价", "客户评价", "好评", "评价最好")),
+        ("价格", ("价格", "售价", "多少钱", "什么价", "几块", "几元")),
+        ("使用限制", ("使用限制", "限制", "注意事项", "禁忌")),
         ("卖点", ("卖点", "特色", "优势", "特点", "核心买点", "核心卖点", "好在哪里")),
         ("商品英文名称", ("英文名", "英文名称", "商品英文名称")),
         ("SKU", ("SKU", "sku", "型号", "货号")),
@@ -8125,6 +8333,7 @@ def _resolve_query_field(field_label: str) -> str | None:
         "表面处理": "specs.surface_finish",
         "不粘": "specs.surface_finish",
         "适配情况": "specs.usage_instruction",
+        "使用限制": "specs.usage_instruction",
         "价格定位": "business.price_positioning",
         "卖点": "business.top_selling_points",
         "核心卖点": "business.top_selling_points",
