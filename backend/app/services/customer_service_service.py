@@ -606,24 +606,70 @@ def _phase1_alcohol_stove_compatibility_answer(db: Session, row: dict) -> tuple[
     normalized_heat_source = "" if heat_source in {"", "/", "[]"} else heat_source
     if not normalized_heat_source and not any(term in category for term in ("锅", "炉", "壶", "酒具", "咖啡")):
         return f"{name}（{sku}）不是炉具或炊具，当前资料也未标注适用酒精炉；不建议按酒精炉适配产品理解。", "not_applicable"
-    verdict = customer_agent_intent_service._alcohol_stove_support_verdict(normalized_heat_source)
+    def _capability_evidence_status(value: str) -> str | None:
+        text_value = str(value or "").strip().lower()
+        if not text_value:
+            return None
+        if re.search(r"(?:未(?:标注|显示|找到)|没有|暂无).{0,20}(?:支持|适用|可用).{0,8}(酒精炉|alcohol stove)", text_value):
+            return "not_listed"
+        if re.search(r"(不支持|不适合|不建议|不能|不可).{0,8}(酒精炉|alcohol stove)", text_value):
+            return "unsupported"
+        if any(term in text_value for term in ("液体酒精", "alcohol fuel")):
+            return "supported"
+        verdict = customer_agent_intent_service._alcohol_stove_support_verdict(text_value)
+        if verdict is True:
+            return "supported"
+        if verdict is False:
+            return "unsupported"
+        return None
+
+    evidence_status = _capability_evidence_status(normalized_heat_source)
     evidence = ""
-    if verdict is None and sku:
+    if evidence_status is None and sku:
         evidence = str(customer_agent_intent_service._best_same_sku_evidence_text(
             db,
             sku=sku,
             supporting=None,
             term_groups=[("酒精炉", "alcohol stove")],
         ) or "").strip()
-        verdict = customer_agent_intent_service._alcohol_stove_support_verdict(evidence)
-    if verdict is True:
+        evidence_status = _capability_evidence_status(evidence)
+    if evidence_status == "supported":
         source_text = evidence or heat_source
         return f"{name}（{sku}）当前资料显示支持酒精炉；适用热源/同 SKU 证据为：{source_text}。", "supported"
-    if verdict is False:
+    if evidence_status == "unsupported":
         return f"{name}（{sku}）当前资料显示不支持酒精炉；相关证据为：{evidence or normalized_heat_source}。", "unsupported"
-    if normalized_heat_source:
+    if normalized_heat_source or evidence_status == "not_listed":
         return f"{name}（{sku}）当前资料显示适用热源为：{normalized_heat_source}；当前资料未显示支持酒精炉。", "not_listed"
     return f"当前资料里没有找到{name}（{sku}）是否支持酒精炉的明确说明。", "missing"
+
+
+def _result_has_positive_capability_evidence(result: dict[str, Any], question: str) -> bool:
+    text = str(question or "").strip()
+    if not isinstance(result, dict) or not text:
+        return False
+    rows = [row for row in (result.get("results") or []) if isinstance(row, dict)]
+    if not rows:
+        return False
+    asks_alcohol = any(term in text for term in ("酒精炉", "酒精"))
+    asks_heat_source = any(term in text for term in ("热源", "燃料", "明火", "卡式炉", "燃气炉"))
+    asks_waterware_capability = any(term in text for term in ("直接加热", "烧水", "装热水", "喝热水", "冷水", "热水", "补水"))
+    for row in rows:
+        field_values = row.get("field_values") if isinstance(row.get("field_values"), dict) else {}
+        evidence_values = [
+            str(row.get("heat_source") or "").strip(),
+            str(field_values.get("热源") or "").strip(),
+            str(field_values.get("适用热源") or "").strip(),
+            str(field_values.get("燃料") or "").strip(),
+            str(field_values.get("是否支持酒精炉") or "").strip(),
+        ]
+        combined = " ".join(value for value in evidence_values if value)
+        if asks_alcohol and customer_agent_intent_service._alcohol_stove_support_verdict(combined) is True:
+            return True
+        if asks_heat_source and combined:
+            return True
+        if asks_waterware_capability and any(term in combined for term in ("热水", "烧水", "补水", "冷水", "保温")):
+            return True
+    return False
 
 
 def _phase1_pan_category_terms(category_ref: str) -> tuple[str, ...]:
@@ -1070,6 +1116,19 @@ def _looks_like_structured_field_filter_query(question: str) -> bool:
     return _structured_filter_field_and_value(text) is not None
 
 
+def _looks_like_semantic_waterware_capability_query(question: str) -> bool:
+    text = str(question or "").strip()
+    if not text or SKU_RE.search(text):
+        return False
+    if any(term in text for term in ("怎么选", "推荐", "想买", "买个", "买一", "选哪", "哪款", "哪种")):
+        return False
+    if not any(term in text for term in ("有哪些", "哪一些", "找", "列出")):
+        return False
+    if not any(term in text for term in ("水具", "水壶", "水杯")):
+        return False
+    return any(term in text for term in ("冷水", "补水", "饮水", "热水", "装热水", "喝热水"))
+
+
 def _structured_field_filter_result(db: Session, question: str) -> dict | None:
     text = str(question or "").strip()
     if not _looks_like_structured_field_filter_query(text):
@@ -1080,7 +1139,7 @@ def _structured_field_filter_result(db: Session, question: str) -> dict | None:
         return None
     field_name, expected_value = filter_info
     if product_ref == "水壶":
-        source_rows = [row for row in _phase1_catalog_rows(db, "产品") if _phase1_is_water_kettle_candidate(row)]
+        source_rows = [row for row in _phase1_catalog_rows(db, "产品") if _phase1_is_strict_water_kettle_candidate(row)]
     else:
         source_rows = _phase1_catalog_rows(db, product_ref)
     rows = []
@@ -1274,7 +1333,9 @@ def _semantic_structured_query_result(db: Session, question: str) -> dict | None
         and any(term in text for term in ("水具", "水壶", "水杯"))
         and any(term in text for term in ("冷水", "补水", "饮水", "热水"))
     ):
-        rows = [row for row in _phase1_catalog_rows(db, "产品") if _phase1_is_water_kettle_candidate(row)]
+        product_ref = "水壶" if "水壶" in text else "水具"
+        candidate_predicate = _phase1_is_strict_water_kettle_candidate if product_ref == "水壶" else _phase1_is_water_kettle_candidate
+        rows = [row for row in _phase1_catalog_rows(db, "产品") if candidate_predicate(row)]
         filtered: list[dict[str, Any]] = []
         for row in rows:
             row_text = _structured_query_row_text(row)
@@ -1292,10 +1353,10 @@ def _semantic_structured_query_result(db: Session, question: str) -> dict | None
         filtered.sort(key=lambda item: (-int(item.get("_score") or 0), str(item.get("sku") or "")))
         return _structured_product_query_result(
             question=text,
-            product_ref="水具",
+            product_ref=product_ref,
             rows=filtered,
             source="structured_waterware_capability_query",
-            reason_label="冷水 / 热水 / 补水语义",
+            reason_label=f"{product_ref} / 冷水 / 热水 / 补水语义",
         )
     is_griddle_selection_request = any(term in text for term in ("怎么搭", "怎么配", "先买", "哪个", "推荐", "更合适", "更值得"))
     if (
@@ -1360,10 +1421,12 @@ def _semantic_structured_query_result(db: Session, question: str) -> dict | None
 
 
 def _should_prioritize_semantic_structured_route(question: str, phase1_plan: dict[str, Any]) -> bool:
+    text = str(question or "").strip()
+    if _looks_like_semantic_waterware_capability_query(text):
+        return True
     primary_intent = str((phase1_plan or {}).get("primary_intent") or "")
     if primary_intent not in {"product_field", "catalog_count"}:
         return False
-    text = str(question or "").strip()
     return _looks_like_structured_field_filter_query(text) or _looks_like_multi_condition_cookware_recommendation(text)
 
 
@@ -1481,11 +1544,25 @@ async def _try_explicit_sku_detail_shortcut(db: Session, question: str) -> dict 
         original_question=text,
     )
     product = db.query(Product).filter(Product.sku == resolved_sku).first()
+    if product and any(term in text for term in ("酒精炉", "酒精")) and any(
+        term in text for term in ("能用", "可以用", "支持", "适合", "能不能", "是否支持")
+    ):
+        bundle = _phase1_product_bundle_by_ref(db, resolved_sku)
+        if bundle[0]:
+            row = _product_row_from_model(*bundle)
+            compatibility_answer, evidence_status = _phase1_alcohol_stove_compatibility_answer(db, row)
+            if evidence_status in {"supported", "unsupported", "not_listed"}:
+                result["answer"] = compatibility_answer
+                answer_meta = result.get("answer_metadata") if isinstance(result.get("answer_metadata"), dict) else {}
+                answer_meta["requested_field"] = "heat_source"
+                answer_meta["evidence_status"] = evidence_status
+                result["answer_metadata"] = answer_meta
     if (
         product
         and any(term in text for term in ("酒精炉", "酒精"))
         and any(term in text for term in ("能用", "可以用", "支持", "适合", "能不能", "是否支持"))
         and str(getattr(product, "category", "") or "").strip() not in {"锅具", "炉具", "水壶", "水具", "餐具", "酒具"}
+        and not _result_has_positive_capability_evidence(result, text)
     ):
         detail = product_service.get_product_detail(db, resolved_sku)
         title = detail.get("product_name_cn") or detail.get("product_name_en") or resolved_sku
@@ -2283,6 +2360,33 @@ def _phase1_is_water_kettle_candidate(row: dict[str, Any]) -> bool:
     if category in {"水具", "水壶"}:
         return True
     return any(term in text for term in ("水壶", "烧水壶", "保温壶", "冷水壶", "便携水具", "户外杯", "保温杯"))
+
+
+def _phase1_is_strict_water_kettle_candidate(row: dict[str, Any]) -> bool:
+    if not _phase1_is_water_kettle_candidate(row):
+        return False
+    category = str(row.get("category") or "").strip()
+    if category == "锅具":
+        return False
+    text = " ".join(
+        str(row.get(key) or "")
+        for key in (
+            "sku",
+            "product_name_cn",
+            "product_name_en",
+            "category",
+            "sub_category",
+            "features",
+            "usage_scenarios",
+            "positioning",
+            "long_description_cn",
+        )
+    )
+    if category in {"水壶", "水具"}:
+        return True
+    if category == "咖啡器具":
+        return any(term in text for term in ("壶", "手冲", "天鹅壶", "细口壶", "咖啡壶"))
+    return False
 
 
 def _phase1_structured_water_kettle_result(scenario: str, rows: list[dict]) -> dict | None:
@@ -3110,7 +3214,11 @@ async def ask_customer_service(
             semantic_preplan=semantic_preplan,
         )
 
-    if not conversation_id and _is_product_usage_care_question(question):
+    if (
+        not conversation_id
+        and _is_product_usage_care_question(question)
+        and not _should_prioritize_semantic_structured_route(question, phase1_plan)
+    ):
         early_usage_care_result = await customer_agent_intent_service.answer_product_usage_care_request(
             db,
             question=question,

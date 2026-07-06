@@ -4,7 +4,7 @@ import re
 
 import pytest
 
-from app.models import Product
+from app.models import Product, ProductSpecs
 from app.services import customer_agent_planner_service
 from test_customer_service_route_level_regression import route_client_and_db
 
@@ -676,6 +676,11 @@ def test_route_level_water_kettle_guard_does_not_break_cookware_or_stove_domains
 @pytest.mark.parametrize(
     ("question", "expected_sku", "required_terms"),
     [
+        ("CS-B14（LX）能不能用酒精炉？", "CS-B14（LX）", ("支持酒精炉", "液体酒精")),
+        ("CS-B14（LX）适用什么热源？", "CS-B14（LX）", ("液体酒精",)),
+        ("CS-B14能不能用酒精炉？", "CS-B14", ("支持酒精炉",)),
+        ("CT-T04(BM) 能不能用酒精炉？", "CT-T04(BM)", ("未标注", "酒精炉")),
+        ("CW-C83 能不能用酒精炉？", "CW-C83", ("未显示支持", "酒精炉")),
         ("KW-K31-白适合冷水还是热水？", "KW-K31-白", ("冷水", "热水")),
         ("KW-K31-黑适合冷水还是热水？", "KW-K31-黑", ("冷水", "热水")),
         ("KW-K31-黑是烧水还是补水？", "KW-K31-黑", ("烧水", "补水")),
@@ -695,7 +700,16 @@ def test_route_level_waterware_capability_questions_keep_exact_sku_and_answer_ca
     expected_sku,
     required_terms,
 ):
-    client, headers, _ = route_client_and_db
+    client, headers, Session = route_client_and_db
+
+    if expected_sku in {"CS-B14（LX）", "CS-B14"}:
+        with Session() as db:
+            product = db.query(Product).filter(Product.sku == expected_sku).first()
+            assert product is not None
+            specs = db.query(ProductSpecs).filter(ProductSpecs.product_id == product.id).first()
+            assert specs is not None
+            specs.heat_source = "液体酒精"
+            db.commit()
 
     response = client.post("/api/customer-service/ask?debug=true", json={"question": question}, headers=headers)
     assert response.status_code == 200, response.text
@@ -709,6 +723,9 @@ def test_route_level_waterware_capability_questions_keep_exact_sku_and_answer_ca
     assert debug_plan.get("product_ref") in {"", expected_sku}, debug_plan
     for term in required_terms:
         assert term in payload["answer"], payload["answer"]
+    if "支持酒精炉" in required_terms:
+        assert "未标注适用酒精炉" not in payload["answer"], payload["answer"]
+        assert "不建议按酒精炉适配产品理解" not in payload["answer"], payload["answer"]
     if "装热水" in question:
         assert "直接加热" not in payload["answer"] or "未标注" in payload["answer"], payload["answer"]
     if "直接加热" in question:
@@ -751,20 +768,25 @@ def test_route_level_structured_and_unknown_field_questions_route_conservatively
 
 
 @pytest.mark.parametrize(
-    ("question", "expected_ref"),
+    ("question", "expected_ref", "forbidden_top", "allowed_sources"),
     [
-        ("有哪些水具材质是不锈钢？", "水具"),
-        ("有哪些水壶是不锈钢的？", "水壶"),
-        ("有哪些锅具材质是铝合金？", "锅具"),
-        ("有哪些锅能用燃气炉？", "锅具"),
+        ("有哪些水具材质是不锈钢？", "水具", set(), {"structured_category_field_filter_query"}),
+        ("有哪些水壶是不锈钢的？", "水壶", {"CW-C06PRO", "CW-C69-1", "CW-C99", "CW-K32"}, {"structured_category_field_filter_query"}),
+        ("有哪些水壶材质是不锈钢？", "水壶", {"CW-C06PRO", "CW-C69-1", "CW-C99", "CW-K32"}, {"structured_category_field_filter_query"}),
+        ("有哪些水壶适合装热水？", "水壶", {"CW-C06PRO", "CW-C69-1", "CW-C99", "CW-K32"}, {"structured_waterware_capability_query"}),
+        ("有哪些水壶适合冷水补水？", "水壶", {"CW-C06PRO", "CW-C69-1", "CW-C99", "CW-K32"}, {"structured_waterware_capability_query"}),
+        ("有哪些锅具材质是铝合金？", "锅具", set(), {"structured_category_field_filter_query"}),
+        ("有哪些锅能用燃气炉？", "锅具", set(), {"structured_category_field_filter_query"}),
     ],
 )
 def test_route_level_structured_field_filter_queries_do_not_fall_into_product_detail(
     route_client_and_db,
     question,
     expected_ref,
+    forbidden_top,
+    allowed_sources,
 ):
-    client, headers, _ = route_client_and_db
+    client, headers, Session = route_client_and_db
 
     response = client.post("/api/customer-service/ask?debug=true", json={"question": question}, headers=headers)
     assert response.status_code == 200, response.text
@@ -778,8 +800,17 @@ def test_route_level_structured_field_filter_queries_do_not_fall_into_product_de
     assert payload["result_skus"], payload
     assert "Product not found" not in payload["answer"]
     assert debug_plan.get("product_ref") not in {"有哪些水具", "有哪些水壶", "有哪些锅具", "有哪些锅"}, debug_plan
-    assert answer_metadata.get("source") == "structured_category_field_filter_query", answer_metadata
+    assert answer_metadata.get("source") in allowed_sources, answer_metadata
     assert answer_metadata.get("product_ref") == expected_ref, answer_metadata
+    if forbidden_top:
+        assert payload["result_skus"][0] not in forbidden_top, payload["result_skus"]
+        with Session() as db:
+            top_categories = {
+                product.sku: product.category
+                for product in db.query(Product).filter(Product.sku.in_(payload["result_skus"][:3])).all()
+            }
+        assert top_categories, payload
+        assert all(category in {"水壶", "水具", "咖啡器具"} for category in top_categories.values()), top_categories
 
 
 @pytest.mark.parametrize(
