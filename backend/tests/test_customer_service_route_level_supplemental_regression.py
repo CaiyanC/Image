@@ -751,6 +751,113 @@ def test_route_level_structured_and_unknown_field_questions_route_conservatively
 
 
 @pytest.mark.parametrize(
+    ("question", "expected_ref"),
+    [
+        ("有哪些水具材质是不锈钢？", "水具"),
+        ("有哪些水壶是不锈钢的？", "水壶"),
+        ("有哪些锅具材质是铝合金？", "锅具"),
+        ("有哪些锅能用燃气炉？", "锅具"),
+    ],
+)
+def test_route_level_structured_field_filter_queries_do_not_fall_into_product_detail(
+    route_client_and_db,
+    question,
+    expected_ref,
+):
+    client, headers, _ = route_client_and_db
+
+    response = client.post("/api/customer-service/ask?debug=true", json={"question": question}, headers=headers)
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    debug_plan = ((payload.get("debug") or {}).get("plan") or {})
+    answer_metadata = payload.get("answer_metadata") or {}
+
+    assert payload["answer_type"] in {"product_query", "query_products"}, payload
+    assert payload["answer_type"] != "product_detail"
+    assert payload["answer"], payload
+    assert payload["result_skus"], payload
+    assert "Product not found" not in payload["answer"]
+    assert debug_plan.get("product_ref") not in {"有哪些水具", "有哪些水壶", "有哪些锅具", "有哪些锅"}, debug_plan
+    assert answer_metadata.get("source") == "structured_category_field_filter_query", answer_metadata
+    assert answer_metadata.get("product_ref") == expected_ref, answer_metadata
+
+
+@pytest.mark.parametrize(
+    "question",
+    [
+        "4人以上露营，容量大一点，能用燃气炉的锅。",
+        "4人以上户外用，大容量锅具有哪些？",
+        "多人露营用，能配燃气炉的锅具推荐一下。",
+    ],
+)
+def test_route_level_multi_condition_cookware_queries_route_to_recommendation_not_product_detail(
+    route_client_and_db,
+    question,
+):
+    client, headers, Session = route_client_and_db
+
+    response = client.post("/api/customer-service/ask?debug=true", json={"question": question}, headers=headers)
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    debug_plan = ((payload.get("debug") or {}).get("plan") or {})
+
+    assert payload["answer_type"] == "recommendation", payload
+    assert payload["answer_type"] != "knowledge_base_answer"
+    assert payload["answer_type"] != "product_detail"
+    assert payload["result_skus"], payload
+    assert payload["answer"], payload
+    assert "Product not found" not in payload["answer"]
+    assert debug_plan.get("product_ref") not in {"4人以上露营", "4人以上户外用", "多人露营用"}, debug_plan
+
+    with Session() as db:
+        top_categories = {
+            product.sku: product.category
+            for product in db.query(Product).filter(Product.sku.in_(payload["result_skus"][:2])).all()
+        }
+
+    assert top_categories, payload
+    assert all(category == "锅具" for category in top_categories.values()), top_categories
+    assert payload["result_skus"][0] not in {"CF-PG20", "CW-C84", "CW-K32", "CB253", "CB254", "AC-Z13"}, payload["result_skus"]
+
+
+@pytest.mark.parametrize(
+    "question",
+    [
+        "新手用，别太重，价格别太高的锅具。",
+        "预算不高，新手适合的轻量锅具有哪些？",
+        "不要太贵，轻一点的露营锅具推荐一下。",
+    ],
+)
+def test_route_level_budget_preference_cookware_queries_still_recommend_not_only_unknown_price(
+    route_client_and_db,
+    question,
+):
+    client, headers, Session = route_client_and_db
+
+    response = client.post("/api/customer-service/ask?debug=true", json={"question": question}, headers=headers)
+    assert response.status_code == 200, response.text
+    payload = response.json()
+
+    assert payload["answer_type"] == "recommendation", payload
+    assert payload["answer_type"] != "product_detail"
+    assert payload["answer_type"] != "knowledge_base_answer"
+    assert payload["result_skus"], payload
+    assert payload["answer"], payload
+    if "未标注实时价格" in payload["answer"] or "未标注价格" in payload["answer"]:
+        assert "以店铺报价为准" in payload["answer"], payload["answer"]
+    assert re.search(r"(新手|轻|锅具|套锅)", payload["answer"]), payload["answer"]
+
+    with Session() as db:
+        top_categories = {
+            product.sku: product.category
+            for product in db.query(Product).filter(Product.sku.in_(payload["result_skus"][:2])).all()
+        }
+
+    assert top_categories, payload
+    assert all(category == "锅具" for category in top_categories.values()), top_categories
+
+
+@pytest.mark.parametrize(
     ("question", "expected_answer_type", "expected_sku", "required_terms"),
     [
         ("炉具点不着怎么办？", "product_usage_care", None, ("关闭阀门", "检查")),

@@ -915,6 +915,14 @@ def _structured_query_row_text(row: dict[str, Any]) -> str:
             "category",
             "sub_category",
             "capacity",
+            "body_material",
+            "material",
+            "heat_source",
+            "applicable_heat_source",
+            "target_audience",
+            "gross_weight_g",
+            "specification",
+            "size",
             "features",
             "usage_scenarios",
             "positioning",
@@ -1013,10 +1021,244 @@ def _unknown_product_fact_result(question: str) -> dict | None:
     }
 
 
+def _structured_filter_field_and_value(question: str) -> tuple[str, str] | None:
+    text = str(question or "").strip()
+    if not text:
+        return None
+    field_aliases = {
+        "材质": ("材质", "材料"),
+        "热源": ("热源", "燃气炉", "卡式炉", "明火", "酒精炉"),
+    }
+    value_aliases = {
+        "不锈钢": ("不锈钢", "304", "316"),
+        "铝合金": ("铝合金", "铝"),
+        "燃气炉": ("燃气炉", "卡式炉", "明火"),
+    }
+    matched_field = None
+    for field_name, aliases in field_aliases.items():
+        if any(alias in text for alias in aliases):
+            matched_field = field_name
+            break
+    matched_value = None
+    for value_name, aliases in value_aliases.items():
+        if any(alias in text for alias in aliases):
+            matched_value = value_name
+            break
+    if matched_field is None and matched_value in {"不锈钢", "铝合金"}:
+        material_shortcuts = (
+            f"是{matched_value}的",
+            f"要{matched_value}的",
+            f"选{matched_value}的",
+        )
+        if any(pattern in text for pattern in material_shortcuts):
+            matched_field = "材质"
+    if matched_field == "热源" and matched_value == "燃气炉":
+        return matched_field, matched_value
+    if matched_field == "材质" and matched_value in {"不锈钢", "铝合金"}:
+        return matched_field, matched_value
+    return None
+
+
+def _looks_like_structured_field_filter_query(question: str) -> bool:
+    text = str(question or "").strip()
+    if not text or SKU_RE.search(text):
+        return False
+    if not any(term in text for term in ("有哪些", "哪一些", "推荐", "找")):
+        return False
+    if _semantic_catalog_product_ref(text) == "产品":
+        return False
+    return _structured_filter_field_and_value(text) is not None
+
+
+def _structured_field_filter_result(db: Session, question: str) -> dict | None:
+    text = str(question or "").strip()
+    if not _looks_like_structured_field_filter_query(text):
+        return None
+    product_ref = _semantic_catalog_product_ref(text)
+    filter_info = _structured_filter_field_and_value(text)
+    if product_ref == "产品" or not filter_info:
+        return None
+    field_name, expected_value = filter_info
+    if product_ref == "水壶":
+        source_rows = [row for row in _phase1_catalog_rows(db, "产品") if _phase1_is_water_kettle_candidate(row)]
+    else:
+        source_rows = _phase1_catalog_rows(db, product_ref)
+    rows = []
+    for row in source_rows:
+        row_text = _structured_query_row_text(row)
+        score = 0
+        if field_name == "材质":
+            if expected_value == "不锈钢" and any(term in row_text for term in ("不锈钢", "304", "316")):
+                score += 8
+            if expected_value == "铝合金" and any(term in row_text for term in ("铝合金", "铝")):
+                score += 8
+        elif field_name == "热源":
+            if expected_value == "燃气炉" and any(term in row_text for term in ("燃气炉", "卡式炉", "明火")):
+                score += 8
+        if score <= 0:
+            continue
+        scoped = dict(row)
+        scoped["_score"] = score
+        rows.append(scoped)
+    rows.sort(key=lambda item: (-int(item.get("_score") or 0), str(item.get("sku") or "")))
+    if not rows and source_rows:
+        display_rows = source_rows[:5]
+        result_skus = [str(row.get("sku") or "").strip().upper() for row in display_rows if str(row.get("sku") or "").strip()]
+        sample_text = "、".join(
+            f"{row.get('sku')} {row.get('product_name_cn')}".strip()
+            for row in display_rows
+            if row.get("sku")
+        )
+        answer = (
+            f"当前在【{product_ref}】里还没筛到能明确确认{field_name}为{expected_value}的候选。"
+            f"{'先把同类产品列出来供你继续缩小范围：%s。' % sample_text if sample_text else ''}"
+            f" 未标注该字段的产品我不会直接当成已确认符合“{expected_value}”条件。"
+        )
+        return {
+            "intent": "query_products",
+            "answer_type": "product_query",
+            "answer": answer,
+            "results": display_rows,
+            "result_skus": result_skus,
+            "candidate_skus": result_skus,
+            "answer_metadata": {"source": "structured_category_field_filter_query", "product_ref": product_ref, "matched_count": 0},
+            "debug": {"agent_mode": "structured_category_field_filter_query", "raw_results": display_rows, "candidate_skus": result_skus},
+            "skip_polish": True,
+        }
+    return _structured_product_query_result(
+        question=text,
+        product_ref=product_ref,
+        rows=rows,
+        source="structured_category_field_filter_query",
+        reason_label=f"{product_ref} / {field_name} / {expected_value} 条件",
+    )
+
+
+def _looks_like_multi_condition_cookware_recommendation(question: str) -> bool:
+    text = str(question or "").strip()
+    if not text or SKU_RE.search(text):
+        return False
+    if not any(term in text for term in ("锅具", "锅", "套锅", "炊具")):
+        return False
+    if any(term in text for term in ("水壶", "水具", "水杯", "壶")):
+        return False
+    has_group_or_scene = any(term in text for term in ("4人以上", "4人", "多人", "家庭", "露营", "户外", "新手"))
+    has_constraints = any(term in text for term in ("容量大", "大容量", "燃气炉", "卡式炉", "明火", "别太重", "轻", "轻量", "轻便"))
+    has_budget_preference = any(term in text for term in ("价格别太高", "别太贵", "不要太贵", "预算不高", "预算有限", "便宜点", "性价比"))
+    has_selection = any(term in text for term in ("推荐", "怎么选", "买什么", "买锅具", "有哪些", "用什么"))
+    return has_group_or_scene and (has_constraints or has_budget_preference) and (has_selection or "。" in text)
+
+
+def _structured_cookware_multi_condition_recommendation_result(db: Session, question: str) -> dict | None:
+    text = str(question or "").strip()
+    if not _looks_like_multi_condition_cookware_recommendation(text):
+        return None
+    rows = [row for row in _phase1_catalog_rows(db, "产品") if _is_service_pot_or_cookware_set_candidate(row)]
+    if not rows:
+        return None
+    wants_group_capacity = any(term in text for term in ("4人以上", "4人", "多人", "家庭", "大容量", "容量大"))
+    wants_gas = any(term in text for term in ("燃气炉", "卡式炉", "明火"))
+    wants_light = any(term in text for term in ("别太重", "轻", "轻量", "轻便"))
+    wants_beginner = "新手" in text
+    wants_budget = any(term in text for term in ("价格别太高", "别太贵", "不要太贵", "预算不高", "预算有限", "便宜点", "性价比"))
+
+    def _rank(row: dict[str, Any]) -> tuple[int, str]:
+        row_text = " ".join(
+            str(row.get(key) or "")
+            for key in (
+                "product_name_cn",
+                "category",
+                "capacity",
+                "features",
+                "usage_scenarios",
+                "positioning",
+                "price_positioning",
+                "long_description_cn",
+            )
+        )
+        score = 0
+        if wants_group_capacity and any(term in row_text for term in ("4人", "2-4人", "多人", "家庭", "3L", "3700ML", "大容量")):
+            score += 10
+        if wants_gas and any(term in row_text for term in ("燃气炉", "卡式炉", "明火")):
+            score += 8
+        if wants_light and any(term in row_text for term in ("轻量", "轻便", "便携", "套娃", "收纳")):
+            score += 6
+        if wants_beginner and any(term in row_text for term in ("入门", "基础", "性价比", "周末野餐")):
+            score += 5
+        if wants_budget and any(term in row_text for term in ("入门", "性价比", "基础", "中端")):
+            score += 4
+        if any(term in row_text for term in ("套锅", "套装", "锅具套装", "炊具套装")):
+            score += 3
+        weight = row.get("gross_weight_g")
+        try:
+            weight_value = float(weight or 0)
+        except (TypeError, ValueError):
+            weight_value = 0
+        if wants_light:
+            if 0 < weight_value <= 800:
+                score += 4
+            elif 800 < weight_value <= 1200:
+                score += 2
+            elif weight_value >= 1800:
+                score -= 3
+        return (-score, str(row.get("sku") or ""))
+
+    selected = sorted(rows, key=_rank)[:5]
+    if not selected:
+        return None
+    top_row = selected[0]
+    top_name = top_row.get("product_name_cn") or top_row.get("sku")
+    top_sku = str(top_row.get("sku") or "").strip().upper()
+    top_reason = str(top_row.get("usage_scenarios") or top_row.get("features") or top_row.get("positioning") or "").strip("。；; ")
+    demand_bits: list[str] = []
+    if wants_group_capacity:
+        demand_bits.append("多人/大容量")
+    if wants_gas:
+        demand_bits.append("燃气炉适配")
+    if wants_light:
+        demand_bits.append("轻量好带")
+    if wants_beginner:
+        demand_bits.append("新手友好")
+    if wants_budget:
+        demand_bits.append("预算别太高")
+    demand_label = "、".join(demand_bits) or "锅具需求"
+    answer = f"这类需求我会优先在锅具/套锅里筛，不先把水具、烤盘或配件当主推。优先推荐 {top_name}（{top_sku}），更贴合“{demand_label}”这类条件。"
+    if top_reason:
+        answer += f" 主要理由是：{top_reason}。"
+    backups: list[str] = []
+    for row in selected[1:3]:
+        name = row.get("product_name_cn") or row.get("sku")
+        sku = str(row.get("sku") or "").strip().upper()
+        reason = str(row.get("usage_scenarios") or row.get("features") or row.get("positioning") or "可作为同域备选").strip("。；; ")
+        backups.append(f"{name}（{sku}），{reason}")
+    if backups:
+        answer += " 备选可以看" + "；".join(backups) + "。"
+    if wants_budget:
+        answer += " 当前资料未标注实时价格，预算相关还需要以店铺报价为准，但我会先按轻量、容量和使用场景帮你缩小范围。"
+    skus = [str(row.get("sku") or "").strip().upper() for row in selected if row.get("sku")]
+    return {
+        "intent": "recommendation",
+        "answer_type": "recommendation",
+        "answer": answer,
+        "results": selected,
+        "result_skus": skus,
+        "candidate_skus": skus,
+        "debug": {"agent_mode": "planner_recommendation_guard_rebuild"},
+        "answer_metadata": {"source": "product_catalog_structured_recommendation"},
+        "skip_polish": True,
+    }
+
+
 def _semantic_structured_query_result(db: Session, question: str) -> dict | None:
     text = str(question or "").strip()
     if not text:
         return None
+    structured_field_filter = _structured_field_filter_result(db, text)
+    if structured_field_filter:
+        return structured_field_filter
+    cookware_multi_condition = _structured_cookware_multi_condition_recommendation_result(db, text)
+    if cookware_multi_condition:
+        return cookware_multi_condition
     if any(term in text for term in ("咖啡器具", "咖啡")) and "手冲" in text:
         rows = [row for row in _phase1_catalog_rows(db, "咖啡器具") if any(term in _structured_query_row_text(row) for term in ("手冲", "细口壶", "咖啡", "滤杯"))]
         return _structured_product_query_result(
@@ -1115,6 +1357,32 @@ def _semantic_structured_query_result(db: Session, question: str) -> dict | None
     if _looks_like_semantic_catalog_query(text):
         return _phase1_catalog_count_result(db, {"product_ref": _semantic_catalog_product_ref(text)})
     return _unknown_product_fact_result(text)
+
+
+def _should_prioritize_semantic_structured_route(question: str, phase1_plan: dict[str, Any]) -> bool:
+    primary_intent = str((phase1_plan or {}).get("primary_intent") or "")
+    if primary_intent not in {"product_field", "catalog_count"}:
+        return False
+    text = str(question or "").strip()
+    return _looks_like_structured_field_filter_query(text) or _looks_like_multi_condition_cookware_recommendation(text)
+
+
+def _semantic_structured_override_plan(question: str, phase1_plan: dict[str, Any], result: dict[str, Any]) -> dict[str, Any]:
+    merged = dict(phase1_plan or {})
+    metadata = result.get("answer_metadata") if isinstance(result.get("answer_metadata"), dict) else {}
+    answer_type = str(result.get("answer_type") or "")
+    if answer_type in {"product_query", "query_products"}:
+        merged["primary_intent"] = "catalog_count"
+        merged["answer_type"] = answer_type
+        merged["product_ref"] = str(metadata.get("product_ref") or _semantic_catalog_product_ref(question) or "").strip()
+        merged["requested_field"] = ""
+    elif answer_type == "recommendation":
+        merged["primary_intent"] = "recommendation"
+        merged["answer_type"] = "recommendation"
+        merged["scenario"] = str(question or "").strip()
+        merged["product_ref"] = ""
+        merged["requested_field"] = ""
+    return merged
 
 
 def _phase1_explicit_sku_alcohol_people_result(db: Session, question: str) -> dict | None:
@@ -2868,6 +3136,34 @@ async def ask_customer_service(
                 semantic_preplan=semantic_preplan,
             )
 
+    if _should_prioritize_semantic_structured_route(question, phase1_plan):
+        semantic_structured_result = _semantic_structured_query_result(db, question)
+        if semantic_structured_result:
+            structured_phase1_plan = _semantic_structured_override_plan(question, phase1_plan, semantic_structured_result)
+            semantic_structured_result = _attach_phase1_plan_and_timing(
+                semantic_structured_result,
+                structured_phase1_plan,
+                _phase1_timing(
+                    request_start=request_start,
+                    planner_duration_ms=planner_duration_ms,
+                ),
+            )
+            semantic_structured_result = _attach_semantic_preplan_debug(
+                semantic_structured_result,
+                semantic_preplan,
+                final_route=str(semantic_structured_result.get("answer_type") or "query_products"),
+            )
+            return await _save_agent_result_and_return(
+                db,
+                user_id=user_id,
+                question=question,
+                conversation_id=conversation_id,
+                agent_result=semantic_structured_result,
+                request_start=request_start,
+                branch="phase1_semantic_structured_priority_guard",
+                semantic_preplan=semantic_preplan,
+            )
+
     phase1_direct_result = None
     executor_start = perf_counter()
     if (
@@ -2942,9 +3238,10 @@ async def ask_customer_service(
 
     semantic_structured_result = _semantic_structured_query_result(db, question)
     if semantic_structured_result:
+        structured_phase1_plan = _semantic_structured_override_plan(question, phase1_plan, semantic_structured_result)
         semantic_structured_result = _attach_phase1_plan_and_timing(
             semantic_structured_result,
-            phase1_plan,
+            structured_phase1_plan,
             _phase1_timing(
                 request_start=request_start,
                 planner_duration_ms=planner_duration_ms,
