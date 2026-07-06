@@ -14,6 +14,11 @@ def _semantic_preplan_debug(payload: dict) -> dict:
     return debug.get("semantic_preplan") if isinstance(debug.get("semantic_preplan"), dict) else {}
 
 
+def _alcohol_stove_supports_from_specs(value: str) -> bool:
+    text = str(value or "")
+    return any(term in text for term in ("\u9152\u7cbe\u7089", "\u6db2\u4f53\u9152\u7cbe", "\u56fa\u4f53\u9152\u7cbe"))
+
+
 def test_semantic_preplan_parser_accepts_code_fence_and_tracks_llm_calls(monkeypatch):
     calls = []
 
@@ -65,6 +70,70 @@ def test_structured_field_query_parser_splits_category_field_and_value_cleanly()
     assert gas_stove.filters.get("specs.heat_source") == "燃气炉"
     assert gas_stove.term == ""
     assert "热源" in gas_stove.requested_fields
+
+
+@pytest.mark.parametrize(
+    "question",
+    [
+        "\u9002\u5408\u9152\u7cbe\u7089\u7684\u9505\u5177\u63a8\u8350",
+        "\u6709\u6ca1\u6709\u9002\u5408\u9152\u7cbe\u7089\u7684\u9505\uff1f",
+        "\u54ea\u4e9b\u9505\u5177\u53ef\u4ee5\u7528\u9152\u7cbe\u7089\uff1f",
+        "\u63a8\u8350\u80fd\u7528\u6db2\u4f53\u9152\u7cbe\u7684\u9505\u5177",
+        "\u9732\u8425\u7528\uff0c\u80fd\u914d\u9152\u7cbe\u7089\u7684\u9505\u5177\u6709\u54ea\u4e9b\uff1f",
+    ],
+)
+def test_recommendation_alcohol_stove_cookware_queries_keep_structured_heat_source_constraint(question):
+    intent = customer_agent_intent_service.parse_intent(question)
+
+    assert intent is not None
+    assert intent.intent in {"recommend_products", "query_products"}
+    assert intent.filters.get("product.category") == "\u9505\u5177"
+    assert intent.filters.get("specs.heat_source") == "\u9152\u7cbe\u7089"
+
+
+def test_compose_recommendation_answer_bypasses_llm_for_alcohol_stove_cookware(monkeypatch):
+    async def fail_finalize(*args, **kwargs):
+        raise AssertionError("finalize llm path should be skipped for alcohol stove cookware recommendation")
+
+    monkeypatch.setattr(customer_agent_intent_service, "_finalize_recommendation_answer", fail_finalize)
+    monkeypatch.setattr(
+        customer_agent_intent_service,
+        "_recommendation_product_data",
+        lambda db, rows, supporting_by_sku=None: [{"sku": "CW-S10-A"}],
+    )
+
+    ranked = [
+        {
+            "row": {
+                "sku": "CW-S10-A",
+                "product_name_cn": "激川单锅",
+                "category": "锅具",
+                "heat_source": "酒精炉\n气炉",
+                "usage_scenarios": "露营简餐",
+            },
+            "matched": ["适合酒精炉"],
+            "reasons": ["适用热源明确包含酒精炉"],
+        }
+    ]
+    intent = customer_agent_intent_service.parse_intent("有没有适合酒精炉的锅？")
+
+    answer = asyncio.run(
+        customer_agent_intent_service._compose_recommendation_answer(
+            db=None,
+            question="有没有适合酒精炉的锅？",
+            ranked=ranked,
+            intent=intent,
+            warnings=[],
+            anomalies=[],
+            followups=[],
+            result_rows=[dict(ranked[0]["row"])],
+            supporting_by_sku={},
+        )
+    )
+
+    assert "CW-S10-A" in answer
+    assert "酒精炉" in answer
+    assert "激川单锅" in answer
 
 
 def test_semantic_preplan_repair_recovers_truncated_json(monkeypatch):
@@ -441,6 +510,75 @@ def test_route_level_single_turn_two_person_cookware_recommendation_stays_in_coo
     assert top_products, payload
     assert all("锅" in category for category in top_products.values()), top_products
     assert re.search(r"(双人|两人|情侣|露营).*(锅具|套锅|炊具|做饭)", payload["answer"]), payload["answer"]
+
+
+@pytest.mark.parametrize(
+    "question",
+    [
+        "\u9002\u5408\u9152\u7cbe\u7089\u7684\u9505\u5177\u63a8\u8350",
+        "\u6709\u6ca1\u6709\u9002\u5408\u9152\u7cbe\u7089\u7684\u9505\uff1f",
+        "\u54ea\u4e9b\u9505\u5177\u53ef\u4ee5\u7528\u9152\u7cbe\u7089\uff1f",
+        "\u63a8\u8350\u80fd\u7528\u6db2\u4f53\u9152\u7cbe\u7684\u9505\u5177",
+        "\u9732\u8425\u7528\uff0c\u80fd\u914d\u9152\u7cbe\u7089\u7684\u9505\u5177\u6709\u54ea\u4e9b\uff1f",
+    ],
+)
+def test_route_level_alcohol_stove_cookware_recommendation_requires_positive_heat_source_evidence(
+    route_client_and_db,
+    question,
+):
+    client, headers, Session = route_client_and_db
+
+    response = client.post(
+        "/api/customer-service/ask?debug=true",
+        json={"question": question},
+        headers=headers,
+    )
+    assert response.status_code == 200, response.text
+    payload = response.json()
+
+    assert payload["answer_type"] in {"recommendation", "product_query", "query_products"}, payload
+    assert payload["answer"], payload
+    assert payload["result_skus"], payload
+    assert "Product not found" not in payload["answer"], payload["answer"]
+
+    with Session() as db:
+        evidence_skus = {
+            product.sku
+            for product in db.query(Product).all()
+            for spec in [db.query(ProductSpecs).filter(ProductSpecs.product_id == product.id).first()]
+            if product.category == "\u9505\u5177" and spec is not None and _alcohol_stove_supports_from_specs(spec.heat_source)
+        }
+        returned_products = {
+            product.sku: product
+            for product in db.query(Product).filter(Product.sku.in_(payload["result_skus"])).all()
+        }
+        returned_specs = {
+            product.sku: db.query(ProductSpecs).filter(ProductSpecs.product_id == product.id).first()
+            for product in db.query(Product).filter(Product.sku.in_(payload["result_skus"])).all()
+        }
+
+    assert returned_products, payload
+    assert returned_specs, payload
+    assert all(spec is not None for spec in returned_specs.values()), returned_specs
+    assert "\u9152\u7cbe" in payload["answer"], payload["answer"]
+    assert all(
+        "\u6c34\u58f6" not in str((returned_products.get(sku).product_name_cn if returned_products.get(sku) else "") or "")
+        for sku in payload["result_skus"]
+    ), returned_products
+    if evidence_skus:
+        assert set(payload["result_skus"]).issubset(evidence_skus), (payload, sorted(evidence_skus))
+        assert all(
+            _alcohol_stove_supports_from_specs(spec.heat_source)
+            for spec in returned_specs.values()
+            if spec is not None
+        ), returned_specs
+        assert "\u660e\u706b\u76f4\u70e7\u3001\u5361\u5f0f\u7089\u3001\u5206\u4f53\u7089\u3001\u4e00\u4f53\u7089" not in payload["answer"], payload["answer"]
+    else:
+        assert (
+            "\u672a\u6807\u6ce8\u8be5\u5b57\u6bb5\u7684\u4ea7\u54c1\u6211\u4e0d\u4f1a\u76f4\u63a5\u5f53\u6210\u5df2\u786e\u8ba4\u7b26\u5408" in payload["answer"]
+            or "\u6ca1\u6709\u660e\u786e\u9152\u7cbe\u7089\u8bc1\u636e" in payload["answer"]
+            or "\u4e0d\u5efa\u8bae\u76f4\u63a5\u5f52\u4e3a\u9152\u7cbe\u7089\u9002\u7528" in payload["answer"]
+        ), payload["answer"]
 
 
 @pytest.mark.parametrize(

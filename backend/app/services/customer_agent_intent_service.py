@@ -1378,7 +1378,7 @@ def _looks_like_scenario_recommendation_question(text: str) -> bool:
 
 
 def _filters_only_define_recommendation_scope(filters: dict[str, Any]) -> bool:
-    allowed_scope_keys = {"product.category"}
+    allowed_scope_keys = {"product.category", "specs.heat_source"}
     return bool(filters) and all(str(key) in allowed_scope_keys for key in (filters or {}).keys())
 
 
@@ -2886,10 +2886,11 @@ async def _recommend_result(
         return cached
 
     query_text = intent.recommendation_query or intent.semantic_query or intent.term or ""
+    hard_filters = _recommendation_hard_filters(intent, query_text)
     base_result = await _recommendation_candidate_result(db, user_id, intent, query_text)
     rows = base_result.get("results") or []
     # If no results with filters, try broader search without filters
-    if not rows and (intent.filters or intent.negative_filters):
+    if not rows and (intent.filters or intent.negative_filters) and not hard_filters:
         fallback_intent_type = "recommend_products" if _is_barbecue_stove_griddle_dual_scope_question(query_text) else "query_products"
         fallback_intent = CustomerIntent(
             intent=fallback_intent_type,
@@ -2906,6 +2907,21 @@ async def _recommend_result(
         if fallback_base and fallback_base.get("results"):
             rows = fallback_base.get("results") or []
             base_result = fallback_base
+    if not rows and hard_filters:
+        answer = "当前资料里没有找到明确标注适合酒精炉的锅具。可以改成普通锅具替代推荐，但我会明确标注它们没有酒精炉证据。"
+        return _build_response(
+            intent=intent,
+            answer=answer,
+            sku=None,
+            sources=base_result.get("sources") or [{"type": "product_search", "label": "推荐候选范围", "count": 0}],
+            results=[],
+            steps=_steps(intent, [{"type": "recommend_products", "label": "推荐产品", "detail": "硬约束筛选后无明确证据候选", "ok": True}]),
+            confidence="high",
+            warnings=["当前资料里没有明确酒精炉证据的锅具候选。"],
+            anomalies=[],
+            suggested_followups=["如果你接受普通锅具替代，我可以继续列出没有酒精炉证据的同类备选。"],
+            answer_type="recommendation",
+        )
     if not rows and _is_barbecue_stove_griddle_dual_scope_question(query_text):
         rows = _filter_barbecue_stove_or_griddle_candidate_rows(
             _supplement_barbecue_dual_scope_rows(db, [], query_text)
@@ -2987,6 +3003,22 @@ async def _recommend_result(
         rows = _filter_cookware_recommendation_candidate_rows(rows)
 
     ranked = _fallback_rank(rows, query_text)
+    ranked = _apply_recommendation_hard_filters_to_ranked(ranked, hard_filters=hard_filters)
+    if not ranked and hard_filters:
+        answer = "当前资料里没有找到明确标注适合酒精炉的锅具。可以改成普通锅具替代推荐，但我会明确标注它们没有酒精炉证据。"
+        return _build_response(
+            intent=intent,
+            answer=answer,
+            sku=None,
+            sources=base_result.get("sources") or [{"type": "product_search", "label": "推荐候选范围", "count": 0}],
+            results=[],
+            steps=_steps(intent, [{"type": "recommend_products", "label": "推荐产品", "detail": "排序后硬约束筛选无明确证据候选", "ok": True}]),
+            confidence="high",
+            warnings=["当前资料里没有明确酒精炉证据的锅具候选。"],
+            anomalies=[],
+            suggested_followups=["如果你接受普通锅具替代，我可以继续列出没有酒精炉证据的同类备选。"],
+            answer_type="recommendation",
+        )
     ranked, people_constraint_warnings = _apply_people_capacity_constraint_to_ranked(
         ranked,
         query_text,
@@ -3110,6 +3142,7 @@ async def _recommendation_candidate_result(db: Session, user_id: str, intent: Cu
         }
 
     scenario_scope = _extract_recommendation_scenario_scope(intent, query_text)
+    hard_filters = _recommendation_hard_filters(intent, query_text)
     effective_term = scenario_scope.get("term") or intent.term or ""
     effective_filters = dict(intent.filters or {})
     effective_filters.update(scenario_scope.get("filters") or {})
@@ -3196,6 +3229,8 @@ async def _recommendation_candidate_result(db: Session, user_id: str, intent: Cu
         rows = _filter_barbecue_stove_or_griddle_candidate_rows(rows)
     if _looks_like_generic_core_cookware_recommendation(query_text):
         rows = _filter_generic_core_cookware_candidate_rows(rows)
+    if hard_filters:
+        rows = _apply_recommendation_hard_filters(db, rows, hard_filters=hard_filters)
     rows = _filter_picnic_lightweight_set_candidate_rows(query_text, rows)
     return {
         "ok": True,
@@ -4005,6 +4040,10 @@ async def _compose_recommendation_answer(
 ) -> str:
     """Compose a recommendation answer from ranked products."""
     result_rows = result_rows or []
+    if _looks_like_alcohol_stove_cookware_recommendation_question(question):
+        alcohol_answer = _shape_alcohol_stove_cookware_recommendation_answer_from_ranked(ranked)
+        if alcohol_answer:
+            return alcohol_answer
     if result_rows:
         product_data_list = _recommendation_product_data(db, result_rows, supporting_by_sku=supporting_by_sku)
         answer = await _finalize_recommendation_answer(
@@ -4366,8 +4405,10 @@ def _parse_structured_filters(text: str) -> tuple[dict[str, Any], dict[str, Any]
     negative_filters: dict[str, Any] = {}
     alcohol_stove_support_pattern = (
         r"(?:同时)?(?:支持|能用|可以用|可用|适配)\s*酒精炉"
+        r"|(?:同时)?(?:支持|能用|可以用|可用|适配|能配|可配)\s*(?:液体酒精|固体酒精)"
         r"|(?:可以|可|能)(?:直接)?放在\s*酒精炉上(?:用|使用)(?:吗)?"
         r"|酒精炉上(?:能用|可以用|可用|适合|使用)"
+        r"|能配\s*酒精炉"
         r"|适合\s*酒精炉"
         r"|酒精炉可用"
         r"|\balcohol\s*stove\b"
@@ -4427,18 +4468,23 @@ def _parse_structured_filters(text: str) -> tuple[dict[str, Any], dict[str, Any]
             category_probe_text,
             flags=re.I,
         )
+        if filters.get("specs.heat_source") == "酒精炉" and any(term in category_probe_text for term in ("锅具", "套锅", "单锅", "炊具")):
+            filters["product.category"] = "锅具"
+        elif filters.get("specs.heat_source") == "酒精炉" and "锅" in category_probe_text and not any(term in category_probe_text for term in ("水壶", "茶壶", "酒精炉")):
+            filters["product.category"] = "锅具"
         cat_map = [
             ("水壶", "水壶"), ("户外水壶", "水壶"), ("水具", "水具"), ("水杯", "水具"), ("杯", "水具"),
             ("锅具", "锅具"), ("锅子", "锅具"), ("套锅", "锅具"), ("单锅", "锅具"), ("煎锅", "锅具"), ("炒锅", "锅具"), ("烤盘", "锅具"), ("锅", "锅具"),
             ("酒精炉", "炉具"), ("气炉", "炉具"), ("卡式炉", "炉具"), ("炉具", "炉具"), ("炉子", "炉具"), ("炉", "炉具"),
             ("餐具", "餐具"), ("勺", "餐具"), ("收纳包", "收纳包具"), ("包具", "收纳包具"),
         ]
-        for kw, cat in cat_map:
-            if any(kw and kw in str(value) for value in filters.values()):
-                continue
-            if kw in category_probe_text:
-                filters["product.category"] = _normalize_category_alias(cat)
-                break
+        if not filters.get("product.category"):
+            for kw, cat in cat_map:
+                if any(kw and kw in str(value) for value in filters.values()):
+                    continue
+                if kw in category_probe_text:
+                    filters["product.category"] = _normalize_category_alias(cat)
+                    break
 
     if not filters.get("specs.body_material"):
         direct_body_material = re.search(
@@ -4474,7 +4520,11 @@ def _parse_structured_filters(text: str) -> tuple[dict[str, Any], dict[str, Any]
             text,
             flags=re.I,
         )
-        if alcohol_support_match:
+        alcohol_fuel_match = (
+            any(term in text for term in ("液体酒精", "固体酒精"))
+            and any(term in text for term in ("推荐", "适合", "能用", "可以用", "可用", "支持", "能配", "可配", "有没有", "哪些", "有哪"))
+        )
+        if alcohol_support_match or alcohol_fuel_match:
             filters["specs.heat_source"] = "酒精炉"
     if not filters.get("specs.surface_finish") and any(term in text for term in ("不粘", "不沾")) and any(term in text for term in ("涂层", "带", "有没有", "哪些", "里", "中")):
         filters["specs.surface_finish"] = "不粘"
@@ -4495,6 +4545,13 @@ def _parse_structured_filters(text: str) -> tuple[dict[str, Any], dict[str, Any]
             _ensure_negative_filter(negative_filters, "product.series", neg_value)
             _ensure_negative_filter(negative_filters, "product.product_name_cn", neg_value)
             break
+
+    if filters.get("specs.heat_source") == "酒精炉":
+        category_scope_text = _positive_category_text(text)
+        if any(term in category_scope_text for term in ("锅具", "套锅", "单锅", "炊具")):
+            filters["product.category"] = "锅具"
+        elif "锅" in category_scope_text and not any(term in category_scope_text for term in ("水壶", "茶壶")):
+            filters["product.category"] = "锅具"
 
     return filters, negative_filters
 
@@ -4538,7 +4595,7 @@ def _normalize_structured_filter_value(field_path: str, value: str) -> str:
     if field_path == "specs.surface_finish":
         cleaned = cleaned.replace("不沾", "不粘")
     if field_path == "specs.heat_source":
-        if "液体酒精" in cleaned or "酒精炉" in cleaned:
+        if "液体酒精" in cleaned or "固体酒精" in cleaned or "酒精炉" in cleaned:
             return "酒精炉"
         if "卡式炉" in cleaned:
             return "卡式炉"
@@ -4987,6 +5044,79 @@ def _filter_rows(rows: list[dict], *, filters: dict[str, Any], negative_filters:
             if any(term_lower in str(item or "").lower() for item in row.values())
         ]
     return filtered
+
+
+def _recommendation_hard_filters(intent: CustomerIntent, query_text: str) -> dict[str, Any]:
+    if not intent or intent.intent != "recommend_products":
+        return {}
+    filters: dict[str, Any] = {}
+    current_filters = intent.filters or {}
+    category = str(current_filters.get("product.category") or "").strip()
+    heat_source = _normalize_structured_filter_value("specs.heat_source", str(current_filters.get("specs.heat_source") or ""))
+    text = str(query_text or "")
+    if not heat_source and any(term in text for term in ("酒精炉", "液体酒精", "固体酒精")) and any(term in text for term in ("锅", "锅具", "套锅", "单锅", "炊具")):
+        heat_source = "酒精炉"
+    if heat_source:
+        filters["specs.heat_source"] = heat_source
+    if category:
+        filters["product.category"] = category
+    return filters if heat_source else {}
+
+
+def _looks_like_alcohol_stove_cookware_recommendation_question(question: str) -> bool:
+    text = str(question or "")
+    if not text:
+        return False
+    if not any(term in text for term in ("酒精炉", "液体酒精", "固体酒精")):
+        return False
+    if not any(term in text for term in ("锅", "锅具", "套锅", "单锅", "炊具")):
+        return False
+    return any(term in text for term in ("推荐", "适合", "有没有", "哪些", "有哪", "可以用"))
+
+
+def _apply_recommendation_hard_filters(
+    db: Session,
+    rows: list[dict[str, Any]],
+    *,
+    hard_filters: dict[str, Any],
+) -> list[dict[str, Any]]:
+    if not hard_filters:
+        return rows
+    filtered = _filter_rows(rows or [], filters=hard_filters, negative_filters={}, term="")
+    seen = {str(row.get("sku") or "").strip().upper() for row in filtered if str(row.get("sku") or "").strip()}
+    supplement_rows = customer_agent_service.search_products(db, "", limit=120, filters=hard_filters)
+    for row in supplement_rows:
+        sku = str(row.get("sku") or "").strip().upper()
+        if not sku or sku in seen:
+            continue
+        filtered.append(row)
+        seen.add(sku)
+        if len(filtered) >= 8:
+            break
+    return filtered
+
+
+def _apply_recommendation_hard_filters_to_ranked(
+    ranked: list[dict[str, Any]],
+    *,
+    hard_filters: dict[str, Any],
+) -> list[dict[str, Any]]:
+    if not hard_filters:
+        return ranked
+    rows = [item.get("row") or {} for item in ranked]
+    filtered_rows = _filter_rows(rows, filters=hard_filters, negative_filters={}, term="")
+    allowed_skus = {
+        str(row.get("sku") or "").strip().upper()
+        for row in filtered_rows
+        if str(row.get("sku") or "").strip()
+    }
+    if not allowed_skus:
+        return []
+    return [
+        item
+        for item in ranked
+        if str((item.get("row") or {}).get("sku") or "").strip().upper() in allowed_skus
+    ]
 
 
 def _is_alcohol_stove_cookware_query(intent: CustomerIntent, question: str, *, rows: list[dict] | None = None) -> bool:
@@ -7806,6 +7936,10 @@ def _shape_recommendation_answer_from_ranked(ranked: list[dict], question: str =
         dual_scope_answer = _shape_barbecue_dual_scope_answer_from_ranked(ranked, question=question)
         if dual_scope_answer:
             return dual_scope_answer
+    if _looks_like_alcohol_stove_cookware_recommendation_question(question):
+        alcohol_answer = _shape_alcohol_stove_cookware_recommendation_answer_from_ranked(ranked)
+        if alcohol_answer:
+            return alcohol_answer
     picks = []
     for item in ranked[:3]:
         row = item.get("row") or {}
@@ -7839,6 +7973,49 @@ def _shape_recommendation_answer_from_ranked(ranked: list[dict], question: str =
         if backup_lines:
             lines.append("备选可以看" + "；".join(backup_lines) + "。")
     lines.append("如果你更看重重量、容量、收纳或预算，我可以再按这个方向继续细分。")
+    return "\n".join(lines)
+
+
+def _shape_alcohol_stove_cookware_recommendation_answer_from_ranked(ranked: list[dict]) -> str:
+    picks: list[dict[str, str]] = []
+    for item in ranked[:3]:
+        row = item.get("row") or {}
+        sku = str(row.get("sku") or "").strip().upper()
+        if not sku or not _row_has_explicit_alcohol_stove_heat_source(row):
+            continue
+        name = str(row.get("product_name_cn") or row.get("product_name_en") or sku).strip()
+        heat_source = str(row.get("heat_source") or "").strip()
+        usage = str(row.get("usage_scenarios") or row.get("features") or row.get("target_audience") or "").strip("。；; ")
+        picks.append(
+            {
+                "sku": sku,
+                "name": name,
+                "heat_source": heat_source or "当前同 SKU 资料明确显示支持酒精炉",
+                "usage": usage,
+            }
+        )
+    if not picks:
+        return ""
+    primary = picks[0]
+    lines = [
+        (
+            f"当前资料里明确带有酒精炉/液体酒精相关热源证据的锅具里，"
+            f"优先推荐{primary['name']}（{primary['sku']}）。"
+            f"它的适用热源证据是：{primary['heat_source']}。"
+        )
+    ]
+    if primary["usage"]:
+        lines.append(f"从现有资料看，它还更偏向：{primary['usage']}。")
+    if len(picks) > 1:
+        backup_lines: list[str] = []
+        for item in picks[1:3]:
+            snippet = f"{item['name']}（{item['sku']}）：适用热源证据为{item['heat_source']}"
+            if item["usage"]:
+                snippet += f"；场景/卖点：{item['usage']}"
+            backup_lines.append(snippet)
+        if backup_lines:
+            lines.append("备选可以看" + "；".join(backup_lines) + "。")
+    lines.append("仅支持明火、卡式炉、分体炉或一体炉、但没有酒精炉证据的普通锅具，我不会直接当作酒精炉适配推荐。")
     return "\n".join(lines)
 
 

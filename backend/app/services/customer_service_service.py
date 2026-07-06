@@ -1222,9 +1222,21 @@ def _structured_field_filter_result(db: Session, question: str) -> dict | None:
         source_rows = [row for row in _phase1_catalog_rows(db, "产品") if _phase1_is_strict_water_kettle_candidate(row)]
     else:
         source_rows = _phase1_catalog_rows(db, product_ref)
+    if product_ref == "锅具" and str(filters.get("specs.heat_source") or "").strip() == "酒精炉":
+        source_rows = [
+            row for row in source_rows
+            if _is_service_pot_or_cookware_set_candidate(row)
+            and _phase1_row_has_explicit_alcohol_stove_support(db, row)
+        ]
     rows = customer_agent_service.search_products(db, "", limit=50, filters=filters)
     if product_ref == "水壶":
         rows = [row for row in rows if _phase1_is_strict_water_kettle_candidate(row)]
+    if product_ref == "锅具" and str(filters.get("specs.heat_source") or "").strip() == "酒精炉":
+        rows = [
+            row for row in rows
+            if _is_service_pot_or_cookware_set_candidate(row)
+            and _phase1_row_has_explicit_alcohol_stove_support(db, row)
+        ]
     if not rows and source_rows:
         display_rows = source_rows[:5]
         result_skus = [str(row.get("sku") or "").strip().upper() for row in display_rows if str(row.get("sku") or "").strip()]
@@ -2191,7 +2203,66 @@ def _phase1_structured_recommendation_result(db: Session, plan: dict) -> dict | 
     scenario = str(plan.get("scenario") or plan.get("raw_question") or "").strip()
     if not scenario:
         return None
+    scope_text = " ".join(
+        part for part in (
+            str(plan.get("scenario") or "").strip(),
+            str(plan.get("raw_question") or "").strip(),
+        )
+        if part
+    )
     rows = _phase1_catalog_rows(db, "产品")
+    if (
+        any(term in scope_text for term in ("酒精炉", "液体酒精", "固体酒精", "alcohol stove"))
+        and any(term in scope_text for term in ("锅", "锅具", "套锅", "单锅", "炊具"))
+        and not any(term in scope_text for term in ("水壶", "茶壶", "烧水壶", "壶类"))
+    ):
+        exact_rows = [
+            row for row in rows
+            if _is_service_pot_or_cookware_set_candidate(row) and _phase1_row_has_explicit_alcohol_stove_support(db, row)
+        ]
+        if exact_rows:
+            selected = exact_rows[:5]
+            lines = ["当前资料里明确标注适合酒精炉的锅具，优先看下面这些："]
+            for row in selected[:3]:
+                name = row.get("product_name_cn") or row.get("sku")
+                sku = str(row.get("sku") or "").strip().upper()
+                heat_source = str(row.get("heat_source") or "").strip() or "同SKU资料/问答明确显示支持酒精炉"
+                lines.append(f"- {name}（{sku}），明确证据：{heat_source}")
+            skus = [str(row.get("sku") or "").strip().upper() for row in selected if row.get("sku")]
+            return {
+                "intent": "recommendation",
+                "answer_type": "recommendation",
+                "answer": "\n".join(lines),
+                "results": selected,
+                "result_skus": skus,
+                "candidate_skus": skus,
+                "debug": {"agent_mode": "planner_recommendation_guard_rebuild"},
+                "answer_metadata": {"source": "product_catalog_structured_recommendation"},
+                "skip_polish": True,
+            }
+        fallback_rows = [row for row in rows if _is_service_pot_or_cookware_set_candidate(row)][:3]
+        if fallback_rows:
+            fallback_lines = [
+                "当前资料里没有找到明确标注适合酒精炉的锅具。",
+                "下面这些只能作为普通锅具替代参考；它们没有酒精炉证据，不能直接当成酒精炉适配推荐：",
+            ]
+            for row in fallback_rows:
+                name = row.get("product_name_cn") or row.get("sku")
+                sku = str(row.get("sku") or "").strip().upper()
+                reason = str(row.get("usage_scenarios") or row.get("features") or row.get("positioning") or "可作为同类替代").strip("。；; ")
+                fallback_lines.append(f"- {name}（{sku}），{reason}")
+            skus = [str(row.get("sku") or "").strip().upper() for row in fallback_rows if row.get("sku")]
+            return {
+                "intent": "recommendation",
+                "answer_type": "recommendation",
+                "answer": "\n".join(fallback_lines),
+                "results": fallback_rows,
+                "result_skus": skus,
+                "candidate_skus": skus,
+                "debug": {"agent_mode": "planner_recommendation_guard_rebuild"},
+                "answer_metadata": {"source": "product_catalog_structured_recommendation"},
+                "skip_polish": True,
+            }
     if _phase1_is_water_kettle_selection_scenario(scenario):
         water_kettle_result = _phase1_structured_water_kettle_result(scenario, rows)
         if water_kettle_result:
@@ -2355,6 +2426,19 @@ def _phase1_repair_recommendation_result(db: Session, agent_result: dict, plan: 
     if not isinstance(agent_result, dict) or not _phase1_should_use_structured_recommendation(plan):
         return agent_result
     scenario = str((plan or {}).get("scenario") or (plan or {}).get("raw_question") or "")
+    scope_text = " ".join(
+        part for part in (
+            str((plan or {}).get("scenario") or "").strip(),
+            str((plan or {}).get("raw_question") or "").strip(),
+        )
+        if part
+    )
+    if (
+        any(term in scope_text for term in ("酒精炉", "液体酒精", "固体酒精", "alcohol stove"))
+        and any(term in scope_text for term in ("锅", "锅具", "套锅", "单锅", "炊具"))
+        and not any(term in scope_text for term in ("水壶", "茶壶", "烧水壶", "壶类"))
+    ):
+        return agent_result
     force_rebuild = _phase1_force_structured_recommendation_rebuild(scenario)
     if (
         str(agent_result.get("answer_type") or "").strip() == "recommendation"
@@ -8234,8 +8318,41 @@ def _is_service_pot_or_cookware_set_candidate(row: dict[str, Any], product: Prod
         "cook set",
         "pot set",
     )
+    water_container_terms = ("水壶", "茶壶", "烧水壶", "kettle", "bottle", "flask", "cup", "杯")
+    product_identity_text = " ".join(
+        str(value or "")
+        for value in (
+            row.get("product_name_cn"),
+            row.get("product_name_en"),
+            row.get("name"),
+            row.get("title"),
+            product.product_name_cn if product is not None else "",
+            product.product_name_en if product is not None else "",
+        )
+    ).lower()
+    non_category_cookware_text = " ".join(
+        str(value or "")
+        for value in (
+            row.get("product_name_cn"),
+            row.get("product_name_en"),
+            row.get("name"),
+            row.get("title"),
+            row.get("features"),
+            row.get("usage_scenarios"),
+            row.get("target_audience"),
+            row.get("positioning"),
+            row.get("long_description_cn"),
+            product.product_name_cn if product is not None else "",
+            product.product_name_en if product is not None else "",
+            product.sub_category if product is not None else "",
+        )
+    ).lower()
     if any(term in text for term in ("水壶", "茶壶", "烧水壶", "kettle", "bottle", "flask", "cup", "杯")) and not any(
         term in text for term in strong_cookware_terms
+    ):
+        return False
+    if any(term in product_identity_text for term in water_container_terms) and not any(
+        term in non_category_cookware_text for term in strong_cookware_terms
     ):
         return False
     has_positive_cookware_shape = _is_service_pot_or_cookware_set_text(text)
