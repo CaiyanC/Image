@@ -614,7 +614,7 @@ def _phase1_alcohol_stove_compatibility_answer(db: Session, row: dict) -> tuple[
             return "not_listed"
         if re.search(r"(不支持|不适合|不建议|不能|不可).{0,8}(酒精炉|alcohol stove)", text_value):
             return "unsupported"
-        if any(term in text_value for term in ("液体酒精", "alcohol fuel")):
+        if any(term in text_value for term in ("液体酒精", "工业酒精", "alcohol fuel")):
             return "supported"
         verdict = customer_agent_intent_service._alcohol_stove_support_verdict(text_value)
         if verdict is True:
@@ -1334,7 +1334,7 @@ def _semantic_structured_query_result(db: Session, question: str) -> dict | None
         and any(term in text for term in ("冷水", "补水", "饮水", "热水"))
     ):
         product_ref = "水壶" if "水壶" in text else "水具"
-        candidate_predicate = _phase1_is_strict_water_kettle_candidate if product_ref == "水壶" else _phase1_is_water_kettle_candidate
+        candidate_predicate = _phase1_is_strict_water_kettle_candidate
         rows = [row for row in _phase1_catalog_rows(db, "产品") if candidate_predicate(row)]
         filtered: list[dict[str, Any]] = []
         for row in rows:

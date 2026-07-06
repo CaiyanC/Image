@@ -708,7 +708,7 @@ def test_route_level_waterware_capability_questions_keep_exact_sku_and_answer_ca
             assert product is not None
             specs = db.query(ProductSpecs).filter(ProductSpecs.product_id == product.id).first()
             assert specs is not None
-            specs.heat_source = "液体酒精"
+            specs.heat_source = "95%液体工业酒精" if expected_sku == "CS-B14" else "液体酒精"
             db.commit()
 
     response = client.post("/api/customer-service/ask?debug=true", json={"question": question}, headers=headers)
@@ -754,7 +754,7 @@ def test_route_level_structured_and_unknown_field_questions_route_conservatively
     required_terms,
     forbidden_terms,
 ):
-    client, headers, _ = route_client_and_db
+    client, headers, Session = route_client_and_db
 
     response = client.post("/api/customer-service/ask?debug=true", json={"question": question}, headers=headers)
     assert response.status_code == 200, response.text
@@ -765,6 +765,15 @@ def test_route_level_structured_and_unknown_field_questions_route_conservatively
         assert term in payload["answer"], payload["answer"]
     for term in forbidden_terms:
         assert term not in payload["answer"], payload["answer"]
+    if "水具" in question and "补水" in question:
+        assert payload["result_skus"], payload
+        with Session() as db:
+            top_categories = {
+                product.sku: product.category
+                for product in db.query(Product).filter(Product.sku.in_(payload["result_skus"][:5])).all()
+            }
+        assert top_categories, payload
+        assert all(category in {"水壶", "水具", "咖啡器具"} for category in top_categories.values()), top_categories
 
 
 @pytest.mark.parametrize(
