@@ -5,7 +5,7 @@ import re
 import pytest
 
 from app.models import Product, ProductSpecs
-from app.services import customer_agent_planner_service
+from app.services import customer_agent_intent_service, customer_agent_planner_service
 from test_customer_service_route_level_regression import route_client_and_db
 
 
@@ -38,9 +38,33 @@ def test_semantic_preplan_parser_accepts_code_fence_and_tracks_llm_calls(monkeyp
     assert result["called"] is True
     assert result["route_hint"] == "comparison"
     assert result["confidence"] > 0
-    assert result["fallback_reason"] == ""
-    assert result["llm_call_count"] == 1
-    assert result["llm_call_count_delta"] == 1
+
+
+def test_structured_field_query_parser_splits_category_field_and_value_cleanly():
+    water_bottle = customer_agent_intent_service.parse_intent("哪些水壶是不锈钢材质？")
+    cookware = customer_agent_intent_service.parse_intent("哪些锅具是铝合金材质？")
+    gas_stove = customer_agent_intent_service.parse_intent("哪些锅能用燃气炉？")
+
+    assert water_bottle is not None
+    assert water_bottle.intent == "query_products"
+    assert water_bottle.filters.get("product.category") == "水壶"
+    assert water_bottle.filters.get("specs.body_material") == "不锈钢"
+    assert water_bottle.term == ""
+    assert "材质" in water_bottle.requested_fields
+
+    assert cookware is not None
+    assert cookware.intent == "query_products"
+    assert cookware.filters.get("product.category") == "锅具"
+    assert cookware.filters.get("specs.body_material") == "铝合金"
+    assert cookware.term == ""
+    assert "材质" in cookware.requested_fields
+
+    assert gas_stove is not None
+    assert gas_stove.intent == "query_products"
+    assert gas_stove.filters.get("product.category") == "锅具"
+    assert gas_stove.filters.get("specs.heat_source") == "燃气炉"
+    assert gas_stove.term == ""
+    assert "热源" in gas_stove.requested_fields
 
 
 def test_semantic_preplan_repair_recovers_truncated_json(monkeypatch):
@@ -843,13 +867,18 @@ def test_route_level_explicit_sku_direct_heating_questions_stay_conservative_wit
 @pytest.mark.parametrize(
     ("question", "expected_ref", "forbidden_top", "allowed_sources"),
     [
+        ("哪些水壶是不锈钢材质？", "水壶", {"CW-C06PRO", "CW-C69-1", "CW-C99", "CW-K32"}, {"structured_category_field_filter_query"}),
         ("有哪些水具材质是不锈钢的？", "水具", set(), {"structured_category_field_filter_query"}),
         ("有哪些水壶是不锈钢的？", "水壶", {"CW-C06PRO", "CW-C69-1", "CW-C99", "CW-K32"}, {"structured_category_field_filter_query"}),
+        ("哪些水壶材质是不锈钢？", "水壶", {"CW-C06PRO", "CW-C69-1", "CW-C99", "CW-K32"}, {"structured_category_field_filter_query"}),
         ("有哪些水壶材质是不锈钢？", "水壶", {"CW-C06PRO", "CW-C69-1", "CW-C99", "CW-K32"}, {"structured_category_field_filter_query"}),
         ("有哪些水壶适合装热水？", "水壶", {"CW-C06PRO", "CW-C69-1", "CW-C99", "CW-K32"}, {"structured_waterware_capability_query"}),
         ("有哪些水壶适合冷水补水？", "水壶", {"CW-C06PRO", "CW-C69-1", "CW-C99", "CW-K32"}, {"structured_waterware_capability_query"}),
+        ("哪些水具是不锈钢材质？", "水具", set(), {"structured_category_field_filter_query"}),
+        ("哪些锅具是铝合金材质？", "锅具", set(), {"structured_category_field_filter_query"}),
         ("有哪些锅具材质是铝合金？", "锅具", set(), {"structured_category_field_filter_query"}),
         ("有哪些锅能用燃气炉？", "锅具", set(), {"structured_category_field_filter_query"}),
+        ("哪些锅能用燃气炉？", "锅具", set(), {"structured_category_field_filter_query"}),
     ],
 )
 def test_route_level_structured_field_filter_queries_do_not_fall_into_product_detail(

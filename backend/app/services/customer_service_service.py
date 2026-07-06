@@ -1153,11 +1153,27 @@ def _structured_filter_field_and_value(question: str) -> tuple[str, str] | None:
     return None
 
 
+def _phase1_structured_field_filter_intent(question: str):
+    intent = customer_agent_intent_service.parse_intent(str(question or "").strip(), previous_result_skus=[])
+    if not intent or intent.intent != "query_products":
+        return None
+    filters = intent.filters or {}
+    if not str(filters.get("product.category") or "").strip():
+        return None
+    if str(filters.get("specs.body_material") or "").strip():
+        return intent
+    if str(filters.get("specs.heat_source") or "").strip():
+        return intent
+    return None
+
+
 def _looks_like_structured_field_filter_query(question: str) -> bool:
     text = str(question or "").strip()
     if not text or SKU_RE.search(text):
         return False
-    if not any(term in text for term in ("有哪些", "哪一些", "推荐", "找")):
+    if _phase1_structured_field_filter_intent(text):
+        return True
+    if not any(term in text for term in ("有哪些", "哪些", "哪一些", "推荐", "找")):
         return False
     if _semantic_catalog_product_ref(text) == "产品":
         return False
@@ -1181,33 +1197,34 @@ def _structured_field_filter_result(db: Session, question: str) -> dict | None:
     text = str(question or "").strip()
     if not _looks_like_structured_field_filter_query(text):
         return None
-    product_ref = _semantic_catalog_product_ref(text)
-    filter_info = _structured_filter_field_and_value(text)
-    if product_ref == "产品" or not filter_info:
-        return None
-    field_name, expected_value = filter_info
+    intent = _phase1_structured_field_filter_intent(text)
+    filters = dict((intent.filters or {}) if intent else {})
+    product_ref = str(filters.get("product.category") or "").strip() or _semantic_catalog_product_ref(text)
+    field_name = ""
+    expected_value = ""
+    if str(filters.get("specs.body_material") or "").strip():
+        field_name = "材质"
+        expected_value = str(filters.get("specs.body_material") or "").strip()
+    elif str(filters.get("specs.heat_source") or "").strip():
+        field_name = "热源"
+        expected_value = str(filters.get("specs.heat_source") or "").strip()
+    else:
+        filter_info = _structured_filter_field_and_value(text)
+        if product_ref == "产品" or not filter_info:
+            return None
+        field_name, expected_value = filter_info
+        if field_name == "材质":
+            filters["specs.body_material"] = expected_value
+        elif field_name == "热源":
+            filters["specs.heat_source"] = expected_value
+        filters.setdefault("product.category", product_ref)
     if product_ref == "水壶":
         source_rows = [row for row in _phase1_catalog_rows(db, "产品") if _phase1_is_strict_water_kettle_candidate(row)]
     else:
         source_rows = _phase1_catalog_rows(db, product_ref)
-    rows = []
-    for row in source_rows:
-        row_text = _structured_query_row_text(row)
-        score = 0
-        if field_name == "材质":
-            if expected_value == "不锈钢" and any(term in row_text for term in ("不锈钢", "304", "316")):
-                score += 8
-            if expected_value == "铝合金" and any(term in row_text for term in ("铝合金", "铝")):
-                score += 8
-        elif field_name == "热源":
-            if expected_value == "燃气炉" and any(term in row_text for term in ("燃气炉", "卡式炉", "明火")):
-                score += 8
-        if score <= 0:
-            continue
-        scoped = dict(row)
-        scoped["_score"] = score
-        rows.append(scoped)
-    rows.sort(key=lambda item: (-int(item.get("_score") or 0), str(item.get("sku") or "")))
+    rows = customer_agent_service.search_products(db, "", limit=50, filters=filters)
+    if product_ref == "水壶":
+        rows = [row for row in rows if _phase1_is_strict_water_kettle_candidate(row)]
     if not rows and source_rows:
         display_rows = source_rows[:5]
         result_skus = [str(row.get("sku") or "").strip().upper() for row in display_rows if str(row.get("sku") or "").strip()]

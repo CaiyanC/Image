@@ -154,6 +154,22 @@ QUERY_FIELD_SPECS = {
     "content.listing_ja": ("content", "listing_ja", "日文listing", ProductContent.listing_ja),
 }
 
+QUERY_FIELD_ALIASES.update(
+    {
+        "主体材质": "specs.body_material",
+        "壶身材质": "specs.body_material",
+        "锅身材质": "specs.body_material",
+        "适用热源": "specs.heat_source",
+        "热源": "specs.heat_source",
+        "能用什么炉": "specs.heat_source",
+        "是否支持": "specs.heat_source",
+        "适用场景": "business.usage_scenarios",
+        "使用场景": "business.usage_scenarios",
+        "场景": "business.usage_scenarios",
+        "用途": "business.usage_scenarios",
+    }
+)
+
 
 def process_agent_request(
     db: Session,

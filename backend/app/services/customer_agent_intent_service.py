@@ -130,13 +130,13 @@ WATER_CONTAINER_CAPABILITY_EXCLUDE_TERMS = ("冲洗", "冷水冲", "洗完", "�
 CATEGORY_SCOPE_ALIASES: dict[str, tuple[str, ...]] = {
     "配件": ("配件", "收纳包具", "配件"),
     "桌椅": ("桌椅",),
-    "咖啡器具": ("咖啡器具", "咖啡"),
+    "咖啡器具": ("咖啡器具", "咖啡", "手冲壶", "咖啡壶"),
     "茶具": ("茶具",),
-    "锅具": ("锅具", "套锅", "单锅", "锅"),
-    "炉具": ("炉具", "炉子", "酒精炉", "卡式炉", "气炉"),
+    "锅具": ("锅具", "套锅", "单锅", "锅", "锅子", "炒锅", "煎锅", "烤盘"),
+    "炉具": ("炉具", "炉子", "酒精炉", "卡式炉", "气炉", "燃气炉"),
     "餐具": ("餐具",),
-    "水壶": ("水壶",),
-    "水具": ("水具", "水壶", "水杯", "杯具"),
+    "水壶": ("水壶", "饮水壶"),
+    "水具": ("水具", "水壶", "水杯", "杯具", "杯", "饮水容器"),
     "天幕/地垫/帐篷": ("天幕", "地垫", "帐篷"),
 }
 CATEGORY_SCOPE_STRICT_CONFIG: dict[str, dict[str, Any]] = {
@@ -194,6 +194,12 @@ CATEGORY_SCOPE_STRICT_CONFIG: dict[str, dict[str, Any]] = {
 CATEGORY_SCOPE_COUNT_TERMS = ("有多少", "多少", "几款", "几种", "几个", "多少个")
 CATEGORY_SCOPE_PEOPLE_TERMS = ("适合几个人", "适合几人", "几个人", "几人", "多少人", "人数")
 CATEGORY_SCOPE_NON_PEOPLE = {"配件", "桌椅", "咖啡器具", "茶具"}
+STRUCTURED_FIELD_ALIASES: dict[str, tuple[str, ...]] = {
+    "specs.body_material": ("主体材质", "壶身材质", "锅身材质", "炉体材质", "材质", "材料", "body_material"),
+    "specs.heat_source": ("适用热源", "热源", "能用什么炉", "能不能用", "是否支持", "可以用", "能用", "body_heat_source"),
+    "business.usage_scenarios": ("适用场景", "使用场景", "场景", "用途"),
+}
+STRUCTURED_LIST_QUERY_PREFIXES = ("哪些", "有哪些", "哪几款", "哪几种", "哪几个")
 FAQ_PURCHASE_TERMS = ("哪里买", "哪儿买", "在哪买", "在哪里买", "可以买到", "购买渠道", "购买链接", "怎么买", "想买", "去哪里", "小程序", "商城", "官方店", "店铺", "店铺入口", "旗舰店", "淘宝", "天猫", "京东", "拼多多", "亚马逊", "Amazon", "amazon", "独立站", "线下", "速卖通", "eBay", "ebay", "阿里国际站", "官方渠道", "哪个平台", "平台可以买", "B2C", "b2c", "下单")
 FAQ_AFTERSALES_TERMS = ("售后", "退换", "退货", "换货", "售后电话", "联系方式", "人工客服", "发票", "开发票", "物流", "快递", "订单", "发错货", "少发", "补寄", "维修", "七天无理由", "买错", "不喜欢")
 FAQ_AFTERSALES_PROBLEM_TERMS = ("问题", "质量", "坏了", "瑕疵", "破损")
@@ -4269,8 +4275,94 @@ def _ensure_negative_filter(negative_filters: dict[str, Any], field_path: str, v
         negative_filters[field_path] = value
 
 
-def _parse_structured_filters(text: str) -> tuple[dict[str, Any], dict[str, Any]]:
+def _normalize_category_alias(value: str) -> str:
+    normalized = str(value or "").strip()
+    if not normalized:
+        return ""
+    for category, aliases in CATEGORY_SCOPE_ALIASES.items():
+        if normalized == category or normalized in aliases:
+            return category
+    return normalized
+
+
+def _extract_category_alias(text: str) -> str:
+    normalized = str(text or "")
+    for category in CATEGORY_SCOPE_ALIASES:
+        if normalized == category:
+            return category
+    for category, aliases in sorted(CATEGORY_SCOPE_ALIASES.items(), key=lambda item: max(len(alias) for alias in item[1]), reverse=True):
+        for alias in sorted(set((category, *aliases)), key=len, reverse=True):
+            if alias and alias in normalized:
+                return category
+    return ""
+
+
+def _looks_like_structured_list_filter_question(text: str) -> bool:
+    normalized = str(text or "").strip()
+    if not normalized:
+        return False
+    return any(prefix in normalized for prefix in STRUCTURED_LIST_QUERY_PREFIXES)
+
+
+def _extract_structured_list_query_filters(text: str) -> dict[str, Any]:
+    normalized = str(text or "").strip()
+    if not _looks_like_structured_list_filter_question(normalized):
+        return {}
+
     filters: dict[str, Any] = {}
+    subject_match = re.search(
+        r"(?:哪些|有哪些|哪几款|哪几种|哪几个)(?P<subject>[^，,。；;？?]{1,12}?)(?:是|为|材质|材料|能用|可以用|可用|支持|适用热源|热源|适合|$)",
+        normalized,
+        flags=re.I,
+    )
+    category_scope = str(subject_match.group("subject") or "").strip() if subject_match else normalized
+    category = _extract_category_alias(category_scope)
+    if category:
+        filters["product.category"] = category
+
+    material_patterns = (
+        r"(?:哪些|有哪些|哪几款|哪几种|哪几个).{0,12}?(?:是|为)\s*(?P<value>[^，,。；;？?\s]{1,24})\s*(?:材质|材料)",
+        r"(?:哪些|有哪些|哪几款|哪几种|哪几个).{0,12}?(?:主体材质|壶身材质|锅身材质|材质|材料)\s*(?:是|为|=)\s*(?P<value>[^，,。；;？?\s]{1,24})",
+    )
+    for pattern in material_patterns:
+        match = re.search(pattern, normalized, flags=re.I)
+        if not match:
+            continue
+        value = _normalize_structured_filter_value("specs.body_material", _clean_filter_value(match.group("value")))
+        if value:
+            filters["specs.body_material"] = value
+            break
+
+    heat_source_patterns = (
+        r"(?:哪些|有哪些|哪几款|哪几种|哪几个).{0,12}?(?:能用|可以用|可用|支持|是否支持)\s*(?P<value>[^，,。；;？?\s]{1,24})",
+        r"(?:哪些|有哪些|哪几款|哪几种|哪几个).{0,12}?(?:适用热源|热源)\s*(?:是|为|=|等于|包含)\s*(?P<value>[^，,。；;？?\s]{1,24})",
+    )
+    for pattern in heat_source_patterns:
+        match = re.search(pattern, normalized, flags=re.I)
+        if not match:
+            continue
+        value = _normalize_structured_filter_value("specs.heat_source", _clean_filter_value(match.group("value")))
+        if value:
+            filters["specs.heat_source"] = value
+            break
+
+    scene_patterns = (
+        r"(?:哪些|有哪些|哪几款|哪几种|哪几个).{0,12}?(?:适合|适用场景是|适用场景为|场景是|用途是)\s*(?P<value>[^，,。；;？?\s]{1,24})",
+    )
+    for pattern in scene_patterns:
+        match = re.search(pattern, normalized, flags=re.I)
+        if not match:
+            continue
+        value = _normalize_structured_filter_value("business.usage_scenarios", _clean_filter_value(match.group("value")))
+        if value:
+            filters["business.usage_scenarios"] = value
+            break
+
+    return filters
+
+
+def _parse_structured_filters(text: str) -> tuple[dict[str, Any], dict[str, Any]]:
+    filters: dict[str, Any] = _extract_structured_list_query_filters(text)
     negative_filters: dict[str, Any] = {}
     alcohol_stove_support_pattern = (
         r"(?:同时)?(?:支持|能用|可以用|可用|适配)\s*酒精炉"
@@ -4288,6 +4380,8 @@ def _parse_structured_filters(text: str) -> tuple[dict[str, Any], dict[str, Any]
         (("容量",), "specs.capacity"),
     )
     for labels, field_path in field_filters:
+        if filters.get(field_path):
+            continue
         label_pattern = "|".join(re.escape(label) for label in labels)
         match = re.search(rf"(?:{label_pattern})\s*(?:为|是|=|等于|包含)\s*([^，,。？?\s]+)", text, flags=re.I)
         if match:
@@ -4310,10 +4404,10 @@ def _parse_structured_filters(text: str) -> tuple[dict[str, Any], dict[str, Any]
 
     category = re.search(r"(?:类目|品类|分类)\s*(?:是|为|=)?\s*([\u4e00-\u9fa5A-Za-z0-9_\-]+)", text)
     if category:
-        filters["product.category"] = category.group(1)
+        filters["product.category"] = _normalize_category_alias(category.group(1))
     category_not = re.search(r"(?:类目|品类|分类)\s*(?:不是|不为|≠|!=)\s*([\u4e00-\u9fa5A-Za-z0-9_\-]+)", text)
     if category_not:
-        negative_filters["product.category"] = category_not.group(1)
+        negative_filters["product.category"] = _normalize_category_alias(category_not.group(1))
 
     # Colloquial: detect category from product type keywords
     if not filters.get("product.category"):
@@ -4343,7 +4437,7 @@ def _parse_structured_filters(text: str) -> tuple[dict[str, Any], dict[str, Any]
             if any(kw and kw in str(value) for value in filters.values()):
                 continue
             if kw in category_probe_text:
-                filters["product.category"] = cat
+                filters["product.category"] = _normalize_category_alias(cat)
                 break
 
     if not filters.get("specs.body_material"):
@@ -4424,10 +4518,51 @@ def _normalize_structured_filter_value(field_path: str, value: str) -> str:
     cleaned = str(value or "").strip()
     if field_path == "specs.body_material":
         cleaned = re.sub(r"^(?:你们有没?有|有没有|有没|帮我找(?:一下)?|帮我查(?:一下)?|查(?:一下|下)?|想找|我想找)\s*", "", cleaned)
+        cleaned = cleaned.replace("不锈钢304", "304不锈钢")
+        if "304不锈钢" in cleaned:
+            return "304不锈钢"
+        if "硬质氧化铝" in cleaned:
+            return "硬质氧化铝" if "合金" not in cleaned else "硬质氧化铝合金"
+        if "铝合金" in cleaned:
+            return "铝合金"
+        if "不锈钢" in cleaned:
+            return "不锈钢"
+        if "塑料" in cleaned:
+            return "塑料"
+        if "硅胶" in cleaned:
+            return "硅胶"
+        if "钛" in cleaned:
+            return "钛"
     if field_path == "specs.surface_finish" and cleaned.endswith("工艺"):
         cleaned = cleaned[:-2]
     if field_path == "specs.surface_finish":
         cleaned = cleaned.replace("不沾", "不粘")
+    if field_path == "specs.heat_source":
+        if "液体酒精" in cleaned or "酒精炉" in cleaned:
+            return "酒精炉"
+        if "卡式炉" in cleaned:
+            return "卡式炉"
+        if "燃气炉" in cleaned:
+            return "燃气炉"
+        if "气炉" in cleaned:
+            return "燃气炉"
+        if "明火直烧" in cleaned:
+            return "明火直烧"
+        if "明火" in cleaned:
+            return "明火"
+        if "分体炉" in cleaned:
+            return "分体炉"
+        if "一体炉" in cleaned:
+            return "一体炉"
+    if field_path == "business.usage_scenarios":
+        if "手冲" in cleaned:
+            return "手冲"
+        if "露营" in cleaned:
+            return "露营"
+        if "冷水" in cleaned or "补水" in cleaned:
+            return "冷水补水"
+        if "热水" in cleaned:
+            return "热水"
     return cleaned.strip()
 
 
