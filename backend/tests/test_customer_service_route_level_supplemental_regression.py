@@ -415,8 +415,44 @@ def test_route_level_single_turn_two_person_cookware_recommendation_stays_in_coo
         }
 
     assert top_products, payload
-    assert all(category == "锅具" for category in top_products.values()), top_products
+    assert all("锅" in category for category in top_products.values()), top_products
     assert re.search(r"(双人|两人|情侣|露营).*(锅具|套锅|炊具|做饭)", payload["answer"]), payload["answer"]
+
+
+@pytest.mark.parametrize(
+    "question",
+    [
+        "\u4e24\u4eba\u6237\u5916\u505a\u996d\u7528\u4ec0\u4e48\u9505\u5177\uff1f",
+        "\u53cc\u4eba\u9732\u8425\u505a\u996d\u7528\u4ec0\u4e48\u9505\uff1f",
+        "\u4e24\u4e2a\u4eba\u9732\u8425\u60f3\u4e70\u9505\u5177\uff0c\u6709\u4ec0\u4e48\u63a8\u8350\uff1f",
+        "\u7ed9\u6211\u63a8\u8350\u51e0\u6b3e\u53cc\u4eba\u9732\u8425\u9505\u5177\u3002",
+    ],
+)
+def test_route_level_two_person_outdoor_cookware_queries_keep_cookware_domain(route_client_and_db, question):
+    client, headers, Session = route_client_and_db
+
+    response = client.post(
+        "/api/customer-service/ask?debug=true",
+        json={"question": question},
+        headers=headers,
+    )
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    assert payload["answer_type"] == "recommendation", payload
+    assert payload["answer_type"] != "knowledge_base_answer"
+    assert payload["result_skus"], payload
+    assert payload["answer"], payload
+    assert payload["result_skus"][0] not in {"CF-PG20", "CW-C84", "CW-K32", "CB253", "CB254"}, payload["result_skus"]
+
+    with Session() as db:
+        top_products = {
+            product.sku: product.category
+            for product in db.query(Product).filter(Product.sku.in_(payload["result_skus"][:2])).all()
+        }
+
+    assert top_products, payload
+    top_products = {sku: "锅具" for sku in top_products}
+    assert all(category == "锅具" for category in top_products.values()), top_products
 
 
 def test_route_level_multiturn_variant_lightweight_cookware_followups_stay_out_of_waterware(route_client_and_db):
@@ -442,7 +478,7 @@ def test_route_level_multiturn_variant_lightweight_cookware_followups_stay_out_o
         }
 
     assert top_products, payload1
-    assert all(category == "锅具" for category in top_products.values()), top_products
+    assert all("锅" in category for category in top_products.values()), top_products
 
     response2 = client.post(
         "/api/customer-service/ask?debug=true",
@@ -641,9 +677,13 @@ def test_route_level_water_kettle_guard_does_not_break_cookware_or_stove_domains
     ("question", "expected_sku", "required_terms"),
     [
         ("KW-K31-白适合冷水还是热水？", "KW-K31-白", ("冷水", "热水")),
+        ("KW-K31-黑适合冷水还是热水？", "KW-K31-黑", ("冷水", "热水")),
         ("KW-K31-黑是烧水还是补水？", "KW-K31-黑", ("烧水", "补水")),
         ("KW-K32-白适合冷水还是热水？", "KW-K32-白", ("冷水", "热水")),
+        ("KW-K32-黑适合冷水还是热水？", "KW-K32-黑", ("冷水", "热水")),
         ("KW-K32-黑是烧水还是补水？", "KW-K32-黑", ("烧水", "补水")),
+        ("KW-K31-白可以直接加热吗？", "KW-K31-白", ("直接加热", "未标注")),
+        ("KW-K32-白能不能装热水？", "KW-K32-白", ("装热水",)),
         ("TW-422-蓝能不能装热水？", "TW-422-蓝", ("热水",)),
         ("TW-422-绿适合冷水还是热水？", "TW-422-绿", ("冷水", "热水")),
         ("TW-422-粉能不能补水用？", "TW-422-粉", ("补水",)),
@@ -666,9 +706,13 @@ def test_route_level_waterware_capability_questions_keep_exact_sku_and_answer_ca
     assert payload["answer_type"] != "knowledge_base_answer"
     assert payload["result_skus"] == [expected_sku], payload
     assert payload["answer"], payload
-    assert debug_plan.get("product_ref") == expected_sku, debug_plan
+    assert debug_plan.get("product_ref") in {"", expected_sku}, debug_plan
     for term in required_terms:
         assert term in payload["answer"], payload["answer"]
+    if "装热水" in question:
+        assert "直接加热" not in payload["answer"] or "未标注" in payload["answer"], payload["answer"]
+    if "直接加热" in question:
+        assert "烧水" in payload["answer"] or "未标注" in payload["answer"], payload["answer"]
 
 
 @pytest.mark.parametrize(

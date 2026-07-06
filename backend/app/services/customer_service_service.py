@@ -1942,7 +1942,9 @@ def _phase1_is_light_budget_cookware_set_scenario(question: str) -> bool:
     has_set_selection = any(term in value for term in ("哪套", "推荐哪套", "买哪套", "选哪套", "套锅", "套装"))
     has_cookware_scope = any(term in value for term in ("锅具", "炊具", "套锅", "锅", "买套", "一套"))
     has_cooking_usage = any(term in value for term in ("做饭", "煮饭", "煮面", "正餐", "烹饪"))
-    has_purchase_or_selection = any(term in value for term in ("想买", "买", "推荐", "怎么选", "该买", "选"))
+    has_purchase_or_selection = any(
+        term in value for term in ("想买", "买", "推荐", "怎么选", "该买", "选", "用什么", "推荐几款", "推荐几个", "有什么推荐")
+    )
     if not (has_two_person and has_camping):
         return False
     if has_cookware_scope and has_purchase_or_selection:
@@ -6295,9 +6297,14 @@ def _shape_answer_for_output(result: dict) -> dict:
             result.get("evidence") or [],
         )
     elif answer_type == "product_detail":
+        question = (
+            str(((result.get("answer_metadata") or {}).get("question")) or "")
+            or str((((result.get("debug") or {}).get("plan") or {}).get("raw_question")) or "")
+        )
         result["answer"] = _shape_product_detail_output(
             result.get("answer"),
             result.get("results") or [],
+            question=question,
         )
     elif answer_type == "product_query":
         result["answer"] = _shape_product_query_output(
@@ -6530,8 +6537,12 @@ def _shape_product_query_output(
     return "".join(lines)
 
 
-def _shape_product_detail_output(answer: str | None, results: list[dict]) -> str:
+def _shape_product_detail_output(answer: str | None, results: list[dict], question: str = "") -> str:
     answer_text = str(answer or "").strip()
+    if results and isinstance(results[0], dict):
+        waterware_capability_answer = _shape_waterware_capability_answer(question, answer_text, results[0])
+        if waterware_capability_answer:
+            return _normalize_handle_material_phrase(waterware_capability_answer)
     if answer_text and (
         ("\n" in answer_text and "：" in answer_text)
         or any(
@@ -6583,6 +6594,89 @@ def _shape_product_detail_output(answer: str | None, results: list[dict]) -> str
     text = answer_text
     sentence = re.split(r"[。！？!?]", text)[0].strip()
     return _normalize_handle_material_phrase(sentence + ("。" if sentence and not sentence.endswith("。") else ""))
+
+
+def _shape_waterware_capability_answer(question: str, answer_text: str, row: dict[str, Any]) -> str | None:
+    text = str(question or "").strip()
+    if not text or not isinstance(row, dict):
+        return None
+    if not any(term in text for term in ("冷水", "热水", "补水", "烧水", "直接加热", "装热水", "喝热水")):
+        return None
+
+    row_text = " ".join(
+        str(row.get(key) or "")
+        for key in (
+            "sku",
+            "product_name_cn",
+            "product_name_en",
+            "category",
+            "sub_category",
+            "features",
+            "usage_scenarios",
+            "positioning",
+            "long_description_cn",
+            "usage_instruction",
+            "heat_source",
+        )
+    )
+    if not (
+        _phase1_is_water_kettle_candidate(row)
+        or any(term in row_text for term in ("咖啡器具", "手冲", "天鹅壶", "保温杯", "随行杯", "饮水", "补水"))
+    ):
+        return None
+
+    sku = str(row.get("sku") or "").strip().upper()
+    name = str(row.get("product_name_cn") or row.get("product_name_en") or sku).strip()
+    prefix = f"{name}（{sku}）"
+    category = str(row.get("category") or "").strip()
+    combined = f"{row_text} {answer_text}"
+    heat_source = str(row.get("heat_source") or "").strip().strip("/").strip()
+    has_direct_heat_evidence = bool(heat_source) or any(
+        term in combined for term in ("烧水", "煮水", "热饮", "泡茶", "手冲", "咖啡壶", "气炉", "卡式炉", "热源")
+    )
+    has_hot_container_evidence = any(
+        term in combined for term in ("冷热两用", "保温", "装热水", "热水", "热饮", "喝热水", "饮水")
+    )
+    has_cold_or_hydration_evidence = any(
+        term in combined for term in ("冷水", "补水", "随身补水", "饮水", "便携饮水", "冷饮")
+    )
+
+    asks_direct_heat = any(term in text for term in ("直接加热", "明火加热", "上火加热"))
+    asks_boil_vs_hydration = "烧水还是补水" in text or ("烧水" in text and "补水" in text)
+    asks_cold_or_hot = any(term in text for term in ("冷水还是热水", "适合冷水", "适合热水"))
+    asks_hot_container = any(term in text for term in ("装热水", "喝热水")) and not asks_direct_heat
+
+    if asks_direct_heat:
+        if has_direct_heat_evidence:
+            if heat_source:
+                return f"{prefix}：当前资料显示它更偏向热饮/烧水类器具，热源信息为“{heat_source}”；如果你问的是直接加热或烧水，可以优先按这个方向理解。"
+            return f"{prefix}：当前资料显示它更偏向热饮/烧水类器具；如果你问的是直接加热或烧水，现有资料只能保守按热饮/烧水用途理解。"
+        return f"{prefix}：当前资料更偏向装热水/饮水或使用场景描述；是否可以直接加热或烧水，当前资料未标注，不能仅凭现有资料确认。"
+
+    if asks_boil_vs_hydration:
+        if has_direct_heat_evidence and not has_cold_or_hydration_evidence:
+            return f"{prefix}：当前资料更偏向烧水/热饮使用，不是主打随身补水的杯具；如果你更看重补水便携，当前资料没有把它标成补水杯。"
+        if has_cold_or_hydration_evidence and not has_direct_heat_evidence:
+            return f"{prefix}：当前资料更偏向补水/饮水容器；是否适合烧水或直接加热，当前资料未标注，不能仅凭现有资料确认。"
+        if has_direct_heat_evidence and has_cold_or_hydration_evidence:
+            return f"{prefix}：当前资料同时出现了热饮/烧水和饮水描述；如果只问“烧水还是补水”，它更适合按具体热源与携带场景区分，现有资料不建议把两种能力直接等同。"
+        return f"{prefix}：关于烧水还是补水，当前资料未给出明确结论；如果你更关心直接加热能力，仍要以热源说明为准。"
+
+    if asks_cold_or_hot:
+        if has_cold_or_hydration_evidence and has_hot_container_evidence and not has_direct_heat_evidence:
+            return f"{prefix}：当前资料更偏向冷水/热水都可装的饮水容器，也能覆盖日常补水；但是否适合直接烧水，当前资料未标注。"
+        if has_direct_heat_evidence and not has_cold_or_hydration_evidence:
+            return f"{prefix}：当前资料更偏向热饮/烧水类器具；如果你问冷水还是热水，它会更贴近热水/热饮场景，是否适合冷水随身补水当前资料未明确标注。"
+        if has_hot_container_evidence or category in {"水具", "水壶"}:
+            return f"{prefix}：当前资料可按装冷水/装热水的饮水容器来理解；如果你进一步关心烧水或直接加热，仍要单独看热源和使用说明。"
+        return f"{prefix}：当前资料未明确标注更偏冷水还是热水使用；如果你更关心直接加热能力，也不能仅凭现有资料确认。"
+
+    if asks_hot_container:
+        if has_hot_container_evidence or has_direct_heat_evidence or category in {"水具", "水壶", "咖啡器具"}:
+            return f"{prefix}：当前资料可按装热水/喝热水场景理解；但“能装热水”不等于“能直接烧水”，这两者需要分开看。"
+        return f"{prefix}：当前资料未明确标注是否适合装热水或喝热水，不能仅凭现有资料确认。"
+
+    return None
 
 
 def _normalize_handle_material_phrase(text: str) -> str:
