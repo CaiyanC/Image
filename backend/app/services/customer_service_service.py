@@ -569,7 +569,7 @@ def _phase1_product_field_result(db: Session, plan: dict) -> dict | None:
             value = ""
     row = _product_row_from_model(product, specs, business, content)
     if requested_field == "heat_source":
-        answer, evidence_status = _phase1_alcohol_stove_compatibility_answer(db, row)
+        answer, evidence_status = _phase1_heat_source_capability_answer(db, row, raw_question or requested_field)
     elif value:
         answer = f"{product.product_name_cn}（{product.sku}）的{requested_field}：{value}。"
         evidence_status = "structured"
@@ -591,6 +591,12 @@ def _phase1_product_field_result(db: Session, plan: dict) -> dict | None:
         },
         "debug": {
             "agent_mode": "planner_product_compatibility" if requested_field == "heat_source" else "planner_product_field",
+            "plan": {
+                "primary_intent": "product_field",
+                "product_ref": product.sku,
+                "requested_field": requested_field,
+                "raw_question": raw_question or requested_field,
+            },
             "raw_results": [row],
             "candidate_skus": [product.sku],
         },
@@ -641,6 +647,48 @@ def _phase1_alcohol_stove_compatibility_answer(db: Session, row: dict) -> tuple[
     if normalized_heat_source or evidence_status == "not_listed":
         return f"{name}（{sku}）当前资料显示适用热源为：{normalized_heat_source}；当前资料未显示支持酒精炉。", "not_listed"
     return f"当前资料里没有找到{name}（{sku}）是否支持酒精炉的明确说明。", "missing"
+
+
+def _phase1_heat_source_capability_answer(db: Session, row: dict, question: str) -> tuple[str, str]:
+    text = str(question or "").strip()
+    if any(term in text for term in ("酒精炉", "酒精")):
+        return _phase1_alcohol_stove_compatibility_answer(db, row)
+
+    name = str(row.get("product_name_cn") or row.get("product_name_en") or row.get("sku") or "该产品").strip()
+    sku = str(row.get("sku") or "").strip().upper()
+    prefix = f"{name}（{sku}）" if name else sku
+    heat_source = str(row.get("heat_source") or "").strip()
+    normalized_heat_source = "" if heat_source in {"", "/", "[]", "暂无", "未标注"} else heat_source
+    asks_direct_heating = any(term in text for term in ("直接加热", "明火加热", "上火加热"))
+    asks_heat_source = any(term in text for term in ("热源", "燃料", "适用什么热源", "适用热源"))
+    capability_aliases = {
+        "卡式炉": ("卡式炉",),
+        "燃气炉": ("燃气炉", "气炉", "卡式炉"),
+        "气炉": ("气炉", "燃气炉", "卡式炉"),
+        "明火直烧": ("明火直烧", "明火"),
+        "明火": ("明火", "明火直烧"),
+        "分体炉": ("分体炉",),
+        "一体炉": ("一体炉",),
+    }
+    asked_capability = next((label for label in capability_aliases if label in text), "")
+
+    if normalized_heat_source:
+        if asks_direct_heating:
+            return f"{prefix}：可以按直接加热理解，当前资料显示适用热源为{normalized_heat_source}。", "supported"
+        if asked_capability:
+            aliases = capability_aliases.get(asked_capability, ())
+            if any(alias and alias in normalized_heat_source for alias in aliases):
+                return f"{prefix}：支持{asked_capability}，当前资料显示适用热源为{normalized_heat_source}。", "supported"
+            return f"{prefix}：当前资料未显示支持{asked_capability}，当前资料显示适用热源为{normalized_heat_source}。", "not_listed"
+        if asks_heat_source:
+            return f"{prefix}：当前资料显示适用热源为{normalized_heat_source}。", "structured"
+        return f"{prefix}：当前资料显示适用热源为{normalized_heat_source}。", "structured"
+
+    if asks_direct_heating:
+        return f"{prefix}：当前资料未标注适用热源；是否可以直接加热，不能仅凭现有资料确认。", "missing"
+    if asked_capability:
+        return f"{prefix}：当前资料未标注适用热源；是否支持{asked_capability}，不能仅凭现有资料确认。", "missing"
+    return f"{prefix}：当前资料未标注适用热源，不能仅凭现有资料确认。", "missing"
 
 
 def _result_has_positive_capability_evidence(result: dict[str, Any], question: str) -> bool:
@@ -1492,7 +1540,7 @@ def _explicit_sku_detail_requested_fields(question: str) -> list[str]:
     if not text:
         return []
     fields = list(customer_agent_intent_service._requested_fields_for_detail_question(text))
-    if any(term in text for term in ("酒精炉", "明火", "热源", "燃料", "火源", "能用", "能不能用", "可以用")) and "热源" not in fields:
+    if any(term in text for term in ("酒精炉", "明火", "明火直烧", "热源", "燃料", "火源", "能用", "能不能用", "可以用", "直接加热", "卡式炉", "燃气炉", "气炉", "分体炉", "一体炉")) and "热源" not in fields:
         fields.append("热源")
     if any(term in text for term in ("适合", "场景", "干嘛用", "露营用", "几个人", "几人用", "适用人群")) and "适用场景" not in fields:
         fields.append("适用场景")
@@ -1510,7 +1558,31 @@ def _is_explicit_sku_detail_question(question: str) -> bool:
     fields = _explicit_sku_detail_requested_fields(text)
     if fields:
         return True
-    return any(term in text for term in ("适合什么场景", "适合露营", "适合几个人", "干嘛用", "能不能用明火", "能不能用酒精炉"))
+    return any(term in text for term in ("适合什么场景", "适合露营", "适合几个人", "干嘛用", "能不能用明火", "能不能用酒精炉", "直接加热", "明火直烧", "卡式炉", "燃气炉", "分体炉", "一体炉"))
+
+
+def _is_explicit_sku_heat_source_question(question: str) -> bool:
+    text = str(question or "").strip()
+    if not text:
+        return False
+    return any(
+        term in text
+        for term in (
+            "酒精炉",
+            "酒精",
+            "直接加热",
+            "明火加热",
+            "上火加热",
+            "明火直烧",
+            "热源",
+            "燃料",
+            "卡式炉",
+            "燃气炉",
+            "气炉",
+            "分体炉",
+            "一体炉",
+        )
+    )
 
 
 async def _try_explicit_sku_detail_shortcut(db: Session, question: str) -> dict | None:
@@ -1529,6 +1601,21 @@ async def _try_explicit_sku_detail_shortcut(db: Session, question: str) -> dict 
     if not resolved_sku:
         return None
     requested_fields = _explicit_sku_detail_requested_fields(text)
+    if (
+        requested_fields
+        and set(requested_fields).issubset({"热源", "适配情况"})
+        and _is_explicit_sku_heat_source_question(text)
+    ):
+        return _phase1_product_field_result(
+            db,
+            {
+                "primary_intent": "product_field",
+                "product_ref": resolved_sku,
+                "requested_field": "heat_source",
+                "raw_question": text,
+                "sku": resolved_sku,
+            },
+        )
     intent = customer_agent_intent_service.CustomerIntent(
         intent="product_detail",
         target_skus=[resolved_sku],
@@ -6944,6 +7031,11 @@ def _shape_product_query_output(
 
 def _shape_product_detail_output(answer: str | None, results: list[dict], question: str = "") -> str:
     answer_text = str(answer or "").strip()
+    if answer_text and any(
+        term in answer_text
+        for term in ("适用热源", "不能仅凭现有资料确认", "未显示支持", "支持酒精炉")
+    ):
+        return _normalize_handle_material_phrase(answer_text)
     if results and isinstance(results[0], dict):
         waterware_capability_answer = _shape_waterware_capability_answer(question, answer_text, results[0])
         if waterware_capability_answer:

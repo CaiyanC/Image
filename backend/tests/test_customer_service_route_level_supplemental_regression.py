@@ -777,9 +777,73 @@ def test_route_level_structured_and_unknown_field_questions_route_conservatively
 
 
 @pytest.mark.parametrize(
+    ("question", "required_terms"),
+    [
+        ("KW-K32-白可以直接加热吗？", ("KW-K32-白", "适用热源", "明火直烧", "卡式炉")),
+        ("KW-K32-白适用什么热源？", ("KW-K32-白", "适用热源", "明火直烧", "卡式炉")),
+        ("KW-K32-白能用卡式炉吗？", ("KW-K32-白", "卡式炉", "适用热源")),
+        ("KW-K32-白能明火直烧吗？", ("KW-K32-白", "明火直烧", "适用热源")),
+    ],
+)
+def test_route_level_explicit_sku_direct_heating_questions_use_positive_heat_source_evidence(
+    route_client_and_db,
+    question,
+    required_terms,
+):
+    client, headers, Session = route_client_and_db
+
+    with Session() as db:
+        product = db.query(Product).filter(Product.sku == "KW-K32-白").first()
+        assert product is not None
+        specs = db.query(ProductSpecs).filter(ProductSpecs.product_id == product.id).first()
+        assert specs is not None
+        specs.heat_source = "明火直烧、卡式炉、分体炉、一体炉"
+        db.commit()
+
+    response = client.post("/api/customer-service/ask?debug=true", json={"question": question}, headers=headers)
+    assert response.status_code == 200, response.text
+    payload = response.json()
+
+    assert payload["answer_type"] == "product_detail", payload
+    assert payload["result_skus"] == ["KW-K32-白"], payload
+    assert payload["answer"], payload
+    for term in required_terms:
+        assert term in payload["answer"], payload["answer"]
+    assert "当前资料未标注" not in payload["answer"], payload["answer"]
+    assert "不能仅凭现有资料确认" not in payload["answer"], payload["answer"]
+    assert "Product not found" not in payload["answer"], payload["answer"]
+
+
+@pytest.mark.parametrize(
+    "question",
+    [
+        "KW-K31-白可以直接加热吗？",
+        "KW-K31-白适用什么热源？",
+        "KW-K31-白能用卡式炉吗？",
+        "KW-K31-白能明火直烧吗？",
+    ],
+)
+def test_route_level_explicit_sku_direct_heating_questions_stay_conservative_without_heat_source_evidence(
+    route_client_and_db,
+    question,
+):
+    client, headers, _ = route_client_and_db
+
+    response = client.post("/api/customer-service/ask?debug=true", json={"question": question}, headers=headers)
+    assert response.status_code == 200, response.text
+    payload = response.json()
+
+    assert payload["answer_type"] == "product_detail", payload
+    assert payload["result_skus"] == ["KW-K31-白"], payload
+    assert payload["answer"], payload
+    assert "未标注" in payload["answer"] or "不能仅凭现有资料确认" in payload["answer"], payload["answer"]
+    assert "Product not found" not in payload["answer"], payload["answer"]
+
+
+@pytest.mark.parametrize(
     ("question", "expected_ref", "forbidden_top", "allowed_sources"),
     [
-        ("有哪些水具材质是不锈钢？", "水具", set(), {"structured_category_field_filter_query"}),
+        ("有哪些水具材质是不锈钢的？", "水具", set(), {"structured_category_field_filter_query"}),
         ("有哪些水壶是不锈钢的？", "水壶", {"CW-C06PRO", "CW-C69-1", "CW-C99", "CW-K32"}, {"structured_category_field_filter_query"}),
         ("有哪些水壶材质是不锈钢？", "水壶", {"CW-C06PRO", "CW-C69-1", "CW-C99", "CW-K32"}, {"structured_category_field_filter_query"}),
         ("有哪些水壶适合装热水？", "水壶", {"CW-C06PRO", "CW-C69-1", "CW-C99", "CW-K32"}, {"structured_waterware_capability_query"}),
