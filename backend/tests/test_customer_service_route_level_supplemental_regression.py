@@ -5,7 +5,7 @@ import re
 import pytest
 
 from app.models import Product, ProductBusiness, ProductSpecs
-from app.services import customer_agent_intent_service, customer_agent_planner_service
+from app.services import customer_agent_intent_service, customer_agent_planner_service, customer_service_service
 from test_customer_service_route_level_regression import (
     _add_knowledge_chunk,
     _add_product_qa,
@@ -210,6 +210,23 @@ def test_recommendation_hard_filters_keep_explicit_category_for_generic_stove_re
     assert customer_agent_intent_service._recommendation_hard_filters(intent, "\u7089\u5177") == {
         "product.category": "\u7089\u5177"
     }
+
+
+@pytest.mark.parametrize(
+    "question",
+    [
+        "\u590f\u5929\u51b7\u6c34\u8865\u6c34\u6c34\u58f6\u63a8\u8350",
+        "\u590f\u5929\u8865\u6c34\u6c34\u58f6\u63a8\u8350",
+        "\u51b7\u6c34\u6c34\u58f6\u63a8\u8350",
+        "\u6c34\u58f6\u63a8\u8350",
+        "\u6237\u5916\u8865\u6c34\u6c34\u5177\u63a8\u8350",
+        "\u6709\u4ec0\u4e48\u6c34\u58f6\u63a8\u8350\uff1f",
+        "\u63a8\u8350\u51e0\u4e2a\u6c34\u58f6",
+    ],
+)
+def test_waterware_recommendation_queries_do_not_fall_into_usage_care(question):
+    assert customer_agent_intent_service._looks_like_recommendation_question(question)
+    assert not customer_service_service._is_product_usage_care_question(question)
 
 
 def test_compose_recommendation_answer_bypasses_llm_for_alcohol_stove_cookware(monkeypatch):
@@ -530,6 +547,38 @@ def test_route_level_generic_stove_recommendation_queries_stay_in_stove_domain(r
         payload["result_skus"],
         include_terms=("\u7089\u5177",),
         exclude_terms=("\u914d\u4ef6", "\u6c34\u5177", "\u6c34\u58f6", "\u9505\u5177", "\u5496\u5561\u5668\u5177", "\u8c03\u6599\u74f6", "\u996d\u76d2", "\u676f\u5177"),
+    )
+
+
+@pytest.mark.parametrize(
+    "question",
+    [
+        "\u590f\u5929\u51b7\u6c34\u8865\u6c34\u6c34\u58f6\u63a8\u8350",
+        "\u590f\u5929\u8865\u6c34\u6c34\u58f6\u63a8\u8350",
+        "\u51b7\u6c34\u6c34\u58f6\u63a8\u8350",
+        "\u6c34\u58f6\u63a8\u8350",
+        "\u6237\u5916\u8865\u6c34\u6c34\u5177\u63a8\u8350",
+        "\u6709\u4ec0\u4e48\u6c34\u58f6\u63a8\u8350\uff1f",
+        "\u63a8\u8350\u51e0\u4e2a\u6c34\u58f6",
+    ],
+)
+def test_route_level_waterware_recommendation_queries_stay_in_waterware_domain(route_client_and_db, question):
+    client, headers, Session = route_client_and_db
+
+    response = client.post("/api/customer-service/ask?debug=true", json={"question": question}, headers=headers)
+    assert response.status_code == 200, response.text
+    payload = response.json()
+
+    assert payload["answer_type"] == "recommendation", payload
+    assert payload["result_skus"], payload
+    assert payload["answer"], payload
+    assert "Product not found" not in payload["answer"], payload["answer"]
+    assert all(term not in payload["answer"] for term in ("\u6e05\u6d17", "\u4fdd\u517b", "\u51b2\u6d17", "\u94a2\u4e1d\u7403")), payload["answer"]
+    _assert_recommendation_result_rows_stay_in_category_domain(
+        Session,
+        payload["result_skus"],
+        include_terms=("\u6c34\u5177", "\u6c34\u58f6", "\u6c34\u676f", "\u676f"),
+        exclude_terms=("\u9505\u5177", "\u8336\u5177", "\u5957\u9505", "\u7089\u5177", "\u914d\u4ef6", "\u8c03\u6599\u74f6"),
     )
 
 

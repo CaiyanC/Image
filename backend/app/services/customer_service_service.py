@@ -6659,12 +6659,40 @@ def _is_product_usage_care_question(question: str) -> bool:
         return has_product_context
     if _looks_like_product_detail_field_question(text):
         return False
+    if _should_preserve_recommendation_priority(text):
+        return False
     matched_usage_terms = [term for term in _USAGE_CARE_TERMS if term in text]
     if not matched_usage_terms:
         return False
     has_product_context = any(term in text for term in _USAGE_CARE_PRODUCT_TERMS)
     has_script_context = "客服怎么回复" in text or "怎么回复客户" in text or "客户说" in text
     return has_product_context or has_script_context or len(matched_usage_terms) >= 2
+
+
+def _should_preserve_recommendation_priority(text: str) -> bool:
+    value = str(text or "").strip()
+    if not value or not _looks_like_recommendation_request(value):
+        return False
+    explicit_sku = bool(SKU_RE.search(value))
+    clear_usage_care_terms = (
+        "清洗",
+        "清洁",
+        "保养",
+        "护理",
+        "怎么洗",
+        "怎么清洗",
+        "怎么保养",
+        "怎么护理",
+        "洗碗机",
+        "泡水",
+        "浸泡",
+        "钢丝球",
+        "刮擦",
+        "使用限制",
+        "注意事项",
+        "禁忌",
+    )
+    return not (explicit_sku and any(term in value for term in clear_usage_care_terms))
 
 
 def _looks_like_product_detail_field_question(text: str) -> bool:
