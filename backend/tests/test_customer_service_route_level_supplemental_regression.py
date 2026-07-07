@@ -91,6 +91,29 @@ def _semantic_preplan_debug(payload: dict) -> dict:
     return debug.get("semantic_preplan") if isinstance(debug.get("semantic_preplan"), dict) else {}
 
 
+def _seed_contents_variant_knowledge_noise(Session) -> None:
+    with Session() as db:
+        _add_knowledge_chunk(
+            db,
+            chunk_id="cs-g25-b-contents-noise-1",
+            sku="CS-G25-B",
+            title="CS-G25-B QA 9",
+            content="Q: 小青炉Pro配收纳袋吗？\nA: 配有收纳袋（部分为网格收纳袋），用完收纳起来，背包整洁不凌乱。",
+            source_type="product",
+            metadata={"sku": "CS-G25-B", "section": "qa:variant-noise-1", "title": "CS-G25-B QA 9"},
+        )
+        _add_knowledge_chunk(
+            db,
+            chunk_id="cs-g25-b-contents-noise-2",
+            sku="CS-G25-B",
+            title="CS-G25-B QA 2",
+            content="Q: 小青炉Pro表面做了什么工艺处理？\nA: 小青炉Pro表面采用硬质氧化工艺，耐磨耐用、易清洁。",
+            source_type="product",
+            metadata={"sku": "CS-G25-B", "section": "qa:variant-noise-2", "title": "CS-G25-B QA 2"},
+        )
+        db.commit()
+
+
 def _seed_contents_grounding_evidence(Session) -> None:
     with Session() as db:
         _add_product_qa(db, "CT-T04(BM)", "CT-T04(BM) 第一次使用要注意什么？", "首次使用前用温水和软布冲洗即可（无需洗洁精）。使用前用温水冲洗即可。", tags="第一次使用,茶具,清洗", priority=190)
@@ -2607,6 +2630,51 @@ def test_route_level_contents_family_explicit_sku_prefers_exact_sku_over_variant
     client, headers, Session = route_client_and_db
     _seed_contents_grounding_evidence(Session)
     _seed_contents_resolution_priority_products(Session)
+    _seed_contents_variant_knowledge_noise(Session)
+
+    response = client.post("/api/customer-service/ask?debug=true", json={"question": question}, headers=headers)
+    assert response.status_code == 200, response.text
+    payload = response.json()
+
+    _assert_contents_contract_answer(payload, expected_sku="CS-G25")
+    assert payload.get("result_skus") == ["CS-G25"], payload.get("result_skus")
+
+
+@pytest.mark.parametrize(
+    "question",
+    [
+        "CS-G25 包装里有什么？",
+        "CS-G25 标配有什么？",
+        "CS-G25 standard accessories?",
+    ],
+)
+def test_route_level_contents_family_explicit_sku_keeps_exact_result_when_semantic_hit_is_variant(
+    route_client_and_db,
+    monkeypatch,
+    question,
+):
+    client, headers, Session = route_client_and_db
+    _seed_contents_grounding_evidence(Session)
+    _seed_contents_resolution_priority_products(Session)
+
+    async def fake_multi_query_semantic_retrieve(db, query, *, sku=None, limit=5, query_limit=5):
+        if sku == "CS-G25":
+            return [
+                {
+                    "sku": "CS-G25-B",
+                    "source_type": "product",
+                    "content": "Q: 小青炉Pro配收纳袋吗？\nA: 配有收纳袋（部分为网格收纳袋），用完收纳起来，背包整洁不凌乱。",
+                    "metadata": {"sku": "CS-G25-B", "section": "qa:variant-noise-1", "title": "CS-G25-B QA 9"},
+                    "score": 0.99,
+                }
+            ]
+        return []
+
+    monkeypatch.setattr(
+        customer_agent_intent_service,
+        "_multi_query_semantic_retrieve",
+        fake_multi_query_semantic_retrieve,
+    )
 
     response = client.post("/api/customer-service/ask?debug=true", json={"question": question}, headers=headers)
     assert response.status_code == 200, response.text

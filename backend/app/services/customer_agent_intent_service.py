@@ -612,6 +612,15 @@ async def answer_product_usage_care_request(
         return None
     request_start = perf_counter()
     usage_subtype = _detect_usage_care_subtype(text)
+    explicit_exact_target_skus = (
+        _usage_care_explicit_exact_target_skus(
+            db,
+            text,
+            [product.sku for product in named_products if getattr(product, "sku", None)],
+        )
+        if usage_subtype == "composition"
+        else []
+    )
     intent = CustomerIntent(
         intent="product_usage_care",
         term=text,
@@ -622,6 +631,10 @@ async def answer_product_usage_care_request(
     )
     response_style = "customer_service_script" if usage_subtype == "customer_reply" else "usage_guidance"
     qa_hits, knowledge_hits, search_debug = await _search_usage_care_qa(db, text, intent.target_skus, usage_subtype=usage_subtype)
+    if explicit_exact_target_skus:
+        qa_hits, qa_filtered = _filter_usage_care_hits_to_target_skus(qa_hits, explicit_exact_target_skus)
+        knowledge_hits, knowledge_filtered = _filter_usage_care_hits_to_target_skus(knowledge_hits, explicit_exact_target_skus)
+        search_debug["filtered_or_downgraded"] = search_debug.get("filtered_or_downgraded", []) + qa_filtered + knowledge_filtered
     compose_start = perf_counter()
     if usage_subtype == "safety":
         answer = _compose_safety_usage_care_answer(text)
@@ -723,7 +736,11 @@ async def answer_product_usage_care_request(
     answer_after_clean = _sanitize_usage_care_answer_text(answer_before_clean)
     answer = answer_after_clean
     compose_answer_ms = customer_perf_service.perf_ms(compose_start)
-    results = _usage_care_results_for_response(qa_hits, knowledge_hits)
+    results = _usage_care_results_for_response(
+        qa_hits,
+        knowledge_hits,
+        explicit_exact_target_skus=explicit_exact_target_skus,
+    )
     sources: list[dict] = []
     if qa_hits:
         sources.append({"type": "product_qa", "label": "产品 QA", "count": len(qa_hits), "skus": sorted({item.get('sku') for item in qa_hits if item.get('sku')})})
@@ -766,6 +783,7 @@ async def answer_product_usage_care_request(
             "total_ms": round(total_ms, 2),
             "filtered_or_downgraded": search_debug["filtered_or_downgraded"],
             "final_used_sources_count": len(qa_hits) + len(knowledge_hits),
+            "explicit_exact_target_skus": explicit_exact_target_skus,
         },
     )
     return response
@@ -7904,6 +7922,49 @@ def _prefer_exact_usage_care_hits(items: list[dict], target_skus: list[str]) -> 
     return exact_hits or items
 
 
+def _usage_care_explicit_exact_target_skus(db: Session, question: str, target_skus: list[str]) -> list[str]:
+    normalized_targets = {
+        str(sku or "").strip().upper()
+        for sku in (target_skus or [])
+        if str(sku or "").strip()
+    }
+    if not normalized_targets:
+        return []
+    exact_targets: list[str] = []
+    seen: set[str] = set()
+    for raw_sku in _extract_skus(question):
+        resolved_sku = _resolve_existing_sku(db, raw_sku)
+        normalized_resolved = str(resolved_sku or "").strip().upper()
+        if not normalized_resolved or normalized_resolved not in normalized_targets or normalized_resolved in seen:
+            continue
+        seen.add(normalized_resolved)
+        exact_targets.append(normalized_resolved)
+    return exact_targets
+
+
+def _filter_usage_care_hits_to_target_skus(items: list[dict], target_skus: list[str]) -> tuple[list[dict], list[dict]]:
+    normalized_targets = {
+        str(sku or "").strip().upper()
+        for sku in (target_skus or [])
+        if str(sku or "").strip()
+    }
+    if not normalized_targets:
+        return items, []
+    kept: list[dict] = []
+    filtered: list[dict] = []
+    for item in items:
+        normalized_sku = str(item.get("sku") or "").strip().upper()
+        if normalized_sku in normalized_targets:
+            kept.append(item)
+            continue
+        filtered.append({
+            "source_kind": "usage_care_exact_sku_lock",
+            "sku": item.get("sku"),
+            "reason": "non_exact_target_filtered",
+        })
+    return kept, filtered
+
+
 def _usage_care_query_terms(question: str) -> list[str]:
     raw_terms = [item.strip() for item in re.split(r"[?,，。？！!、\s]+", str(question or "")) if item.strip()]
     keep = []
@@ -8651,12 +8712,25 @@ def _usage_care_debug_source_texts(qa_hits: list[dict], knowledge_hits: list[dic
     return rows
 
 
-def _usage_care_results_for_response(qa_hits: list[dict], knowledge_hits: list[dict]) -> list[dict]:
+def _usage_care_results_for_response(
+    qa_hits: list[dict],
+    knowledge_hits: list[dict],
+    *,
+    explicit_exact_target_skus: list[str] | None = None,
+) -> list[dict]:
     results = []
     seen: set[tuple[str, str, str, str]] = set()
+    locked_targets = [
+        str(sku or "").strip().upper()
+        for sku in (explicit_exact_target_skus or [])
+        if str(sku or "").strip()
+    ]
     for item in qa_hits:
+        row_sku = item.get("sku")
+        if locked_targets:
+            row_sku = locked_targets[0]
         row = {
-            "sku": item.get("sku"),
+            "sku": row_sku,
             "product_name_cn": item.get("product_name_cn"),
             "field_values": {"使用/清洗保养建议": item.get("answer") or ""},
             "matched_by": "product_qa",
@@ -8672,8 +8746,11 @@ def _usage_care_results_for_response(qa_hits: list[dict], knowledge_hits: list[d
         seen.add(key)
         results.append(row)
     for item in knowledge_hits:
+        row_sku = item.get("sku")
+        if locked_targets:
+            row_sku = locked_targets[0]
         row = {
-            "sku": item.get("sku"),
+            "sku": row_sku,
             "product_name_cn": "",
             "field_values": {"使用/清洗保养建议": item.get("content") or ""},
             "matched_by": "knowledge_chunks",
