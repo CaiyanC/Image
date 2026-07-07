@@ -1825,3 +1825,161 @@ def test_route_level_unknown_field_fallback_no_regression_recommendation_cases(
     assert categories, payload
     assert any(category in expected_domain for category in categories.values()), categories
     assert not any(category in forbidden_domains for category in categories.values()), categories
+
+
+@pytest.mark.parametrize(
+    ("question", "expected_sku"),
+    [
+        ("\u0043\u0046\u002d\u0050\u0047\u0031\u0039 \u8fd9\u4e2a \u0053\u004b\u0055 \u73b0\u5728\u8fd8\u6709\u8d60\u54c1\u5417\uff1f", "CF-PG19"),
+        ("\u0043\u0046\u002d\u0050\u0047\u0031\u0039 \u6709\u8d60\u54c1\u5417\uff1f", "CF-PG19"),
+        ("\u0043\u0046\u002d\u0050\u0047\u0031\u0039 \u968f\u5355\u9001\u4e1c\u897f\u5417\uff1f", "CF-PG19"),
+        ("\u0043\u0046\u002d\u0050\u0047\u0031\u0039 \u6709\u4f18\u60e0\u5238\u5417\uff1f", "CF-PG19"),
+        ("\u0043\u0046\u002d\u0050\u0047\u0031\u0039 \u4eca\u5929\u80fd\u53d1\u5417\uff1f", "CF-PG19"),
+        ("\u0043\u0046\u002d\u0050\u0047\u0031\u0039 \u8bc4\u4ef7\u600e\u4e48\u6837\uff1f", "CF-PG19"),
+        ("\u0043\u0046\u002d\u0050\u0047\u0031\u0039 \u597d\u8bc4\u7387\u662f\u591a\u5c11\uff1f", "CF-PG19"),
+        ("\u0043\u0046\u002d\u0050\u0047\u0031\u0039 \u4fdd\u4fee\u591a\u4e45\uff1f", "CF-PG19"),
+        ("\u0043\u0046\u002d\u0050\u0047\u0031\u0039 \u5305\u90ae\u5417\uff1f", "CF-PG19"),
+        ("\u0043\u0057\u002d\u0043\u0038\u0033 \u6709\u4ec0\u4e48\u4f18\u60e0\u6d3b\u52a8\uff1f", "CW-C83"),
+        ("\u0043\u0057\u002d\u0043\u0038\u0033 \u6709\u6ca1\u6709\u8d60\u54c1\uff1f", "CW-C83"),
+        ("\u0043\u0057\u002d\u0043\u0038\u0033 \u76f4\u64ad\u95f4\u6709\u5238\u5417\uff1f", "CW-C83"),
+        ("\u0043\u0057\u002d\u0043\u0038\u0033 \u5e93\u5b58\u8fd8\u6709\u591a\u5c11\uff1f", "CW-C83"),
+        ("\u0043\u0053\u002d\u0042\u0031\u0034\uff08\u004c\u0058\uff09 \u6709\u8d60\u54c1\u5417\uff1f", "CS-B14（LX）"),
+        ("\u0043\u0053\u002d\u0042\u0031\u0034\uff08\u004c\u0058\uff09 \u4fdd\u4fee\u591a\u4e45\uff1f", "CS-B14（LX）"),
+        ("\u0043\u0053\u002d\u0042\u0031\u0034\uff08\u004c\u0058\uff09 \u73b0\u5728\u6709\u6d3b\u52a8\u5417\uff1f", "CS-B14（LX）"),
+    ],
+)
+def test_route_level_explicit_sku_unknown_realtime_questions_prefer_conservative_fallback(
+    route_client_and_db,
+    question,
+    expected_sku,
+):
+    client, headers, _ = route_client_and_db
+
+    response = client.post("/api/customer-service/ask?debug=true", json={"question": question}, headers=headers)
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    answer = str(payload.get("answer") or "")
+    answer_metadata = payload.get("answer_metadata") or {}
+
+    assert payload["result_skus"], payload
+    assert expected_sku in payload["result_skus"], payload["result_skus"]
+    assert answer, payload
+    assert "Product not found" not in answer, answer
+    assert not any(term in answer for term in ("\u73b0\u8d27\u5145\u8db3", "\u76f4\u64ad\u95f4\u4e13\u4eab", "\u4fdd\u8bc1\u660e\u5929\u5230", "\u7acb\u5373\u53d1\u8d27", "\u5df2\u542b\u8d60\u54c1")), answer
+    assert any(term in answer for term in ("\u672a\u6807\u6ce8", "\u65e0\u6cd5\u786e\u8ba4", "\u8bf7\u4ee5\u5e73\u53f0\u6216\u5e97\u94fa\u9875\u9762\u4e3a\u51c6", "\u4eba\u5de5\u5ba2\u670d")), answer
+    assert answer_metadata.get("source") == "resolved_entity_unknown_field_fallback", answer_metadata
+    assert payload["answer_type"] == "product_detail", payload
+    assert payload.get("debug", {}).get("agent_mode") == "resolved_entity_unknown_field_fallback", payload.get("debug")
+
+
+@pytest.mark.parametrize(
+    "question",
+    [
+        "\u74e6\u7247\u70e4\u76d8 \u6709\u8d60\u54c1\u5417\uff1f",
+        "\u74e6\u7247\u70e4\u76d8 \u4fdd\u4fee\u591a\u4e45\uff1f",
+        "\u74e6\u7247\u70e4\u76d8 \u4eca\u5929\u80fd\u53d1\u5417\uff1f",
+    ],
+)
+def test_route_level_unique_product_name_unknown_field_uses_conservative_fallback(route_client_and_db, question):
+    client, headers, _ = route_client_and_db
+
+    response = client.post("/api/customer-service/ask?debug=true", json={"question": question}, headers=headers)
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    answer = str(payload.get("answer") or "")
+    answer_metadata = payload.get("answer_metadata") or {}
+
+    assert "CF-PG19" in (payload.get("result_skus") or []), payload.get("result_skus")
+    assert "Product not found" not in answer, answer
+    assert any(term in answer for term in ("\u672a\u6807\u6ce8", "\u65e0\u6cd5\u786e\u8ba4", "\u8bf7\u4ee5\u5e73\u53f0\u6216\u5e97\u94fa\u9875\u9762\u4e3a\u51c6")), answer
+    assert answer_metadata.get("source") == "resolved_entity_unknown_field_fallback", answer_metadata
+
+
+@pytest.mark.parametrize(
+    "question",
+    [
+        "\u6fc0\u5ddd\u5355\u9505 \u6709\u8d60\u54c1\u5417\uff1f",
+        "\u6fc0\u5ddd\u5355\u9505 \u6709\u6d3b\u52a8\u5417\uff1f",
+    ],
+)
+def test_route_level_ambiguous_product_name_unknown_field_clarifies_instead_of_picking_one(route_client_and_db, question):
+    client, headers, _ = route_client_and_db
+
+    response = client.post("/api/customer-service/ask?debug=true", json={"question": question}, headers=headers)
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    answer = str(payload.get("answer") or "")
+    answer_metadata = payload.get("answer_metadata") or {}
+
+    assert payload["answer_type"] == "clarification", payload
+    assert payload.get("needs_clarification") is True, payload
+    assert set(payload.get("result_skus") or []) >= {"CW-S10-1", "CW-S10-A"}, payload.get("result_skus")
+    assert any(term in answer for term in ("\u8bf7\u5148\u6307\u5b9a", "\u5177\u4f53\u6b3e\u5f0f", "\u591a\u4e2a\u76f8\u5173\u5546\u54c1")), answer
+    assert answer_metadata.get("source") == "named_product_unknown_field_clarification", answer_metadata
+
+
+@pytest.mark.parametrize(
+    "question",
+    [
+        "ZZZ-UNKNOWN-001 \u6709\u8d60\u54c1\u5417\uff1f",
+        "\u5b8c\u5168\u4e0d\u5b58\u5728\u7684\u4ea7\u54c1\u540d \u6709\u8d60\u54c1\u5417\uff1f",
+    ],
+)
+def test_route_level_unknown_realtime_negative_cases_can_still_not_found(route_client_and_db, question):
+    client, headers, _ = route_client_and_db
+
+    response = client.post("/api/customer-service/ask?debug=true", json={"question": question}, headers=headers)
+    assert response.status_code in {200, 404}, response.text
+    if response.status_code == 404:
+        assert "Product not found" in response.text or "\u6ca1\u6709\u627e\u5230" in response.text, response.text
+        return
+    payload = response.json()
+    answer = str(payload.get("answer") or "")
+    assert "Product not found" in answer or "\u6ca1\u6709\u627e\u5230" in answer, answer
+
+
+@pytest.mark.parametrize(
+    ("question", "expected_answer_type", "required_sku", "required_terms"),
+    [
+        ("\u0043\u0046\u002d\u0050\u0047\u0031\u0039 \u662f\u4ec0\u4e48\u6750\u8d28\uff1f", "product_detail", "CF-PG19", ("\u786c\u8d28\u6c27\u5316\u94dd\u5408\u91d1", "\u6750\u8d28")),
+        ("\u0043\u0046\u002d\u0050\u0047\u0031\u0039 \u9002\u5408\u4ec0\u4e48\u573a\u666f\uff1f", "product_detail", "CF-PG19", ("\u9732\u8425\u70e7\u70e4", "\u8425\u5730\u65e9\u9910", "\u573a\u666f")),
+        ("\u004b\u0057\u002d\u004b\u0033\u0032\u002d\u767d\u53ef\u4ee5\u76f4\u63a5\u52a0\u70ed\u5417\uff1f", "product_detail", "KW-K32-白", ("\u660e\u706b\u76f4\u70e7", "\u5361\u5f0f\u7089", "\u9002\u7528\u70ed\u6e90")),
+        ("\u0043\u0054\u002d\u0054\u0030\u0034\u0028\u0042\u004d\u0029 \u91cc\u9762\u6709\u4ec0\u4e48\uff1f", "product_usage_care", "CT-T04(BM)", ("\u8336\u58f6", "\u8336\u676f", "\u5f00\u7bb1")),
+        ("\u0043\u0057\u002d\u0043\u0030\u0036\u0050\u0052\u004f \u600e\u4e48\u6e05\u6d17\uff1f", "product_usage_care", None, ("\u6e05\u6d17", "\u8f6f\u5237", "\u6e29\u6c34")),
+        ("\u0043\u0053\u002d\u0042\u0031\u0034\uff08\u004c\u0058\uff09\u4f7f\u7528\u9152\u7cbe\u6709\u4ec0\u4e48\u6ce8\u610f\u4e8b\u9879\uff1f", ("product_usage_care", "product_detail"), "CS-B14（LX）", ("\u6db2\u4f53\u9152\u7cbe", "\u901a\u98ce")),
+    ],
+)
+def test_route_level_unknown_realtime_priority_no_regression_known_capabilities(
+    route_client_and_db,
+    question,
+    expected_answer_type,
+    required_sku,
+    required_terms,
+):
+    client, headers, Session = route_client_and_db
+    if question in {
+        "\u0043\u0054\u002d\u0054\u0030\u0034\u0028\u0042\u004d\u0029 \u91cc\u9762\u6709\u4ec0\u4e48\uff1f",
+        "\u0043\u0057\u002d\u0043\u0030\u0036\u0050\u0052\u004f \u600e\u4e48\u6e05\u6d17\uff1f",
+        "\u0043\u0053\u002d\u0042\u0031\u0034\uff08\u004c\u0058\uff09\u4f7f\u7528\u9152\u7cbe\u6709\u4ec0\u4e48\u6ce8\u610f\u4e8b\u9879\uff1f",
+    }:
+        _seed_contents_grounding_evidence(Session)
+
+    response = client.post("/api/customer-service/ask?debug=true", json={"question": question}, headers=headers)
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    answer = str(payload.get("answer") or "")
+    answer_metadata = payload.get("answer_metadata") or {}
+
+    if isinstance(expected_answer_type, tuple):
+        assert payload["answer_type"] in expected_answer_type, payload
+    else:
+        assert payload["answer_type"] == expected_answer_type, payload
+    if required_sku:
+        assert required_sku in (payload.get("result_skus") or []), payload.get("result_skus")
+    assert not (
+        answer_metadata.get("source") == "resolved_entity_unknown_field_fallback"
+        or payload.get("debug", {}).get("agent_mode") == "resolved_entity_unknown_field_fallback"
+    ), payload
+    assert "Product not found" not in answer, answer
+    assert not any(term in answer for term in ("\u5f53\u524d\u8d44\u6599\u672a\u6807\u6ce8\u8be5\u5546\u54c1\u662f\u5426\u9644\u8d60", "\u65e0\u6cd5\u786e\u8ba4\u5b9e\u65f6")), answer
+    assert any(term in answer for term in required_terms), answer

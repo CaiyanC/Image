@@ -78,11 +78,24 @@ _STRUCTURED_UNKNOWN_FACT_TERMS: dict[str, tuple[str, ...]] = {
 
 _RESOLVED_ENTITY_UNKNOWN_FACT_TERMS: dict[str, tuple[str, ...]] = {
     **_STRUCTURED_UNKNOWN_FACT_TERMS,
-    "优惠活动": ("优惠", "活动", "优惠活动", "优惠券", "券", "直播间有券", "直播间券", "会员价", "到手价"),
-    "发货时效": ("发货", "多久发货", "发货时间", "几天到", "明天到", "今天到", "什么时候到", "配送"),
-    "赠品": ("赠品", "送什么", "送啥", "附赠"),
-    "包邮": ("包邮", "免邮", "运费"),
-    "售后": ("售后", "售后怎么样", "售后政策", "售后服务"),
+    "优惠活动": ("优惠", "活动", "优惠活动", "优惠券", "券", "直播间有券", "直播间券", "会员价", "到手价", "促销", "满减", "折扣", "秒杀"),
+    "发货时效": ("发货", "多久发货", "发货时间", "几天到", "明天到", "今天到", "什么时候到", "配送", "发货地", "今天能发", "明天能到"),
+    "赠品": ("赠品", "送什么", "送啥", "附赠", "赠送", "配赠", "礼品", "随单赠品", "随单送东西", "送东西"),
+    "包邮": ("包邮", "免邮", "运费", "包邮地区"),
+    "售后": ("售后", "售后怎么样", "售后政策", "售后服务", "退换货", "售后时效"),
+}
+
+_RESOLVED_ENTITY_REALTIME_COMMERCIAL_LABELS = {
+    "库存",
+    "销量",
+    "评价",
+    "价格",
+    "保修",
+    "优惠活动",
+    "发货时效",
+    "赠品",
+    "包邮",
+    "售后",
 }
 
 
@@ -1089,6 +1102,28 @@ def _detect_resolved_entity_unknown_fact_label(question: str) -> str | None:
     return None
 
 
+def _resolved_entity_unknown_field_guard_label(question: str) -> str | None:
+    text = str(question or "").strip()
+    if not text:
+        return None
+    if customer_agent_intent_service._looks_like_usage_care_question(text):
+        return None
+    if customer_agent_intent_service._looks_like_contents_grounding_question(text):
+        return None
+    if customer_agent_intent_service._is_compare_question(text):
+        return None
+    if _looks_like_recommendation_request(text):
+        return None
+    return _detect_resolved_entity_unknown_fact_label(text)
+
+
+def _resolved_entity_realtime_commercial_field_guard_label(question: str) -> str | None:
+    label = _resolved_entity_unknown_field_guard_label(question)
+    if label in _RESOLVED_ENTITY_REALTIME_COMMERCIAL_LABELS:
+        return label
+    return None
+
+
 def _resolved_entity_unknown_fact_answer(prefix: str, label: str) -> str:
     special = {
         "库存": f"{prefix}\n当前资料未标注库存，也不能仅凭现有资料确认实时库存；请以平台或店铺页面为准，或联系人工客服确认。",
@@ -1174,15 +1209,7 @@ def _try_resolved_product_unknown_field_shortcut(db: Session, question: str) -> 
     text = str(question or "").strip()
     if not text:
         return None
-    if customer_agent_intent_service._looks_like_usage_care_question(text):
-        return None
-    if customer_agent_intent_service._looks_like_contents_grounding_question(text):
-        return None
-    if customer_agent_intent_service._is_compare_question(text):
-        return None
-    if _looks_like_recommendation_request(text):
-        return None
-    label = _detect_resolved_entity_unknown_fact_label(text)
+    label = _resolved_entity_unknown_field_guard_label(text)
     if not label:
         return None
 
@@ -1770,6 +1797,8 @@ async def _try_explicit_sku_detail_shortcut(db: Session, question: str) -> dict 
     if not text or not explicit_skus:
         return None
     if customer_agent_intent_service._looks_like_contents_grounding_question(text):
+        return None
+    if _resolved_entity_realtime_commercial_field_guard_label(text):
         return None
     if not _is_explicit_sku_detail_question(text):
         return None
