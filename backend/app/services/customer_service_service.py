@@ -1619,6 +1619,8 @@ async def _try_explicit_sku_detail_shortcut(db: Session, question: str) -> dict 
     explicit_skus = customer_agent_service._extract_skus(text)
     if not text or not explicit_skus:
         return None
+    if customer_agent_intent_service._looks_like_contents_grounding_question(text):
+        return None
     if not _is_explicit_sku_detail_question(text):
         return None
     resolved_candidates: list[str] = []
@@ -5164,6 +5166,8 @@ def _try_product_qa_shortcut(db: Session, question: str) -> dict | None:
         return None
     if customer_agent_intent_service._looks_like_usage_care_question(question):
         return None
+    if customer_agent_intent_service._looks_like_contents_grounding_question(question):
+        return None
     product = _explicit_product_from_question(db, question)
     if not product:
         return None
@@ -6528,7 +6532,7 @@ _USAGE_CARE_TERMS = (
     "气罐",
     "阀门",
 )
-_USAGE_CARE_PRODUCT_TERMS = ("锅", "锅具", "套锅", "炒锅", "煎锅", "单锅", "烤盘", "煎盘", "盘", "壶", "杯", "炉", "炉具", "酒精炉", "气炉")
+_USAGE_CARE_PRODUCT_TERMS = ("锅", "锅具", "套锅", "炒锅", "煎锅", "单锅", "烤盘", "煎盘", "盘", "壶", "杯", "炉", "炉具", "酒精炉", "气炉", "茶具", "套装")
 _PURE_AFTERSALES_FLOW_TERMS = ("退换货", "退货", "换货", "售后电话", "保修多久", "质保多久", "联系客服", "售后联系方式")
 
 
@@ -6634,6 +6638,12 @@ def _is_product_usage_care_question(question: str) -> bool:
         return False
     if customer_agent_intent_service._looks_like_water_container_capability_question(text):
         return False
+    if customer_agent_intent_service._looks_like_contents_grounding_question(text):
+        has_product_context = (
+            bool(SKU_RE.search(text))
+            or any(term in text for term in _USAGE_CARE_PRODUCT_TERMS)
+        )
+        return has_product_context
     if _looks_like_product_detail_field_question(text):
         return False
     matched_usage_terms = [term for term in _USAGE_CARE_TERMS if term in text]

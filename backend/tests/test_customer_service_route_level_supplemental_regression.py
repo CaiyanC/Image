@@ -6,12 +6,91 @@ import pytest
 
 from app.models import Product, ProductSpecs
 from app.services import customer_agent_intent_service, customer_agent_planner_service
-from test_customer_service_route_level_regression import route_client_and_db
+from test_customer_service_route_level_regression import (
+    _add_knowledge_chunk,
+    _add_product_qa,
+    route_client_and_db,
+)
+from test_customer_service_route_level_regression import _parse_sse_payload
+
+
+def _seed_contents_grounding_evidence(Session) -> None:
+    with Session() as db:
+        _add_product_qa(db, "CT-T04(BM)", "CT-T04(BM) 第一次使用要注意什么？", "首次使用前用温水和软布冲洗即可（无需洗洁精）。使用前用温水冲洗即可。", tags="第一次使用,茶具,清洗", priority=190)
+        _add_product_qa(db, "CT-T04(BM)", "CT-T04(BM) 里面有什么？", "CT-T04(BM) 为一整套便携功夫茶具，含茶壶、茶杯等配件，开箱即可泡茶。", tags="配件,套装,组成", priority=210)
+        _add_product_qa(db, "CW-C06PRO", "CW-C06PRO 怎么清洗？", "使用后趁热用温水+软刷清洗，彻底擦干或小火烘干，避免钢丝球等硬物刮擦表面。", tags="清洗,保养", priority=210)
+        _add_product_qa(db, "CW-C83", "CW-C83 套装包含哪些东西？", "CW-C83 为套锅组合，当前资料可确认包含锅、炒锅和煎锅三类锅体组件；如需更细包装清单，建议再核对正式商品页。", tags="套装,包含,组成", priority=190)
+        _add_product_qa(db, "CS-B14（LX）", "CS-B14（LX）使用酒精有什么注意事项？", "CS-B14（LX）适配旋焰酒精炉，使用时建议按液体酒精热源场景操作，并保持通风，避免在密闭空间使用。", tags="酒精炉,液体酒精,注意事项", priority=200)
+        _add_knowledge_chunk(
+            db,
+            chunk_id="ct-t04-contents-1",
+            sku="CT-T04(BM)",
+            title="出山功夫茶具补充问答",
+            content="Q: 出山-功夫茶具（竹套版）里面有什么？\nA: 出山-功夫茶具（竹套版）为一整套便携功夫茶具，含茶壶、茶杯等配件，开箱即可泡茶。\nQ: 出山-功夫茶具（竹套版）第一次使用要注意什么？\nA: 首次使用前用温水和软布冲洗即可（无需洗洁精）。",
+            source_type="product",
+            metadata={"section": "qa", "category": "茶具"},
+        )
+        _add_knowledge_chunk(
+            db,
+            chunk_id="cw-c83-contents-1",
+            sku="CW-C83",
+            title="炊墨套锅补充问答",
+            content="Q: 炊墨套锅包含哪些东西？\nA: 当前资料可确认包含锅、炒锅和煎锅三类锅体组件；如需更细包装清单，建议再核对正式商品页。",
+            source_type="product",
+            metadata={"section": "qa", "category": "锅具"},
+        )
+        _add_knowledge_chunk(
+            db,
+            chunk_id="cs-b14-lx-alcohol-1",
+            sku="CS-B14（LX）",
+            title="旋焰炉芯使用酒精注意事项",
+            content="Q: CS-B14（LX）使用酒精有什么注意事项？\nA: 该产品适配旋焰酒精炉，适用热源为液体酒精；使用时应保持通风，避免在密闭空间操作。",
+            source_type="product",
+            metadata={"section": "qa", "category": "配件"},
+        )
+        db.commit()
 
 
 def _semantic_preplan_debug(payload: dict) -> dict:
     debug = payload.get("debug") if isinstance(payload.get("debug"), dict) else {}
     return debug.get("semantic_preplan") if isinstance(debug.get("semantic_preplan"), dict) else {}
+
+
+def _seed_contents_grounding_evidence(Session) -> None:
+    with Session() as db:
+        _add_product_qa(db, "CT-T04(BM)", "CT-T04(BM) 第一次使用要注意什么？", "首次使用前用温水和软布冲洗即可（无需洗洁精）。使用前用温水冲洗即可。", tags="第一次使用,茶具,清洗", priority=190)
+        _add_product_qa(db, "CT-T04(BM)", "CT-T04(BM) 里面有什么？", "CT-T04(BM) 为一整套便携功夫茶具，含茶壶、茶杯等配件，开箱即可泡茶。", tags="配件,套装,组成", priority=210)
+        _add_product_qa(db, "CW-C06PRO", "CW-C06PRO 怎么清洗？", "使用后趁热用温水+软刷清洗，彻底擦干或小火烘干，避免钢丝球等硬物刮擦表面。", tags="清洗,保养", priority=210)
+        _add_product_qa(db, "CW-C83", "CW-C83 套装包含哪些东西？", "CW-C83 为套锅组合，当前资料可确认包含锅、炒锅和煎锅三类锅体组件；如需更细包装清单，建议再核对正式商品页。", tags="套装,包含,组成", priority=190)
+        _add_product_qa(db, "CS-B14（LX）", "CS-B14（LX）使用酒精有什么注意事项？", "CS-B14（LX）适配旋焰酒精炉，使用时建议按液体酒精热源场景操作，并保持通风，避免在密闭空间使用。", tags="酒精炉,液体酒精,注意事项", priority=200)
+        _add_knowledge_chunk(
+            db,
+            chunk_id="ct-t04-contents-1-v2",
+            sku="CT-T04(BM)",
+            title="出山功夫茶具补充问答",
+            content="Q: 出山-功夫茶具（竹套版）里面有什么？\nA: 出山-功夫茶具（竹套版）为一整套便携功夫茶具，含茶壶、茶杯等配件，开箱即可泡茶。\nQ: 出山-功夫茶具（竹套版）第一次使用要注意什么？\nA: 首次使用前用温水和软布冲洗即可（无需洗洁精）。",
+            source_type="product",
+            metadata={"section": "qa", "category": "茶具"},
+        )
+        _add_knowledge_chunk(
+            db,
+            chunk_id="cw-c83-contents-1-v2",
+            sku="CW-C83",
+            title="炊墨套锅补充问答",
+            content="Q: 炊墨套锅包含哪些东西？\nA: 当前资料可确认包含锅、炒锅和煎锅三类锅体组件；如需更细包装清单，建议再核对正式商品页。",
+            source_type="product",
+            metadata={"section": "qa", "category": "锅具"},
+        )
+        _add_knowledge_chunk(
+            db,
+            chunk_id="cs-b14-lx-alcohol-1-v2",
+            sku="CS-B14（LX）",
+            title="旋焰炉芯使用酒精注意事项",
+            content="Q: CS-B14（LX）使用酒精有什么注意事项？\nA: 该产品适配旋焰酒精炉，适用热源为液体酒精；使用时应保持通风，避免在密闭空间操作。",
+            source_type="product",
+            metadata={"section": "qa", "category": "配件"},
+        )
+        db.commit()
 
 
 def _alcohol_stove_supports_from_specs(value: str) -> bool:
@@ -1160,6 +1239,142 @@ def test_route_level_qa_usage_care_and_sku_knowledge_boundary(
         assert payload["result_skus"] == [expected_sku], payload
     for term in required_terms:
         assert term in payload["answer"], payload["answer"]
+
+
+@pytest.mark.parametrize(
+    "question",
+    [
+        "CT-T04(BM) 里面有什么？",
+        "CT-T04(BM) 包含什么？",
+        "CT-T04(BM) 套装包含哪些东西？",
+        "CT-T04(BM) 有哪些配件？",
+        "CT-T04(BM) 开箱有什么？",
+        "CT-T04(BM) 组成是什么？",
+        "出山-功夫茶具（竹套版）里面有什么？",
+        "出山-功夫茶具（竹套版）包含什么？",
+    ],
+)
+def test_route_level_explicit_sku_contents_questions_hit_same_sku_grounded_sources(
+    route_client_and_db,
+    question,
+):
+    client, headers, Session = route_client_and_db
+    _seed_contents_grounding_evidence(Session)
+
+    response = client.post("/api/customer-service/ask?debug=true", json={"question": question}, headers=headers)
+    assert response.status_code == 200, response.text
+    payload = response.json()
+
+    assert payload["answer_type"] in {"product_usage_care", "product_detail"}, payload
+    assert payload["answer"], payload
+    assert "Product not found" not in payload["answer"], payload["answer"]
+    assert "产品不存在" not in payload["answer"], payload["answer"]
+    assert payload["result_skus"], payload
+    assert "CT-T04(BM)" in payload["result_skus"], payload["result_skus"]
+    if question.startswith("CT-T04(BM)"):
+        assert payload["result_skus"][0] == "CT-T04(BM)", payload["result_skus"]
+        assert "CT-T04" not in payload["result_skus"], payload["result_skus"]
+    assert any(term in payload["answer"] for term in ("茶壶", "茶杯", "配件", "开箱即可泡茶")), payload["answer"]
+
+
+def test_route_level_named_product_contents_questions_bypass_generic_product_qa_shortcut(
+    route_client_and_db,
+):
+    client, headers, Session = route_client_and_db
+    _seed_contents_grounding_evidence(Session)
+
+    with Session() as db:
+        _add_product_qa(
+            db,
+            "CT-T04(BM)",
+            "出山-功夫茶具（竹套版）怎么样？",
+            "出山-功夫茶具（竹套版）的核心卖点包括：竹套保护设计、国风美学、全套收纳便携、专为功夫茶打造。",
+            tags="卖点,介绍",
+            priority=260,
+        )
+        db.commit()
+
+    response = client.post(
+        "/api/customer-service/ask?debug=true",
+        json={"question": "出山-功夫茶具（竹套版）包含什么？"},
+        headers=headers,
+    )
+    assert response.status_code == 200, response.text
+    payload = response.json()
+
+    assert payload["answer"], payload
+    assert payload["result_skus"] == ["CT-T04(BM)"], payload["result_skus"]
+    assert any(term in payload["answer"] for term in ("茶壶", "茶杯", "配件", "开箱即可泡茶")), payload["answer"]
+    assert "核心卖点" not in payload["answer"], payload["answer"]
+
+
+@pytest.mark.parametrize(
+    ("question", "required_sku", "required_terms"),
+    [
+        ("CT-T04(BM) 有什么使用限制？", "CT-T04(BM)", ("茶具", "未标注适用酒精炉")),
+        ("CT-T04(BM) 第一次使用要注意什么？", "CT-T04(BM)", ("温水", "软布")),
+        ("CW-C06PRO 怎么清洗？", "CW-C06PRO", ("温水", "软刷", "钢丝球")),
+        ("CW-C83 套装包含哪些东西？", "CW-C83", ("锅", "炒锅", "煎锅")),
+        ("CS-B14（LX）使用酒精有什么注意事项？", "CS-B14（LX）", ("液体酒精", "通风")),
+        ("CW-C83 的价格是多少？", "CW-C83", ("未标注", "价格")),
+    ],
+)
+def test_route_level_contents_grounding_no_regression_cases(
+    route_client_and_db,
+    question,
+    required_sku,
+    required_terms,
+):
+    client, headers, Session = route_client_and_db
+    _seed_contents_grounding_evidence(Session)
+
+    response = client.post("/api/customer-service/ask?debug=true", json={"question": question}, headers=headers)
+    assert response.status_code == 200, response.text
+    payload = response.json()
+
+    assert payload["answer"], payload
+    assert payload["result_skus"], payload
+    assert required_sku in payload["result_skus"], payload["result_skus"]
+    if question == "CT-T04(BM) 第一次使用要注意什么？":
+        assert payload["result_skus"][0] == "CT-T04(BM)", payload["result_skus"]
+        assert "CT-T04" not in payload["result_skus"], payload["result_skus"]
+    if question == "CW-C83 套装包含哪些东西？":
+        assert payload["result_skus"][0] == "CW-C83", payload["result_skus"]
+        assert "CW-C83-1" not in payload["result_skus"], payload["result_skus"]
+    assert "Product not found" not in payload["answer"], payload["answer"]
+    for term in required_terms:
+        assert term in payload["answer"], payload["answer"]
+
+
+def test_route_level_contents_grounding_endpoint_parity(route_client_and_db):
+    client, headers, Session = route_client_and_db
+    _seed_contents_grounding_evidence(Session)
+
+    ask_response = client.post(
+        "/api/customer-service/ask?debug=true",
+        json={"question": "CT-T04(BM) 里面有什么？"},
+        headers=headers,
+    )
+    stream_response = client.post(
+        "/api/customer-service/ask-stream",
+        json={"question": "CT-T04(BM) 里面有什么？"},
+        headers=headers,
+    )
+
+    assert ask_response.status_code == 200, ask_response.text
+    assert stream_response.status_code == 200, stream_response.text
+
+    ask_payload = ask_response.json()
+    stream_payload = _parse_sse_payload(stream_response.text)
+
+    assert ask_payload["answer_type"] == stream_payload["answer_type"]
+    assert ask_payload["result_skus"] == stream_payload["result_skus"]
+    assert "CT-T04(BM)" in ask_payload["result_skus"], ask_payload["result_skus"]
+    assert "CT-T04(BM)" in stream_payload["result_skus"], stream_payload["result_skus"]
+    assert stream_payload["answer"], stream_payload
+    for term in ("茶壶", "茶杯", "配件"):
+        assert term in ask_payload["answer"], ask_payload["answer"]
+        assert term in stream_payload["answer"], stream_payload["answer"]
 
 
 @pytest.mark.parametrize(

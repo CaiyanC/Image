@@ -91,6 +91,19 @@ USAGE_CARE_TERMS = (
     "气罐",
     "阀门",
 )
+CONTENTS_GROUNDING_TERMS = (
+    "里面有什么",
+    "包含什么",
+    "套装包含",
+    "套装里有什么",
+    "套装里有啥",
+    "开箱有什么",
+    "开箱有啥",
+    "组成是什么",
+    "有哪些配件",
+    "包装里有什么",
+    "包装内有什么",
+)
 USAGE_CARE_SCRIPT_TERMS = ("客服怎么回复", "怎么回复客户", "客户说")
 USAGE_CARE_CLEANING_TERMS = ("清洗", "清洁", "怎么洗", "怎么清洗", "洗完", "冷水冲", "软刷", "温水", "擦干", "烘干", "钢丝球", "硬物刮擦")
 USAGE_CARE_MAINTENANCE_TERMS = ("保养", "护理", "养护", "存放", "晾干", "擦干", "烘干", "冷水", "骤冷骤热", "热锅骤冷")
@@ -372,10 +385,10 @@ async def process_intent_request(
             is_single_field_sufficient=False,
         )
     if (
-        _looks_like_usage_care_question(question)
+        (_looks_like_usage_care_question(question) or (_looks_like_contents_grounding_question(question) and explicit_named_products))
         and not _looks_like_water_container_capability_question(question)
         and not _looks_like_usage_care_aftersales_question(question)
-        and not _looks_like_product_detail_question(question)
+        and not (_looks_like_product_detail_question(question) and not _looks_like_contents_grounding_question(question))
     ):
         usage_care_result = await answer_product_usage_care_request(
             db,
@@ -484,11 +497,31 @@ async def answer_product_usage_care_request(
 ) -> dict | None:
     text = str(question or "").strip()
     named_products = named_products or []
-    if not _looks_like_usage_care_question(text):
+    if _looks_like_contents_grounding_question(text):
+        if not named_products:
+            named_products = _explicit_products_from_question(db, text)
+        if not named_products:
+            resolved_products: list[Product] = []
+            resolved_seen: set[str] = set()
+            for raw_sku in _extract_skus(text):
+                resolved_sku = _resolve_existing_sku(db, raw_sku)
+                if not resolved_sku:
+                    continue
+                normalized_sku = str(resolved_sku or "").strip().upper()
+                if not normalized_sku or normalized_sku in resolved_seen:
+                    continue
+                product = db.query(Product).filter(Product.sku == resolved_sku).first()
+                if product:
+                    resolved_seen.add(normalized_sku)
+                    resolved_products.append(product)
+            if resolved_products:
+                named_products = resolved_products
+    named_products = _narrow_contents_grounding_products(db, text, named_products)
+    if not (_looks_like_usage_care_question(text) or (_looks_like_contents_grounding_question(text) and named_products)):
         return None
     if _looks_like_water_container_capability_question(text):
         return None
-    if _looks_like_product_detail_question(text) and not named_products:
+    if _looks_like_product_detail_question(text) and not _looks_like_contents_grounding_question(text) and not named_products:
         return None
     request_start = perf_counter()
     usage_subtype = _detect_usage_care_subtype(text)
@@ -7317,6 +7350,38 @@ def _looks_like_usage_care_question(text: str) -> bool:
     return any(term in value for term in USAGE_CARE_TERMS)
 
 
+def _looks_like_contents_grounding_question(text: str) -> bool:
+    value = str(text or "").strip()
+    if not value:
+        return False
+    return any(term in value for term in CONTENTS_GROUNDING_TERMS)
+
+
+def _narrow_contents_grounding_products(db: Session, question: str, products: list[Product]) -> list[Product]:
+    if not products:
+        return []
+    resolved_pairs: list[tuple[str, str]] = []
+    for raw_sku in _extract_skus(question):
+        resolved_sku = _resolve_existing_sku(db, raw_sku)
+        normalized_sku = str(resolved_sku or "").strip().upper()
+        normalized_raw = str(raw_sku or "").strip().upper()
+        if normalized_sku and normalized_raw:
+            resolved_pairs.append((normalized_raw, normalized_sku))
+    if not resolved_pairs:
+        return products
+    resolved_pairs.sort(key=lambda item: (len(item[0]), len(item[1])), reverse=True)
+    keep_skus: list[str] = []
+    for _, normalized_sku in resolved_pairs:
+        if any(normalized_sku != existing and normalized_sku in existing for existing in keep_skus):
+            continue
+        if normalized_sku not in keep_skus:
+            keep_skus.append(normalized_sku)
+    if not keep_skus:
+        return products
+    narrowed = [product for product in products if str(getattr(product, "sku", "") or "").strip().upper() in keep_skus]
+    return narrowed or products
+
+
 def _looks_like_usage_care_aftersales_question(text: str) -> bool:
     value = str(text or "").strip()
     if not value:
@@ -7361,6 +7426,9 @@ async def _search_usage_care_qa(
     rerank_start = perf_counter()
     qa_ranked, qa_filtered = _rerank_usage_care_hits(question, qa_hits, usage_subtype=usage_subtype, target_skus=target_skus, source_kind="product_qa", limit=limit)
     knowledge_ranked, knowledge_filtered = _rerank_usage_care_hits(question, knowledge_hits, usage_subtype=usage_subtype, target_skus=target_skus, source_kind="knowledge_chunks", limit=limit)
+    if target_skus:
+        qa_ranked = _prefer_exact_usage_care_hits(qa_ranked, target_skus)
+        knowledge_ranked = _prefer_exact_usage_care_hits(knowledge_ranked, target_skus)
     rerank_ms = customer_perf_service.perf_ms(rerank_start)
     debug = {
         "search_ms": round(customer_perf_service.perf_ms(search_start), 2),
@@ -7426,7 +7494,7 @@ async def _search_usage_care_knowledge(db: Session, question: str, target_skus: 
                 str(metadata.get("section") or ""),
                 str(metadata.get("title") or ""),
             ])
-            if not any(term in haystack for term in USAGE_CARE_TERMS):
+            if not (_looks_like_usage_care_question(haystack) or _looks_like_contents_grounding_question(haystack)):
                 continue
             scoped_hits.append({
                 "id": metadata.get("source_id") or metadata.get("title") or row.get("sku") or "",
@@ -7442,6 +7510,8 @@ async def _search_usage_care_knowledge(db: Session, question: str, target_skus: 
 
 def _detect_usage_care_subtype(question: str) -> str:
     text = str(question or "")
+    if _looks_like_contents_grounding_question(text):
+        return "composition"
     if any(term in text for term in ("点不着", "打不着", "点火", "连接", "安全", "注意事项", "气罐", "存放", "阀门")):
         return "safety"
     if any(term in text for term in USAGE_CARE_REPLY_TERMS):
@@ -7458,6 +7528,8 @@ def _detect_usage_care_subtype(question: str) -> str:
 
 
 def _usage_care_focus_terms(subtype: str) -> tuple[str, ...]:
+    if subtype == "composition":
+        return CONTENTS_GROUNDING_TERMS + ("茶壶", "茶杯", "配件", "开箱", "组成", "套装")
     if subtype == "customer_reply":
         return USAGE_CARE_CLEANING_TERMS + USAGE_CARE_MAINTENANCE_TERMS + USAGE_CARE_STICKING_TERMS
     if subtype == "burnt":
@@ -7567,6 +7639,17 @@ def _rerank_usage_care_hits(
     return [item for _, item in ranked[:limit]], filtered
 
 
+def _prefer_exact_usage_care_hits(items: list[dict], target_skus: list[str]) -> list[dict]:
+    normalized_targets = [str(sku or "").strip().upper() for sku in target_skus if str(sku or "").strip()]
+    if not normalized_targets:
+        return items
+    exact_hits = [
+        item for item in items
+        if str(item.get("sku") or "").strip().upper() in normalized_targets
+    ]
+    return exact_hits or items
+
+
 def _usage_care_query_terms(question: str) -> list[str]:
     raw_terms = [item.strip() for item in re.split(r"[?,，。？！!、\s]+", str(question or "")) if item.strip()]
     keep = []
@@ -7586,6 +7669,8 @@ def _compose_usage_care_answer(question: str, qa_hits: list[dict], knowledge_hit
     usage_subtype = _detect_usage_care_subtype(question)
     if _is_cold_shock_usage_care_question(question):
         return _compose_cold_shock_usage_care_answer(question, qa_hits, knowledge_hits)
+    if usage_subtype == "composition":
+        return _compose_usage_care_composition_answer(question, qa_hits, knowledge_hits)
     suggestions: list[str] = []
     seen = set()
     for item in qa_hits:
@@ -7611,6 +7696,27 @@ def _compose_usage_care_answer(question: str, qa_hits: list[dict], knowledge_hit
             lines.append(f"避免事项：{sections['avoid']}")
         body = "\n".join(lines)
     return body
+
+
+def _compose_usage_care_composition_answer(question: str, qa_hits: list[dict], knowledge_hits: list[dict]) -> str:
+    label = _usage_care_product_label(question, qa_hits, knowledge_hits)
+    evidence_terms = ("茶壶", "茶杯", "配件", "开箱", "组成", "套装")
+    suggestions: list[str] = []
+    seen: set[str] = set()
+    for item in [*qa_hits, *knowledge_hits]:
+        candidate = _normalize_usage_care_snippet(item.get("answer") or item.get("content") or "")
+        if not candidate or candidate in seen:
+            continue
+        suggestions.append(candidate.strip("。；; "))
+        seen.add(candidate)
+    selected = next((item for item in suggestions if any(term in item for term in evidence_terms)), "")
+    if not selected and suggestions:
+        selected = suggestions[0]
+    if not selected:
+        prefix = f"{label}：" if label else ""
+        return f"{prefix}当前资料暂未提供明确的套装包含或组成说明，建议联系人工客服确认。"
+    prefix = f"{label}：" if label else ""
+    return f"{prefix}{selected.rstrip('。；;')}。"
 
 
 def _is_cold_shock_usage_care_question(question: str) -> bool:
