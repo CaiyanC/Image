@@ -107,8 +107,26 @@ CONTENTS_GROUNDING_TERMS = (
     "有哪些配件",
     "有什么配件",
     "有啥配件",
+    "配件有哪些",
+    "附件有哪些",
     "包装里有什么",
     "包装内有什么",
+    "包装清单是什么",
+    "清单是什么",
+    "标配有什么",
+    "标配哪些东西",
+    "随附什么",
+    "附带什么",
+    "带什么",
+    "都有什么",
+    "配置是什么",
+    "有哪些组件",
+    "由什么组成",
+    "package includes",
+    "what's included",
+    "what is included",
+    "standard accessories",
+    "included items",
 )
 COMPOSITION_EVIDENCE_POSITIVE_TERMS = (
     "包含",
@@ -140,6 +158,39 @@ COMPOSITION_EVIDENCE_NEGATIVE_TERMS = (
     "top_selling_points",
     "listing",
     "long_description",
+)
+CONTENTS_GROUNDING_FAMILY_TERMS = (
+    "配件",
+    "附件",
+    "组件",
+    "包含",
+    "里面",
+    "套装",
+    "开箱",
+    "包装",
+    "清单",
+    "标配",
+    "随附",
+    "附带",
+    "组成",
+    "配置",
+    "package includes",
+    "what's included",
+    "what is included",
+    "standard accessories",
+    "included items",
+    "components",
+    "accessories",
+    "contents",
+)
+CONTENTS_GROUNDING_QUESTION_TERMS = (
+    "什么",
+    "哪些",
+    "有啥",
+    "都有什么",
+    "是什么",
+    "?",
+    "？",
 )
 USAGE_CARE_SCRIPT_TERMS = ("客服怎么回复", "怎么回复客户", "客户说")
 USAGE_CARE_CLEANING_TERMS = ("清洗", "清洁", "怎么洗", "怎么清洗", "洗完", "冷水冲", "软刷", "温水", "擦干", "烘干", "钢丝球", "硬物刮擦")
@@ -551,6 +602,8 @@ async def answer_product_usage_care_request(
                     resolved_products.append(product)
             if resolved_products:
                 named_products = resolved_products
+        if len(named_products) > 1:
+            return _build_contents_accessories_ambiguity_result(text, named_products)
     named_products = _narrow_contents_grounding_products(db, text, named_products)
     if not (_looks_like_usage_care_question(text) or (_looks_like_contents_grounding_question(text) and named_products)):
         return None
@@ -2217,12 +2270,12 @@ def _explicit_product_rows_from_question(db: Session, question: str) -> list[dic
         sku = str(product.sku or "").strip().upper()
         if not sku or sku in seen:
             continue
-        name_cn = customer_agent_service.normalize_search_text(getattr(product, "product_name_cn", "") or "")
-        name_en = customer_agent_service.normalize_search_text(getattr(product, "product_name_en", "") or "")
+        name_cn_aliases = customer_agent_service.product_name_aliases(getattr(product, "product_name_cn", "") or "")
+        name_en_aliases = customer_agent_service.product_name_aliases(getattr(product, "product_name_en", "") or "")
         sku_text = customer_agent_service.normalize_search_text(sku)
         if (
-            (name_cn and name_cn in text)
-            or (name_en and name_en in text)
+            any(alias and alias in text for alias in name_cn_aliases)
+            or any(alias and alias in text for alias in name_en_aliases)
             or (sku_text and sku_text in text)
         ):
             rows.append(
@@ -7472,7 +7525,51 @@ def _looks_like_contents_grounding_question(text: str) -> bool:
     value = str(text or "").strip()
     if not value:
         return False
-    return any(term in value for term in CONTENTS_GROUNDING_TERMS)
+    if _is_compare_question(value) or any(
+        term in value for term in ("关系", "什么关系", "是什么关系", "有何关系", "哪个包含哪个", "套装和单品", "组成关系")
+    ):
+        return False
+    lower_value = value.lower()
+    if any(term in value for term in CONTENTS_GROUNDING_TERMS):
+        return True
+    if any(term in lower_value for term in CONTENTS_GROUNDING_TERMS if term.isascii()):
+        return True
+    has_family_term = any(term in value for term in CONTENTS_GROUNDING_FAMILY_TERMS) or any(
+        term in lower_value for term in CONTENTS_GROUNDING_FAMILY_TERMS if term.isascii()
+    )
+    if not has_family_term:
+        return False
+    return any(term in value for term in CONTENTS_GROUNDING_QUESTION_TERMS)
+
+
+def _build_contents_accessories_ambiguity_result(question: str, products: list[Product]) -> dict:
+    options = "；".join(
+        f"{str(product.product_name_cn or product.product_name_en or product.sku).strip()}（{str(product.sku or '').strip().upper()}）"
+        for product in products[:5]
+    )
+    answer = f"匹配到多个相关商品：{options}。请先指定 SKU 或具体款式，我再确认这款商品的配件、包含内容或开箱清单。"
+    intent = CustomerIntent(
+        intent="clarify",
+        clarification_question=answer,
+        source_context="question",
+        is_single_field_sufficient=False,
+    )
+    result = _clarify_result(intent)
+    result["results"] = _usage_care_named_product_results(products[:5])
+    result["result_skus"] = [
+        str(getattr(product, "sku", "") or "").strip().upper()
+        for product in products[:5]
+        if str(getattr(product, "sku", "") or "").strip()
+    ]
+    result["candidate_skus"] = list(result["result_skus"])
+    result["answer_metadata"] = {
+        "source": "resolved_entity_contents_accessories_clarification",
+        "evidence_status": "ambiguous_product",
+    }
+    debug = result.get("debug") if isinstance(result.get("debug"), dict) else {}
+    debug["agent_mode"] = "resolved_entity_contents_accessories_clarification"
+    result["debug"] = debug
+    return result
 
 
 def _narrow_contents_grounding_products(db: Session, question: str, products: list[Product]) -> list[Product]:

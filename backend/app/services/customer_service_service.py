@@ -1029,7 +1029,7 @@ def _has_resolved_entity_contents_accessories_question(db: Session, question: st
         return False
     if _resolve_sku(db, text, None):
         return True
-    return len(_products_named_in_question(db, text)) == 1
+    return bool(_products_named_in_question(db, text))
 
 
 def _structured_query_row_text(row: dict[str, Any]) -> str:
@@ -7587,6 +7587,12 @@ async def _try_named_product_shortcut(db: Session, *, user_id: str, question: st
     products = _products_named_in_question(db, question)
     if not products:
         return None
+    if customer_agent_intent_service._looks_like_contents_grounding_question(question):
+        return await customer_agent_intent_service.answer_product_usage_care_request(
+            db,
+            question=question,
+            named_products=products,
+        )
     if _is_variant_compare_question(question) and len(products) >= 2:
         sku_text = " 和 ".join(product.sku for product in products[:3])
         return await customer_agent_intent_service.process_intent_request(
@@ -7640,9 +7646,8 @@ def _products_named_in_question(db: Session, question: str) -> list[Product]:
             name = str(raw_name or "").strip()
             if len(name) < 2:
                 continue
-            name_lower = name.lower()
-            base_name = re.sub(r"\s*pro$", "", name_lower, flags=re.I)
-            if name_lower in lower or (name_lower.endswith("pro") and "pro" in lower and base_name in lower):
+            aliases = customer_agent_service.product_name_aliases(name)
+            if any(alias.lower() in lower for alias in aliases):
                 matched.append(product)
                 break
     matched.sort(key=lambda item: (("pro" not in (item.product_name_cn or "").lower()), -(len(item.product_name_cn or ""))))

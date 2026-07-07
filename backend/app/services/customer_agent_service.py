@@ -75,6 +75,55 @@ def normalize_search_text(value: Any) -> str:
         text = text.replace(source, target)
     return re.sub(r"\s+", " ", text).strip()
 
+
+def product_name_aliases(value: Any) -> list[str]:
+    text = normalize_search_text(value or "")
+    if not text:
+        return []
+
+    candidates = [text]
+    without_brackets = re.sub(r"\s*[\(\（][^\)\）]+[\)\）]\s*", "", text).strip()
+    if without_brackets:
+        candidates.append(without_brackets)
+
+    index = 0
+    while index < len(candidates):
+        candidate = candidates[index]
+        index += 1
+        hyphen_match = re.match(r"^(?P<prefix>.+?)[-—–－](?P<suffix>[^-—–－（）()]+)$", candidate)
+        if hyphen_match:
+            suffix = str(hyphen_match.group("suffix") or "").strip()
+            prefix = str(hyphen_match.group("prefix") or "").strip()
+            if (
+                prefix
+                and suffix
+                and len(suffix) <= 4
+                and not re.search(r"\d", suffix)
+                and (
+                    re.search(r"\d", prefix)
+                    or suffix.lower() in {"pro", "max"}
+                    or suffix in {"黑色", "白色", "蓝色", "绿色", "粉色", "红色", "灰色", "银色", "金色"}
+                )
+            ):
+                candidates.append(prefix)
+        cup_count_trimmed = re.sub(r"\d+\s*杯$", "", candidate).strip()
+        if cup_count_trimmed and cup_count_trimmed != candidate:
+            candidates.append(cup_count_trimmed)
+
+    aliases: list[str] = []
+    seen: set[str] = set()
+    for candidate in candidates:
+        normalized = normalize_search_text(candidate)
+        if len(normalized) < 2:
+            continue
+        lowered = normalized.lower()
+        if lowered in seen:
+            continue
+        seen.add(lowered)
+        aliases.append(normalized)
+    aliases.sort(key=len, reverse=True)
+    return aliases
+
 QUERY_FIELD_ALIASES = {
     **agent_action_service.FIELD_ALIASES,
     "SKU": "product.sku",

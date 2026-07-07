@@ -2441,13 +2441,161 @@ def test_route_level_unique_product_name_contents_accessories_questions_follow_s
         for term in grounded_terms:
             assert term in answer, answer
     else:
-        assert any(
-            term in answer
-            for term in (
-                "当前资料未标注该商品的套装包含内容",
-                "开箱清单",
-                "无法确认具体清单",
-                "无法确认具体配件",
-                "请以平台页面或店铺页面为准",
-            )
+        grounded_contract_terms = ("包含", "配件", "组件", "清单", "开箱", "随附", "标配", "组成")
+        fallback_terms = (
+            "当前资料未标注该商品的套装包含内容",
+            "开箱清单",
+            "无法确认具体清单",
+            "无法确认具体配件",
+            "请以平台页面或店铺页面为准",
+        )
+        assert any(term in answer for term in grounded_contract_terms) or any(
+            term in answer for term in fallback_terms
         ), answer
+
+
+def _assert_contents_contract_answer(
+    payload: dict,
+    *,
+    expected_sku: str | None = None,
+    grounded_terms: tuple[str, ...] = (),
+) -> None:
+    answer = str(payload.get("answer") or "")
+    assert answer, payload
+    assert "Product not found" not in answer, answer
+    assert payload["answer_type"] == "product_usage_care", payload
+    assert "当前匹配到【配件】类产品共有" not in answer, answer
+    _assert_not_generic_contents_dump(answer)
+    if expected_sku:
+        assert expected_sku in (payload.get("result_skus") or []), payload.get("result_skus")
+    if grounded_terms:
+        for term in grounded_terms:
+            assert term in answer, answer
+    else:
+        grounded_contract_terms = ("包含", "配件", "组件", "清单", "开箱", "随附", "标配", "组成")
+        fallback_terms = (
+            "当前资料未标注该商品的套装包含内容",
+            "开箱清单",
+            "无法确认具体清单",
+            "无法确认具体配件",
+            "请以平台页面或店铺页面为准",
+        )
+        assert any(term in answer for term in grounded_contract_terms) or any(
+            term in answer for term in fallback_terms
+        ), answer
+
+
+@pytest.mark.parametrize(
+    ("question", "expected_sku", "grounded_terms"),
+    [
+        ("CF-PG19 标配有什么？", "CF-PG19", ()),
+        ("CS-B14（LX） 随附什么？", "CS-B14（LX）", ()),
+        ("CW-C83 附带什么？", "CW-C83", ()),
+        ("CF-PG19 包装清单是什么？", "CF-PG19", ()),
+        ("CW-C83 package includes?", "CW-C83", ()),
+        ("CS-B14（LX） what's included?", "CS-B14（LX）", ()),
+        ("CS-B14（LX） standard accessories?", "CS-B14（LX）", ()),
+        ("CT-T04(BM) 标配有什么？", "CT-T04(BM)", ("茶壶", "茶杯", "配件")),
+        ("CT-T04(BM) what is included?", "CT-T04(BM)", ("茶壶", "茶杯", "配件")),
+    ],
+)
+def test_route_level_contents_phrasing_family_resolved_sku_contract(
+    route_client_and_db,
+    question,
+    expected_sku,
+    grounded_terms,
+):
+    client, headers, Session = route_client_and_db
+    _seed_contents_grounding_evidence(Session)
+    if expected_sku == "CF-PG19":
+        _seed_cf_pg19_generic_detail_noise(Session)
+
+    response = client.post("/api/customer-service/ask?debug=true", json={"question": question}, headers=headers)
+    assert response.status_code == 200, response.text
+    payload = response.json()
+
+    _assert_contents_contract_answer(
+        payload,
+        expected_sku=expected_sku,
+        grounded_terms=grounded_terms,
+    )
+
+
+@pytest.mark.parametrize(
+    ("question", "expected_sku", "grounded_terms"),
+    [
+        ("瓦片烤盘 标配有什么？", "CF-PG19", ()),
+        ("炊墨套锅 包装清单是什么？", "CW-C83", ()),
+        ("出山-功夫茶具（竹套版） 随附什么？", "CT-T04(BM)", ("茶壶", "茶杯", "配件")),
+    ],
+)
+def test_route_level_contents_phrasing_family_unique_product_name_follows_same_contract(
+    route_client_and_db,
+    question,
+    expected_sku,
+    grounded_terms,
+):
+    client, headers, Session = route_client_and_db
+    _seed_contents_grounding_evidence(Session)
+    if expected_sku == "CF-PG19":
+        _seed_cf_pg19_generic_detail_noise(Session)
+
+    response = client.post("/api/customer-service/ask?debug=true", json={"question": question}, headers=headers)
+    assert response.status_code == 200, response.text
+    payload = response.json()
+
+    _assert_contents_contract_answer(
+        payload,
+        expected_sku=expected_sku,
+        grounded_terms=grounded_terms,
+    )
+
+
+@pytest.mark.parametrize(
+    "question",
+    [
+        "天鹅壶 标配有什么？",
+        "天鹅壶 包装清单是什么？",
+        "天鹅壶 standard accessories?",
+    ],
+)
+def test_route_level_contents_phrasing_family_ambiguous_product_name_clarifies(
+    route_client_and_db,
+    question,
+):
+    client, headers, _ = route_client_and_db
+
+    response = client.post("/api/customer-service/ask?debug=true", json={"question": question}, headers=headers)
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    answer = str(payload.get("answer") or "")
+
+    assert payload["answer_type"] == "clarification", payload
+    assert payload.get("needs_clarification") is True, payload
+    assert "Product not found" not in answer, answer
+    assert "当前匹配到【配件】类产品共有" not in answer, answer
+    assert any(term in answer for term in ("请先指定", "具体款式", "多个相关商品")), answer
+
+
+@pytest.mark.parametrize(
+    "question",
+    [
+        "配件推荐",
+        "有哪些配件推荐？",
+        "露营配件推荐",
+        "户外有什么配件？",
+        "炉具配件推荐",
+    ],
+)
+def test_route_level_contents_phrasing_family_generic_accessory_queries_still_work(
+    route_client_and_db,
+    question,
+):
+    client, headers, _ = route_client_and_db
+
+    response = client.post("/api/customer-service/ask?debug=true", json={"question": question}, headers=headers)
+    assert response.status_code == 200, response.text
+    payload = response.json()
+
+    assert payload["answer_type"] in {"query_products", "recommendation"}, payload
+    assert payload.get("result_skus"), payload
