@@ -5122,7 +5122,7 @@ def _recommendation_hard_filters(intent: CustomerIntent, query_text: str) -> dic
         filters["specs.heat_source"] = heat_source
     if category:
         filters["product.category"] = category
-    return filters if heat_source else {}
+    return filters if (heat_source or category) else {}
 
 
 def _looks_like_alcohol_stove_cookware_recommendation_question(question: str) -> bool:

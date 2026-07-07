@@ -973,7 +973,7 @@ def _semantic_catalog_product_ref(question: str) -> str:
         return "水壶"
     if "水具" in text:
         return "水具"
-    if any(term in text for term in ("炉具", "炉子", "卡式炉", "分体炉", "一体炉")):
+    if any(term in text for term in ("炉具", "炉子", "卡式炉", "分体炉", "一体炉", "气炉", "stove", "burner")):
         return "炉具"
     if any(term in text for term in ("锅具", "套锅", "单锅", "锅")):
         return "锅具"
@@ -1389,12 +1389,12 @@ def _semantic_structured_query_result(db: Session, question: str) -> dict | None
     text = str(question or "").strip()
     if not text:
         return None
-    structured_field_filter = _structured_field_filter_result(db, text)
-    if structured_field_filter:
-        return structured_field_filter
     cookware_multi_condition = _structured_cookware_multi_condition_recommendation_result(db, text)
     if cookware_multi_condition:
         return cookware_multi_condition
+    structured_field_filter = _structured_field_filter_result(db, text)
+    if structured_field_filter:
+        return structured_field_filter
     if any(term in text for term in ("咖啡器具", "咖啡")) and "手冲" in text:
         rows = [row for row in _phase1_catalog_rows(db, "咖啡器具") if any(term in _structured_query_row_text(row) for term in ("手冲", "细口壶", "咖啡", "滤杯"))]
         return _structured_product_query_result(
@@ -2201,6 +2201,16 @@ def _phase1_answer_mentions_product(agent_result: dict) -> bool:
     return any(term in answer for term in ("单锅", "套锅", "锅具", "烤盘", "水壶", "行山", "激川"))
 
 
+def _phase1_explicit_recommendation_scope_ref(question: str) -> str:
+    text = str(question or "").strip()
+    if not text:
+        return ""
+    ref = _semantic_catalog_product_ref(text)
+    if ref in {"炉具", "锅具", "水壶", "水具", "咖啡器具", "茶具", "配件", "餐具", "桌椅"}:
+        return ref
+    return ""
+
+
 def _phase1_structured_recommendation_result(db: Session, plan: dict) -> dict | None:
     scenario = str(plan.get("scenario") or plan.get("raw_question") or "").strip()
     if not scenario:
@@ -2285,6 +2295,9 @@ def _phase1_structured_recommendation_result(db: Session, plan: dict) -> dict | 
         combo_result = _phase1_structured_stove_griddle_result(scenario, rows)
         if combo_result:
             return combo_result
+    scope_ref = _phase1_explicit_recommendation_scope_ref(scope_text)
+    if scope_ref:
+        rows = _phase1_catalog_rows(db, scope_ref)
     scored: list[tuple[int, dict]] = []
     for row in rows:
         haystack = " ".join(

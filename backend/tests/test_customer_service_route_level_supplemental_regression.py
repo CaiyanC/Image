@@ -98,6 +98,38 @@ def _alcohol_stove_supports_from_specs(value: str) -> bool:
     return any(term in text for term in ("\u9152\u7cbe\u7089", "\u6db2\u4f53\u9152\u7cbe", "\u56fa\u4f53\u9152\u7cbe"))
 
 
+def _category_contains_any(value: str, expected_terms: tuple[str, ...]) -> bool:
+    text = str(value or "").strip()
+    return any(term in text for term in expected_terms)
+
+
+def _assert_recommendation_result_rows_stay_in_category_domain(
+    Session,
+    result_skus: list[str],
+    *,
+    include_terms: tuple[str, ...],
+    exclude_terms: tuple[str, ...],
+) -> None:
+    assert result_skus, result_skus
+    with Session() as db:
+        products = db.query(Product).filter(Product.sku.in_(result_skus)).all()
+    by_sku = {product.sku: product for product in products}
+    assert set(result_skus).issubset(by_sku.keys()), {"result_skus": result_skus, "loaded": sorted(by_sku.keys())}
+    for sku in result_skus:
+        product = by_sku[sku]
+        category = str(product.category or "")
+        assert _category_contains_any(category, include_terms), {
+            "sku": sku,
+            "actual_category": category,
+            "expected_any": include_terms,
+        }
+        assert not _category_contains_any(category, exclude_terms), {
+            "sku": sku,
+            "actual_category": category,
+            "excluded_any": exclude_terms,
+        }
+
+
 def test_semantic_preplan_parser_accepts_code_fence_and_tracks_llm_calls(monkeypatch):
     calls = []
 
@@ -168,6 +200,16 @@ def test_recommendation_alcohol_stove_cookware_queries_keep_structured_heat_sour
     assert intent.intent in {"recommend_products", "query_products"}
     assert intent.filters.get("product.category") == "\u9505\u5177"
     assert intent.filters.get("specs.heat_source") == "\u9152\u7cbe\u7089"
+
+
+def test_recommendation_hard_filters_keep_explicit_category_for_generic_stove_recommendation():
+    intent = customer_agent_intent_service.parse_intent("\u7089\u5177\u63a8\u8350")
+
+    assert intent is not None
+    assert intent.intent == "recommend_products"
+    assert customer_agent_intent_service._recommendation_hard_filters(intent, "\u7089\u5177") == {
+        "product.category": "\u7089\u5177"
+    }
 
 
 def test_compose_recommendation_answer_bypasses_llm_for_alcohol_stove_cookware(monkeypatch):
@@ -458,6 +500,37 @@ def test_route_level_stove_combo_variant_generalization_stays_off_accessories(
 
     assert categories, payload
     assert all(category == "炉具" for category in categories.values()), categories
+
+
+@pytest.mark.parametrize(
+    "question",
+    [
+        "\u7089\u5177\u63a8\u8350",
+        "\u6709\u4ec0\u4e48\u7089\u5177\u63a8\u8350\uff1f",
+        "\u63a8\u8350\u51e0\u4e2a\u7089\u5177",
+        "\u9732\u8425\u7089\u5177\u63a8\u8350",
+        "\u6237\u5916\u7089\u5177\u63a8\u8350",
+        "\u9002\u5408\u9732\u8425\u7684\u7089\u5177\u6709\u54ea\u4e9b\uff1f",
+        "\u5361\u5f0f\u7089\u63a8\u8350",
+        "\u6c14\u7089\u63a8\u8350",
+    ],
+)
+def test_route_level_generic_stove_recommendation_queries_stay_in_stove_domain(route_client_and_db, question):
+    client, headers, Session = route_client_and_db
+
+    response = client.post("/api/customer-service/ask?debug=true", json={"question": question}, headers=headers)
+    assert response.status_code == 200, response.text
+    payload = response.json()
+
+    assert payload["answer_type"] == "recommendation", payload
+    assert payload["result_skus"], payload
+    assert payload["answer"], payload
+    _assert_recommendation_result_rows_stay_in_category_domain(
+        Session,
+        payload["result_skus"],
+        include_terms=("\u7089\u5177",),
+        exclude_terms=("\u914d\u4ef6", "\u6c34\u5177", "\u6c34\u58f6", "\u9505\u5177", "\u5496\u5561\u5668\u5177", "\u8c03\u6599\u74f6", "\u996d\u76d2", "\u676f\u5177"),
+    )
 
 
 @pytest.mark.parametrize(
