@@ -7620,8 +7620,6 @@ def _is_generic_named_product_question(question: str) -> bool:
 
 
 def _products_named_in_question(db: Session, question: str) -> list[Product]:
-    text = customer_agent_service.normalize_search_text(question)
-    lower = text.lower()
     resolved_skus: list[str] = []
     seen_resolved_skus: set[str] = set()
     for raw_sku in customer_agent_service._extract_skus(question):
@@ -7637,21 +7635,23 @@ def _products_named_in_question(db: Session, question: str) -> list[Product]:
         }
         exact_products = [sku_map[sku] for sku in resolved_skus if sku in sku_map]
         if exact_products:
+            if customer_agent_intent_service._looks_like_multi_product_relation_question(question):
+                return customer_agent_intent_service._relation_products_from_question(db, question, exact_products)
             return exact_products
+    subject = customer_agent_intent_service._detail_subject_from_question(question) or question
+    if customer_agent_intent_service._looks_like_contents_grounding_question(question):
+        normalized_subject = customer_agent_service.normalize_search_text(subject)
+        if (
+            normalized_subject
+            and not customer_agent_service._extract_skus(normalized_subject)
+            and len(normalized_subject) < 3
+        ):
+            return []
     products = db.query(Product).all()
-    matched: list[Product] = []
-    for product in products:
-        names = [product.sku, product.product_name_cn, product.product_name_en]
-        for raw_name in names:
-            name = str(raw_name or "").strip()
-            if len(name) < 2:
-                continue
-            aliases = customer_agent_service.product_name_aliases(name)
-            if any(alias.lower() in lower for alias in aliases):
-                matched.append(product)
-                break
-    matched.sort(key=lambda item: (("pro" not in (item.product_name_cn or "").lower()), -(len(item.product_name_cn or ""))))
-    return matched
+    matched_products = customer_agent_service.resolve_named_product_candidates(question, products, subject=subject)
+    if customer_agent_intent_service._looks_like_multi_product_relation_question(question):
+        return customer_agent_intent_service._relation_products_from_question(db, question, matched_products)
+    return matched_products
 
 
 def _is_variant_compare_question(question: str) -> bool:

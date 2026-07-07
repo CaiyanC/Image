@@ -7,6 +7,7 @@ import pytest
 from app.models import Product, ProductBusiness, ProductSpecs
 from app.services import customer_agent_intent_service, customer_agent_planner_service, customer_service_service
 from test_customer_service_route_level_regression import (
+    _add_product,
     _add_knowledge_chunk,
     _add_product_qa,
     route_client_and_db,
@@ -70,6 +71,18 @@ def _seed_cf_pg19_generic_detail_noise(Session) -> None:
             source_type="product",
             metadata={"section": "product_detail", "category": "锅具"},
         )
+        db.commit()
+
+
+def _seed_contents_resolution_priority_products(Session) -> None:
+    with Session() as db:
+        _add_product(db, "CS-G25", "小青炉", "炉具", "/", "不锈钢", "气罐", "基础款炉具", "露营烧烤", 2100)
+        _add_product(db, "CS-G25-B", "小青炉Pro", "炉具", "/", "不锈钢", "气罐", "Pro版炉具", "露营烧烤", 2300)
+        _add_product(db, "CF-PG19PRO", "瓦片烤盘Pro", "锅具", "8英寸", "硬质氧化铝合金", "燃气炉", "升级款烤盘", "露营烧烤 营地早餐", 860)
+        _add_product(db, "CS-B16-37", "气炉围雪炉", "配件", "/", "不锈钢", "/", "围雪炉配件", "炉具维护", 120)
+        _add_product(db, "CS-G35", "围雪炉Pro", "炉具", "/", "不锈钢", "气罐", "围雪炉系列", "露营烧烤", 2600)
+        _add_product(db, "TW-139CS", "城市出逃饭盒", "餐具", "900ML", "304不锈钢", "/", "城市出逃系列", "公园野餐", 180)
+        _add_product(db, "CW-C65-3", "城市出逃1L水壶(电光绿)", "水壶", "1L", "铝合金", "燃气炉", "城市出逃系列", "户外补水", 280)
         db.commit()
 
 
@@ -2574,6 +2587,117 @@ def test_route_level_contents_phrasing_family_ambiguous_product_name_clarifies(
     assert payload.get("needs_clarification") is True, payload
     assert "Product not found" not in answer, answer
     assert "当前匹配到【配件】类产品共有" not in answer, answer
+    assert any(term in answer for term in ("请先指定", "具体款式", "多个相关商品")), answer
+
+
+@pytest.mark.parametrize(
+    "question",
+    [
+        "CS-G25 包装里有什么？",
+        "CS-G25 标配有什么？",
+        "CS-G25 随附什么？",
+        "CS-G25 附带什么？",
+        "CS-G25 standard accessories?",
+    ],
+)
+def test_route_level_contents_family_explicit_sku_prefers_exact_sku_over_variant(
+    route_client_and_db,
+    question,
+):
+    client, headers, Session = route_client_and_db
+    _seed_contents_grounding_evidence(Session)
+    _seed_contents_resolution_priority_products(Session)
+
+    response = client.post("/api/customer-service/ask?debug=true", json={"question": question}, headers=headers)
+    assert response.status_code == 200, response.text
+    payload = response.json()
+
+    _assert_contents_contract_answer(payload, expected_sku="CS-G25")
+    assert payload.get("result_skus") == ["CS-G25"], payload.get("result_skus")
+
+
+@pytest.mark.parametrize(
+    "question",
+    [
+        "CF-PG19PRO 标配有什么？",
+        "CS-G25-B 标配有什么？",
+    ],
+)
+def test_route_level_contents_family_explicit_sku_prefers_exact_sku_for_other_variant_groups(
+    route_client_and_db,
+    question,
+):
+    client, headers, Session = route_client_and_db
+    _seed_contents_grounding_evidence(Session)
+    _seed_contents_resolution_priority_products(Session)
+
+    expected_sku = question.split(" ", 1)[0]
+
+    response = client.post("/api/customer-service/ask?debug=true", json={"question": question}, headers=headers)
+    assert response.status_code == 200, response.text
+    payload = response.json()
+
+    _assert_contents_contract_answer(payload, expected_sku=expected_sku)
+    assert payload.get("result_skus") == [expected_sku], payload.get("result_skus")
+
+
+@pytest.mark.parametrize(
+    "question",
+    [
+        "瓦片烤盘Pro 有哪些配件？",
+        "瓦片烤盘Pro 包装里有什么？",
+        "瓦片烤盘Pro 标配有什么？",
+    ],
+)
+def test_route_level_contents_family_unique_name_prefers_strong_version_match(
+    route_client_and_db,
+    question,
+):
+    client, headers, Session = route_client_and_db
+    _seed_contents_grounding_evidence(Session)
+    _seed_contents_resolution_priority_products(Session)
+
+    response = client.post("/api/customer-service/ask?debug=true", json={"question": question}, headers=headers)
+    assert response.status_code == 200, response.text
+    payload = response.json()
+
+    assert payload["answer_type"] != "clarification", payload
+    _assert_contents_contract_answer(payload, expected_sku="CF-PG19PRO")
+    assert payload.get("result_skus") == ["CF-PG19PRO"], payload.get("result_skus")
+
+
+@pytest.mark.parametrize(
+    "question",
+    [
+        "围雪炉 有哪些配件？",
+        "围雪炉 包装清单是什么？",
+        "城市出逃 有哪些配件？",
+        "城市出逃 包装清单是什么？",
+        "瓦片烤盘 有哪些配件？",
+        "瓦片烤盘 包装清单是什么？",
+    ],
+)
+def test_route_level_contents_family_ambiguous_names_must_clarify(
+    route_client_and_db,
+    question,
+):
+    client, headers, Session = route_client_and_db
+    _seed_contents_grounding_evidence(Session)
+    _seed_cf_pg19_generic_detail_noise(Session)
+    _seed_contents_resolution_priority_products(Session)
+
+    response = client.post("/api/customer-service/ask?debug=true", json={"question": question}, headers=headers)
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    answer = str(payload.get("answer") or "")
+
+    assert payload["answer_type"] == "clarification", payload
+    assert payload.get("needs_clarification") is True, payload
+    assert "Product not found" not in answer, answer
+    assert payload.get("result_skus"), payload
+    assert payload["answer_type"] not in {"query_products", "product_query"}, payload
+    assert "当前匹配到【配件】类产品共有" not in answer, answer
+    assert "当前资料未标注该商品的套装包含内容" not in answer, answer
     assert any(term in answer for term in ("请先指定", "具体款式", "多个相关商品")), answer
 
 

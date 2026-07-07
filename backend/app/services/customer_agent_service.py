@@ -124,6 +124,155 @@ def product_name_aliases(value: Any) -> list[str]:
     aliases.sort(key=len, reverse=True)
     return aliases
 
+
+VERSION_TOKENS = ("pro", "plus", "max", "lite", "mini", "ultra")
+VERSION_SUFFIX_RE = re.compile(r"(?:pro|plus|max|lite|mini|ultra)$", re.I)
+
+
+def product_name_family_aliases(value: Any) -> list[str]:
+    aliases = product_name_aliases(value)
+    family_aliases: list[str] = []
+    seen = {alias.lower() for alias in aliases}
+    for alias in aliases:
+        stripped = VERSION_SUFFIX_RE.sub("", alias).strip(" -_()（）")
+        stripped = re.sub(r"(?:饭盒|水壶|保温杯|套锅|单锅|炒锅|煎锅|烤盘|茶具|炉|炉具)$", "", stripped).strip(" -_()（）")
+        if len(stripped) >= 2 and stripped.lower() not in seen:
+            family_aliases.append(stripped)
+            seen.add(stripped.lower())
+    family_aliases.sort(key=len, reverse=True)
+    return family_aliases
+
+
+def product_name_version_tokens(value: Any) -> set[str]:
+    text = normalize_search_text(value or "").lower()
+    return {token for token in VERSION_TOKENS if token in text}
+
+
+def resolve_named_product_candidates(question: str, products: list[Product], *, subject: str | None = None) -> list[Product]:
+    normalized_question = normalize_search_text(question or "").lower()
+    normalized_subject = normalize_search_text(subject or question or "").lower()
+    subject_versions = product_name_version_tokens(normalized_subject)
+    matches: list[tuple[int, int, Product, dict[str, bool]]] = []
+
+    for product in products:
+        names = [getattr(product, "product_name_cn", "") or "", getattr(product, "product_name_en", "") or ""]
+        strong_exact = False
+        strong_contains = False
+        family_exact = False
+        family_contains = False
+        fuzzy_contains = False
+        subject_exact_alias = False
+        subject_family_alias = False
+        subject_in_name = False
+        best_len = 0
+        product_versions = set()
+
+        for name in names:
+            if not str(name).strip():
+                continue
+            strong_aliases = product_name_aliases(name)
+            family_aliases = product_name_family_aliases(name)
+            product_versions.update(product_name_version_tokens(name))
+            for alias in strong_aliases:
+                alias_lower = alias.lower()
+                if normalized_subject and alias_lower == normalized_subject:
+                    subject_exact_alias = True
+                if subject_versions and not (subject_versions & product_versions) and alias_lower != normalized_subject:
+                    continue
+                if alias_lower == normalized_subject:
+                    strong_exact = True
+                    best_len = max(best_len, len(alias_lower))
+                elif alias_lower and (alias_lower in normalized_subject or alias_lower in normalized_question):
+                    strong_contains = True
+                    best_len = max(best_len, len(alias_lower))
+            for alias in family_aliases:
+                alias_lower = alias.lower()
+                if normalized_subject and alias_lower == normalized_subject:
+                    subject_family_alias = True
+                if alias_lower == normalized_subject:
+                    family_exact = True
+                    best_len = max(best_len, len(alias_lower))
+                elif alias_lower and (alias_lower in normalized_subject or alias_lower in normalized_question):
+                    family_contains = True
+                    best_len = max(best_len, len(alias_lower))
+            normalized_name = normalize_search_text(name).lower()
+            if normalized_subject and normalized_subject in normalized_name:
+                subject_in_name = True
+            if normalized_subject and normalized_subject in normalized_name:
+                fuzzy_contains = True
+                best_len = max(best_len, len(normalized_subject))
+
+        score = 0
+        if strong_exact:
+            score = 400 + best_len
+        elif strong_contains:
+            score = 300 + best_len
+        elif family_exact:
+            score = 200 + best_len
+        elif family_contains:
+            score = 100 + best_len
+        elif fuzzy_contains:
+            score = 50 + best_len
+        if score > 0:
+            matches.append(
+                (
+                    score,
+                    best_len,
+                    product,
+                    {
+                        "strong_exact": strong_exact,
+                        "strong_contains": strong_contains,
+                        "family_exact": family_exact,
+                        "family_contains": family_contains,
+                        "fuzzy_contains": fuzzy_contains,
+                        "subject_exact_alias": subject_exact_alias,
+                        "subject_family_alias": subject_family_alias,
+                        "subject_in_name": subject_in_name,
+                    },
+                )
+            )
+
+    if not matches:
+        return []
+
+    matches.sort(key=lambda item: (-item[0], -item[1], len(str(getattr(item[2], "product_name_cn", "") or "")), str(getattr(item[2], "sku", "") or "")))
+
+    if subject_versions:
+        top_score = matches[0][0]
+        top = [item[2] for item in matches if item[0] == top_score]
+        return top[:5]
+
+    family_ambiguous = [
+        item[2]
+        for item in matches
+        if item[3]["subject_exact_alias"] or item[3]["subject_family_alias"] or item[3]["subject_in_name"]
+    ]
+    if normalized_subject and len(family_ambiguous) > 1:
+        deduped_family_ambiguous: list[Product] = []
+        seen_skus: set[str] = set()
+        for product in family_ambiguous:
+            sku = str(getattr(product, "sku", "") or "").strip().upper()
+            if not sku or sku in seen_skus:
+                continue
+            deduped_family_ambiguous.append(product)
+            seen_skus.add(sku)
+        if len(deduped_family_ambiguous) > 1:
+            return deduped_family_ambiguous[:5]
+
+    exactish = [item[2] for item in matches if item[3]["strong_exact"] or item[3]["family_exact"]]
+    if len(exactish) > 1:
+        return exactish[:5]
+
+    strongish = [item[2] for item in matches if item[3]["strong_exact"] or item[3]["strong_contains"]]
+    if len(strongish) == 1:
+        return strongish
+    if len(strongish) > 1:
+        return strongish[:5]
+
+    top_score = matches[0][0]
+    top = [item[2] for item in matches if item[0] == top_score]
+    return top[:5]
+
 QUERY_FIELD_ALIASES = {
     **agent_action_service.FIELD_ALIASES,
     "SKU": "product.sku",

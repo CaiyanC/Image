@@ -584,24 +584,23 @@ async def answer_product_usage_care_request(
     text = str(question or "").strip()
     named_products = named_products or []
     if _looks_like_contents_grounding_question(text):
-        if not named_products:
+        resolved_products: list[Product] = []
+        resolved_seen: set[str] = set()
+        for raw_sku in _extract_skus(text):
+            resolved_sku = _resolve_existing_sku(db, raw_sku)
+            if not resolved_sku:
+                continue
+            normalized_sku = str(resolved_sku or "").strip().upper()
+            if not normalized_sku or normalized_sku in resolved_seen:
+                continue
+            product = db.query(Product).filter(Product.sku == resolved_sku).first()
+            if product:
+                resolved_seen.add(normalized_sku)
+                resolved_products.append(product)
+        if resolved_products:
+            named_products = resolved_products
+        elif not named_products:
             named_products = _explicit_products_from_question(db, text)
-        if not named_products:
-            resolved_products: list[Product] = []
-            resolved_seen: set[str] = set()
-            for raw_sku in _extract_skus(text):
-                resolved_sku = _resolve_existing_sku(db, raw_sku)
-                if not resolved_sku:
-                    continue
-                normalized_sku = str(resolved_sku or "").strip().upper()
-                if not normalized_sku or normalized_sku in resolved_seen:
-                    continue
-                product = db.query(Product).filter(Product.sku == resolved_sku).first()
-                if product:
-                    resolved_seen.add(normalized_sku)
-                    resolved_products.append(product)
-            if resolved_products:
-                named_products = resolved_products
         if len(named_products) > 1:
             return _build_contents_accessories_ambiguity_result(text, named_products)
     named_products = _narrow_contents_grounding_products(db, text, named_products)
@@ -2262,22 +2261,24 @@ def _looks_like_product_compatibility_question(question: str) -> bool:
 
 
 def _explicit_product_rows_from_question(db: Session, question: str) -> list[dict[str, Any]]:
-    text = customer_agent_service.normalize_search_text(question)
     rows: list[dict[str, Any]] = []
     seen: set[str] = set()
-    products = db.query(Product).all()
-    for product in products:
-        sku = str(product.sku or "").strip().upper()
-        if not sku or sku in seen:
-            continue
-        name_cn_aliases = customer_agent_service.product_name_aliases(getattr(product, "product_name_cn", "") or "")
-        name_en_aliases = customer_agent_service.product_name_aliases(getattr(product, "product_name_en", "") or "")
-        sku_text = customer_agent_service.normalize_search_text(sku)
-        if (
-            any(alias and alias in text for alias in name_cn_aliases)
-            or any(alias and alias in text for alias in name_en_aliases)
-            or (sku_text and sku_text in text)
-        ):
+    explicit_skus: list[str] = []
+    for raw_sku in _extract_skus(question):
+        resolved_sku = _resolve_existing_sku(db, raw_sku)
+        normalized_sku = str(resolved_sku or "").strip().upper()
+        if normalized_sku and normalized_sku not in seen:
+            explicit_skus.append(normalized_sku)
+            seen.add(normalized_sku)
+    if explicit_skus:
+        sku_map = {
+            str(getattr(product, "sku", "") or "").strip().upper(): product
+            for product in db.query(Product).filter(Product.sku.in_(explicit_skus)).all()
+        }
+        for sku in explicit_skus:
+            product = sku_map.get(sku)
+            if not product:
+                continue
             rows.append(
                 {
                     "sku": sku,
@@ -2286,7 +2287,25 @@ def _explicit_product_rows_from_question(db: Session, question: str) -> list[dic
                     "category": getattr(product, "category", None),
                 }
             )
-            seen.add(sku)
+        if rows:
+            return rows
+    text = customer_agent_service.normalize_search_text(question)
+    subject = _detail_subject_from_question(question) or question
+    products = db.query(Product).all()
+    matched_products = customer_agent_service.resolve_named_product_candidates(question, products, subject=subject)
+    for product in matched_products:
+        sku = str(product.sku or "").strip().upper()
+        if not sku or sku in seen:
+            continue
+        rows.append(
+            {
+                "sku": sku,
+                "product_name_cn": getattr(product, "product_name_cn", None),
+                "product_name_en": getattr(product, "product_name_en", None),
+                "category": getattr(product, "category", None),
+            }
+        )
+        seen.add(sku)
     return rows
 
 
@@ -5814,6 +5833,9 @@ def _detail_subject_from_question(text: str) -> str:
     cleaned = re.sub(r"^(?:帮我|麻烦|请|想|我想|我想问下|我想问一下)?(?:查一下|查下|看一下|看下|问一下|问下|帮忙查一下)", "", cleaned).strip(" ，。？！；;")
     if not cleaned:
         return ""
+    contents_subject = _contents_accessories_subject_from_question(cleaned)
+    if contents_subject:
+        return contents_subject
     quoted = _quoted_subject_from_question(cleaned)
     if quoted:
         return quoted
@@ -5855,6 +5877,23 @@ def _detail_subject_from_question(text: str) -> str:
             subject = _clean_detail_subject(subject)
             if subject and len(subject) >= 2:
                 return subject
+    return ""
+
+
+def _contents_accessories_subject_from_question(text: str) -> str:
+    value = customer_agent_service.normalize_search_text(text)
+    if not value or not _looks_like_contents_grounding_question(value):
+        return ""
+    lower_value = value.lower()
+    for term in sorted(CONTENTS_GROUNDING_TERMS, key=len, reverse=True):
+        idx = lower_value.find(term.lower()) if term.isascii() else value.find(term)
+        if idx <= 0:
+            continue
+        subject = value[:idx].strip(" ，。？！；;")
+        subject = re.sub(r"的$", "", subject).strip(" ，。？！；;")
+        subject = _clean_detail_subject(subject)
+        if subject and len(subject) >= 2:
+            return subject
     return ""
 
 
