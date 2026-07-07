@@ -2791,3 +2791,108 @@ def test_route_level_contents_phrasing_family_generic_accessory_queries_still_wo
 
     assert payload["answer_type"] in {"query_products", "recommendation"}, payload
     assert payload.get("result_skus"), payload
+
+
+@pytest.mark.parametrize(
+    "question",
+    [
+        "婧川水壶 有哪些配件？",
+        "婧川水壶 包装清单是什么？",
+        "婧川水壶 随附什么？",
+        "婧川水壶 package includes?",
+        "婧川水壶 what is included?",
+        "星河水壶 包装清单是什么？",
+        "青川套锅 标配有什么？",
+        "远山炉 随附什么？",
+    ],
+)
+def test_route_level_unresolved_product_like_contents_questions_clarify_instead_of_generic_catalog_or_empty_kb(
+    route_client_and_db,
+    question,
+):
+    client, headers, Session = route_client_and_db
+    _seed_contents_grounding_evidence(Session)
+    _seed_contents_resolution_priority_products(Session)
+
+    response = client.post("/api/customer-service/ask?debug=true", json={"question": question}, headers=headers)
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    answer = str(payload.get("answer") or "")
+
+    assert payload["answer_type"] == "clarification", payload
+    assert payload.get("needs_clarification") is True, payload
+    assert payload.get("result_skus") in ([], None), payload.get("result_skus")
+    assert payload["answer_type"] not in {"query_products", "product_query", "knowledge_base_answer"}, payload
+    assert "Product not found" not in answer, answer
+    assert "当前匹配到【配件】类产品共有" not in answer, answer
+    assert any(term in answer for term in ("没能", "具体 SKU", "确认是哪一款", "确认具体商品", "请提供 SKU")), answer
+
+
+@pytest.mark.parametrize(
+    "question",
+    [
+        "户外有什么配件？",
+        "配件推荐",
+        "有哪些配件推荐？",
+        "露营配件推荐",
+        "水壶推荐",
+        "有哪些水壶？",
+        "户外水壶推荐",
+    ],
+)
+def test_route_level_unresolved_product_like_guard_does_not_break_generic_queries(
+    route_client_and_db,
+    question,
+):
+    client, headers, _ = route_client_and_db
+
+    response = client.post("/api/customer-service/ask?debug=true", json={"question": question}, headers=headers)
+    assert response.status_code == 200, response.text
+    payload = response.json()
+
+    assert payload["answer_type"] in {"query_products", "recommendation"}, payload
+
+
+@pytest.mark.parametrize(
+    "question",
+    [
+        "CS-G25 标配有什么？",
+        "CS-G25 standard accessories?",
+        "CS-G25-B 包装里有什么？",
+        "CF-PG19 标配有什么？",
+        "瓦片烤盘Pro 标配有什么？",
+        "围雪炉 包装清单是什么？",
+        "天鹅壶 包装清单是什么？",
+        "CW-C83 套装和单品有什么区别？",
+        "CT-T04(BM) 里面有什么？",
+        "CF-PG19 有赠品吗？",
+        "炉具推荐",
+        "哪些水具是不锈钢？",
+    ],
+)
+def test_route_level_unresolved_product_like_guard_preserves_existing_families(
+    route_client_and_db,
+    question,
+):
+    client, headers, Session = route_client_and_db
+    _seed_contents_grounding_evidence(Session)
+    _seed_cf_pg19_generic_detail_noise(Session)
+    _seed_contents_resolution_priority_products(Session)
+
+    response = client.post("/api/customer-service/ask?debug=true", json={"question": question}, headers=headers)
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    answer = str(payload.get("answer") or "")
+
+    assert answer, payload
+    assert "Product not found" not in answer, answer
+    if question in {"围雪炉 包装清单是什么？", "天鹅壶 包装清单是什么？"}:
+        assert payload["answer_type"] == "clarification", payload
+    elif question in {"炉具推荐", "哪些水具是不锈钢？"}:
+        assert payload["answer_type"] in {"recommendation", "query_products", "product_query"}, payload
+    elif question == "CF-PG19 有赠品吗？":
+        assert payload["answer_type"] in {"product_detail", "product_usage_care"}, payload
+    elif question == "CW-C83 套装和单品有什么区别？":
+        assert payload["answer_type"] in {"comparison", "product_usage_care", "product_detail"}, payload
+    else:
+        assert payload["answer_type"] != "clarification", payload

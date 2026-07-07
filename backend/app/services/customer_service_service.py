@@ -3635,6 +3635,32 @@ async def ask_customer_service(
             semantic_preplan=semantic_preplan,
         )
 
+    unresolved_product_like_contents_result = _unresolved_product_like_contents_clarification_result(db, question)
+    if unresolved_product_like_contents_result:
+        unresolved_product_like_contents_result = _attach_phase1_plan_and_timing(
+            unresolved_product_like_contents_result,
+            phase1_plan,
+            _phase1_timing(
+                request_start=request_start,
+                planner_duration_ms=planner_duration_ms,
+            ),
+        )
+        unresolved_product_like_contents_result = _attach_semantic_preplan_debug(
+            unresolved_product_like_contents_result,
+            semantic_preplan,
+            final_route=str(unresolved_product_like_contents_result.get("answer_type") or "clarification"),
+        )
+        return await _save_agent_result_and_return(
+            db,
+            user_id=user_id,
+            question=question,
+            conversation_id=conversation_id,
+            agent_result=unresolved_product_like_contents_result,
+            request_start=request_start,
+            branch="unresolved_product_like_contents_clarification",
+            semantic_preplan=semantic_preplan,
+        )
+
     if (
         not conversation_id
         and _is_product_usage_care_question(question)
@@ -7586,6 +7612,10 @@ def _public_intent_name(intent: str | None, answer_type: str | None = None) -> s
 async def _try_named_product_shortcut(db: Session, *, user_id: str, question: str) -> dict | None:
     products = _products_named_in_question(db, question)
     if not products:
+        unresolved_clarification = _unresolved_product_like_contents_clarification_result(db, question)
+        if unresolved_clarification:
+            return unresolved_clarification
+    if not products:
         return None
     if customer_agent_intent_service._looks_like_contents_grounding_question(question):
         return await customer_agent_intent_service.answer_product_usage_care_request(
@@ -7606,6 +7636,81 @@ async def _try_named_product_shortcut(db: Session, *, user_id: str, question: st
         detail = product_service.get_product_detail(db, products[0].sku)
         return _named_product_context_result(question, detail)
     return None
+
+
+def _unresolved_product_like_contents_clarification_result(db: Session, question: str) -> dict | None:
+    if not customer_agent_intent_service._looks_like_contents_grounding_question(question):
+        return None
+    if customer_agent_intent_service._looks_like_multi_product_relation_question(question):
+        return None
+    if customer_agent_service._extract_skus(question):
+        return None
+    if _resolve_sku(db, question, None):
+        return None
+    if _products_named_in_question(db, question):
+        return None
+    subject = customer_agent_intent_service._detail_subject_from_question(question)
+    if not subject:
+        return None
+    if not customer_agent_intent_service._looks_like_named_product_term(subject):
+        return None
+    if _is_generic_contents_subject(subject):
+        return None
+    answer = (
+        f"我没能在当前商品资料里明确找到“{subject}”对应的具体 SKU。"
+        "你可以提供 SKU，或确认是哪一款商品，我再帮你查包装清单、配件或开箱内容。"
+    )
+    return {
+        "intent": "clarify",
+        "answer_type": "clarification",
+        "answer": answer,
+        "results": [],
+        "result_skus": [],
+        "candidate_skus": [],
+        "needs_clarification": True,
+        "answer_metadata": {
+            "source": "unresolved_product_like_contents_clarification",
+            "evidence_status": "unresolved_product_like_subject",
+        },
+        "debug": {"agent_mode": "unresolved_product_like_contents_clarification"},
+        "skip_polish": True,
+    }
+
+
+def _is_generic_contents_subject(subject: str) -> bool:
+    value = customer_agent_service.normalize_search_text(subject).strip()
+    if not value:
+        return True
+    generic_terms = {
+        "户外",
+        "露营",
+        "野营",
+        "配件",
+        "水壶",
+        "水具",
+        "锅具",
+        "套锅",
+        "单锅",
+        "炉具",
+        "炉子",
+        "茶具",
+        "咖啡器具",
+        "杯具",
+        "杯子",
+        "水杯",
+        "壶",
+        "锅",
+        "炉",
+        "杯",
+        "包",
+    }
+    if value in generic_terms:
+        return True
+    stripped = value
+    for prefix in ("户外", "露营", "野营", "徒步", "公园", "野餐", "车载", "营地", "新手"):
+        if stripped.startswith(prefix):
+            stripped = stripped[len(prefix):].strip()
+    return stripped in generic_terms
 
 
 def _is_generic_named_product_question(question: str) -> bool:
