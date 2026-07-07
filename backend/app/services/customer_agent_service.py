@@ -784,13 +784,19 @@ def _action_response(actions, answer: str) -> dict:
 def _extract_skus(text: str) -> list[str]:
     seen = []
     normalized_text = normalize_search_text(text or "")
-    for item in SKU_RE.findall(normalized_text):
-        normalized = _trim_sku_tail_candidate(item)
-        if normalized not in seen:
-            seen.append(normalized)
-    for candidate in _extract_sku_prefix_candidates(normalized_text):
-        if candidate not in seen:
-            seen.append(candidate)
+    variants = [
+        normalized_text,
+        normalized_text.replace("（", "(").replace("）", ")"),
+        normalized_text.replace("(", "（").replace(")", "）"),
+    ]
+    for variant in variants:
+        for item in SKU_RE.findall(variant):
+            normalized = _trim_sku_tail_candidate(item)
+            if normalized not in seen:
+                seen.append(normalized)
+        for candidate in _extract_sku_prefix_candidates(variant):
+            if candidate not in seen:
+                seen.append(candidate)
     return seen
 
 

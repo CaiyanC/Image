@@ -1021,6 +1021,17 @@ def _looks_like_semantic_catalog_query(question: str) -> bool:
     return any(term in text for term in count_or_list_terms) and any(term in text for term in scope_terms)
 
 
+def _has_resolved_entity_contents_accessories_question(db: Session, question: str) -> bool:
+    text = str(question or "").strip()
+    if not text:
+        return False
+    if not customer_agent_intent_service._looks_like_contents_grounding_question(text):
+        return False
+    if _resolve_sku(db, text, None):
+        return True
+    return len(_products_named_in_question(db, text)) == 1
+
+
 def _structured_query_row_text(row: dict[str, Any]) -> str:
     return " ".join(
         str(row.get(key) or "").strip()
@@ -1566,6 +1577,8 @@ def _semantic_structured_query_result(db: Session, question: str) -> dict | None
     text = str(question or "").strip()
     if not text:
         return None
+    if _has_resolved_entity_contents_accessories_question(db, text):
+        return None
     cookware_multi_condition = _structured_cookware_multi_condition_recommendation_result(db, text)
     if cookware_multi_condition:
         return cookware_multi_condition
@@ -1669,6 +1682,12 @@ def _semantic_structured_query_result(db: Session, question: str) -> dict | None
             source="structured_accessory_storage_query",
             reason_label="配件 / 收纳语义",
         )
+    if (
+        not _has_resolved_entity_contents_accessories_question(db, text)
+        and any(term in text for term in ("配件", "附件"))
+        and any(term in text for term in ("有什么", "有啥"))
+    ):
+        return _phase1_catalog_count_result(db, {"product_ref": "配件"})
     if _looks_like_semantic_catalog_query(text):
         return _phase1_catalog_count_result(db, {"product_ref": _semantic_catalog_product_ref(text)})
     return _unknown_product_fact_result(text)
@@ -1759,12 +1778,14 @@ def _is_explicit_sku_detail_question(question: str) -> bool:
         return False
     if customer_agent_intent_service._is_compare_question(text):
         return False
+    if customer_agent_intent_service._looks_like_multi_product_relation_question(text):
+        return False
     if any(term in text for term in ("有哪些", "列出", "推荐哪套", "推荐哪个", "推荐哪款", "怎么选", "先买哪个")):
         return False
     fields = _explicit_sku_detail_requested_fields(text)
     if fields:
         return True
-    return any(term in text for term in ("适合什么场景", "适合露营", "适合几个人", "干嘛用", "能不能用明火", "能不能用酒精炉", "直接加热", "明火直烧", "卡式炉", "燃气炉", "分体炉", "一体炉"))
+    return any(term in text for term in ("是什么", "是什么产品", "介绍一下", "适合什么场景", "适合露营", "适合几个人", "干嘛用", "能不能用明火", "能不能用酒精炉", "直接加热", "明火直烧", "卡式炉", "燃气炉", "分体炉", "一体炉"))
 
 
 def _is_explicit_sku_heat_source_question(question: str) -> bool:
@@ -3707,7 +3728,11 @@ async def ask_customer_service(
         phase1_direct_result = _phase1_product_field_result(db, phase1_plan)
     elif phase1_plan.get("primary_intent") == "category_compatibility":
         phase1_direct_result = _phase1_category_compatibility_result(db, phase1_plan)
-    elif phase1_plan.get("primary_intent") == "catalog_count" and _looks_like_semantic_catalog_query(question):
+    elif (
+        phase1_plan.get("primary_intent") == "catalog_count"
+        and _looks_like_semantic_catalog_query(question)
+        and not _has_resolved_entity_contents_accessories_question(db, question)
+    ):
         phase1_direct_result = _phase1_catalog_count_result(db, phase1_plan)
     elif phase1_plan.get("primary_intent") in {"product_compare_recommendation", "comparison"}:
         phase1_direct_result = _phase1_compare_choice_result(db, phase1_plan)
@@ -5374,6 +5399,8 @@ def _sku_identity_subject(question: str) -> str:
 def _try_product_qa_shortcut(db: Session, question: str) -> dict | None:
     if len(_products_named_in_question(db, question)) >= 2:
         return None
+    if customer_agent_intent_service._looks_like_multi_product_relation_question(question):
+        return None
     if customer_agent_intent_service._looks_like_usage_care_question(question):
         return None
     if customer_agent_intent_service._looks_like_contents_grounding_question(question):
@@ -6852,7 +6879,8 @@ def _is_product_usage_care_question(question: str) -> bool:
         return False
     if customer_agent_intent_service._looks_like_contents_grounding_question(text):
         has_product_context = (
-            bool(SKU_RE.search(text))
+            bool(customer_agent_service._extract_skus(text))
+            or bool(SKU_RE.search(text))
             or any(term in text for term in _USAGE_CARE_PRODUCT_TERMS)
         )
         return has_product_context
@@ -7588,6 +7616,22 @@ def _is_generic_named_product_question(question: str) -> bool:
 def _products_named_in_question(db: Session, question: str) -> list[Product]:
     text = customer_agent_service.normalize_search_text(question)
     lower = text.lower()
+    resolved_skus: list[str] = []
+    seen_resolved_skus: set[str] = set()
+    for raw_sku in customer_agent_service._extract_skus(question):
+        resolved_sku = _resolve_sku(db, question, raw_sku)
+        normalized_sku = str(resolved_sku or "").strip().upper()
+        if normalized_sku and normalized_sku not in seen_resolved_skus:
+            resolved_skus.append(normalized_sku)
+            seen_resolved_skus.add(normalized_sku)
+    if resolved_skus:
+        sku_map = {
+            str(product.sku or "").strip().upper(): product
+            for product in db.query(Product).filter(Product.sku.in_(resolved_skus)).all()
+        }
+        exact_products = [sku_map[sku] for sku in resolved_skus if sku in sku_map]
+        if exact_products:
+            return exact_products
     products = db.query(Product).all()
     matched: list[Product] = []
     for product in products:

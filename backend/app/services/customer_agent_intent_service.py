@@ -94,15 +94,52 @@ USAGE_CARE_TERMS = (
 CONTENTS_GROUNDING_TERMS = (
     "里面有什么",
     "包含什么",
+    "包含哪些东西",
+    "包含哪些内容",
     "套装包含",
+    "套装包含什么",
     "套装里有什么",
+    "套装里带什么",
     "套装里有啥",
     "开箱有什么",
     "开箱有啥",
     "组成是什么",
     "有哪些配件",
+    "有什么配件",
+    "有啥配件",
     "包装里有什么",
     "包装内有什么",
+)
+COMPOSITION_EVIDENCE_POSITIVE_TERMS = (
+    "包含",
+    "套装包含",
+    "清单",
+    "开箱",
+    "配件",
+    "组成",
+    "内含",
+    "标配",
+    "随附",
+    "由",
+    "包装内",
+    "包装里",
+    "package includes",
+    "includes",
+    "components",
+    "accessories",
+)
+COMPOSITION_EVIDENCE_NEGATIVE_TERMS = (
+    "内容信息",
+    "SKU:",
+    "中文标题",
+    "英文标题",
+    "中文描述",
+    "英文描述",
+    "规格信息",
+    "卖点",
+    "top_selling_points",
+    "listing",
+    "long_description",
 )
 USAGE_CARE_SCRIPT_TERMS = ("客服怎么回复", "怎么回复客户", "客户说")
 USAGE_CARE_CLEANING_TERMS = ("清洗", "清洁", "怎么洗", "怎么清洗", "洗完", "冷水冲", "软刷", "温水", "擦干", "烘干", "钢丝球", "硬物刮擦")
@@ -315,6 +352,7 @@ async def process_intent_request(
                         intent.requested_fields.append(f)
     if intent:
         intent = _sanitize_intent(intent)
+        intent.target_skus = _normalize_resolved_skus(db, intent.target_skus)
         if scoped_comparison_candidates and intent.intent == "recommend_products" and previous_result_skus:
             intent.target_skus = [
                 str(item or "").strip().upper()
@@ -371,14 +409,11 @@ async def process_intent_request(
                 )
 
     explicit_named_products = _explicit_products_from_question(db, question)
-    if (
-        len(explicit_named_products) > 1
-        and _looks_like_multi_product_relation_question(question)
-        and intent.intent != "compare_products"
-    ):
+    relation_products = _relation_products_from_question(db, question, explicit_named_products)
+    if len(relation_products) > 1 and _looks_like_multi_product_relation_question(question):
         intent = CustomerIntent(
             intent="compare_products",
-            target_skus=[product.sku for product in explicit_named_products[:5] if getattr(product, "sku", None)],
+            target_skus=[product.sku for product in relation_products[:5] if getattr(product, "sku", None)],
             requested_fields=intent.requested_fields,
             semantic_query=question,
             source_context="question",
@@ -587,16 +622,23 @@ async def answer_product_usage_care_request(
                 "注意事项：如果是涂层锅，先避免强力刮擦。",
                 "避免事项：不要用钢丝球硬刮，避免伤涂层。",
             ])
+        elif usage_subtype == "composition":
+            answer = _compose_usage_care_composition_answer(text, [], [])
         else:
             answer = "系统暂未配置对应清洗/保养资料，建议联系人工客服确认。"
         compose_answer_ms = customer_perf_service.perf_ms(compose_start)
         total_ms = customer_perf_service.perf_ms(request_start)
+        fallback_results = (
+            _usage_care_named_product_results(named_products)
+            if usage_subtype == "composition"
+            else []
+        )
         return _build_response(
             intent=intent,
             answer=answer,
             sku=intent.target_skus[0] if len(intent.target_skus) == 1 else None,
             sources=[{"type": "usage_care_knowledge", "label": "使用/清洗保养检索", "count": 0}],
-            results=[],
+            results=fallback_results,
             steps=_steps(intent, [{"type": "usage_care_search", "label": "检索使用/清洗保养资料", "detail": "未命中 QA 或知识库", "ok": True}]),
             confidence="low",
             warnings=["usage_care_data_missing"],
@@ -2025,7 +2067,7 @@ async def _product_detail_result(db: Session, intent: CustomerIntent, original_q
 
 
 async def _compare_result(db: Session, intent: CustomerIntent, original_question: str = "") -> dict:
-    intent.target_skus = [_resolve_existing_sku(db, sku) for sku in intent.target_skus]
+    intent.target_skus = _normalize_resolved_skus(db, intent.target_skus)
     fields = intent.requested_fields or ["商品英文名称", "容量", "重量", "材质", "颜色", "卖点", "适用场景", "目标人群"]
     compare_text = str(original_question or "")
     if any(term in compare_text for term in ("热源", "燃料", "适用热源", "适用燃料")) and "热源" not in fields:
@@ -2205,6 +2247,34 @@ def _explicit_products_from_question(db: Session, question: str) -> list[Product
         for product in db.query(Product).filter(Product.sku.in_(sku_order)).all()
     }
     return [sku_map[sku] for sku in sku_order if sku in sku_map]
+
+
+def _relation_products_from_question(db: Session, question: str, explicit_products: list[Product]) -> list[Product]:
+    if not _looks_like_multi_product_relation_question(question):
+        return explicit_products
+    if len(explicit_products) >= 2:
+        return explicit_products
+    if len(explicit_products) != 1:
+        return explicit_products
+    primary = explicit_products[0]
+    primary_sku = str(getattr(primary, "sku", "") or "").strip().upper()
+    if not primary_sku:
+        return explicit_products
+    related = list(explicit_products)
+    seen = {primary_sku}
+    children = (
+        db.query(Product)
+        .filter(Product.sku.ilike(f"{primary_sku}-%"))
+        .order_by(Product.sku.asc())
+        .limit(4)
+        .all()
+    )
+    for product in children:
+        sku = str(getattr(product, "sku", "") or "").strip().upper()
+        if sku and sku not in seen:
+            related.append(product)
+            seen.add(sku)
+    return related
 
 
 def _compatibility_result_row(detail: dict[str, Any]) -> dict[str, Any]:
@@ -5040,6 +5110,25 @@ def _resolve_existing_sku(db: Session, sku: str) -> str:
     return text
 
 
+def _normalize_resolved_skus(db: Session, skus: list[str] | None) -> list[str]:
+    normalized: list[str] = []
+    unresolved: list[str] = []
+    seen: set[str] = set()
+    for raw_sku in skus or []:
+        text = str(raw_sku or "").strip()
+        if not text:
+            continue
+        resolved = _resolve_existing_sku(db, text)
+        resolved_text = str(resolved or "").strip().upper()
+        if resolved_text and db.query(Product).filter(Product.sku == resolved_text).first():
+            if resolved_text not in seen:
+                normalized.append(resolved_text)
+                seen.add(resolved_text)
+            continue
+        unresolved.append(text.upper())
+    return normalized or [sku for sku in unresolved if sku not in seen]
+
+
 def _detail_to_result_row(detail: dict[str, Any], *, matched_by: str) -> dict[str, Any]:
     specs = detail.get("specs") or {}
     business = detail.get("business") or {}
@@ -7691,6 +7780,11 @@ def _usage_care_query_terms(question: str) -> list[str]:
     for term in USAGE_CARE_TERMS:
         if term in str(question or "") and term not in keep:
             keep.append(term)
+    if _looks_like_contents_grounding_question(question):
+        for term in ("套装", "包含", "组成", "配件", "开箱", *CONTENTS_GROUNDING_TERMS):
+            if term in str(question or "") or len(term) <= 4:
+                if term not in keep:
+                    keep.append(term)
     return keep[:10]
 
 
@@ -7729,7 +7823,6 @@ def _compose_usage_care_answer(question: str, qa_hits: list[dict], knowledge_hit
 
 def _compose_usage_care_composition_answer(question: str, qa_hits: list[dict], knowledge_hits: list[dict]) -> str:
     label = _usage_care_product_label(question, qa_hits, knowledge_hits)
-    evidence_terms = ("茶壶", "茶杯", "配件", "开箱", "组成", "套装")
     suggestions: list[str] = []
     seen: set[str] = set()
     for item in [*qa_hits, *knowledge_hits]:
@@ -7738,14 +7831,81 @@ def _compose_usage_care_composition_answer(question: str, qa_hits: list[dict], k
             continue
         suggestions.append(candidate.strip("。；; "))
         seen.add(candidate)
-    selected = next((item for item in suggestions if any(term in item for term in evidence_terms)), "")
-    if not selected and suggestions:
-        selected = suggestions[0]
+    selected = next((item for item in suggestions if _is_composition_evidence_text(item)), "")
     if not selected:
         prefix = f"{label}：" if label else ""
-        return f"{prefix}当前资料暂未提供明确的套装包含或组成说明，建议联系人工客服确认。"
+        return (
+            f"{prefix}当前资料未标注该商品的套装包含内容、开箱清单或具体配件，"
+            "无法确认具体清单，请以平台页面或店铺页面为准。"
+        )
     prefix = f"{label}：" if label else ""
     return f"{prefix}{selected.rstrip('。；;')}。"
+
+
+def _is_composition_evidence_text(text: str) -> bool:
+    value = _normalize_usage_care_snippet(text)
+    if not value:
+        return False
+    lower_value = value.lower()
+    has_positive_signal = any(term in value for term in COMPOSITION_EVIDENCE_POSITIVE_TERMS) or any(
+        term in lower_value for term in COMPOSITION_EVIDENCE_POSITIVE_TERMS if term.isascii()
+    )
+    if not has_positive_signal:
+        return False
+    if _is_generic_composition_noise_text(value):
+        return False
+    has_negative_signal = any(term in value for term in COMPOSITION_EVIDENCE_NEGATIVE_TERMS) or any(
+        term in lower_value for term in COMPOSITION_EVIDENCE_NEGATIVE_TERMS if term.isascii()
+    )
+    if not has_negative_signal:
+        return True
+    strong_positive_terms = ("套装包含", "开箱", "清单", "内含", "标配", "随附", "package includes", "components", "accessories")
+    return any(term in value for term in strong_positive_terms) or any(
+        term in lower_value for term in strong_positive_terms if term.isascii()
+    )
+
+
+def _is_generic_composition_noise_text(text: str) -> bool:
+    value = _normalize_usage_care_snippet(text)
+    if not value:
+        return False
+    lower_value = value.lower()
+    generic_noise_terms = (
+        *COMPOSITION_EVIDENCE_NEGATIVE_TERMS,
+        "中文名:",
+        "英文名:",
+        "品牌:",
+        "系列:",
+        "类目:",
+        "等级:",
+        "生命周期:",
+        "负责人:",
+        "技术优势",
+        "使用说明",
+        "使用步骤",
+        "日常养护",
+        "开箱初洗",
+    )
+    return any(term in value for term in generic_noise_terms) or any(
+        term in lower_value for term in generic_noise_terms if term.isascii()
+    )
+
+
+def _usage_care_named_product_results(products: list[Product]) -> list[dict]:
+    rows: list[dict] = []
+    seen: set[str] = set()
+    for product in products:
+        sku = str(getattr(product, "sku", "") or "").strip().upper()
+        if not sku or sku in seen:
+            continue
+        rows.append({
+            "sku": sku,
+            "product_name_cn": getattr(product, "product_name_cn", None),
+            "field_values": {"使用/清洗保养建议": ""},
+            "matched_by": "resolved_product",
+        })
+        seen.add(sku)
+    return rows
 
 
 def _is_cold_shock_usage_care_question(question: str) -> bool:
@@ -8357,20 +8517,41 @@ def _usage_care_debug_source_texts(qa_hits: list[dict], knowledge_hits: list[dic
 
 def _usage_care_results_for_response(qa_hits: list[dict], knowledge_hits: list[dict]) -> list[dict]:
     results = []
+    seen: set[tuple[str, str, str, str]] = set()
     for item in qa_hits:
-        results.append({
+        row = {
             "sku": item.get("sku"),
             "product_name_cn": item.get("product_name_cn"),
             "field_values": {"使用/清洗保养建议": item.get("answer") or ""},
             "matched_by": "product_qa",
-        })
+        }
+        key = (
+            str(row.get("sku") or ""),
+            str(row.get("product_name_cn") or ""),
+            str((row.get("field_values") or {}).get("使用/清洗保养建议") or ""),
+            str(row.get("matched_by") or ""),
+        )
+        if key in seen:
+            continue
+        seen.add(key)
+        results.append(row)
     for item in knowledge_hits:
-        results.append({
+        row = {
             "sku": item.get("sku"),
             "product_name_cn": "",
             "field_values": {"使用/清洗保养建议": item.get("content") or ""},
             "matched_by": "knowledge_chunks",
-        })
+        }
+        key = (
+            str(row.get("sku") or ""),
+            str(row.get("product_name_cn") or ""),
+            str((row.get("field_values") or {}).get("使用/清洗保养建议") or ""),
+            str(row.get("matched_by") or ""),
+        )
+        if key in seen:
+            continue
+        seen.add(key)
+        results.append(row)
     return results
 
 
@@ -9097,11 +9278,16 @@ def _build_response(
     uncertainty: str | None = None,
     debug: dict[str, Any] | None = None,
 ) -> dict:
-    response_skus = [
-        str(row.get("sku") or "").strip().upper()
-        for row in (results or [])
-        if isinstance(row, dict) and str(row.get("sku") or "").strip()
-    ]
+    response_skus: list[str] = []
+    seen_response_skus: set[str] = set()
+    for row in (results or []):
+        if not isinstance(row, dict):
+            continue
+        normalized_sku = str(row.get("sku") or "").strip().upper()
+        if not normalized_sku or normalized_sku in seen_response_skus:
+            continue
+        seen_response_skus.add(normalized_sku)
+        response_skus.append(normalized_sku)
     contract = CustomerAnswerComposer.build_contract(
         intent=intent,
         answer=answer,

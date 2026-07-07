@@ -51,6 +51,28 @@ def _seed_contents_grounding_evidence(Session) -> None:
         db.commit()
 
 
+def _seed_cf_pg19_generic_detail_noise(Session) -> None:
+    with Session() as db:
+        _add_knowledge_chunk(
+            db,
+            chunk_id="cf-pg19-generic-detail-noise",
+            sku="CF-PG19",
+            title="瓦片烤盘产品基础资料",
+            content=(
+                "SKU: CF-PG19\n"
+                "中文名: 瓦片烤盘\n"
+                "规格信息:\n"
+                "- 材质: 铝合金\n"
+                "- 适用热源: 明火直烧、燃气炉、卡式炉、电磁炉\n"
+                "- 技术优势: 中式方形设计，方形设计增加27%烹饪空间\n"
+                "- 使用说明: 【使用步骤】1.开箱初洗：首次使用前，用温水和软布轻柔冲洗锅身，无需使用洗洁精。"
+            ),
+            source_type="product",
+            metadata={"section": "product_detail", "category": "锅具"},
+        )
+        db.commit()
+
+
 def _semantic_preplan_debug(payload: dict) -> dict:
     debug = payload.get("debug") if isinstance(payload.get("debug"), dict) else {}
     return debug.get("semantic_preplan") if isinstance(debug.get("semantic_preplan"), dict) else {}
@@ -1983,3 +2005,449 @@ def test_route_level_unknown_realtime_priority_no_regression_known_capabilities(
     assert "Product not found" not in answer, answer
     assert not any(term in answer for term in ("\u5f53\u524d\u8d44\u6599\u672a\u6807\u6ce8\u8be5\u5546\u54c1\u662f\u5426\u9644\u8d60", "\u65e0\u6cd5\u786e\u8ba4\u5b9e\u65f6")), answer
     assert any(term in answer for term in required_terms), answer
+
+
+def _assert_conservative_contents_answer(payload: dict, expected_sku: str) -> None:
+    answer = str(payload.get("answer") or "")
+    assert payload["answer_type"] == "product_usage_care", payload
+    assert answer, payload
+    assert expected_sku in (payload.get("result_skus") or []), payload.get("result_skus")
+    assert "Product not found" not in answer, answer
+    assert any(
+        term in answer
+        for term in (
+            "当前资料可确认包含",
+            "锅、炒锅和煎锅",
+            "当前资料暂未提供明确的套装包含或组成说明",
+            "当前资料未标注套装包含内容",
+            "无法确认具体清单",
+            "建议联系人工客服确认",
+        )
+    ), answer
+
+
+@pytest.mark.parametrize(
+    "question",
+    [
+        "CW-C83 套装里带什么？",
+        "CW-C83 包含哪些东西？",
+        "CW-C83 里面有什么？",
+        "CW-C83 套装包含什么？",
+        "CW-C83 有哪些配件？",
+        "CW-C83 开箱有什么？",
+    ],
+)
+def test_route_level_cw_c83_contents_questions_do_not_not_found_and_use_contents_path(
+    route_client_and_db,
+    question,
+):
+    client, headers, Session = route_client_and_db
+    _seed_contents_grounding_evidence(Session)
+
+    response = client.post("/api/customer-service/ask?debug=true", json={"question": question}, headers=headers)
+    assert response.status_code == 200, response.text
+    payload = response.json()
+
+    _assert_conservative_contents_answer(payload, "CW-C83")
+    assert payload.get("debug", {}).get("agent_mode") == "product_usage_care_fast_path", payload.get("debug")
+    assert payload["result_skus"][0] == "CW-C83", payload["result_skus"]
+    assert "CW-C83-1" not in payload["result_skus"], payload["result_skus"]
+    assert not any(term in payload["answer"] for term in ("支持酒精炉", "适用热源", "明火直烧")), payload["answer"]
+
+
+@pytest.mark.parametrize(
+    ("question", "required_terms"),
+    [
+        ("CW-C83 和 CW-C83-1 是什么关系？", ("套装", "单品", "CW-C83-1")),
+        ("CW-C83-1 是什么？", ("炊墨炒锅", "CW-C83-1")),
+        ("CW-C83-2 是什么？", ("炊墨煎锅", "CW-C83-2")),
+        ("CW-C83 套装和单品有什么区别？", ("套装", "单品", "CW-C83-1")),
+    ],
+)
+def test_route_level_cw_c83_parent_child_relation_questions_do_not_not_found(
+    route_client_and_db,
+    question,
+    required_terms,
+):
+    client, headers, Session = route_client_and_db
+    _seed_contents_grounding_evidence(Session)
+
+    response = client.post("/api/customer-service/ask?debug=true", json={"question": question}, headers=headers)
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    answer = str(payload.get("answer") or "")
+
+    assert answer, payload
+    assert "Product not found" not in answer, answer
+    for term in required_terms:
+        assert term in answer, answer
+
+
+@pytest.mark.parametrize(
+    ("question", "expected_sku"),
+    [
+        ("CF-PG19 包含哪些东西？", "CF-PG19"),
+        ("TW-422-蓝 包含哪些东西？", "TW-422-蓝"),
+    ],
+)
+def test_route_level_other_existing_sku_contents_questions_use_grounding_or_conservative_fallback(
+    route_client_and_db,
+    question,
+    expected_sku,
+):
+    client, headers, Session = route_client_and_db
+    _seed_contents_grounding_evidence(Session)
+
+    response = client.post("/api/customer-service/ask?debug=true", json={"question": question}, headers=headers)
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    answer = str(payload.get("answer") or "")
+
+    assert payload["answer_type"] == "product_usage_care", payload
+    assert expected_sku in (payload.get("result_skus") or []), payload.get("result_skus")
+    assert "Product not found" not in answer, answer
+    assert answer, payload
+
+
+@pytest.mark.parametrize(
+    "question",
+    [
+        "ZZZ-UNKNOWN-001 包含哪些东西？",
+        "完全不存在的产品名 套装里带什么？",
+    ],
+)
+def test_route_level_contents_negative_cases_can_still_not_found(route_client_and_db, question):
+    client, headers, _ = route_client_and_db
+
+    response = client.post("/api/customer-service/ask?debug=true", json={"question": question}, headers=headers)
+    assert response.status_code in {200, 404}, response.text
+    if response.status_code == 404:
+        assert "Product not found" in response.text or "没有找到" in response.text, response.text
+        return
+    payload = response.json()
+    answer = str(payload.get("answer") or "")
+    assert "Product not found" in answer or "没有找到" in answer, answer
+def _assert_not_generic_contents_dump(answer: str) -> None:
+    assert answer
+    forbidden_terms = (
+        "\u5185\u5bb9\u4fe1\u606f",
+        "SKU:",
+        "\u4e2d\u6587\u6807\u9898",
+        "\u82f1\u6587\u6807\u9898",
+        "\u4e2d\u6587\u63cf\u8ff0",
+        "\u82f1\u6587\u63cf\u8ff0",
+        "\u89c4\u683c\u4fe1\u606f",
+        "\u5356\u70b9",
+    )
+    assert not any(term in answer for term in forbidden_terms), answer
+
+
+def test_compose_usage_care_composition_answer_rejects_generic_listing_chunks_and_falls_back():
+    answer = customer_agent_intent_service._compose_usage_care_composition_answer(
+        "CW-C83 \u5957\u88c5\u91cc\u5e26\u4ec0\u4e48\uff1f",
+        [],
+        [
+            {
+                "sku": "CW-C83",
+                "content": (
+                    "\u5185\u5bb9\u4fe1\u606f:\n"
+                    "- \u4e2d\u6587\u6807\u9898: \u708a\u58a8\u5957\u9505\n"
+                    "- \u82f1\u6587\u6807\u9898: camping cookware set\n"
+                    "- \u4e2d\u6587\u63cf\u8ff0: \u8fd9\u6b3e\u5957\u9505\u91c7\u7528\u4f18\u8d28\u590d\u5408\u5e95\u8bbe\u8ba1\uff0c\u9002\u914d\u591a\u79cd\u70ed\u6e90\u3002"
+                ),
+            },
+            {
+                "sku": "CW-C83",
+                "content": (
+                    "SKU: CW-C83\n"
+                    "\u4e2d\u6587\u540d: \u708a\u58a8\u5957\u9505\n"
+                    "\u89c4\u683c\u4fe1\u606f:\n"
+                    "- \u5bb9\u91cf: \u9505\uff1a3700ML\n"
+                    "- \u6750\u8d28: \u786c\u8d28\u6c27\u5316\u94dd\u5408\u91d1"
+                ),
+            },
+        ],
+    )
+
+    assert "\u5f53\u524d\u8d44\u6599" in answer, answer
+    assert any(
+        term in answer
+        for term in (
+            "\u5957\u88c5\u5305\u542b\u5185\u5bb9",
+            "\u5f00\u7bb1\u6e05\u5355",
+            "\u65e0\u6cd5\u786e\u8ba4\u5177\u4f53\u914d\u4ef6",
+            "\u8bf7\u4ee5\u5e73\u53f0\u9875\u9762\u6216\u5e97\u94fa\u4e3a\u51c6",
+            "\u5efa\u8bae\u8054\u7cfb\u4eba\u5de5\u5ba2\u670d\u786e\u8ba4",
+        )
+    ), answer
+    _assert_not_generic_contents_dump(answer)
+
+
+def test_compose_usage_care_composition_answer_accepts_explicit_composition_evidence():
+    answer = customer_agent_intent_service._compose_usage_care_composition_answer(
+        "CT-T04(BM) \u91cc\u9762\u6709\u4ec0\u4e48\uff1f",
+        [
+            {
+                "sku": "CT-T04(BM)",
+                "answer": (
+                    "CT-T04(BM) \u4e3a\u4e00\u6574\u5957\u4fbf\u643a\u529f\u592b\u8336\u5177\uff0c"
+                    "\u542b\u8336\u58f6\u3001\u8336\u676f\u7b49\u914d\u4ef6\uff0c\u5f00\u7bb1\u5373\u53ef\u6ce1\u8336\u3002"
+                ),
+            }
+        ],
+        [],
+    )
+
+    assert any(term in answer for term in ("\u8336\u58f6", "\u8336\u676f", "\u914d\u4ef6", "\u5f00\u7bb1")), answer
+    assert "\u5185\u5bb9\u4fe1\u606f" not in answer, answer
+
+
+def test_compose_usage_care_composition_answer_rejects_generic_detail_noise_that_mentions_open_box_usage():
+    answer = customer_agent_intent_service._compose_usage_care_composition_answer(
+        "CF-PG19 有哪些配件？",
+        [],
+        [
+            {
+                "sku": "CF-PG19",
+                "content": (
+                    "SKU: CF-PG19\n"
+                    "中文名: 瓦片烤盘\n"
+                    "规格信息:\n"
+                    "- 材质: 铝合金\n"
+                    "- 适用热源: 明火直烧、燃气炉、卡式炉、电磁炉\n"
+                    "- 使用说明: 【使用步骤】1.开箱初洗：首次使用前，用温水和软布轻柔冲洗锅身，无需使用洗洁精。"
+                ),
+            }
+        ],
+    )
+
+    assert "当前资料" in answer, answer
+    assert "请以平台页面或店铺页面为准" in answer, answer
+    _assert_not_generic_contents_dump(answer)
+
+
+@pytest.mark.parametrize(
+    "question",
+    [
+        "CW-C83 \u5957\u88c5\u91cc\u5e26\u4ec0\u4e48\uff1f",
+        "CW-C83 \u5305\u542b\u54ea\u4e9b\u4e1c\u897f\uff1f",
+        "CW-C83 \u91cc\u9762\u6709\u4ec0\u4e48\uff1f",
+        "CW-C83 \u5957\u88c5\u5305\u542b\u4ec0\u4e48\uff1f",
+        "CW-C83 \u6709\u54ea\u4e9b\u914d\u4ef6\uff1f",
+        "CW-C83 \u5f00\u7bb1\u6709\u4ec0\u4e48\uff1f",
+    ],
+)
+def test_route_level_cw_c83_contents_without_direct_composition_evidence_fallbacks_instead_of_dumping_listing(
+    route_client_and_db,
+    question,
+):
+    client, headers, _ = route_client_and_db
+
+    response = client.post("/api/customer-service/ask?debug=true", json={"question": question}, headers=headers)
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    answer = str(payload.get("answer") or "")
+
+    assert payload["answer_type"] == "product_usage_care", payload
+    assert "CW-C83" in (payload.get("result_skus") or []), payload.get("result_skus")
+    assert "Product not found" not in answer, answer
+    assert answer, payload
+    _assert_not_generic_contents_dump(answer)
+    assert any(
+        term in answer
+        for term in (
+            "\u5957\u88c5\u5305\u542b\u5185\u5bb9",
+            "\u5f00\u7bb1\u6e05\u5355",
+            "\u65e0\u6cd5\u786e\u8ba4\u5177\u4f53\u6e05\u5355",
+            "\u65e0\u6cd5\u786e\u8ba4\u5177\u4f53\u914d\u4ef6",
+            "\u8bf7\u4ee5\u5e73\u53f0\u9875\u9762\u6216\u5e97\u94fa\u4e3a\u51c6",
+        )
+    ), answer
+
+
+def _assert_resolved_sku_accessories_contract(payload: dict, expected_sku: str) -> None:
+    answer = str(payload.get("answer") or "")
+    assert payload["answer_type"] == "product_usage_care", payload
+    assert expected_sku in (payload.get("result_skus") or []), payload.get("result_skus")
+    assert answer, payload
+    assert "Product not found" not in answer, answer
+    assert "当前匹配到【配件】类产品共有" not in answer, answer
+    _assert_not_generic_contents_dump(answer)
+    assert any(
+        term in answer
+        for term in (
+            "当前资料未标注该商品的套装包含内容",
+            "开箱清单",
+            "无法确认具体清单",
+            "无法确认具体配件",
+            "请以平台页面或店铺页面为准",
+            "含茶壶、茶杯等配件",
+        )
+    ), answer
+
+
+@pytest.mark.parametrize(
+    "question",
+    [
+        "CS-B14（LX） 有哪些配件？",
+        "CS-B14（LX） 有什么配件？",
+        "CS-B14（LX） 包含哪些东西？",
+        "CS-B14（LX） 开箱有什么？",
+    ],
+)
+def test_route_level_resolved_sku_accessories_questions_do_not_become_catalog_or_generic_detail_dump(
+    route_client_and_db,
+    question,
+):
+    client, headers, _ = route_client_and_db
+
+    response = client.post("/api/customer-service/ask?debug=true", json={"question": question}, headers=headers)
+    assert response.status_code == 200, response.text
+    payload = response.json()
+
+    _assert_resolved_sku_accessories_contract(payload, "CS-B14（LX）")
+
+
+@pytest.mark.parametrize(
+    ("question", "expected_sku", "grounded_terms"),
+    [
+        ("CW-C83 有哪些配件？", "CW-C83", ()),
+        ("CW-C83 有什么配件？", "CW-C83", ()),
+        ("CT-T04(BM) 有哪些配件？", "CT-T04(BM)", ("茶壶", "茶杯", "配件")),
+        ("CT-T04(BM) 有什么配件？", "CT-T04(BM)", ("茶壶", "茶杯", "配件")),
+        ("CF-PG19 有哪些配件？", "CF-PG19", ()),
+        ("CF-PG19 有什么配件？", "CF-PG19", ()),
+    ],
+)
+def test_route_level_other_resolved_sku_accessories_questions_stay_bound_to_entity(
+    route_client_and_db,
+    question,
+    expected_sku,
+    grounded_terms,
+):
+    client, headers, Session = route_client_and_db
+    if expected_sku == "CT-T04(BM)":
+        _seed_contents_grounding_evidence(Session)
+    if expected_sku == "CF-PG19":
+        _seed_cf_pg19_generic_detail_noise(Session)
+
+    response = client.post("/api/customer-service/ask?debug=true", json={"question": question}, headers=headers)
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    answer = str(payload.get("answer") or "")
+
+    assert expected_sku in (payload.get("result_skus") or []), payload.get("result_skus")
+    assert payload["answer_type"] == "product_usage_care", payload
+    assert "当前匹配到【配件】类产品共有" not in answer, answer
+    assert "Product not found" not in answer, answer
+    assert answer, payload
+    if grounded_terms:
+        _assert_not_generic_contents_dump(answer)
+        for term in grounded_terms:
+            assert term in answer, answer
+    else:
+        _assert_not_generic_contents_dump(answer)
+        assert any(
+            term in answer
+            for term in (
+                "当前资料未标注该商品的套装包含内容",
+                "开箱清单",
+                "无法确认具体清单",
+                "无法确认具体配件",
+                "请以平台页面或店铺页面为准",
+            )
+        ), answer
+
+
+@pytest.mark.parametrize(
+    "question",
+    [
+        "CS-B14（LX） 有哪些配件？",
+        "CS-B14(LX) 有哪些配件？",
+        "CT-T04(BM) 有哪些配件？",
+    ],
+)
+def test_route_level_bracket_sku_accessories_questions_are_treated_as_entity_bound_contents(
+    route_client_and_db,
+    question,
+):
+    client, headers, _ = route_client_and_db
+
+    response = client.post("/api/customer-service/ask?debug=true", json={"question": question}, headers=headers)
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    answer = str(payload.get("answer") or "")
+
+    assert payload["answer_type"] != "query_products", payload
+    assert "当前匹配到【配件】类产品共有" not in answer, answer
+
+
+@pytest.mark.parametrize(
+    "question",
+    [
+        "配件推荐",
+        "有哪些配件推荐？",
+        "露营配件推荐",
+        "户外有什么配件？",
+    ],
+)
+def test_route_level_generic_accessory_queries_still_work_without_resolved_entity(
+    route_client_and_db,
+    question,
+):
+    client, headers, _ = route_client_and_db
+
+    response = client.post("/api/customer-service/ask?debug=true", json={"question": question}, headers=headers)
+    assert response.status_code == 200, response.text
+    payload = response.json()
+
+    assert payload["answer_type"] in {"query_products", "recommendation"}, payload
+    assert payload.get("result_skus"), payload
+
+
+@pytest.mark.parametrize(
+    ("question", "expected_sku", "grounded_terms"),
+    [
+        ("瓦片烤盘 有哪些配件？", "CF-PG19", ()),
+        ("瓦片烤盘 包含哪些东西？", "CF-PG19", ()),
+        ("出山-功夫茶具（竹套版） 有哪些配件？", "CT-T04(BM)", ("茶壶", "茶杯", "配件")),
+        ("出山-功夫茶具（竹套版） 开箱有什么？", "CT-T04(BM)", ("开箱", "泡茶")),
+    ],
+)
+def test_route_level_unique_product_name_contents_accessories_questions_follow_same_contract(
+    route_client_and_db,
+    question,
+    expected_sku,
+    grounded_terms,
+):
+    client, headers, Session = route_client_and_db
+    if expected_sku == "CT-T04(BM)":
+        _seed_contents_grounding_evidence(Session)
+    if expected_sku == "CF-PG19":
+        _seed_cf_pg19_generic_detail_noise(Session)
+
+    response = client.post("/api/customer-service/ask?debug=true", json={"question": question}, headers=headers)
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    answer = str(payload.get("answer") or "")
+
+    assert payload["answer_type"] == "product_usage_care", payload
+    assert expected_sku in (payload.get("result_skus") or []), payload.get("result_skus")
+    assert "Product not found" not in answer, answer
+    assert "当前匹配到【配件】类产品共有" not in answer, answer
+    assert answer, payload
+    _assert_not_generic_contents_dump(answer)
+    if grounded_terms:
+        for term in grounded_terms:
+            assert term in answer, answer
+    else:
+        assert any(
+            term in answer
+            for term in (
+                "当前资料未标注该商品的套装包含内容",
+                "开箱清单",
+                "无法确认具体清单",
+                "无法确认具体配件",
+                "请以平台页面或店铺页面为准",
+            )
+        ), answer
