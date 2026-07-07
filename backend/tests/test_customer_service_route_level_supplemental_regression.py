@@ -4,7 +4,7 @@ import re
 
 import pytest
 
-from app.models import Product, ProductSpecs
+from app.models import Product, ProductBusiness, ProductSpecs
 from app.services import customer_agent_intent_service, customer_agent_planner_service
 from test_customer_service_route_level_regression import (
     _add_knowledge_chunk,
@@ -1452,3 +1452,128 @@ def test_route_level_alternative_followups_stay_in_same_recommendation_domain(ro
     assert payload3["answer_type"] != "clarification"
     assert payload3["result_skus"], payload3
     assert payload3["result_skus"][0] not in {"CB253", "CB254", "AC-Z13", "CW-C84", "CW-K32"}, payload3["result_skus"]
+
+
+def _structured_field_match(actual: str | None, expected: str) -> bool:
+    actual_text = str(actual or "").strip().lower()
+    expected_text = str(expected or "").strip().lower()
+    if not actual_text or not expected_text:
+        return False
+    if expected_text in actual_text:
+        return True
+    compact_actual = re.sub(r"[\s,，。/\\|;；:：()（）\[\]{}\"'`]+", "", actual_text)
+    compact_expected = re.sub(r"[\s,，。/\\|;；:：()（）\[\]{}\"'`]+", "", expected_text)
+    if compact_expected and compact_expected in compact_actual:
+        return True
+    compact_expected = re.sub(r"(材质|工艺|处理|产品)$", "", compact_expected)
+    if compact_expected and compact_expected in compact_actual:
+        return True
+    return False
+
+
+def _assert_structured_result_rows_match_filters(
+    Session,
+    result_skus: list[str],
+    *,
+    category: str,
+    body_material: str = "",
+    heat_source: str = "",
+    usage_scenarios: str = "",
+) -> None:
+    assert result_skus, result_skus
+    with Session() as db:
+        rows = (
+            db.query(Product, ProductSpecs, ProductBusiness)
+            .outerjoin(ProductSpecs, ProductSpecs.product_id == Product.id)
+            .outerjoin(ProductBusiness, ProductBusiness.product_id == Product.id)
+            .filter(Product.sku.in_(result_skus))
+            .all()
+        )
+    by_sku = {product.sku: (product, specs, business) for product, specs, business in rows}
+    assert set(result_skus).issubset(by_sku.keys()), {"result_skus": result_skus, "loaded": sorted(by_sku.keys())}
+    for sku in result_skus:
+        product, specs, business = by_sku[sku]
+        assert product.category == category, {"sku": sku, "actual_category": product.category, "expected_category": category}
+        if body_material:
+            assert _structured_field_match(getattr(specs, "body_material", None), body_material), {
+                "sku": sku,
+                "field": "body_material",
+                "actual": getattr(specs, "body_material", None),
+                "expected": body_material,
+            }
+        if heat_source:
+            assert _structured_field_match(getattr(specs, "heat_source", None), heat_source), {
+                "sku": sku,
+                "field": "heat_source",
+                "actual": getattr(specs, "heat_source", None),
+                "expected": heat_source,
+            }
+        if usage_scenarios:
+            assert _structured_field_match(getattr(business, "usage_scenarios", None), usage_scenarios), {
+                "sku": sku,
+                "field": "usage_scenarios",
+                "actual": getattr(business, "usage_scenarios", None),
+                "expected": usage_scenarios,
+            }
+
+
+@pytest.mark.parametrize(
+    ("question", "expected_category", "field_path", "expected_value", "expected_field"),
+    [
+        ("哪些水具是不锈钢？", "水具", "specs.body_material", "不锈钢", "材质"),
+        ("哪些锅具是硬质氧化铝？", "锅具", "specs.body_material", "硬质氧化铝", "材质"),
+        ("哪些锅能用燃气炉？", "锅具", "specs.heat_source", "燃气炉", "热源"),
+    ],
+)
+def test_structured_field_query_parser_additional_category_field_value_cases(
+    question,
+    expected_category,
+    field_path,
+    expected_value,
+    expected_field,
+):
+    intent = customer_agent_intent_service.parse_intent(question)
+
+    assert intent is not None, question
+    assert intent.intent == "query_products", question
+    assert intent.filters.get("product.category") == expected_category, (question, intent.filters)
+    assert intent.filters.get(field_path) == expected_value, (question, intent.filters)
+    assert intent.term == "", question
+    assert expected_field in intent.requested_fields, (question, intent.requested_fields)
+
+
+@pytest.mark.parametrize(
+    ("question", "category", "body_material", "heat_source"),
+    [
+        ("哪些水具是不锈钢？", "水具", "不锈钢", ""),
+        ("有哪些水具是不锈钢？", "水具", "不锈钢", ""),
+        ("哪些锅具是铝合金？", "锅具", "铝合金", ""),
+        ("有哪些锅具是铝合金？", "锅具", "铝合金", ""),
+        ("哪些锅具是硬质氧化铝？", "锅具", "硬质氧化铝", ""),
+        ("哪些锅能用燃气炉？", "锅具", "", "燃气炉"),
+    ],
+)
+def test_route_level_structured_field_filter_results_are_pure_db_filtered_rows(
+    route_client_and_db,
+    question,
+    category,
+    body_material,
+    heat_source,
+):
+    client, headers, Session = route_client_and_db
+
+    response = client.post("/api/customer-service/ask?debug=true", json={"question": question}, headers=headers)
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    answer_metadata = payload.get("answer_metadata") or {}
+
+    assert payload["answer_type"] in {"product_query", "query_products"}, payload
+    assert answer_metadata.get("source") == "structured_category_field_filter_query", answer_metadata
+    assert payload["result_skus"], payload
+    _assert_structured_result_rows_match_filters(
+        Session,
+        payload["result_skus"],
+        category=category,
+        body_material=body_material,
+        heat_source=heat_source,
+    )

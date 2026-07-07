@@ -903,6 +903,13 @@ def parse_intent(question: str, *, sku: str | None = None, previous_result_skus:
     semantic_query = _parse_semantic_query(text)
     recommendation_query = _parse_recommendation_query(text, semantic_query)
     term = _parse_term(text, filters, semantic_query)
+    if not requested_fields:
+        if filters.get("specs.body_material"):
+            requested_fields = ["材质"]
+        elif filters.get("specs.heat_source"):
+            requested_fields = ["热源"]
+        elif filters.get("business.usage_scenarios"):
+            requested_fields = ["适用场景"]
     fuzzy_people_cookware_subject = _fuzzy_people_cookware_subject(text)
     fallback_detail_subject = _detail_subject_from_question(text)
     prefixed_material_subject_match = re.search(
@@ -4429,6 +4436,28 @@ def _extract_structured_list_query_filters(text: str) -> dict[str, Any]:
         if value:
             filters["business.usage_scenarios"] = value
             break
+
+    if category and not any(
+        filters.get(field_path)
+        for field_path in ("specs.body_material", "specs.heat_source", "business.usage_scenarios")
+    ):
+        copula_match = re.search(
+            r"(?:哪些|有哪些|哪几款|哪几种|哪几个)[^，,。；;？?]{0,12}?(?:是|为)\s*(?P<value>[^，,。；;？?\s]{1,24})",
+            normalized,
+            flags=re.I,
+        )
+        if copula_match:
+            raw_value = _clean_filter_value(copula_match.group("value"))
+            inferred_specs = (
+                ("specs.body_material", "材质"),
+                ("specs.heat_source", "热源"),
+                ("business.usage_scenarios", "适用场景"),
+            )
+            for field_path, _field_label in inferred_specs:
+                value = _normalize_structured_filter_value(field_path, raw_value)
+                if value:
+                    filters[field_path] = value
+                    break
 
     return filters
 
