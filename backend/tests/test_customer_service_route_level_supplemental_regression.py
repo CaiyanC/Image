@@ -1699,3 +1699,129 @@ def test_route_level_structured_field_filter_results_are_pure_db_filtered_rows(
         body_material=body_material,
         heat_source=heat_source,
     )
+
+
+@pytest.mark.parametrize(
+    "question",
+    [
+        "CW-C83 有什么优惠活动？",
+        "CW-C83 有优惠吗？",
+        "CW-C83 有没有优惠券？",
+        "CW-C83 现在有活动吗？",
+        "CW-C83 到手价是多少？",
+        "CW-C83 库存还有多少？",
+        "CW-C83 销量怎么样？",
+        "CW-C83 好评率是多少？",
+        "CW-C83 多久发货？",
+        "CW-C83 有没有赠品？",
+        "CW-C83 包邮吗？",
+        "CW-C83 保修多久？",
+        "CW-C83 售后怎么样？",
+        "CW-C83 直播间有券吗？",
+        "CW-C83 会员价是多少？",
+        "CW-C83 能不能明天到？",
+    ],
+)
+def test_route_level_explicit_sku_unknown_field_questions_fallback_conservatively(
+    route_client_and_db,
+    question,
+):
+    client, headers, _ = route_client_and_db
+
+    response = client.post("/api/customer-service/ask?debug=true", json={"question": question}, headers=headers)
+    assert response.status_code == 200, response.text
+    payload = response.json()
+
+    assert payload["answer"], payload
+    assert payload["result_skus"], payload
+    assert "CW-C83" in payload["result_skus"], payload["result_skus"]
+    assert "Product not found" not in payload["answer"], payload["answer"]
+    assert "没有找到匹配的产品资料" not in payload["answer"], payload["answer"]
+    assert any(term in payload["answer"] for term in ("未标注", "无法确认", "请以平台或店铺页面为准", "联系人工客服")), payload["answer"]
+    assert not any(term in payload["answer"] for term in ("现货充足", "直播间专享", "保证明天到", "立即发货", "已含赠品")), payload["answer"]
+
+
+def test_route_level_nonexistent_explicit_sku_unknown_field_still_returns_product_not_found(route_client_and_db):
+    client, headers, _ = route_client_and_db
+
+    response = client.post("/api/customer-service/ask?debug=true", json={"question": "ZZZ-UNKNOWN-001 有优惠吗？"}, headers=headers)
+    assert response.status_code in {200, 404}, response.text
+    if response.status_code == 404:
+        assert "Product not found" in response.text or "没有找到" in response.text, response.text
+        return
+
+    payload = response.json()
+    assert "Product not found" in payload["answer"] or "没有找到" in payload["answer"], payload["answer"]
+
+
+@pytest.mark.parametrize(
+    ("question", "expected_answer_type", "required_sku", "required_terms"),
+    [
+        ("CW-C83 的价格是多少？", "product_detail", "CW-C83", ("未标注", "价格")),
+        ("KW-K32-白可以直接加热吗？", "product_detail", "KW-K32-白", ("KW-K32-白",)),
+        ("CT-T04(BM) 里面有什么？", "product_usage_care", "CT-T04(BM)", ("CT-T04(BM)",)),
+        ("CW-C06PRO 怎么清洗？", "product_usage_care", None, ("清洗", "保养", "人工客服")),
+    ],
+)
+def test_route_level_unknown_field_fallback_no_regression_product_cases(
+    route_client_and_db,
+    question,
+    expected_answer_type,
+    required_sku,
+    required_terms,
+):
+    client, headers, _ = route_client_and_db
+
+    response = client.post("/api/customer-service/ask?debug=true", json={"question": question}, headers=headers)
+    assert response.status_code == 200, response.text
+    payload = response.json()
+
+    assert payload["answer_type"] == expected_answer_type, payload
+    assert payload["answer"], payload
+    assert "Product not found" not in payload["answer"], payload["answer"]
+    if required_sku:
+        assert payload["result_skus"], payload
+        assert required_sku in payload["result_skus"], payload["result_skus"]
+    for term in required_terms:
+        if term in payload["answer"]:
+            break
+    else:
+        assert False, payload["answer"]
+
+
+@pytest.mark.parametrize(
+    ("question", "expected_domain", "forbidden_domains", "required_terms"),
+    [
+        ("炉具推荐", {"炉具"}, {"锅具", "水壶", "水具", "配件"}, ("炉具",)),
+        ("夏天冷水补水水壶推荐", {"水壶", "水具", "水杯"}, {"锅具", "茶具", "炉具", "配件"}, ("水",)),
+        ("适合酒精炉的锅具推荐", {"锅具"}, {"炉具", "水壶", "水具", "配件"}, ("酒精炉",)),
+    ],
+)
+def test_route_level_unknown_field_fallback_no_regression_recommendation_cases(
+    route_client_and_db,
+    question,
+    expected_domain,
+    forbidden_domains,
+    required_terms,
+):
+    client, headers, Session = route_client_and_db
+
+    response = client.post("/api/customer-service/ask?debug=true", json={"question": question}, headers=headers)
+    assert response.status_code == 200, response.text
+    payload = response.json()
+
+    assert payload["answer_type"] == "recommendation", payload
+    assert payload["answer"], payload
+    assert payload["result_skus"], payload
+    assert "Product not found" not in payload["answer"], payload["answer"]
+    for term in required_terms:
+        assert term in payload["answer"], payload["answer"]
+
+    with Session() as db:
+        categories = {
+            str(product.sku or "").strip().upper(): str(product.category or "").strip()
+            for product in db.query(Product).filter(Product.sku.in_(payload["result_skus"])).all()
+        }
+    assert categories, payload
+    assert any(category in expected_domain for category in categories.values()), categories
+    assert not any(category in forbidden_domains for category in categories.values()), categories

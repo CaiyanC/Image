@@ -76,6 +76,15 @@ _STRUCTURED_UNKNOWN_FACT_TERMS: dict[str, tuple[str, ...]] = {
     "安装视频": ("安装视频", "安装教程", "视频教程"),
 }
 
+_RESOLVED_ENTITY_UNKNOWN_FACT_TERMS: dict[str, tuple[str, ...]] = {
+    **_STRUCTURED_UNKNOWN_FACT_TERMS,
+    "优惠活动": ("优惠", "活动", "优惠活动", "优惠券", "券", "直播间有券", "直播间券", "会员价", "到手价"),
+    "发货时效": ("发货", "多久发货", "发货时间", "几天到", "明天到", "今天到", "什么时候到", "配送"),
+    "赠品": ("赠品", "送什么", "送啥", "附赠"),
+    "包邮": ("包邮", "免邮", "运费"),
+    "售后": ("售后", "售后怎么样", "售后政策", "售后服务"),
+}
+
 
 def _split_composite_customer_question(question: str) -> dict[str, str] | None:
     text = str(question or "").strip()
@@ -1067,6 +1076,147 @@ def _detect_unknown_product_fact_label(question: str) -> str | None:
     for label, terms in _STRUCTURED_UNKNOWN_FACT_TERMS.items():
         if any(term in text for term in terms):
             return label
+    return None
+
+
+def _detect_resolved_entity_unknown_fact_label(question: str) -> str | None:
+    text = str(question or "").strip()
+    if not text:
+        return None
+    for label, terms in _RESOLVED_ENTITY_UNKNOWN_FACT_TERMS.items():
+        if any(term in text for term in terms):
+            return label
+    return None
+
+
+def _resolved_entity_unknown_fact_answer(prefix: str, label: str) -> str:
+    special = {
+        "库存": f"{prefix}\n当前资料未标注库存，也不能仅凭现有资料确认实时库存；请以平台或店铺页面为准，或联系人工客服确认。",
+        "销量": f"{prefix}\n当前资料未标注销量，也不能仅凭现有资料判断实时销量；请以平台或店铺页面为准。",
+        "评价": f"{prefix}\n当前资料未标注评价或好评率，也不能仅凭现有资料确认实时评价信息；请以平台或店铺页面为准。",
+        "价格": f"{prefix}\n当前资料未标注实时价格，也不能仅凭现有资料确认当前售价；请以平台或店铺页面为准。",
+        "保修": f"{prefix}\n当前资料未标注保修信息，也无法仅凭现有资料确认具体质保政策；请以平台或店铺页面或人工客服说明为准。",
+        "认证": f"{prefix}\n当前资料未标注对应认证或检测信息，不能仅凭现有资料确认。",
+        "官方说明书": f"{prefix}\n当前资料未维护官方说明书信息，如需确认建议联系人工客服。",
+        "安装视频": f"{prefix}\n当前资料未维护安装视频信息，如需确认建议联系人工客服。",
+        "优惠活动": f"{prefix}\n当前资料未标注该商品的优惠、活动、券、会员价或到手价信息，也无法确认实时促销；请以平台或店铺页面为准。",
+        "发货时效": f"{prefix}\n当前资料未标注该商品的实时发货时效或配送承诺，也无法确认是否能按你说的时间送达；请以平台或店铺页面为准。",
+        "赠品": f"{prefix}\n当前资料未标注该商品是否附赠赠品，也无法确认实时活动赠品；请以平台或店铺页面为准。",
+        "包邮": f"{prefix}\n当前资料未标注该商品的包邮或运费规则，也无法确认实时包邮活动；请以平台或店铺页面为准。",
+        "售后": f"{prefix}\n当前资料未标注该商品的售后政策或服务细则，也无法确认实时售后安排；请以平台或店铺页面或人工客服说明为准。",
+    }
+    return special.get(label) or f"{prefix}\n当前资料未标注该信息，也无法确认实时信息；请以平台或店铺页面为准。"
+
+
+def _build_resolved_product_unknown_field_result(
+    product: Product,
+    *,
+    label: str,
+    source: str,
+) -> dict:
+    row = _product_row_from_model(product)
+    name = str(product.product_name_cn or product.product_name_en or product.sku or "").strip()
+    sku = str(product.sku or "").strip().upper()
+    prefix = f"{name}（{sku}）" if name else sku
+    answer = _resolved_entity_unknown_fact_answer(prefix, label)
+    return {
+        "intent": "product_detail",
+        "answer_type": "product_detail",
+        "answer": answer,
+        "results": [row],
+        "result_skus": [sku],
+        "candidate_skus": [sku],
+        "sku": sku,
+        "answer_metadata": {"source": source, "requested_field": label, "evidence_status": "missing"},
+        "debug": {
+            "agent_mode": source,
+            "plan": {"primary_intent": "product_field", "product_ref": sku, "requested_field": label},
+            "raw_results": [row],
+            "candidate_skus": [sku],
+        },
+        "skip_polish": True,
+    }
+
+
+def _build_ambiguous_named_product_unknown_field_result(products: list[Product], *, label: str) -> dict:
+    rows = [_product_row_from_model(product) for product in products[:5]]
+    options = "；".join(
+        f"{str(product.product_name_cn or product.product_name_en or product.sku).strip()}（{str(product.sku or '').strip().upper()}）"
+        for product in products[:5]
+    )
+    answer = (
+        f"匹配到多个相关商品：{options}。"
+        f"请先指定 SKU 或具体款式；另外，当前资料也未标注该类实时{label}信息，不能直接确认。"
+    )
+    return {
+        "intent": "clarify",
+        "answer_type": "clarification",
+        "answer": answer,
+        "results": rows,
+        "result_skus": [str(product.sku or "").strip().upper() for product in products[:5] if str(product.sku or "").strip()],
+        "candidate_skus": [str(product.sku or "").strip().upper() for product in products[:5] if str(product.sku or "").strip()],
+        "sku": None,
+        "needs_clarification": True,
+        "suggested_followups": ["请直接提供 SKU 或完整产品名。"],
+        "followups": ["请直接提供 SKU 或完整产品名。"],
+        "answer_metadata": {"source": "named_product_unknown_field_clarification", "requested_field": label, "evidence_status": "ambiguous_product"},
+        "debug": {
+            "agent_mode": "named_product_unknown_field_clarification",
+            "plan": {"primary_intent": "clarify", "requested_field": label},
+            "raw_results": rows,
+            "candidate_skus": [str(product.sku or "").strip().upper() for product in products[:5] if str(product.sku or "").strip()],
+        },
+        "skip_polish": True,
+    }
+
+
+def _try_resolved_product_unknown_field_shortcut(db: Session, question: str) -> dict | None:
+    text = str(question or "").strip()
+    if not text:
+        return None
+    if customer_agent_intent_service._looks_like_usage_care_question(text):
+        return None
+    if customer_agent_intent_service._looks_like_contents_grounding_question(text):
+        return None
+    if customer_agent_intent_service._is_compare_question(text):
+        return None
+    if _looks_like_recommendation_request(text):
+        return None
+    label = _detect_resolved_entity_unknown_fact_label(text)
+    if not label:
+        return None
+
+    resolved_sku = _resolve_sku(db, text, None)
+    if resolved_sku:
+        product = db.query(Product).filter(Product.sku == resolved_sku).first()
+        if product:
+            if _has_direct_structured_detail_answer(db, product, text):
+                return None
+            exact_qa = _best_product_qa_match(db, product, text)
+            if exact_qa and _is_exact_product_qa_question_match(exact_qa, text):
+                return None
+            return _build_resolved_product_unknown_field_result(
+                product,
+                label=label,
+                source="resolved_entity_unknown_field_fallback",
+            )
+        return None
+
+    named_products = _products_named_in_question(db, text)
+    if len(named_products) == 1:
+        product = named_products[0]
+        if _has_direct_structured_detail_answer(db, product, text):
+            return None
+        exact_qa = _best_product_qa_match(db, product, text)
+        if exact_qa and _is_exact_product_qa_question_match(exact_qa, text):
+            return None
+        return _build_resolved_product_unknown_field_result(
+            product,
+            label=label,
+            source="resolved_entity_unknown_field_fallback",
+        )
+    if len(named_products) > 1:
+        return _build_ambiguous_named_product_unknown_field_result(named_products, label=label)
     return None
 
 
@@ -3417,6 +3567,24 @@ async def ask_customer_service(
             semantic_preplan=semantic_preplan,
         )
 
+    resolved_unknown_field_result = _try_resolved_product_unknown_field_shortcut(db, question)
+    if resolved_unknown_field_result:
+        resolved_unknown_field_result = _attach_semantic_preplan_debug(
+            resolved_unknown_field_result,
+            semantic_preplan,
+            final_route=resolved_unknown_field_result.get("answer_type") or "product_detail",
+        )
+        return await _save_agent_result_and_return(
+            db,
+            user_id=user_id,
+            question=question,
+            conversation_id=conversation_id,
+            agent_result=resolved_unknown_field_result,
+            request_start=request_start,
+            branch="resolved_entity_unknown_field_fallback",
+            semantic_preplan=semantic_preplan,
+        )
+
     if (
         not conversation_id
         and _is_product_usage_care_question(question)
@@ -5180,6 +5348,8 @@ def _try_product_qa_shortcut(db: Session, question: str) -> dict | None:
     if customer_agent_intent_service._looks_like_usage_care_question(question):
         return None
     if customer_agent_intent_service._looks_like_contents_grounding_question(question):
+        return None
+    if _detect_resolved_entity_unknown_fact_label(question):
         return None
     product = _explicit_product_from_question(db, question)
     if not product:
