@@ -214,6 +214,63 @@ def test_semantic_preplan_parser_accepts_code_fence_and_tracks_llm_calls(monkeyp
     assert result["confidence"] > 0
 
 
+def test_semantic_preplan_parser_accepts_contents_subtype_and_entity_scope(monkeypatch):
+    calls = []
+
+    async def fake_chat_completion(db, messages, model=None, temperature=0.2, max_tokens=1200, *, purpose="chat"):
+        calls.append(purpose)
+        return """```json
+{"route_hint":"product_detail","question_type":"contents_accessories","entities":["CF-PG19"],"field_hint":"contents","subtype":"composition","entity_scope":"resolved_single","qa_or_usage_care":true,"unknown_field":false,"confidence":0.91,"reason":"resolved contents question"}
+```"""
+
+    monkeypatch.setattr(customer_agent_planner_service.customer_llm_service, "chat_completion", fake_chat_completion)
+
+    result = asyncio.run(
+        customer_agent_planner_service.plan_customer_question_semantic(
+            db=None,
+            question="CF-PG19 原厂配了什么？",
+            deterministic_plan={"primary_intent": "product_field", "answer_type": "product_detail"},
+            context={},
+        )
+    )
+
+    assert calls == ["semantic_preplan"]
+    assert result["called"] is True
+    assert result["route_hint"] == "product_detail"
+    assert result["question_type"] == "contents_accessories"
+    assert result["field_hint"] == "contents"
+    assert result["subtype"] == "composition"
+    assert result["entity_scope"] == "resolved_single"
+    assert result["entities"] == ["CF-PG19"]
+    assert result["confidence"] == pytest.approx(0.91)
+    assert "result_skus" not in result
+    assert "candidate_skus" not in result
+
+
+@pytest.mark.parametrize(
+    "question",
+    [
+        "CF-PG19 原厂配了什么？",
+        "CF-PG19 盒子里有什么？",
+        "CS-G25 默认带哪些？",
+        "CW-C83 what comes in the box?",
+        "CS-B14（LX） what does it come with?",
+        "瓦片烤盘Pro what does it come with?",
+        "围雪炉 盒子里有什么？",
+        "婧川水壶 有没有附件？",
+        "户外有什么配件？",
+    ],
+)
+def test_route_level_contents_family_now_requires_semantic_preplan(question):
+    plan = customer_agent_planner_service.plan_customer_question(question)
+
+    assert customer_service_service._should_call_semantic_preplan(
+        question,
+        plan,
+        conversation_id=None,
+    ) is True
+
+
 def test_structured_field_query_parser_splits_category_field_and_value_cleanly():
     water_bottle = customer_agent_intent_service.parse_intent("哪些水壶是不锈钢材质？")
     cookware = customer_agent_intent_service.parse_intent("哪些锅具是铝合金材质？")
@@ -2555,6 +2612,69 @@ def test_route_level_contents_phrasing_family_resolved_sku_contract(
         expected_sku=expected_sku,
         grounded_terms=grounded_terms,
     )
+
+
+@pytest.mark.parametrize(
+    ("question", "expected_sku"),
+    [
+        ("CF-PG19 原厂配了什么？", "CF-PG19"),
+        ("CF-PG19 盒子里有什么？", "CF-PG19"),
+        ("CS-B14（LX） what does it come with?", "CS-B14（LX）"),
+    ],
+)
+def test_route_level_blind_contents_phrases_do_not_fall_back_to_generic_product_qa_dump(
+    route_client_and_db,
+    question,
+    expected_sku,
+):
+    client, headers, Session = route_client_and_db
+    _seed_contents_grounding_evidence(Session)
+    _seed_cf_pg19_generic_detail_noise(Session)
+
+    response = client.post("/api/customer-service/ask?debug=true", json={"question": question}, headers=headers)
+    assert response.status_code == 200, response.text
+    payload = response.json()
+
+    _assert_contents_contract_answer(payload, expected_sku=expected_sku)
+    assert payload.get("debug", {}).get("agent_mode") != "product_qa_fast_path", payload.get("debug")
+
+
+@pytest.mark.parametrize(
+    ("question", "expected_answer_type", "expected_sku"),
+    [
+        ("CS-G25 盒子里有什么？", "product_usage_care", "CS-G25"),
+        ("CW-C83 what comes in the box?", "product_usage_care", "CW-C83"),
+        ("围雪炉 盒子里有什么？", "clarification", None),
+        ("婧川水壶 有没有附件？", "clarification", None),
+        ("户外有什么配件？", ("query_products", "recommendation"), None),
+    ],
+)
+def test_route_level_blind_contents_entity_scope_contract(
+    route_client_and_db,
+    question,
+    expected_answer_type,
+    expected_sku,
+):
+    client, headers, Session = route_client_and_db
+    _seed_contents_grounding_evidence(Session)
+    _seed_contents_resolution_priority_products(Session)
+
+    response = client.post("/api/customer-service/ask?debug=true", json={"question": question}, headers=headers)
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    answer = str(payload.get("answer") or "")
+
+    if isinstance(expected_answer_type, tuple):
+        assert payload["answer_type"] in expected_answer_type, payload
+    else:
+        assert payload["answer_type"] == expected_answer_type, payload
+    if expected_sku:
+        _assert_contents_contract_answer(payload, expected_sku=expected_sku)
+    else:
+        assert "Product not found" not in answer, answer
+        assert payload["answer_type"] != "knowledge_base_answer", payload
+        if expected_answer_type == "clarification":
+            assert "当前匹配到【配件】类产品共有" not in answer, answer
 
 
 @pytest.mark.parametrize(

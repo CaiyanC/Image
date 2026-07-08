@@ -52,11 +52,25 @@ SEMANTIC_PREPLAN_QUESTION_TYPES = {
     "count",
     "filter",
     "field",
+    "contents_accessories",
     "comparison",
     "recommendation",
     "usage",
     "unknown_field",
     "followup",
+}
+SEMANTIC_PREPLAN_SUBTYPES = {
+    "",
+    "contents_accessories",
+    "composition",
+}
+SEMANTIC_PREPLAN_ENTITY_SCOPES = {
+    "",
+    "resolved_single",
+    "unique_product_name",
+    "ambiguous_product_name",
+    "unresolved_product_like",
+    "generic_scope",
 }
 SEMANTIC_PREPLAN_FORBIDDEN_KEYS = {
     "answer",
@@ -77,6 +91,8 @@ SEMANTIC_PREPLAN_ALLOWED_KEYS = {
     "question_type",
     "entities",
     "field_hint",
+    "subtype",
+    "entity_scope",
     "qa_or_usage_care",
     "unknown_field",
     "confidence",
@@ -85,6 +101,8 @@ SEMANTIC_PREPLAN_ALLOWED_KEYS = {
     "q",
     "e",
     "f",
+    "s",
+    "scope",
     "u",
     "n",
     "c",
@@ -95,6 +113,8 @@ SEMANTIC_PREPLAN_SHORT_KEY_MAP = {
     "q": "question_type",
     "e": "entities",
     "f": "field_hint",
+    "s": "subtype",
+    "scope": "entity_scope",
     "u": "qa_or_usage_care",
     "n": "unknown_field",
     "c": "confidence",
@@ -129,6 +149,8 @@ def _empty_semantic_preplan(*, called: bool = False, fallback_reason: str = "") 
         "question_type": "",
         "entities": [],
         "field_hint": None,
+        "subtype": "",
+        "entity_scope": "",
         "qa_or_usage_care": False,
         "unknown_field": False,
         "confidence": 0.0,
@@ -218,6 +240,12 @@ def _validate_semantic_preplan(data: dict[str, Any] | None, *, raw_content: str 
     entities = [str(item).strip() for item in entities[:8] if str(item or "").strip()]
     field_hint = data.get("field_hint")
     field_hint = str(field_hint).strip() if field_hint is not None and str(field_hint).strip() else None
+    subtype = str(data.get("subtype") or "").strip()
+    entity_scope = str(data.get("entity_scope") or "").strip()
+    if subtype not in SEMANTIC_PREPLAN_SUBTYPES:
+        subtype = ""
+    if entity_scope not in SEMANTIC_PREPLAN_ENTITY_SCOPES:
+        entity_scope = ""
     result = _empty_semantic_preplan(called=True)
     result.update(
         {
@@ -225,6 +253,8 @@ def _validate_semantic_preplan(data: dict[str, Any] | None, *, raw_content: str 
             "question_type": question_type,
             "entities": entities,
             "field_hint": field_hint,
+            "subtype": subtype,
+            "entity_scope": entity_scope,
             "qa_or_usage_care": bool(data.get("qa_or_usage_care")),
             "unknown_field": bool(data.get("unknown_field")),
             "confidence": max(0.0, min(1.0, confidence)),
@@ -255,9 +285,10 @@ def _semantic_preplan_messages(
             "role": "system",
             "content": (
                 "Return only JSON, no markdown. You classify route only, not facts or answer. "
-                "Use short keys exactly: r,q,e,f,u,n,c,why. "
+                "Use short keys exactly: r,q,e,f,s,scope,u,n,c,why. "
                 "r enum: usage_care,recommendation,product_detail,query_products,knowledge_base_answer,comparison,unknown_field,clarification. "
-                "q enum: safety,count,filter,field,comparison,recommendation,usage,unknown_field,followup. "
+                "q enum: safety,count,filter,field,contents_accessories,comparison,recommendation,usage,unknown_field,followup. "
+                "s enum: empty,contents_accessories,composition. scope enum: empty,resolved_single,unique_product_name,ambiguous_product_name,unresolved_product_like,generic_scope. "
                 "e is entity words only, f is field hint or null, u/n booleans, c 0..1. "
                 "Never output answer, SKU facts, candidate_skus, recommended_skus, result_skus, price, stock, sales, certification, warranty."
             ),
@@ -272,7 +303,7 @@ def _semantic_preplan_messages(
                 f"deterministic_product_ref: {deterministic_plan.get('product_ref') or ''}\n"
                 f"has_conversation_id: {bool(context.get('conversation_id'))}\n"
                 f"has_recommendation_context: {bool(context.get('has_recommendation_context'))}\n"
-                'JSON shape: {"r":"recommendation","q":"recommendation","e":[],"f":null,"u":false,"n":false,"c":0.8,"why":"short"}'
+                'JSON shape: {"r":"recommendation","q":"recommendation","e":[],"f":null,"s":"","scope":"","u":false,"n":false,"c":0.8,"why":"short"}'
             ),
         },
     ]
@@ -288,6 +319,7 @@ def _semantic_preplan_feature_summary(question: str, deterministic_plan: dict[st
         "mentions_griddle": any(term in text for term in ("烤盘", "煎烤", "煎蛋", "煎培根")),
         "mentions_cookware": any(term in text for term in ("锅", "锅具", "炊具", "煮面", "正餐")),
         "mentions_filter": any(term in text for term in ("有哪些", "哪几", "更偏", "适合", "推荐")),
+        "mentions_contents_accessories": customer_agent_service.looks_like_contents_accessories_question(text),
         "mentions_waterware": any(term in text for term in ("水具", "水杯", "水壶", "冷水", "补水", "随身")),
         "mentions_coffee": any(term in text for term in ("咖啡", "咖啡器具", "手冲")),
         "mentions_usage_restriction": any(term in text for term in ("使用限制", "注意事项", "禁忌")),
@@ -299,6 +331,8 @@ def _semantic_preplan_feature_summary(question: str, deterministic_plan: dict[st
 def _question_type_for_route(route_hint: str, feature_summary: str) -> str:
     if "mentions_alternative=true" in feature_summary:
         return "followup"
+    if "mentions_contents_accessories=true" in feature_summary:
+        return "contents_accessories"
     if route_hint == "comparison":
         return "comparison"
     if route_hint == "query_products":
@@ -345,9 +379,10 @@ async def _repair_semantic_preplan_output(db, *, question: str, raw_content: str
                 "role": "system",
                 "content": (
                     "Return only one compact JSON object with keys r,q,e,f,u,n,c,why. "
+                    "Optional keys: s,scope. "
                     "Classify route only; never answer or output SKU facts/candidates. "
                     "r enum: usage_care,recommendation,product_detail,query_products,knowledge_base_answer,comparison,unknown_field,clarification. "
-                    "q enum: safety,count,filter,field,comparison,recommendation,usage,unknown_field,followup."
+                    "q enum: safety,count,filter,field,contents_accessories,comparison,recommendation,usage,unknown_field,followup."
                 ),
             },
             {
@@ -355,7 +390,7 @@ async def _repair_semantic_preplan_output(db, *, question: str, raw_content: str
                 "content": (
                     f"question: {question}\n"
                     f"previous_output_preview: {_safe_preview(raw_content, 120)}\n"
-                    'JSON shape: {"r":"query_products","q":"filter","e":[],"f":null,"u":false,"n":false,"c":0.8,"why":"short"}'
+                    'JSON shape: {"r":"query_products","q":"filter","e":[],"f":null,"s":"","scope":"","u":false,"n":false,"c":0.8,"why":"short"}'
                 ),
             },
         ],

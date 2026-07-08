@@ -457,12 +457,24 @@ def _is_complex_filter_ambiguous_for_preplan(question: str) -> bool:
     return bool(coffee_filter or water_filter)
 
 
+def _looks_like_contents_accessories_contract_question(question: str) -> bool:
+    text = str(question or "").strip()
+    if not text:
+        return False
+    return bool(
+        customer_agent_service.looks_like_contents_accessories_question(text)
+        or customer_agent_intent_service._looks_like_contents_grounding_question(text)
+    )
+
+
 def _should_call_semantic_preplan(question: str, phase1_plan: dict | None, *, conversation_id: str | None) -> bool:
     text = str(question or "").strip()
     if not text:
         return False
     if _detect_unknown_product_fact_label(text):
         return False
+    if _looks_like_contents_accessories_contract_question(text):
+        return True
     if isinstance(phase1_plan, dict) and phase1_plan.get("primary_intent") == "catalog_count" and _looks_like_semantic_catalog_query(text):
         return False
     if _is_product_usage_care_question(text) and not _is_sku_usage_restriction_ambiguous_for_preplan(text):

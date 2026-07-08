@@ -76,6 +76,40 @@ def normalize_search_text(value: Any) -> str:
     return re.sub(r"\s+", " ", text).strip()
 
 
+def looks_like_contents_accessories_question(value: Any) -> bool:
+    text = normalize_search_text(value or "")
+    if not text:
+        return False
+    lower_text = text.lower()
+    direct_terms = (
+        "原厂配了什么",
+        "原厂带什么",
+        "出厂带什么",
+        "默认带哪些",
+        "默认配什么",
+        "盒子里有什么",
+        "箱子里有什么",
+        "包装盒里有什么",
+        "到手里面有什么",
+        "随箱带什么",
+        "全套含什么",
+        "标准配置是什么",
+        "有没有附件",
+        "有没有随箱配件",
+        "买回来里面有什么",
+        "收到货里面有什么",
+        "what comes in the box",
+        "what does it come with",
+        "factory included items",
+        "default accessories",
+        "box contents",
+        "in-box accessories",
+    )
+    if any(term in text for term in direct_terms):
+        return True
+    return any(term in lower_text for term in direct_terms if term.isascii())
+
+
 def product_name_aliases(value: Any) -> list[str]:
     text = normalize_search_text(value or "")
     if not text:
