@@ -62,8 +62,17 @@ SEMANTIC_PREPLAN_QUESTION_TYPES = {
 }
 SEMANTIC_PREPLAN_SUBTYPES = {
     "",
+    "unknown_realtime",
+    "commercial_realtime",
     "contents_accessories",
     "composition",
+    "known_detail",
+    "usage_care",
+    "relation_comparison",
+    "recommendation",
+    "structured_query",
+    "generic_query",
+    "no_match",
 }
 SEMANTIC_PREPLAN_ENTITY_SCOPES = {
     "",
@@ -336,7 +345,8 @@ def _semantic_preplan_messages(
                 "Use short keys exactly: r,q,e,f,s,scope,u,n,c,why. "
                 "r enum: usage_care,recommendation,product_detail,query_products,knowledge_base_answer,comparison,unknown_field,clarification. "
                 "q enum: safety,count,filter,field,contents_accessories,comparison,recommendation,usage,unknown_field,followup. "
-                "s enum: empty,contents_accessories,composition. scope enum: empty,resolved_single,unique_product_name,ambiguous_product_name,unresolved_product_like,generic_scope. "
+                "s enum: empty,unknown_realtime,commercial_realtime,contents_accessories,composition,known_detail,usage_care,relation_comparison,recommendation,structured_query,generic_query,no_match. "
+                "scope enum: empty,resolved_single,unique_product_name,ambiguous_product_name,unresolved_product_like,generic_scope. "
                 "e is entity words only, f is field hint or null, u/n booleans, c 0..1. "
                 "Never output answer, SKU facts, candidate_skus, recommended_skus, result_skus, price, stock, sales, certification, warranty."
             ),

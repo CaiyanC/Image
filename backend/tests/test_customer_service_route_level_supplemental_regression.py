@@ -91,6 +91,50 @@ def _semantic_preplan_debug(payload: dict) -> dict:
     return debug.get("semantic_preplan") if isinstance(debug.get("semantic_preplan"), dict) else {}
 
 
+def _unknown_realtime_preplan_stub(
+    *,
+    field_hint: str = "stock",
+    entity_scope: str = "resolved_single",
+    subtype: str = "unknown_realtime",
+    route_hint: str = "unknown_field",
+    question_type: str = "unknown_field",
+    unknown_field: bool = True,
+) -> dict:
+    return {
+        "called": True,
+        "purpose": "semantic_preplan",
+        "route_hint": route_hint,
+        "question_type": question_type,
+        "entities": [],
+        "field_hint": field_hint,
+        "subtype": subtype,
+        "entity_scope": entity_scope,
+        "qa_or_usage_care": False,
+        "unknown_field": unknown_field,
+        "confidence": 0.96,
+        "reason": "unknown realtime contract",
+        "accepted_or_overridden": "",
+        "override_reason": "",
+        "fallback_reason": "",
+        "llm_call_count": 1,
+        "llm_call_count_delta": 1,
+        "raw_preview": "",
+        "preplan_model": "test-semantic-preplan",
+        "preplan_temperature": 0,
+        "preplan_max_tokens": 256,
+        "preplan_json_mode": True,
+        "preplan_thinking_disabled": True,
+        "preplan_latency_ms": 1.0,
+        "provider_usage_available": False,
+        "prompt_tokens": None,
+        "completion_tokens": None,
+        "total_tokens": None,
+        "reasoning_tokens": None,
+        "prompt_cache_hit_tokens": None,
+        "prompt_cache_miss_tokens": None,
+    }
+
+
 def _seed_contents_variant_knowledge_noise(Session) -> None:
     with Session() as db:
         _add_knowledge_chunk(
@@ -307,6 +351,36 @@ def test_semantic_preplan_parser_accepts_contents_subtype_and_entity_scope(monke
     assert "candidate_skus" not in result
 
 
+def test_semantic_preplan_parser_accepts_unknown_realtime_subtype_and_entity_scope(monkeypatch):
+    calls = []
+
+    async def fake_chat_completion(db, messages, model=None, temperature=0.2, max_tokens=1200, *, purpose="chat", api_model_override=None, response_format=None, thinking=None, metadata=None):
+        calls.append(purpose)
+        return """{"route_hint":"unknown_field","question_type":"unknown_field","entities":["CS-B14（LX）"],"field_hint":"stock","subtype":"unknown_realtime","entity_scope":"resolved_single","qa_or_usage_care":false,"unknown_field":true,"confidence":0.93,"reason":"resolved realtime product question"}"""
+
+    monkeypatch.setattr(customer_agent_planner_service.customer_llm_service, "chat_completion", fake_chat_completion)
+
+    result = asyncio.run(
+        customer_agent_planner_service.plan_customer_question_semantic(
+            db=None,
+            question="CS-B14（LX） 现在有货吗？",
+            deterministic_plan={"primary_intent": "product_field", "answer_type": "product_detail"},
+            context={},
+        )
+    )
+
+    assert calls == ["semantic_preplan"]
+    assert result["called"] is True
+    assert result["route_hint"] == "unknown_field"
+    assert result["question_type"] == "unknown_field"
+    assert result["field_hint"] == "stock"
+    assert result["subtype"] == "unknown_realtime"
+    assert result["entity_scope"] == "resolved_single"
+    assert result["entities"] == ["CS-B14（LX）"]
+    assert result["unknown_field"] is True
+    assert result["confidence"] == pytest.approx(0.93)
+
+
 @pytest.mark.parametrize(
     "question",
     [
@@ -322,6 +396,26 @@ def test_semantic_preplan_parser_accepts_contents_subtype_and_entity_scope(monke
     ],
 )
 def test_route_level_contents_family_now_requires_semantic_preplan(question):
+    plan = customer_agent_planner_service.plan_customer_question(question)
+
+    assert customer_service_service._should_call_semantic_preplan(
+        question,
+        plan,
+        conversation_id=None,
+    ) is True
+
+
+@pytest.mark.parametrize(
+    "question",
+    [
+        "CS-B14（LX） 现在有货吗？",
+        "CF-PG19 有优惠券吗？",
+        "CW-C83 评价怎么样？",
+        "围雪炉 今天能发吗？",
+        "婧川水壶 现在有货吗？",
+    ],
+)
+def test_route_level_unknown_realtime_family_now_requires_semantic_preplan(question):
     plan = customer_agent_planner_service.plan_customer_question(question)
 
     assert customer_service_service._should_call_semantic_preplan(
@@ -632,7 +726,7 @@ def test_route_level_semantic_preplan_triggers_for_alternative_followup(route_cl
         "CS-B14（LX）能不能用酒精炉？",
         "CW-C83 容量是多少？",
         "现在有多少款水具？",
-        "CW-C83有库存吗？",
+        "CF-PG19 是什么材质？",
         "炉具点不着怎么办？",
     ],
 )
@@ -2073,6 +2167,43 @@ def test_route_level_unique_product_name_unknown_field_uses_conservative_fallbac
 @pytest.mark.parametrize(
     "question",
     [
+        "婧川水壶 现在有货吗？",
+        "星河水壶 有赠品吗？",
+    ],
+)
+def test_route_level_unresolved_product_like_unknown_realtime_clarifies_instead_of_falling_to_catalog_or_qa(
+    route_client_and_db,
+    monkeypatch,
+    question,
+):
+    client, headers, _ = route_client_and_db
+
+    async def fake_preplan(db, question, deterministic_plan, context):
+        return _unknown_realtime_preplan_stub(field_hint="stock", entity_scope="unresolved_product_like")
+
+    monkeypatch.setattr(customer_agent_planner_service, "plan_customer_question_semantic", fake_preplan)
+
+    response = client.post("/api/customer-service/ask?debug=true", json={"question": question}, headers=headers)
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    answer = str(payload.get("answer") or "")
+    answer_metadata = payload.get("answer_metadata") or {}
+
+    assert payload["answer_type"] == "clarification", payload
+    assert payload.get("needs_clarification") is True, payload
+    assert payload.get("result_skus") in ([], None), payload.get("result_skus")
+    assert any(term in answer for term in ("提供 SKU", "具体 SKU", "具体款式", "确认是哪一款商品")), answer
+    assert payload.get("debug", {}).get("agent_mode") != "product_qa_fast_path", payload.get("debug")
+    assert payload["answer_type"] != "knowledge_base_answer", payload
+    assert answer_metadata.get("source") == "unresolved_product_like_unknown_field_clarification", answer_metadata
+    semantic_debug = _semantic_preplan_debug(payload)
+    assert semantic_debug.get("called") is True, payload.get("debug")
+    assert semantic_debug.get("subtype") == "unknown_realtime", semantic_debug
+
+
+@pytest.mark.parametrize(
+    "question",
+    [
         "\u6fc0\u5ddd\u5355\u9505 \u6709\u8d60\u54c1\u5417\uff1f",
         "\u6fc0\u5ddd\u5355\u9505 \u6709\u6d3b\u52a8\u5417\uff1f",
     ],
@@ -2111,6 +2242,249 @@ def test_route_level_unknown_realtime_negative_cases_can_still_not_found(route_c
     payload = response.json()
     answer = str(payload.get("answer") or "")
     assert "Product not found" in answer or "\u6ca1\u6709\u627e\u5230" in answer, answer
+
+
+def test_route_level_unknown_realtime_contract_blocks_product_qa_and_other_fast_paths(route_client_and_db, monkeypatch):
+    client, headers, _ = route_client_and_db
+
+    async def fake_preplan(db, question, deterministic_plan, context):
+        return _unknown_realtime_preplan_stub(field_hint="stock", entity_scope="resolved_single")
+
+    monkeypatch.setattr(customer_agent_planner_service, "plan_customer_question_semantic", fake_preplan)
+
+    response = client.post("/api/customer-service/ask?debug=true", json={"question": "CS-B14（LX） 现在有货吗？"}, headers=headers)
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    answer = str(payload.get("answer") or "")
+    answer_metadata = payload.get("answer_metadata") or {}
+    semantic_debug = _semantic_preplan_debug(payload)
+
+    assert payload["answer_type"] == "product_detail", payload
+    assert "CS-B14（LX）" in (payload.get("result_skus") or []), payload.get("result_skus")
+    assert answer_metadata.get("source") == "resolved_entity_unknown_field_fallback", answer_metadata
+    assert payload.get("debug", {}).get("agent_mode") == "resolved_entity_unknown_field_fallback", payload.get("debug")
+    assert payload.get("debug", {}).get("agent_mode") not in {
+        "product_qa_fast_path",
+        "product_usage_care_fast_path",
+        "planner_recommendation_guard_rebuild",
+    }, payload.get("debug")
+    assert payload["answer_type"] not in {"knowledge_base_answer", "query_products", "product_query", "recommendation"}, payload
+    assert "现货充足" not in answer and "立即发货" not in answer and "直播间专享" not in answer, answer
+    assert semantic_debug.get("called") is True, payload.get("debug")
+    assert semantic_debug.get("subtype") == "unknown_realtime", semantic_debug
+
+
+@pytest.mark.parametrize(
+    ("question", "field_hint", "subtype", "route_hint", "question_type"),
+    [
+        ("围雪炉 现在有货吗？", "stock", "commercial_realtime", "query_products", "unknown_field"),
+        ("瓦片烤盘 到手价多少？", "price", "known_detail", "product_detail", "field"),
+    ],
+)
+def test_route_level_unknown_realtime_contract_prefers_ambiguous_scope_over_early_resolution(
+    route_client_and_db,
+    monkeypatch,
+    question,
+    field_hint,
+    subtype,
+    route_hint,
+    question_type,
+):
+    client, headers, _ = route_client_and_db
+
+    async def fake_preplan(db, question, deterministic_plan, context):
+        return _unknown_realtime_preplan_stub(
+            field_hint=field_hint,
+            entity_scope="ambiguous_product_name",
+            subtype=subtype,
+            route_hint=route_hint,
+            question_type=question_type,
+            unknown_field=(question_type == "unknown_field"),
+        )
+
+    monkeypatch.setattr(customer_agent_planner_service, "plan_customer_question_semantic", fake_preplan)
+
+    response = client.post("/api/customer-service/ask?debug=true", json={"question": question}, headers=headers)
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    answer_metadata = payload.get("answer_metadata") or {}
+
+    assert payload["answer_type"] == "clarification", payload
+    assert payload.get("needs_clarification") is True, payload
+    assert payload.get("debug", {}).get("agent_mode") != "resolved_entity_unknown_field_fallback", payload.get("debug")
+    assert answer_metadata.get("source") == "named_product_unknown_field_clarification", answer_metadata
+
+
+@pytest.mark.parametrize(
+    ("question", "field_hint", "subtype", "route_hint", "question_type"),
+    [
+        ("婧川水壶 现在有货吗？", "stock", "commercial_realtime", "query_products", "unknown_field"),
+        ("星河水壶 有赠品吗？", "gift", "contents_accessories", "product_detail", "field"),
+        ("青川套锅 有优惠券吗？", "coupon", "recommendation", "recommendation", "recommendation"),
+    ],
+)
+def test_route_level_unknown_realtime_contract_clarifies_unresolved_product_like_even_when_preplan_misclassifies_subtype(
+    route_client_and_db,
+    monkeypatch,
+    question,
+    field_hint,
+    subtype,
+    route_hint,
+    question_type,
+):
+    client, headers, _ = route_client_and_db
+
+    async def fake_preplan(db, question, deterministic_plan, context):
+        return _unknown_realtime_preplan_stub(
+            field_hint=field_hint,
+            entity_scope="unresolved_product_like",
+            subtype=subtype,
+            route_hint=route_hint,
+            question_type=question_type,
+            unknown_field=(question_type == "unknown_field"),
+        )
+
+    monkeypatch.setattr(customer_agent_planner_service, "plan_customer_question_semantic", fake_preplan)
+
+    response = client.post("/api/customer-service/ask?debug=true", json={"question": question}, headers=headers)
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    answer_metadata = payload.get("answer_metadata") or {}
+
+    assert payload["answer_type"] == "clarification", payload
+    assert payload.get("needs_clarification") is True, payload
+    assert payload.get("result_skus") in ([], None), payload.get("result_skus")
+    assert payload["answer_type"] not in {"knowledge_base_answer", "product_query", "recommendation"}, payload
+    assert answer_metadata.get("source") == "unresolved_product_like_unknown_field_clarification", answer_metadata
+
+
+@pytest.mark.parametrize(
+    ("question", "field_hint"),
+    [
+        ("完全不存在的产品名 有库存吗？", "stock"),
+        ("ABC-FAKE-001 有活动吗？", "promotion"),
+        ("TEST-NO-SKU 到手价多少？", "price"),
+    ],
+)
+def test_route_level_unknown_realtime_contract_uses_not_found_for_no_match_scope(
+    route_client_and_db,
+    monkeypatch,
+    question,
+    field_hint,
+):
+    client, headers, _ = route_client_and_db
+
+    async def fake_preplan(db, question, deterministic_plan, context):
+        return _unknown_realtime_preplan_stub(
+            field_hint=field_hint,
+            entity_scope="generic_scope",
+            subtype="no_match",
+            route_hint="query_products",
+            question_type="unknown_field",
+        )
+
+    monkeypatch.setattr(customer_agent_planner_service, "plan_customer_question_semantic", fake_preplan)
+
+    response = client.post("/api/customer-service/ask?debug=true", json={"question": question}, headers=headers)
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    answer = str(payload.get("answer") or "")
+    answer_metadata = payload.get("answer_metadata") or {}
+
+    assert payload["answer_type"] == "product_detail", payload
+    assert payload.get("result_skus") in ([], None), payload.get("result_skus")
+    assert "Product not found" in answer or "没有找到" in answer, answer
+    assert answer_metadata.get("source") == "unknown_field_product_not_found", answer_metadata
+    assert payload.get("debug", {}).get("agent_mode") != "structured_unknown_field_guard", payload.get("debug")
+
+
+@pytest.mark.parametrize(
+    ("question", "field_hint", "subtype", "entity_scope", "entities", "expected_sources"),
+    [
+        (
+            "围雪炉 现在有货吗？",
+            "stock",
+            "commercial_realtime",
+            "unique_product_name",
+            ["围雪炉"],
+            {"named_product_unknown_field_clarification", "unresolved_product_like_unknown_field_clarification"},
+        ),
+        (
+            "婧川水壶 现在有货吗？",
+            "stock",
+            "commercial_realtime",
+            "unique_product_name",
+            ["婧川水壶"],
+            {"unresolved_product_like_unknown_field_clarification"},
+        ),
+    ],
+)
+def test_route_level_unknown_realtime_contract_uses_preplan_entities_when_question_subject_is_empty(
+    route_client_and_db,
+    monkeypatch,
+    question,
+    field_hint,
+    subtype,
+    entity_scope,
+    entities,
+    expected_sources,
+):
+    client, headers, _ = route_client_and_db
+
+    async def fake_preplan(db, question, deterministic_plan, context):
+        plan = _unknown_realtime_preplan_stub(
+            field_hint=field_hint,
+            entity_scope=entity_scope,
+            subtype=subtype,
+            route_hint="query_products",
+            question_type="count",
+            unknown_field=False,
+        )
+        plan["entities"] = entities
+        return plan
+
+    monkeypatch.setattr(customer_agent_planner_service, "plan_customer_question_semantic", fake_preplan)
+    monkeypatch.setattr(customer_agent_intent_service, "_detail_subject_from_question", lambda text: "")
+
+    response = client.post("/api/customer-service/ask?debug=true", json={"question": question}, headers=headers)
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    answer_metadata = payload.get("answer_metadata") or {}
+
+    assert payload["answer_type"] == "clarification", payload
+    assert payload.get("needs_clarification") is True, payload
+    assert answer_metadata.get("source") in expected_sources, answer_metadata
+
+
+def test_route_level_unknown_realtime_contract_no_match_overrides_unresolved_when_subject_is_empty(
+    route_client_and_db,
+    monkeypatch,
+):
+    client, headers, _ = route_client_and_db
+
+    async def fake_preplan(db, question, deterministic_plan, context):
+        plan = _unknown_realtime_preplan_stub(
+            field_hint="stock",
+            entity_scope="unresolved_product_like",
+            subtype="no_match",
+            route_hint="query_products",
+            question_type="count",
+            unknown_field=False,
+        )
+        plan["entities"] = ["完全不存在的产品名"]
+        return plan
+
+    monkeypatch.setattr(customer_agent_planner_service, "plan_customer_question_semantic", fake_preplan)
+    monkeypatch.setattr(customer_agent_intent_service, "_detail_subject_from_question", lambda text: "")
+
+    response = client.post("/api/customer-service/ask?debug=true", json={"question": "完全不存在的产品名 有库存吗？"}, headers=headers)
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    answer_metadata = payload.get("answer_metadata") or {}
+
+    assert payload["answer_type"] == "product_detail", payload
+    assert "Product not found" in payload.get("answer", "") or "没有找到" in payload.get("answer", ""), payload.get("answer")
+    assert answer_metadata.get("source") == "unknown_field_product_not_found", answer_metadata
 
 
 @pytest.mark.parametrize(

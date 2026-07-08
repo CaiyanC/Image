@@ -66,7 +66,7 @@ COMPOSITE_FACT_RECOMMENDATION_MARKERS = (
 )
 
 _STRUCTURED_UNKNOWN_FACT_TERMS: dict[str, tuple[str, ...]] = {
-    "库存": ("库存", "现货"),
+    "库存": ("库存", "现货", "有货", "还有货", "现在有货"),
     "销量": ("销量", "销量最高", "卖得最好"),
     "评价": ("评价", "客户评价", "好评", "评价最好"),
     "价格": ("价格", "售价", "多少钱", "什么价", "几块", "几元"),
@@ -97,6 +97,7 @@ _RESOLVED_ENTITY_REALTIME_COMMERCIAL_LABELS = {
     "包邮",
     "售后",
 }
+_SEMANTIC_UNKNOWN_REALTIME_SUBTYPES = {"unknown_realtime", "commercial_realtime"}
 
 
 def _split_composite_customer_question(question: str) -> dict[str, str] | None:
@@ -471,8 +472,8 @@ def _should_call_semantic_preplan(question: str, phase1_plan: dict | None, *, co
     text = str(question or "").strip()
     if not text:
         return False
-    if _detect_unknown_product_fact_label(text):
-        return False
+    if _detect_resolved_entity_unknown_fact_label(text):
+        return True
     if _looks_like_contents_accessories_contract_question(text):
         return True
     if isinstance(phase1_plan, dict) and phase1_plan.get("primary_intent") == "catalog_count" and _looks_like_semantic_catalog_query(text):
@@ -1147,6 +1148,18 @@ def _resolved_entity_realtime_commercial_field_guard_label(question: str) -> str
     return None
 
 
+def _semantic_preplan_unknown_realtime_subtype(preplan: dict | None, question: str) -> str:
+    subtype = str((preplan or {}).get("subtype") or "").strip()
+    if subtype in _SEMANTIC_UNKNOWN_REALTIME_SUBTYPES:
+        return subtype
+    route_hint = str((preplan or {}).get("route_hint") or "").strip()
+    question_type = str((preplan or {}).get("question_type") or "").strip()
+    label = _resolved_entity_realtime_commercial_field_guard_label(question) or _detect_unknown_product_fact_label(question)
+    if label and (route_hint == "unknown_field" or question_type == "unknown_field" or (preplan or {}).get("unknown_field")):
+        return "commercial_realtime"
+    return ""
+
+
 def _resolved_entity_unknown_fact_answer(prefix: str, label: str) -> str:
     special = {
         "库存": f"{prefix}\n当前资料未标注库存，也不能仅凭现有资料确认实时库存；请以平台或店铺页面为准，或联系人工客服确认。",
@@ -1228,6 +1241,148 @@ def _build_ambiguous_named_product_unknown_field_result(products: list[Product],
     }
 
 
+def _build_generic_ambiguous_unknown_field_clarification_result(
+    question: str,
+    *,
+    label: str,
+    products: list[Product] | None = None,
+    subject_override: str | None = None,
+) -> dict:
+    rows = [_product_row_from_model(product) for product in (products or [])[:5]]
+    subject = subject_override or customer_agent_intent_service._detail_subject_from_question(question) or "这款商品"
+    if rows:
+        options = "；".join(
+            f"{str(row.get('product_name_cn') or row.get('product_name_en') or row.get('sku') or '').strip()}（{str(row.get('sku') or '').strip().upper()}）"
+            for row in rows
+            if str(row.get("sku") or "").strip()
+        )
+        answer = (
+            f"“{subject}”这个叫法可能对应多个相关商品：{options}。"
+            f"请先指定 SKU 或更完整的款式名；另外，当前资料也未标注该类实时{label}信息，不能直接确认。"
+        )
+    else:
+        answer = (
+            f"“{subject}”这个叫法可能对应多个相关商品。"
+            f"请先提供 SKU 或更完整的商品名；另外，当前资料也未标注该类实时{label}信息，不能直接确认。"
+        )
+    candidate_skus = [str(row.get("sku") or "").strip().upper() for row in rows if str(row.get("sku") or "").strip()]
+    return {
+        "intent": "clarify",
+        "answer_type": "clarification",
+        "answer": answer,
+        "results": rows,
+        "result_skus": candidate_skus,
+        "candidate_skus": candidate_skus,
+        "sku": None,
+        "needs_clarification": True,
+        "suggested_followups": ["请直接提供 SKU 或完整产品名。"],
+        "followups": ["请直接提供 SKU 或完整产品名。"],
+        "answer_metadata": {"source": "named_product_unknown_field_clarification", "requested_field": label, "evidence_status": "ambiguous_product"},
+        "debug": {
+            "agent_mode": "named_product_unknown_field_clarification",
+            "plan": {"primary_intent": "clarify", "requested_field": label},
+            "raw_results": rows,
+            "candidate_skus": candidate_skus,
+        },
+        "skip_polish": True,
+    }
+
+
+def _build_unresolved_product_like_unknown_field_clarification_result(
+    question: str,
+    *,
+    label: str,
+    subject_override: str | None = None,
+) -> dict | None:
+    subject = subject_override or customer_agent_intent_service._detail_subject_from_question(question)
+    if not subject:
+        return None
+    if not customer_agent_intent_service._looks_like_named_product_term(subject):
+        return None
+    if _is_generic_contents_subject(subject):
+        return None
+    product_like_suffixes = ("壶", "水壶", "锅", "套锅", "炉", "炉具", "烤盘", "盘", "杯", "茶具", "咖啡壶", " kettle")
+    normalized_subject = customer_agent_service.normalize_search_text(subject).strip()
+    if not any(normalized_subject.endswith(suffix.strip()) for suffix in product_like_suffixes if suffix.strip()):
+        return None
+    answer = (
+        f"我没能在当前商品资料里明确找到“{subject}”对应的具体 SKU。"
+        f"你可以提供 SKU，或确认是哪一款商品，我再帮你判断这款商品的实时{label}类信息该去哪里确认。"
+    )
+    return {
+        "intent": "clarify",
+        "answer_type": "clarification",
+        "answer": answer,
+        "results": [],
+        "result_skus": [],
+        "candidate_skus": [],
+        "needs_clarification": True,
+        "answer_metadata": {
+            "source": "unresolved_product_like_unknown_field_clarification",
+            "requested_field": label,
+            "evidence_status": "unresolved_product_like_subject",
+        },
+        "debug": {"agent_mode": "unresolved_product_like_unknown_field_clarification"},
+        "skip_polish": True,
+    }
+
+
+def _generic_unresolved_product_like_unknown_field_clarification_result(
+    question: str,
+    *,
+    label: str,
+    subject_override: str | None = None,
+) -> dict:
+    subject = subject_override or customer_agent_intent_service._detail_subject_from_question(question) or "这款商品"
+    answer = (
+        f"我还没法把“{subject}”稳定对应到具体 SKU。"
+        f"你可以提供 SKU 或更完整的商品名，我再帮你判断这款商品的实时{label}类信息该去哪里确认。"
+    )
+    return {
+        "intent": "clarify",
+        "answer_type": "clarification",
+        "answer": answer,
+        "results": [],
+        "result_skus": [],
+        "candidate_skus": [],
+        "needs_clarification": True,
+        "answer_metadata": {
+            "source": "unresolved_product_like_unknown_field_clarification",
+            "requested_field": label,
+            "evidence_status": "unresolved_product_like_subject",
+        },
+        "debug": {"agent_mode": "unresolved_product_like_unknown_field_clarification"},
+        "skip_polish": True,
+    }
+
+
+def _build_unknown_field_product_not_found_result(
+    question: str,
+    *,
+    label: str,
+    subject_override: str | None = None,
+) -> dict:
+    extracted_skus = [str(item or "").strip().upper() for item in customer_agent_service._extract_skus(question) if str(item or "").strip()]
+    subject = subject_override or customer_agent_intent_service._detail_subject_from_question(question) or question
+    target = extracted_skus[0] if extracted_skus else str(subject or "").strip()
+    answer = f"没有找到“{target}”对应的产品资料，当前无法确认它的{label}信息。请确认 SKU 或产品名是否正确。"
+    return {
+        "intent": "product_detail",
+        "answer_type": "product_detail",
+        "answer": answer,
+        "results": [],
+        "result_skus": [],
+        "candidate_skus": [],
+        "answer_metadata": {
+            "source": "unknown_field_product_not_found",
+            "requested_field": label,
+            "evidence_status": "product_not_found",
+        },
+        "debug": {"agent_mode": "unknown_field_product_not_found"},
+        "skip_polish": True,
+    }
+
+
 def _try_resolved_product_unknown_field_shortcut(db: Session, question: str) -> dict | None:
     text = str(question or "").strip()
     if not text:
@@ -1267,6 +1422,85 @@ def _try_resolved_product_unknown_field_shortcut(db: Session, question: str) -> 
         )
     if len(named_products) > 1:
         return _build_ambiguous_named_product_unknown_field_result(named_products, label=label)
+    return None
+
+
+def _pre_route_high_risk_contract_result(
+    db: Session,
+    question: str,
+    semantic_preplan: dict | None,
+) -> dict | None:
+    text = str(question or "").strip()
+    if not text:
+        return None
+    if not isinstance(semantic_preplan, dict) or not semantic_preplan.get("called"):
+        return None
+    label = _resolved_entity_realtime_commercial_field_guard_label(text) or _detect_unknown_product_fact_label(text)
+    if not label:
+        return None
+    subtype = str((semantic_preplan or {}).get("subtype") or "").strip()
+    entity_scope_hint = str((semantic_preplan or {}).get("entity_scope") or "").strip()
+    entity_texts = [
+        str(item or "").strip()
+        for item in ((semantic_preplan or {}).get("entities") or [])
+        if str(item or "").strip()
+    ]
+    primary_entity = entity_texts[0] if entity_texts else ""
+    resolved_sku = _resolve_sku(db, text, None)
+    if resolved_sku:
+        product = db.query(Product).filter(Product.sku == resolved_sku).first()
+        if product:
+            return _build_resolved_product_unknown_field_result(
+                product,
+                label=label,
+                source="resolved_entity_unknown_field_fallback",
+            )
+        return _build_unknown_field_product_not_found_result(text, label=label, subject_override=primary_entity)
+    named_products = _products_named_in_question(db, text)
+    if primary_entity:
+        entity_named_products = customer_agent_service.resolve_named_product_candidates(
+            primary_entity,
+            db.query(Product).all(),
+            subject=primary_entity,
+        )
+        if len(entity_named_products) > len(named_products):
+            named_products = entity_named_products
+    if entity_scope_hint == "ambiguous_product_name":
+        if len(named_products) > 1:
+            return _build_ambiguous_named_product_unknown_field_result(named_products, label=label)
+        return _build_generic_ambiguous_unknown_field_clarification_result(
+            text,
+            label=label,
+            products=named_products,
+            subject_override=primary_entity,
+        )
+    if len(named_products) > 1:
+        return _build_ambiguous_named_product_unknown_field_result(named_products, label=label)
+    if len(named_products) == 1 and subtype != "no_match":
+        return _build_resolved_product_unknown_field_result(
+            named_products[0],
+            label=label,
+            source="resolved_entity_unknown_field_fallback",
+        )
+    if subtype == "no_match":
+        return _build_unknown_field_product_not_found_result(text, label=label, subject_override=primary_entity)
+    unresolved_clarification = _build_unresolved_product_like_unknown_field_clarification_result(
+        text,
+        label=label,
+        subject_override=primary_entity,
+    )
+    if unresolved_clarification:
+        return unresolved_clarification
+    if entity_scope_hint == "unresolved_product_like":
+        return _generic_unresolved_product_like_unknown_field_clarification_result(
+            text,
+            label=label,
+            subject_override=primary_entity,
+        )
+    if customer_agent_service._extract_skus(text):
+        return _build_unknown_field_product_not_found_result(text, label=label, subject_override=primary_entity)
+    if subtype in _SEMANTIC_UNKNOWN_REALTIME_SUBTYPES:
+        return unresolved_clarification
     return None
 
 
@@ -3610,6 +3844,36 @@ async def ask_customer_service(
     )
     if isinstance(semantic_preplan, dict) and semantic_preplan.get("called"):
         phase1_plan["semantic_preplan"] = semantic_preplan
+
+    high_risk_contract_result = _pre_route_high_risk_contract_result(
+        db,
+        question,
+        semantic_preplan,
+    )
+    if high_risk_contract_result:
+        high_risk_contract_result = _attach_phase1_plan_and_timing(
+            high_risk_contract_result,
+            phase1_plan,
+            _phase1_timing(
+                request_start=request_start,
+                planner_duration_ms=planner_duration_ms,
+            ),
+        )
+        high_risk_contract_result = _attach_semantic_preplan_debug(
+            high_risk_contract_result,
+            semantic_preplan,
+            final_route=str(high_risk_contract_result.get("answer_type") or high_risk_contract_result.get("intent") or ""),
+        )
+        return await _save_agent_result_and_return(
+            db,
+            user_id=user_id,
+            question=question,
+            conversation_id=conversation_id,
+            agent_result=high_risk_contract_result,
+            request_start=request_start,
+            branch="pre_route_high_risk_contract",
+            semantic_preplan=semantic_preplan,
+        )
 
     explicit_sku_direct_result = await _try_explicit_sku_detail_shortcut(db, question)
     if explicit_sku_direct_result:
