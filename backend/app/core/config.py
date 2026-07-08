@@ -65,6 +65,11 @@ class Settings:
     AI_REQUEST_QUEUE_TIMEOUT_SECONDS: float = float(os.getenv("AI_REQUEST_QUEUE_TIMEOUT_SECONDS", "8"))
     EMBEDDING_REQUEST_TIMEOUT_SECONDS: int = int(os.getenv("EMBEDDING_REQUEST_TIMEOUT_SECONDS", "8"))
     AI_MAX_CONCURRENT_REQUESTS: int = int(os.getenv("AI_MAX_CONCURRENT_REQUESTS", "10"))
+    SEMANTIC_PREPLAN_MODEL: str = os.getenv("SEMANTIC_PREPLAN_MODEL", "deepseek-v4-flash").strip()
+    SEMANTIC_PREPLAN_MAX_TOKENS: int = int(os.getenv("SEMANTIC_PREPLAN_MAX_TOKENS", "256"))
+    SEMANTIC_PREPLAN_TEMPERATURE: float = float(os.getenv("SEMANTIC_PREPLAN_TEMPERATURE", "0"))
+    SEMANTIC_PREPLAN_JSON_MODE: bool = os.getenv("SEMANTIC_PREPLAN_JSON_MODE", "true").lower() == "true"
+    SEMANTIC_PREPLAN_THINKING_DISABLED: bool = os.getenv("SEMANTIC_PREPLAN_THINKING_DISABLED", "true").lower() == "true"
 
     DATABASE_URL: str = os.getenv(
         "DATABASE_URL",

@@ -4,6 +4,7 @@ import json
 import re
 
 from typing import Any
+from ..core.config import settings
 from . import customer_agent_service, customer_llm_service
 
 
@@ -161,7 +162,54 @@ def _empty_semantic_preplan(*, called: bool = False, fallback_reason: str = "") 
         "llm_call_count": 1 if called else 0,
         "llm_call_count_delta": 1 if called else 0,
         "raw_preview": "",
+        "preplan_model": "",
+        "preplan_temperature": None,
+        "preplan_max_tokens": None,
+        "preplan_json_mode": False,
+        "preplan_thinking_disabled": False,
+        "preplan_latency_ms": None,
+        "provider_usage_available": False,
+        "prompt_tokens": None,
+        "completion_tokens": None,
+        "total_tokens": None,
+        "reasoning_tokens": None,
+        "prompt_cache_hit_tokens": None,
+        "prompt_cache_miss_tokens": None,
     }
+
+
+def _semantic_preplan_runtime_settings() -> dict[str, Any]:
+    return {
+        "model": str(settings.SEMANTIC_PREPLAN_MODEL or "").strip() or None,
+        "temperature": float(settings.SEMANTIC_PREPLAN_TEMPERATURE),
+        "max_tokens": max(1, int(settings.SEMANTIC_PREPLAN_MAX_TOKENS)),
+        "response_format": {"type": "json_object"} if settings.SEMANTIC_PREPLAN_JSON_MODE else None,
+        "thinking": {"type": "disabled"} if settings.SEMANTIC_PREPLAN_THINKING_DISABLED else None,
+    }
+
+
+def _apply_semantic_preplan_observability(
+    result: dict[str, Any],
+    metadata: dict[str, Any] | None,
+    runtime_settings: dict[str, Any],
+) -> dict[str, Any]:
+    result["preplan_model"] = str((metadata or {}).get("request_model") or runtime_settings.get("model") or "")
+    result["preplan_temperature"] = (metadata or {}).get("temperature", runtime_settings.get("temperature"))
+    result["preplan_max_tokens"] = (metadata or {}).get("max_tokens", runtime_settings.get("max_tokens"))
+    result["preplan_json_mode"] = bool(runtime_settings.get("response_format"))
+    thinking = (metadata or {}).get("thinking", runtime_settings.get("thinking"))
+    result["preplan_thinking_disabled"] = isinstance(thinking, dict) and thinking.get("type") == "disabled"
+    result["preplan_latency_ms"] = (metadata or {}).get("elapsed_ms")
+    usage = (metadata or {}).get("usage") if isinstance((metadata or {}).get("usage"), dict) else {}
+    result["provider_usage_available"] = bool(usage)
+    result["prompt_tokens"] = usage.get("prompt_tokens")
+    result["completion_tokens"] = usage.get("completion_tokens")
+    result["total_tokens"] = usage.get("total_tokens")
+    completion_details = usage.get("completion_tokens_details") if isinstance(usage.get("completion_tokens_details"), dict) else {}
+    result["reasoning_tokens"] = completion_details.get("reasoning_tokens")
+    result["prompt_cache_hit_tokens"] = usage.get("prompt_cache_hit_tokens")
+    result["prompt_cache_miss_tokens"] = usage.get("prompt_cache_miss_tokens")
+    return result
 
 
 def _extract_json_object(text: str) -> dict[str, Any] | None:
@@ -372,6 +420,7 @@ def _validate_semantic_preplan_label(content: str, *, feature_summary: str) -> d
 
 
 async def _repair_semantic_preplan_output(db, *, question: str, raw_content: str) -> str:
+    runtime_settings = _semantic_preplan_runtime_settings()
     return await customer_llm_service.chat_completion(
         db,
         [
@@ -394,9 +443,12 @@ async def _repair_semantic_preplan_output(db, *, question: str, raw_content: str
                 ),
             },
         ],
-        temperature=0,
-        max_tokens=1200,
+        temperature=runtime_settings["temperature"],
+        max_tokens=runtime_settings["max_tokens"],
         purpose="semantic_preplan_repair",
+        api_model_override=runtime_settings["model"],
+        response_format=runtime_settings["response_format"],
+        thinking=runtime_settings["thinking"],
     )
 
 
@@ -405,6 +457,7 @@ async def _semantic_preplan_label_output(
     *,
     feature_summary: str,
 ) -> str:
+    runtime_settings = _semantic_preplan_runtime_settings()
     return await customer_llm_service.chat_completion(
         db,
         [
@@ -426,9 +479,11 @@ async def _semantic_preplan_label_output(
                 ),
             },
         ],
-        temperature=0,
-        max_tokens=800,
+        temperature=runtime_settings["temperature"],
+        max_tokens=min(runtime_settings["max_tokens"], 256),
         purpose="semantic_preplan_label",
+        api_model_override=runtime_settings["model"],
+        thinking=runtime_settings["thinking"],
     )
 
 
@@ -446,21 +501,29 @@ async def plan_customer_question_semantic(
     context = context if isinstance(context, dict) else {}
     messages = _semantic_preplan_messages(question=text, deterministic_plan=deterministic_plan, context=context)
     feature_summary = _semantic_preplan_feature_summary(text, deterministic_plan, context)
+    runtime_settings = _semantic_preplan_runtime_settings()
     llm_call_count = 0
+    llm_metadata: dict[str, Any] = {}
     try:
         content = await customer_llm_service.chat_completion(
             db,
             messages,
-            temperature=0,
-            max_tokens=1200,
+            temperature=runtime_settings["temperature"],
+            max_tokens=runtime_settings["max_tokens"],
             purpose="semantic_preplan",
+            api_model_override=runtime_settings["model"],
+            response_format=runtime_settings["response_format"],
+            thinking=runtime_settings["thinking"],
+            metadata=llm_metadata,
         )
         llm_call_count += 1
     except Exception as exc:
         result = _empty_semantic_preplan(called=True, fallback_reason=f"llm_error:{type(exc).__name__}")
         result["error"] = str(exc)[:240]
+        _apply_semantic_preplan_observability(result, llm_metadata, runtime_settings)
         return result
     result = _validate_semantic_preplan(_extract_json_object(content), raw_content=content)
+    _apply_semantic_preplan_observability(result, llm_metadata, runtime_settings)
     if result.get("fallback_reason") == "invalid_json":
         try:
             repaired = await _repair_semantic_preplan_output(db, question=text, raw_content=content)
@@ -470,8 +533,10 @@ async def plan_customer_question_semantic(
             result["error"] = str(exc)[:240]
             result["llm_call_count"] = llm_call_count
             result["llm_call_count_delta"] = llm_call_count
+            _apply_semantic_preplan_observability(result, llm_metadata, runtime_settings)
             return result
         result = _validate_semantic_preplan(_extract_json_object(repaired), raw_content=repaired)
+        _apply_semantic_preplan_observability(result, llm_metadata, runtime_settings)
     if result.get("fallback_reason") == "invalid_json":
         try:
             label_content = await _semantic_preplan_label_output(db, feature_summary=feature_summary)
@@ -481,8 +546,10 @@ async def plan_customer_question_semantic(
             result["error"] = str(exc)[:240]
             result["llm_call_count"] = llm_call_count
             result["llm_call_count_delta"] = llm_call_count
+            _apply_semantic_preplan_observability(result, llm_metadata, runtime_settings)
             return result
         result = _validate_semantic_preplan_label(label_content, feature_summary=feature_summary)
+        _apply_semantic_preplan_observability(result, llm_metadata, runtime_settings)
     result["llm_call_count"] = llm_call_count
     result["llm_call_count_delta"] = llm_call_count
     if not result.get("route_hint"):

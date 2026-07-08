@@ -607,6 +607,11 @@ async def chat_completion(
     model: str | None = None,
     temperature: float = 0.2,
     max_tokens: int = 1200,
+    *,
+    api_model_override: str | None = None,
+    response_format: dict | None = None,
+    thinking: dict | None = None,
+    response_metadata: dict | None = None,
 ) -> str:
     cfg = _resolve_model_config(db, model) if model else get_default_model_by_type(db, "chat")
     if not cfg:
@@ -619,11 +624,15 @@ async def chat_completion(
         raise ValueError(f"聊天模型 '{cfg['id']}' 未配置 API Key")
 
     body = {
-        "model": cfg.get("api_model") or cfg["id"],
+        "model": api_model_override or cfg.get("api_model") or cfg["id"],
         "messages": messages,
         "temperature": temperature,
         "max_tokens": max_tokens,
     }
+    if isinstance(response_format, dict) and response_format:
+        body["response_format"] = response_format
+    if isinstance(thinking, dict) and thinking:
+        body["thinking"] = thinking
     headers = {
         "Authorization": f"Bearer {api_key}",
         "Content-Type": "application/json",
@@ -645,6 +654,19 @@ async def chat_completion(
         )
     data = response.json()
     agent_trace_service.trace("AI_RESPONSE", data)
+    if isinstance(response_metadata, dict):
+        response_metadata.update(
+            {
+                "model": str(body.get("model") or cfg.get("api_model") or cfg["id"]),
+                "provider_model": data.get("model") if isinstance(data, dict) else None,
+                "request_model": body.get("model"),
+                "request_temperature": temperature,
+                "request_max_tokens": max_tokens,
+                "request_response_format": response_format if isinstance(response_format, dict) and response_format else None,
+                "request_thinking": thinking if isinstance(thinking, dict) and thinking else None,
+                "usage": data.get("usage") if isinstance(data, dict) else None,
+            }
+        )
     try:
         return data["choices"][0]["message"]["content"] or ""
     except (KeyError, IndexError, TypeError) as exc:

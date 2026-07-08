@@ -109,6 +109,7 @@ def record_llm_call(
     }
     _log(payload)
     record = payload["extra"].copy()
+    record["elapsed_ms"] = round(elapsed_ms, 2)
     if state is not None:
         state["llm_calls"].append(record)
     return record

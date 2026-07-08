@@ -191,8 +191,49 @@ def _assert_recommendation_result_rows_stay_in_category_domain(
 def test_semantic_preplan_parser_accepts_code_fence_and_tracks_llm_calls(monkeypatch):
     calls = []
 
-    async def fake_chat_completion(db, messages, model=None, temperature=0.2, max_tokens=1200, *, purpose="chat"):
-        calls.append(purpose)
+    async def fake_chat_completion(
+        db,
+        messages,
+        model=None,
+        temperature=0.2,
+        max_tokens=1200,
+        *,
+        purpose="chat",
+        api_model_override=None,
+        response_format=None,
+        thinking=None,
+        metadata=None,
+    ):
+        calls.append(
+            {
+                "purpose": purpose,
+                "model": model,
+                "api_model_override": api_model_override,
+                "temperature": temperature,
+                "max_tokens": max_tokens,
+                "response_format": response_format,
+                "thinking": thinking,
+            }
+        )
+        if isinstance(metadata, dict):
+            metadata.update(
+                {
+                    "request_model": api_model_override or model,
+                    "temperature": temperature,
+                    "max_tokens": max_tokens,
+                    "response_format": response_format,
+                    "thinking": thinking,
+                    "elapsed_ms": 123.45,
+                    "usage": {
+                        "prompt_tokens": 31,
+                        "completion_tokens": 11,
+                        "total_tokens": 42,
+                        "completion_tokens_details": {"reasoning_tokens": 0},
+                        "prompt_cache_hit_tokens": 7,
+                        "prompt_cache_miss_tokens": 24,
+                    },
+                }
+            )
         return """```json
 {"route_hint":"comparison","question_type":"comparison","entities":[],"field_hint":null,"qa_or_usage_care":false,"unknown_field":false,"confidence":0.84,"reason":"pan vs cookware"}
 ```"""
@@ -208,16 +249,35 @@ def test_semantic_preplan_parser_accepts_code_fence_and_tracks_llm_calls(monkeyp
         )
     )
 
-    assert calls == ["semantic_preplan"]
+    assert [item["purpose"] for item in calls] == ["semantic_preplan"]
     assert result["called"] is True
     assert result["route_hint"] == "comparison"
     assert result["confidence"] > 0
+    assert calls[0]["model"] is None
+    assert calls[0]["api_model_override"] == "deepseek-v4-flash"
+    assert calls[0]["temperature"] == 0
+    assert calls[0]["max_tokens"] == 256
+    assert calls[0]["response_format"] == {"type": "json_object"}
+    assert calls[0]["thinking"] == {"type": "disabled"}
+    assert result["preplan_model"] == "deepseek-v4-flash"
+    assert result["preplan_temperature"] == 0
+    assert result["preplan_max_tokens"] == 256
+    assert result["preplan_json_mode"] is True
+    assert result["preplan_thinking_disabled"] is True
+    assert result["preplan_latency_ms"] == pytest.approx(123.45)
+    assert result["provider_usage_available"] is True
+    assert result["prompt_tokens"] == 31
+    assert result["completion_tokens"] == 11
+    assert result["total_tokens"] == 42
+    assert result["reasoning_tokens"] == 0
+    assert result["prompt_cache_hit_tokens"] == 7
+    assert result["prompt_cache_miss_tokens"] == 24
 
 
 def test_semantic_preplan_parser_accepts_contents_subtype_and_entity_scope(monkeypatch):
     calls = []
 
-    async def fake_chat_completion(db, messages, model=None, temperature=0.2, max_tokens=1200, *, purpose="chat"):
+    async def fake_chat_completion(db, messages, model=None, temperature=0.2, max_tokens=1200, *, purpose="chat", api_model_override=None, response_format=None, thinking=None, metadata=None):
         calls.append(purpose)
         return """```json
 {"route_hint":"product_detail","question_type":"contents_accessories","entities":["CF-PG19"],"field_hint":"contents","subtype":"composition","entity_scope":"resolved_single","qa_or_usage_care":true,"unknown_field":false,"confidence":0.91,"reason":"resolved contents question"}
@@ -392,7 +452,7 @@ def test_compose_recommendation_answer_bypasses_llm_for_alcohol_stove_cookware(m
 def test_semantic_preplan_repair_recovers_truncated_json(monkeypatch):
     calls = []
 
-    async def fake_chat_completion(db, messages, model=None, temperature=0.2, max_tokens=1200, *, purpose="chat"):
+    async def fake_chat_completion(db, messages, model=None, temperature=0.2, max_tokens=1200, *, purpose="chat", api_model_override=None, response_format=None, thinking=None, metadata=None):
         calls.append(purpose)
         if purpose == "semantic_preplan":
             return '{\n  "route_hint": "query_products",\n  "question_type": "filter",\n  "entities": [],\n'
@@ -421,7 +481,7 @@ def test_semantic_preplan_repair_recovers_truncated_json(monkeypatch):
 def test_semantic_preplan_label_fallback_recovers_empty_json_outputs(monkeypatch):
     calls = []
 
-    async def fake_chat_completion(db, messages, model=None, temperature=0.2, max_tokens=1200, *, purpose="chat"):
+    async def fake_chat_completion(db, messages, model=None, temperature=0.2, max_tokens=1200, *, purpose="chat", api_model_override=None, response_format=None, thinking=None, metadata=None):
         calls.append(purpose)
         if purpose in {"semantic_preplan", "semantic_preplan_repair"}:
             return ""
@@ -449,7 +509,7 @@ def test_semantic_preplan_label_fallback_recovers_empty_json_outputs(monkeypatch
 
 
 def test_semantic_preplan_forbidden_keys_still_fallback(monkeypatch):
-    async def fake_chat_completion(db, messages, model=None, temperature=0.2, max_tokens=1200, *, purpose="chat"):
+    async def fake_chat_completion(db, messages, model=None, temperature=0.2, max_tokens=1200, *, purpose="chat", api_model_override=None, response_format=None, thinking=None, metadata=None):
         return '{"route_hint":"comparison","question_type":"comparison","entities":[],"field_hint":null,"qa_or_usage_care":false,"unknown_field":false,"confidence":0.9,"reason":"x","candidate_skus":["BAD-1"]}'
 
     monkeypatch.setattr(customer_agent_planner_service.customer_llm_service, "chat_completion", fake_chat_completion)
@@ -486,7 +546,7 @@ def test_route_level_semantic_preplan_triggers_only_for_ambiguous_routes(
     client, headers, _ = route_client_and_db
     calls = []
 
-    async def fake_chat_completion(db, messages, model=None, temperature=0.2, max_tokens=1200, *, purpose="chat"):
+    async def fake_chat_completion(db, messages, model=None, temperature=0.2, max_tokens=1200, *, purpose="chat", api_model_override=None, response_format=None, thinking=None, metadata=None):
         calls.append({"purpose": purpose, "messages": messages})
         return json.dumps(
             {
@@ -522,7 +582,7 @@ def test_route_level_semantic_preplan_triggers_for_alternative_followup(route_cl
     client, headers, _ = route_client_and_db
     calls = []
 
-    async def fake_chat_completion(db, messages, model=None, temperature=0.2, max_tokens=1200, *, purpose="chat"):
+    async def fake_chat_completion(db, messages, model=None, temperature=0.2, max_tokens=1200, *, purpose="chat", api_model_override=None, response_format=None, thinking=None, metadata=None):
         calls.append({"purpose": purpose, "messages": messages})
         return json.dumps(
             {
@@ -584,7 +644,7 @@ def test_route_level_semantic_preplan_skips_clear_deterministic_routes(
     client, headers, _ = route_client_and_db
     calls = []
 
-    async def fake_chat_completion(db, messages, model=None, temperature=0.2, max_tokens=1200, *, purpose="chat"):
+    async def fake_chat_completion(db, messages, model=None, temperature=0.2, max_tokens=1200, *, purpose="chat", api_model_override=None, response_format=None, thinking=None, metadata=None):
         if purpose == "semantic_preplan":
             calls.append({"purpose": purpose, "messages": messages})
             raise AssertionError("semantic_preplan should not run for clear deterministic routes")
