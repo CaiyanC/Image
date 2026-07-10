@@ -59,6 +59,42 @@ def main() -> None:
         if obsolete_ids:
             conn.execute(text("DELETE FROM group_permissions WHERE group_id = ANY(:ids)"), {"ids": obsolete_ids})
             conn.execute(text("DELETE FROM groups WHERE id = ANY(:ids)"), {"ids": obsolete_ids})
+
+        removed_user_111 = conn.execute(text("""
+            WITH target_users AS (
+                SELECT id FROM users WHERE username = '111'
+            ), deleted_operation_logs AS (
+                DELETE FROM operation_logs WHERE operator_id IN (SELECT id FROM target_users)
+            ), deleted_generations AS (
+                DELETE FROM generations WHERE user_id IN (SELECT id FROM target_users)
+            ), deleted_memberships AS (
+                DELETE FROM user_groups WHERE user_id IN (SELECT id FROM target_users)
+            )
+            DELETE FROM users WHERE id IN (SELECT id FROM target_users)
+        """)).rowcount
+
+        conn.execute(text("""
+            DELETE FROM user_groups
+            WHERE user_id IN (SELECT id FROM users WHERE username = 'lukey')
+        """))
+        conn.execute(text("""
+            INSERT INTO user_groups (id, user_id, group_id, group_role, created_at, updated_at)
+            SELECT
+                gen_random_uuid(),
+                u.id,
+                g.id,
+                'admin',
+                CURRENT_TIMESTAMP,
+                CURRENT_TIMESTAMP
+            FROM users u
+            CROSS JOIN groups g
+            WHERE u.username = 'lukey'
+              AND g.group_name = 'IT部'
+            ON CONFLICT (user_id, group_id) DO UPDATE SET
+                group_role = EXCLUDED.group_role,
+                updated_at = CURRENT_TIMESTAMP
+        """))
+
         conn.execute(text("""
             DELETE FROM group_permissions gp
             USING groups g, permissions p
@@ -109,6 +145,26 @@ def main() -> None:
             "SELECT COUNT(*) FROM groups WHERE group_name = ANY(:names)"
         ), {"names": obsolete_names}).scalar_one()
         department_count = conn.execute(text("SELECT COUNT(*) FROM groups")).scalar_one()
+        remaining_user_111 = conn.execute(text(
+            "SELECT COUNT(*) FROM users WHERE username = '111'"
+        )).scalar_one()
+        lukey_it_memberships = conn.execute(text("""
+            SELECT COUNT(*)
+            FROM user_groups ug
+            JOIN users u ON u.id = ug.user_id
+            JOIN groups g ON g.id = ug.group_id
+            WHERE u.username = 'lukey'
+              AND g.group_name = 'IT部'
+              AND ug.group_role = 'admin'
+        """)).scalar_one()
+        lukey_other_memberships = conn.execute(text("""
+            SELECT COUNT(*)
+            FROM user_groups ug
+            JOIN users u ON u.id = ug.user_id
+            JOIN groups g ON g.id = ug.group_id
+            WHERE u.username = 'lukey'
+              AND g.group_name <> 'IT部'
+        """)).scalar_one()
         if (before_products, before_qa) != (after_products, after_qa):
             raise RuntimeError("Product or QA row counts changed during migration")
         if remaining_obsolete or department_count != 15:
@@ -116,11 +172,18 @@ def main() -> None:
                 f"Department cleanup incomplete: remaining_obsolete={remaining_obsolete}, "
                 f"department_count={department_count}"
             )
+        if remaining_user_111 or lukey_it_memberships != 1 or lukey_other_memberships:
+            raise RuntimeError(
+                "Development user cleanup incomplete: "
+                f"remaining_user_111={remaining_user_111}, "
+                f"lukey_it_memberships={lukey_it_memberships}, "
+                f"lukey_other_memberships={lukey_other_memberships}"
+            )
 
     print(
         f"Migrated {database_name}: products={before_products}, qa={before_qa}, "
         f"departments={department_count}, removed_legacy={len(obsolete_ids)}; "
-        "L6 assets and departments normalized"
+        f"removed_user_111={removed_user_111}; L6 assets and departments normalized"
     )
 
 
