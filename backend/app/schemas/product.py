@@ -351,6 +351,8 @@ class ProductDetailResponse(BaseModel):
     business: Optional[ProductBusinessResponse] = None
     content: Optional[ProductContentResponse] = None
     media: List[ProductMediaResponse] = []
+    assets: list[dict] = []
+    media_data: dict = {}
     prompts: List[ProductPromptsResponse] = []
     qa_items: List[ProductQaResponse] = []
     qa_negative: Optional[ProductQaNegativeResponse] = None

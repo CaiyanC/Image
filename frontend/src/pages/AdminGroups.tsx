@@ -113,7 +113,7 @@ export default function AdminGroups() {
       setGroups(groupData)
       setPermissions(permissionData)
     } catch (err) {
-      setError(err instanceof Error ? err.message : '加载团队权限失败')
+      setError(err instanceof Error ? err.message : '加载部门权限失败')
     } finally {
       setLoading(false)
     }
@@ -135,10 +135,10 @@ export default function AdminGroups() {
       await api.groups.create(createForm)
       setShowCreate(false)
       setCreateForm({ group_name: '', description: '' })
-      setMessage('团队创建成功')
+      setMessage('部门创建成功')
       loadInitialData()
     } catch (err) {
-      setError(err instanceof Error ? err.message : '创建团队失败')
+      setError(err instanceof Error ? err.message : '创建部门失败')
     }
   }
 
@@ -147,22 +147,22 @@ export default function AdminGroups() {
     try {
       await api.groups.update(editingGroup.id, editForm)
       setEditingGroup(null)
-      setMessage('团队已更新')
+      setMessage('部门已更新')
       loadInitialData()
     } catch (err) {
-      setError(err instanceof Error ? err.message : '更新团队失败')
+      setError(err instanceof Error ? err.message : '更新部门失败')
     }
   }
 
   async function handleDelete(groupId: string) {
-    if (!confirm('确定删除该团队吗？')) return
+    if (!confirm('确定删除该部门吗？')) return
     try {
       await api.groups.delete(groupId)
-      setMessage('团队已删除')
+      setMessage('部门已删除')
       setExpandedGroup(null)
       loadInitialData()
     } catch (err) {
-      setError(err instanceof Error ? err.message : '删除团队失败')
+      setError(err instanceof Error ? err.message : '删除部门失败')
     }
   }
 
@@ -178,7 +178,7 @@ export default function AdminGroups() {
     try {
       await Promise.all([refreshMembers(group.id), refreshPermissions(group.id)])
     } catch (err) {
-      setError(err instanceof Error ? err.message : '加载团队详情失败')
+      setError(err instanceof Error ? err.message : '加载部门详情失败')
     }
   }
 
@@ -253,14 +253,14 @@ export default function AdminGroups() {
     <div className="p-4 max-w-6xl mx-auto">
       <div className="flex items-center justify-between mb-6">
         <div>
-          <h1 className="text-2xl font-bold text-apple-text tracking-tight">团队与权限</h1>
-          <p className="text-sm text-apple-gray-medium mt-1">超级管理员可以按部门统一分配生图、智能客服、产品数据等权限。</p>
+          <h1 className="text-2xl font-bold text-apple-text tracking-tight">部门与权限</h1>
+          <p className="text-sm text-apple-gray-medium mt-1">总经办管理员可以按部门统一分配生图、智能客服、产品数据和视觉素材权限。</p>
         </div>
         <button
           onClick={() => setShowCreate(true)}
           className="px-4 py-2 bg-blue-500 text-white rounded-lg text-sm font-medium hover:bg-blue-600 transition-colors"
         >
-          新建团队
+          新建部门
         </button>
       </div>
 
@@ -269,7 +269,7 @@ export default function AdminGroups() {
           type="text"
           value={searchQuery}
           onChange={(e) => setSearchQuery(e.target.value)}
-          placeholder="搜索团队名称或描述..."
+          placeholder="搜索部门名称或描述..."
           className="w-full px-4 py-2.5 bg-white/60 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-400 transition-all"
         />
       </div>
@@ -289,10 +289,10 @@ export default function AdminGroups() {
 
       {showCreate && (
         <div className="glass rounded-xl p-6 mb-6 animate-fade-in">
-          <h2 className="text-lg font-semibold text-apple-text mb-4">新建团队</h2>
+          <h2 className="text-lg font-semibold text-apple-text mb-4">新建部门</h2>
           <div className="grid md:grid-cols-2 gap-4 mb-4">
             <div>
-              <label className="text-xs font-medium text-apple-gray-dark block mb-1">团队名称 *</label>
+              <label className="text-xs font-medium text-apple-gray-dark block mb-1">部门名称 *</label>
               <input
                 type="text"
                 value={createForm.group_name}
@@ -307,7 +307,7 @@ export default function AdminGroups() {
                 value={createForm.description}
                 onChange={(event) => setCreateForm({ ...createForm, description: event.target.value })}
                 className="w-full px-3 py-2 bg-white/50 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/20"
-                placeholder="团队职责说明"
+                placeholder="部门职责说明"
               />
             </div>
           </div>
@@ -324,10 +324,10 @@ export default function AdminGroups() {
 
       {editingGroup && (
         <div className="glass rounded-xl p-6 mb-6 animate-fade-in">
-          <h2 className="text-lg font-semibold text-apple-text mb-4">编辑团队</h2>
+          <h2 className="text-lg font-semibold text-apple-text mb-4">编辑部门</h2>
           <div className="grid md:grid-cols-2 gap-4 mb-4">
             <div>
-              <label className="text-xs font-medium text-apple-gray-dark block mb-1">团队名称 *</label>
+              <label className="text-xs font-medium text-apple-gray-dark block mb-1">部门名称 *</label>
               <input
                 type="text"
                 value={editForm.group_name}
@@ -359,7 +359,7 @@ export default function AdminGroups() {
         <div className="flex items-center justify-center py-20 animate-pulse-soft text-apple-gray-medium">加载中...</div>
       ) : filteredGroups.length === 0 ? (
         <div className="glass p-12 text-center rounded-xl">
-          <p className="text-apple-gray-medium">{searchQuery ? '没有匹配的团队' : '暂无团队'}</p>
+          <p className="text-apple-gray-medium">{searchQuery ? '没有匹配的部门' : '暂无部门'}</p>
         </div>
       ) : (
         <div className="space-y-3">
@@ -406,7 +406,7 @@ export default function AdminGroups() {
                   <div className="grid lg:grid-cols-[360px_1fr] gap-4">
                     <section className="bg-white/45 rounded-xl p-4">
                       <div className="flex items-center justify-between mb-3">
-                        <h4 className="text-sm font-semibold text-apple-text">团队成员</h4>
+                        <h4 className="text-sm font-semibold text-apple-text">部门成员</h4>
                         <button
                           onClick={() => {
                             setShowAddMember(true)
@@ -478,7 +478,7 @@ export default function AdminGroups() {
                       <div className="flex items-center justify-between gap-3 mb-4">
                         <div>
                           <h4 className="text-sm font-semibold text-apple-text">部门权限</h4>
-                          <p className="text-xs text-apple-gray-medium mt-0.5">勾选后，该团队下所有成员都会获得对应能力。</p>
+                          <p className="text-xs text-apple-gray-medium mt-0.5">勾选后，该部门下所有成员都会获得对应能力。</p>
                         </div>
                         <button onClick={handleSavePermissions} disabled={savingPermissions} className="px-4 py-2 bg-blue-500 text-white rounded-lg text-sm font-medium hover:bg-blue-600 transition-colors disabled:opacity-50">
                           {savingPermissions ? '保存中...' : '保存权限'}

@@ -69,7 +69,7 @@ def _authorize_sign_request(db: Session, user: User, normalized_path: str) -> No
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Knowledge files must be downloaded through the knowledge base API",
         )
-    if normalized_path.startswith("/uploads/images/") or normalized_path.startswith("/uploads/videos/"):
+    if normalized_path.startswith(("/uploads/images/", "/uploads/videos/", "/uploads/assets/")):
         if has_permission(db, user.id, "product.read"):
             return
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Permission required: product.read")

@@ -5,8 +5,10 @@ from sqlalchemy.orm import sessionmaker, DeclarativeBase, Session
 from .config import settings
 from .permission_constants import (
     COMMON_PERMISSION_KEYS,
+    DEPRECATED_EMPTY_GROUP_NAMES,
     DEFAULT_GROUPS,
     GROUP_PERMISSION_KEYS,
+    LEGACY_GROUP_NAME_MAP,
     PERMISSION_DEFS,
     PERMISSION_ROUTE_MAP,
     ROUTE_DEFS,
@@ -142,12 +144,33 @@ def _ensure_product_assets_compat():
             "thumbnail_url": "TEXT",
             "brand": "VARCHAR(64) DEFAULT 'alocs'",
             "material_type": "VARCHAR(64)",
+            "source_key": "VARCHAR(128)",
             "angle_scene": "VARCHAR(128)",
             "channel": "VARCHAR(64)",
             "language_tag": "VARCHAR(32)",
             "version_tag": "VARCHAR(32)",
+            "product_version": "VARCHAR(32)",
+            "market_version": "VARCHAR(32)",
             "date_tag": "VARCHAR(16)",
             "status_tag": "VARCHAR(32)",
+            "file_name": "VARCHAR(255)",
+            "file_format": "VARCHAR(20)",
+            "resolution": "VARCHAR(32)",
+            "aspect_ratio": "VARCHAR(16)",
+            "asset_level": "VARCHAR(10) DEFAULT 'C'",
+            "is_real_product": "BOOLEAN DEFAULT TRUE",
+            "is_ai_generated": "BOOLEAN DEFAULT FALSE",
+            "is_competitor": "BOOLEAN DEFAULT FALSE",
+            "is_latest_version": "BOOLEAN DEFAULT TRUE",
+            "is_public": "BOOLEAN DEFAULT FALSE",
+            "ai_customer_usable": "BOOLEAN DEFAULT FALSE",
+            "ai_marketing_usable": "BOOLEAN DEFAULT FALSE",
+            "ai_reference_usable": "BOOLEAN DEFAULT FALSE",
+            "editable_flag": "BOOLEAN DEFAULT FALSE",
+            "review_status": "VARCHAR(32) DEFAULT 'pending'",
+            "authorization_status": "VARCHAR(32) DEFAULT 'unknown'",
+            "forbidden_usage": "TEXT",
+            "maintainer": "VARCHAR(100)",
             "seq": "INTEGER DEFAULT 0",
             "sort_order": "INTEGER DEFAULT 0",
             "tags": "TEXT DEFAULT '{}'",
@@ -159,6 +182,23 @@ def _ensure_product_assets_compat():
             for name, definition in expected_columns.items():
                 if name not in existing_columns and name != "id":
                     conn.execute(text(f"ALTER TABLE product_assets ADD COLUMN {name} {definition}"))
+            conn.execute(text(
+                "UPDATE product_assets SET "
+                "asset_level = COALESCE(asset_level, 'C'), "
+                "is_real_product = COALESCE(is_real_product, TRUE), "
+                "is_ai_generated = COALESCE(is_ai_generated, FALSE), "
+                "is_competitor = COALESCE(is_competitor, FALSE), "
+                "is_latest_version = COALESCE(is_latest_version, TRUE), "
+                "is_public = COALESCE(is_public, FALSE), "
+                "ai_customer_usable = COALESCE(ai_customer_usable, FALSE), "
+                "ai_marketing_usable = COALESCE(ai_marketing_usable, FALSE), "
+                "ai_reference_usable = COALESCE(ai_reference_usable, FALSE), "
+                "editable_flag = COALESCE(editable_flag, FALSE), "
+                "review_status = COALESCE(review_status, 'pending'), "
+                "authorization_status = COALESCE(authorization_status, 'unknown'), "
+                "file_name = COALESCE(file_name, url), "
+                "product_version = COALESCE(product_version, version_tag)"
+            ))
             if settings.DATABASE_URL.startswith("postgresql"):
                 orphan_count = conn.execute(text(
                     "SELECT COUNT(*) FROM product_assets pa "
@@ -168,15 +208,20 @@ def _ensure_product_assets_compat():
                 if orphan_count:
                     raise RuntimeError(f"product_assets contains {orphan_count} orphan sku rows")
                 conn.execute(text(
-                    "DO $$ BEGIN "
+                    "DO $$ DECLARE constraint_name text; BEGIN "
                     "IF NOT EXISTS ("
-                    "SELECT 1 FROM pg_constraint WHERE conname = 'fk_product_assets_sku_products_sku'"
+                    "SELECT 1 FROM pg_constraint c "
+                    "WHERE c.conrelid = 'product_assets'::regclass "
+                    "AND c.contype = 'f' "
+                    "AND pg_get_constraintdef(c.oid) LIKE '%FOREIGN KEY (sku)%ON UPDATE CASCADE ON DELETE CASCADE%'"
                     ") THEN "
-                    "ALTER TABLE product_assets "
-                    "ADD CONSTRAINT fk_product_assets_sku_products_sku "
-                    "FOREIGN KEY (sku) REFERENCES products (sku) ON DELETE RESTRICT; "
-                    "END IF; "
-                    "END $$;"
+                    "FOR constraint_name IN "
+                    "SELECT c.conname FROM pg_constraint c "
+                    "WHERE c.conrelid = 'product_assets'::regclass AND c.contype = 'f' "
+                    "LOOP EXECUTE format('ALTER TABLE product_assets DROP CONSTRAINT %I', constraint_name); END LOOP; "
+                    "ALTER TABLE product_assets ADD CONSTRAINT fk_product_assets_sku_products_sku "
+                    "FOREIGN KEY (sku) REFERENCES products (sku) ON UPDATE CASCADE ON DELETE CASCADE; "
+                    "END IF; END $$;"
                 ))
             if settings.DATABASE_URL.startswith("postgresql"):
                 conn.execute(text("CREATE INDEX IF NOT EXISTS idx_product_assets_sku ON product_assets (sku)"))
@@ -204,19 +249,86 @@ def _ensure_product_assets_compat():
 
 def _seed_default_groups(db):
     from ..models.group import Group
+    from ..models.permissions import GroupPermission
+    from ..models.user_group import UserGroup
 
     existing = {g.group_name: g for g in db.query(Group).all()}
     changed = False
+    for legacy_name, department_name in LEGACY_GROUP_NAME_MAP.items():
+        legacy = existing.get(legacy_name)
+        if not legacy:
+            continue
+        target = existing.get(department_name)
+        if target is None:
+            legacy.group_name = department_name
+            existing.pop(legacy_name, None)
+            existing[department_name] = legacy
+            changed = True
+            continue
+
+        target_users = {
+            str(row.user_id): row
+            for row in db.query(UserGroup).filter(UserGroup.group_id == target.id).all()
+        }
+        for membership in db.query(UserGroup).filter(UserGroup.group_id == legacy.id).all():
+            existing_membership = target_users.get(str(membership.user_id))
+            if existing_membership:
+                if membership.group_role == "admin":
+                    existing_membership.group_role = "admin"
+                db.delete(membership)
+            else:
+                membership.group_id = target.id
+
+        db.query(GroupPermission).filter(GroupPermission.group_id == legacy.id).delete(
+            synchronize_session=False
+        )
+        db.query(Group).filter(Group.id == legacy.id).delete(synchronize_session=False)
+        existing.pop(legacy_name, None)
+        changed = True
+
+    removable_names = set(DEPRECATED_EMPTY_GROUP_NAMES)
+    removable_names.update(name for name in existing if name.startswith("test-group-"))
+    for group_name in removable_names:
+        group = existing.get(group_name)
+        if not group:
+            continue
+        if db.query(UserGroup).filter(UserGroup.group_id == group.id).first():
+            continue
+        db.query(GroupPermission).filter(GroupPermission.group_id == group.id).delete(
+            synchronize_session=False
+        )
+        db.query(Group).filter(Group.id == group.id).delete(synchronize_session=False)
+        existing.pop(group_name, None)
+        changed = True
+
     for name, desc in DEFAULT_GROUPS:
         group = existing.get(name)
         if group:
-            if not group.description:
+            if group.description != desc:
                 group.description = desc
                 changed = True
         else:
             db.add(Group(group_name=name, description=desc))
             changed = True
     if changed:
+        db.commit()
+
+    obsolete_names = set(LEGACY_GROUP_NAME_MAP)
+    obsolete_names.update(DEPRECATED_EMPTY_GROUP_NAMES)
+    obsolete_names.update(
+        name for (name,) in db.query(Group.group_name).all() if name.startswith("test-group-")
+    )
+    obsolete_group_ids = [
+        group_id for (group_id,) in db.query(Group.id).filter(
+            Group.group_name.in_(obsolete_names),
+            ~Group.id.in_(db.query(UserGroup.group_id)),
+        ).all()
+    ]
+    if obsolete_group_ids:
+        db.query(GroupPermission).filter(GroupPermission.group_id.in_(obsolete_group_ids)).delete(
+            synchronize_session=False
+        )
+        db.query(Group).filter(Group.id.in_(obsolete_group_ids)).delete(synchronize_session=False)
         db.commit()
 
 
@@ -270,6 +382,7 @@ def _seed_default_permissions(db):
             permission_keys.append("category.read")
     groups = {g.group_name: g for g in db.query(Group).all()}
     permissions = {p.permission_key: p for p in db.query(Permission).all()}
+    permission_keys_by_id = {str(p.id): p.permission_key for p in permissions.values()}
     existing_pairs = {
         (str(gp.group_id), str(gp.permission_id))
         for gp in db.query(GroupPermission).all()
@@ -279,6 +392,12 @@ def _seed_default_permissions(db):
         group = groups.get(group_name)
         if not group:
             continue
+        desired_keys = set(permission_keys)
+        for group_permission in db.query(GroupPermission).filter(GroupPermission.group_id == group.id).all():
+            if permission_keys_by_id.get(str(group_permission.permission_id)) not in desired_keys:
+                db.delete(group_permission)
+                existing_pairs.discard((str(group.id), str(group_permission.permission_id)))
+                changed = True
         for permission_key in permission_keys:
             permission = permissions.get(permission_key)
             if not permission:

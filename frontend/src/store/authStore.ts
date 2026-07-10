@@ -3,7 +3,7 @@ import type { User } from '../types'
 
 function isManagement(user: User | null): boolean {
   if (!user || !user.groups) return false
-  return user.groups.some((g) => g.group_name === '管理层')
+  return user.groups.some((g) => g.group_name === '总经办')
 }
 
 function readStoredAuth(): Pick<AuthState, 'token' | 'user' | 'isManagement'> {

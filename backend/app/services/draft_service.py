@@ -265,6 +265,12 @@ def publish_draft(db: Session, draft_id: str, user_id: str = None) -> dict:
                     listing_ja=cd.get("listing_ja"),
                 ))
 
+        if "media" in draft_data:
+            from . import product_asset_sync_service
+            product_asset_sync_service.sync_product_assets_from_media_data(
+                db, existing_product, draft_data.get("media")
+            )
+
         # QA items - delete old and insert new
         from ..models.product_qa import ProductQa, ProductQaNegative
         db.query(ProductQa).filter(ProductQa.product_id == pid).delete()

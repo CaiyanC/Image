@@ -4,7 +4,7 @@ from ..models.group import Group
 from ..models.user_group import UserGroup
 from ..models.user import User
 from ..models.permissions import GroupPermission, Permission
-from ..core.permission_constants import MANAGEMENT_GROUP_NAME, PRESET_GROUP_NAMES
+from ..core.permission_constants import DEPARTMENT_ORDER, MANAGEMENT_GROUP_NAME, PRESET_GROUP_NAMES
 
 
 def _group_to_dict(group: Group) -> dict:
@@ -41,7 +41,8 @@ def get_group_by_name(db: Session, name: str):
 
 
 def get_groups(db: Session):
-    groups = db.query(Group).order_by(Group.group_name).all()
+    groups = db.query(Group).all()
+    groups.sort(key=lambda group: (DEPARTMENT_ORDER.get(group.group_name, 999), group.group_name))
     return [_group_to_dict(g) for g in groups]
 
 

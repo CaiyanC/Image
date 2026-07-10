@@ -1,10 +1,10 @@
 import { useState, useEffect } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import { api, type CategoryItem } from '../services/api'
-import type { Product, ProductMediaItem } from '../types'
+import type { Product, ProductAsset } from '../types'
 import L1L4Importer from '../components/ProductImport/L1L4Importer'
 import L5Importer from '../components/ProductImport/L5Importer'
-import { SecureImage } from '../components/SecureFile'
+import { SecureImage, SecureVideo } from '../components/SecureFile'
 import { useAuthStore } from '../store/authStore'
 import { canUsePermission, showNoPermissionToast } from '../services/permissionFeedback'
 
@@ -790,31 +790,27 @@ export default function ProductManagement() {
                   <div>
                     <h3 className="text-sm font-semibold text-apple-text mb-3">🖼️ L6 - 多媒体资产</h3>
                     <div className="space-y-3">
-                      {selected.media?.length ? (
+                      {selected.assets?.length ? (
                         (() => {
-                          const layerLabels: Record<string, string> = {
-                            source: '原始素材层', ai: 'AI 生成图层', channel: '渠道层',
-                            social: '社媒层', ref: '参考辅助层',
+                          const grouped = new Map<string, ProductAsset[]>()
+                          for (const asset of selected.assets) {
+                            const category = asset.category_name || '未分类'
+                            if (!grouped.has(category)) grouped.set(category, [])
+                            grouped.get(category)!.push(asset)
                           }
-                          const grouped = new Map<string, ProductMediaItem[]>()
-                          for (const m of selected.media) {
-                            const layer = m.media_layer || 'source'
-                            if (!grouped.has(layer)) grouped.set(layer, [])
-                            grouped.get(layer)!.push(m)
-                          }
-                          return Array.from(grouped.entries()).map(([layer, items]) => (
-                            <div key={layer} className="bg-white/50 rounded-lg p-3">
-                              <div className="text-xs font-semibold text-apple-text mb-2">{layerLabels[layer] || layer}</div>
+                          return Array.from(grouped.entries()).map(([category, items]) => (
+                            <div key={category} className="bg-white/50 rounded-lg p-3">
+                              <div className="text-xs font-semibold text-apple-text mb-2">{category}</div>
                               <div className="grid grid-cols-4 gap-2">
-                                {items.map((m) => (
-                                  <div key={m.id} className="relative group">
-                                    {m.file_url ? (
-                                      <SecureImage src={m.file_url} alt={m.file_name} className="w-full aspect-square object-cover rounded-lg" />
+                                {items.map((asset) => (
+                                  <div key={asset.id} className="relative group">
+                                    {asset.asset_type === 'video' ? (
+                                      <SecureVideo src={asset.url} controls className="w-full aspect-square object-cover rounded-lg" />
                                     ) : (
-                                      <div className="w-full aspect-square bg-gray-100 rounded-lg flex items-center justify-center text-xs text-apple-gray-medium">{m.file_name || '-'}</div>
+                                      <SecureImage src={asset.thumbnail_url || asset.url} alt={asset.file_name || asset.sub_category || ''} className="w-full aspect-square object-cover rounded-lg" />
                                     )}
                                     <div className="absolute bottom-0 left-0 right-0 bg-black/50 text-white text-[10px] px-1 py-0.5 rounded-b-lg truncate">
-                                      {m.media_group}{m.channel_name ? ` · ${m.channel_name}` : ''}
+                                      {asset.sub_category || '未分类'}{asset.status_tag ? ` · ${asset.status_tag}` : ''}
                                     </div>
                                   </div>
                                 ))}

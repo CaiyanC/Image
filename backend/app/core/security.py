@@ -8,7 +8,7 @@ from sqlalchemy.orm import Session
 
 from .config import settings
 from .database import get_db
-from .permission_constants import MANAGEMENT_GROUP_NAME
+from .permission_constants import MANAGEMENT_GROUP_NAME, PRODUCT_TEAM_GROUP_NAME
 from ..models.user import User
 from ..models.group import Group
 from ..models.user_group import UserGroup
@@ -189,7 +189,7 @@ def require_product_permission(action: str):
 
         if action == "delete":
             for ug in user_groups:
-                if ug["group_name"] == "产品团队" and ug["group_role"] == "admin":
+                if ug["group_name"] == PRODUCT_TEAM_GROUP_NAME and ug["group_role"] == "admin":
                     return current_user
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,

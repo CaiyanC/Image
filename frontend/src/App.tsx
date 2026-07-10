@@ -263,7 +263,7 @@ function NoAccess() {
           </div>
           <h1 className="text-xl font-black text-apple-text">没有访问权限</h1>
           <p className="text-sm text-apple-gray-medium mt-2">
-            当前账号没有访问该页面的权限，请联系超级管理员调整所在团队权限。
+            当前账号没有访问该页面的权限，请联系总经办管理员调整所在部门权限。
           </p>
         </div>
       </div>

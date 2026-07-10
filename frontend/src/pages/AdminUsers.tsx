@@ -50,7 +50,7 @@ export default function AdminUsers() {
       const data = await api.groups.list()
       setGroups(data)
     } catch (err) {
-      setError(err instanceof Error ? err.message : '团队加载失败')
+      setError(err instanceof Error ? err.message : '部门加载失败')
     }
   }
 
@@ -102,7 +102,7 @@ export default function AdminUsers() {
       } = { username: newUser.username, password: newUser.password }
       if (newUser.email.trim()) payload.email = newUser.email.trim()
 
-      const managementGroup = groups.find((g) => g.group_name === '管理层')
+      const managementGroup = groups.find((g) => g.group_name === '总经办')
       const selectedGroupId =
         newUser.account_type === 'admin' ? managementGroup?.id : newUser.group_id
       if (selectedGroupId) {
@@ -221,7 +221,7 @@ export default function AdminUsers() {
               disabled={newUser.account_type === 'admin'}
             >
               <option value="">
-                {newUser.account_type === 'admin' ? '自动加入管理层' : '暂不分配团队'}
+                {newUser.account_type === 'admin' ? '自动加入总经办' : '暂不分配部门'}
               </option>
               {groups.map((g) => (
                 <option key={g.id} value={g.id}>
@@ -281,7 +281,7 @@ export default function AdminUsers() {
               <th className="text-left px-6 py-3 text-xs font-medium text-apple-gray-dark">用户名</th>
               <th className="text-left px-6 py-3 text-xs font-medium text-apple-gray-dark">邮箱</th>
               <th className="text-left px-6 py-3 text-xs font-medium text-apple-gray-dark">用户类型</th>
-              <th className="text-left px-6 py-3 text-xs font-medium text-apple-gray-dark">所属团队</th>
+              <th className="text-left px-6 py-3 text-xs font-medium text-apple-gray-dark">所属部门</th>
               <th className="text-left px-6 py-3 text-xs font-medium text-apple-gray-dark">状态</th>
               <th className="text-left px-6 py-3 text-xs font-medium text-apple-gray-dark">注册时间</th>
               <th className="text-right px-6 py-3 text-xs font-medium text-apple-gray-dark">操作</th>

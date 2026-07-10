@@ -279,7 +279,7 @@ export default function ProductCreate() {
       const specData = product.specs || {}
       const busData = product.business || {}
       const contData = product.content || {}
-      const medData = product.media || []
+      const medData = (product as any).media_data || product.media || []
 
       setSpecs({
         size_info: (specData as any).size_info || (specData as any).dimension_lines || [{ label: '', value: '', unit: '厘米' }],
