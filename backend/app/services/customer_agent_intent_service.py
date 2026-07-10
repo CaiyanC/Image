@@ -1609,7 +1609,8 @@ def _requested_fields_for_detail_question(text: str) -> list[str]:
         ("适配情况", ("冷水还是热水", "适合冷水", "适合热水", "喝热水", "补水", "随身补水", "烧水还是补水", "能不能装热水", "能不能补水用")),
         ("表面处理", ("涂层", "不粘涂层", "有涂层", "不粘吗", "不沾吗")),
         ("卖点", ("是什么产品", "产品参数", "参数", "有什么特点")),
-        ("适用场景", ("适合几个人", "适合几人", "几个人", "几人使用", "适合什么", "适合哪些人群", "适用人群")),
+        ("适用人数", ("适合几个人", "适合几人", "几个人", "几人使用", "多少人", "人数", "适用人数")),
+        ("适用场景", ("适合什么", "适合哪些人群", "适用人群")),
         ("颜色", ("颜色",)),
         ("热源", ("燃料", "用什么燃料", "热源", "酒精炉吗", "能用酒精炉", "支持酒精炉", "可以用酒精炉")),
         ("配件", ("几个锅", "几件", "包装里", "包装内", "配件", "包含什么")),
@@ -6808,6 +6809,8 @@ def _normalize_requested_field_label(label: str) -> str:
     aliases = {
         "使用场景": "适用场景",
         "场景": "适用场景",
+        "适合人群": "适用人数",
+        "目标人群": "适用人数",
         "禁止": "禁止操作",
         "禁忌": "禁止操作",
         "防伪": "正品辨别",
@@ -7009,6 +7012,8 @@ def _field_evidence_terms(requested_fields: list[str]) -> set[str]:
             terms.update(("正品", "防伪", "真假", "辨别"))
         elif label == "适用场景":
             terms.update(("适用场景", "使用场景", "场景", "适合", "露营", "徒步", "野餐", "咖啡", "人群"))
+        elif label == "适用人数":
+            terms.update(("适用人数", "适合几个人", "适合几人", "几个人", "几人", "多少人", "人数", "目标人群", "适合人群"))
         elif label == "容量":
             terms.update(("容量", "ml", "ML", "L", "升"))
         elif label == "重量":
@@ -9203,6 +9208,7 @@ def _resolve_query_field(field_label: str) -> str | None:
         "适用场景": "business.usage_scenarios",
         "使用场景": "business.usage_scenarios",
         "场景": "business.usage_scenarios",
+        "适用人数": "business.target_audience",
         "目标人群": "business.target_audience",
         "适合人群": "business.target_audience",
         "配件": "specs.usage_instruction",

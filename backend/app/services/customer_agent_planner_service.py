@@ -81,6 +81,39 @@ SEMANTIC_PREPLAN_ENTITY_SCOPES = {
     "ambiguous_product_name",
     "unresolved_product_like",
     "generic_scope",
+    "category_scope",
+    "product_like",
+    "resolved_product",
+    "ambiguous_product",
+    "unresolved_product",
+    "negative_product",
+}
+SEMANTIC_PREPLAN_ROUTE_FAMILIES = {
+    "",
+    "structured_query",
+    "recommendation",
+    "product_bound_qa",
+    "unresolved_product_like",
+    "negative_product_like",
+    "unknown_realtime",
+    "contents_accessories",
+    "generic_query",
+    "clarification",
+}
+SEMANTIC_PREPLAN_FIELD_TYPES = {
+    "",
+    "material",
+    "category",
+    "usage",
+    "heat_source",
+    "capacity",
+    "price",
+    "stock",
+    "shipping",
+    "gift",
+    "contents",
+    "recommendation",
+    "unknown",
 }
 SEMANTIC_PREPLAN_FORBIDDEN_KEYS = {
     "answer",
@@ -97,9 +130,11 @@ SEMANTIC_PREPLAN_FORBIDDEN_KEYS = {
     "warranty",
 }
 SEMANTIC_PREPLAN_ALLOWED_KEYS = {
+    "route_family",
     "route_hint",
     "question_type",
     "entities",
+    "field_type",
     "field_hint",
     "subtype",
     "entity_scope",
@@ -155,15 +190,18 @@ def _empty_semantic_preplan(*, called: bool = False, fallback_reason: str = "") 
     return {
         "called": called,
         "purpose": "semantic_preplan",
+        "route_family": "",
         "route_hint": "",
         "question_type": "",
         "entities": [],
+        "field_type": "",
         "field_hint": None,
         "subtype": "",
         "entity_scope": "",
         "qa_or_usage_care": False,
         "unknown_field": False,
         "confidence": 0.0,
+        "confidence_label": "",
         "reason": "",
         "accepted_or_overridden": "",
         "override_reason": "",
@@ -267,6 +305,62 @@ def _safe_preview(value: str, limit: int = 200) -> str:
     return text[:limit]
 
 
+def _semantic_route_family_defaults(route_family: str) -> dict[str, Any]:
+    family = str(route_family or "").strip()
+    if family == "structured_query":
+        return {"route_hint": "query_products", "question_type": "filter", "subtype": "structured_query"}
+    if family == "recommendation":
+        return {"route_hint": "recommendation", "question_type": "recommendation", "subtype": "recommendation"}
+    if family == "product_bound_qa":
+        return {"route_hint": "product_detail", "question_type": "field", "subtype": "known_detail"}
+    if family in {"unresolved_product_like", "negative_product_like"}:
+        return {"route_hint": "clarification", "question_type": "field", "subtype": "no_match"}
+    if family == "unknown_realtime":
+        return {"route_hint": "unknown_field", "question_type": "unknown_field", "subtype": "unknown_realtime", "unknown_field": True}
+    if family == "contents_accessories":
+        return {"route_hint": "product_detail", "question_type": "contents_accessories", "subtype": "contents_accessories"}
+    if family == "generic_query":
+        return {"route_hint": "query_products", "question_type": "filter", "subtype": "generic_query"}
+    if family == "clarification":
+        return {"route_hint": "clarification", "question_type": "field", "subtype": "no_match"}
+    return {}
+
+
+def _semantic_route_family_from_legacy(route_hint: str, question_type: str, subtype: str) -> str:
+    if subtype == "structured_query" or (route_hint == "query_products" and question_type in {"filter", "count"}):
+        return "structured_query" if subtype == "structured_query" else "generic_query"
+    if route_hint == "recommendation" or subtype == "recommendation":
+        return "recommendation"
+    if route_hint == "unknown_field" or subtype in {"unknown_realtime", "commercial_realtime"}:
+        return "unknown_realtime"
+    if question_type == "contents_accessories" or subtype in {"contents_accessories", "composition"}:
+        return "contents_accessories"
+    if route_hint in {"product_detail", "usage_care", "knowledge_base_answer"}:
+        return "product_bound_qa"
+    if route_hint == "clarification" or subtype == "no_match":
+        return "clarification"
+    return ""
+
+
+def _semantic_confidence_parts(value: Any) -> tuple[float, str]:
+    label = str(value or "").strip().lower()
+    if label in {"low", "medium", "high"}:
+        return {"low": 0.35, "medium": 0.65, "high": 0.9}[label], label
+    try:
+        numeric = max(0.0, min(1.0, float(value or 0)))
+    except (TypeError, ValueError):
+        return 0.0, ""
+    if numeric >= 0.8:
+        label = "high"
+    elif numeric >= 0.5:
+        label = "medium"
+    elif numeric > 0:
+        label = "low"
+    else:
+        label = ""
+    return numeric, label
+
+
 def _validate_semantic_preplan(data: dict[str, Any] | None, *, raw_content: str = "") -> dict[str, Any]:
     if not isinstance(data, dict):
         result = _empty_semantic_preplan(called=True, fallback_reason="invalid_json")
@@ -277,14 +371,17 @@ def _validate_semantic_preplan(data: dict[str, Any] | None, *, raw_content: str 
         if long_key not in data and short_key in data:
             data[long_key] = data[short_key]
     forbidden = sorted(key for key in data if key in SEMANTIC_PREPLAN_FORBIDDEN_KEYS)
+    route_family = str(data.get("route_family") or "").strip()
     route_hint = str(data.get("route_hint") or "").strip()
     question_type = str(data.get("question_type") or "").strip()
-    try:
-        confidence = float(data.get("confidence") or 0)
-    except (TypeError, ValueError):
-        result = _empty_semantic_preplan(called=True, fallback_reason="invalid_confidence")
-        result["raw_preview"] = _safe_preview(raw_content)
-        return result
+    defaults = _semantic_route_family_defaults(route_family)
+    if defaults:
+        route_hint = route_hint or str(defaults.get("route_hint") or "")
+        question_type = question_type or str(defaults.get("question_type") or "")
+        data["subtype"] = data.get("subtype") or defaults.get("subtype") or ""
+        if defaults.get("unknown_field"):
+            data["unknown_field"] = True
+    confidence, confidence_label = _semantic_confidence_parts(data.get("confidence"))
     if route_hint not in SEMANTIC_PREPLAN_ROUTE_HINTS:
         result = _empty_semantic_preplan(called=True, fallback_reason="invalid_route_hint")
         result["raw_preview"] = _safe_preview(raw_content)
@@ -299,22 +396,32 @@ def _validate_semantic_preplan(data: dict[str, Any] | None, *, raw_content: str 
     field_hint = str(field_hint).strip() if field_hint is not None and str(field_hint).strip() else None
     subtype = str(data.get("subtype") or "").strip()
     entity_scope = str(data.get("entity_scope") or "").strip()
+    field_type = str(data.get("field_type") or "").strip()
+    if not route_family:
+        route_family = _semantic_route_family_from_legacy(route_hint, question_type, subtype)
+    if route_family not in SEMANTIC_PREPLAN_ROUTE_FAMILIES:
+        route_family = ""
     if subtype not in SEMANTIC_PREPLAN_SUBTYPES:
         subtype = ""
     if entity_scope not in SEMANTIC_PREPLAN_ENTITY_SCOPES:
         entity_scope = ""
+    if field_type not in SEMANTIC_PREPLAN_FIELD_TYPES:
+        field_type = ""
     result = _empty_semantic_preplan(called=True)
     result.update(
         {
+            "route_family": route_family,
             "route_hint": route_hint,
             "question_type": question_type,
             "entities": entities,
+            "field_type": field_type,
             "field_hint": field_hint,
             "subtype": subtype,
             "entity_scope": entity_scope,
             "qa_or_usage_care": bool(data.get("qa_or_usage_care")),
             "unknown_field": bool(data.get("unknown_field")),
             "confidence": max(0.0, min(1.0, confidence)),
+            "confidence_label": confidence_label,
             "reason": str(data.get("reason") or "")[:300],
             "raw_preview": _safe_preview(raw_content),
         }
@@ -341,13 +448,12 @@ def _semantic_preplan_messages(
         {
             "role": "system",
             "content": (
-                "Return only JSON, no markdown. You classify route only, not facts or answer. "
-                "Use short keys exactly: r,q,e,f,s,scope,u,n,c,why. "
-                "r enum: usage_care,recommendation,product_detail,query_products,knowledge_base_answer,comparison,unknown_field,clarification. "
-                "q enum: safety,count,filter,field,contents_accessories,comparison,recommendation,usage,unknown_field,followup. "
-                "s enum: empty,unknown_realtime,commercial_realtime,contents_accessories,composition,known_detail,usage_care,relation_comparison,recommendation,structured_query,generic_query,no_match. "
-                "scope enum: empty,resolved_single,unique_product_name,ambiguous_product_name,unresolved_product_like,generic_scope. "
-                "e is entity words only, f is field hint or null, u/n booleans, c 0..1. "
+                "Return only JSON, no markdown. You are a pre-route arbiter only; do not answer and do not judge product facts. "
+                "Preferred keys: route_family, entity_scope, field_type, confidence, reason. "
+                "route_family enum: structured_query,recommendation,product_bound_qa,unresolved_product_like,negative_product_like,unknown_realtime,contents_accessories,generic_query,clarification. "
+                "entity_scope enum: generic_scope,category_scope,product_like,resolved_product,ambiguous_product,unresolved_product,negative_product. "
+                "field_type enum: material,category,usage,heat_source,capacity,price,stock,shipping,gift,contents,recommendation,unknown. "
+                "confidence enum: low,medium,high. reason must be short debug only. "
                 "Never output answer, SKU facts, candidate_skus, recommended_skus, result_skus, price, stock, sales, certification, warranty."
             ),
         },
@@ -361,7 +467,7 @@ def _semantic_preplan_messages(
                 f"deterministic_product_ref: {deterministic_plan.get('product_ref') or ''}\n"
                 f"has_conversation_id: {bool(context.get('conversation_id'))}\n"
                 f"has_recommendation_context: {bool(context.get('has_recommendation_context'))}\n"
-                'JSON shape: {"r":"recommendation","q":"recommendation","e":[],"f":null,"s":"","scope":"","u":false,"n":false,"c":0.8,"why":"short"}'
+                'JSON shape: {"route_family":"recommendation","entity_scope":"category_scope","field_type":"recommendation","confidence":"high","reason":"short"}'
             ),
         },
     ]
@@ -437,11 +543,11 @@ async def _repair_semantic_preplan_output(db, *, question: str, raw_content: str
             {
                 "role": "system",
                 "content": (
-                    "Return only one compact JSON object with keys r,q,e,f,u,n,c,why. "
-                    "Optional keys: s,scope. "
+                    "Return only one compact JSON object with keys route_family, entity_scope, field_type, confidence, reason. "
                     "Classify route only; never answer or output SKU facts/candidates. "
-                    "r enum: usage_care,recommendation,product_detail,query_products,knowledge_base_answer,comparison,unknown_field,clarification. "
-                    "q enum: safety,count,filter,field,contents_accessories,comparison,recommendation,usage,unknown_field,followup."
+                    "route_family enum: structured_query,recommendation,product_bound_qa,unresolved_product_like,negative_product_like,unknown_realtime,contents_accessories,generic_query,clarification. "
+                    "entity_scope enum: generic_scope,category_scope,product_like,resolved_product,ambiguous_product,unresolved_product,negative_product. "
+                    "field_type enum: material,category,usage,heat_source,capacity,price,stock,shipping,gift,contents,recommendation,unknown."
                 ),
             },
             {
@@ -449,7 +555,7 @@ async def _repair_semantic_preplan_output(db, *, question: str, raw_content: str
                 "content": (
                     f"question: {question}\n"
                     f"previous_output_preview: {_safe_preview(raw_content, 120)}\n"
-                    'JSON shape: {"r":"query_products","q":"filter","e":[],"f":null,"s":"","scope":"","u":false,"n":false,"c":0.8,"why":"short"}'
+                    'JSON shape: {"route_family":"structured_query","entity_scope":"category_scope","field_type":"material","confidence":"high","reason":"short"}'
                 ),
             },
         ],
@@ -910,7 +1016,9 @@ def _requested_field(text: str) -> str:
         return "重量"
     if any(term in text for term in ("材质", "什么材料", "材料")):
         return "材质"
-    if any(term in text for term in ("适合什么场景", "适合哪些场景", "适合露营用", "适合几个人", "适合几人", "适用人群", "干嘛用")):
+    if any(term in text for term in ("适合几个人", "适合几人", "几个人", "几人使用", "多少人", "人数", "适用人数")):
+        return "适用人数"
+    if any(term in text for term in ("适合什么场景", "适合哪些场景", "适合露营用", "适用人群", "干嘛用")):
         return "适用场景"
     if any(term in text for term in ("酒精炉", "明火", "热源", "燃料", "能不能用", "能否用", "可以用", "支持")):
         return "热源"

@@ -83,6 +83,10 @@ def _seed_contents_resolution_priority_products(Session) -> None:
         _add_product(db, "CS-G35", "围雪炉Pro", "炉具", "/", "不锈钢", "气罐", "围雪炉系列", "露营烧烤", 2600)
         _add_product(db, "TW-139CS", "城市出逃饭盒", "餐具", "900ML", "304不锈钢", "/", "城市出逃系列", "公园野餐", 180)
         _add_product(db, "CW-C65-3", "城市出逃1L水壶(电光绿)", "水壶", "1L", "铝合金", "燃气炉", "城市出逃系列", "户外补水", 280)
+        _add_product(db, "KW-HIKE-01", "徒步轻量水杯", "水具", "520ML", "不锈钢", "/", "轻量便携", "徒步补水 轻量出行", 240)
+        _add_product(db, "KW-FIRE-SS-01", "明火不锈钢小方壶", "水壶", "900ML", "304不锈钢", "明火直烧 卡式炉", "直火烧水", "露营烧水", 420)
+        _add_product(db, "ST-BEGINNER-01", "新手基础炉", "炉具", "/", "不锈钢", "气罐", "基础 入门 性价比", "新手露营", 980)
+        _add_product(db, "CF-PG19-AL", "瓦片铝合金烤盘", "锅具", "32cm", "铝合金", "卡式炉", "户外烧烤烤盘", "多人烧烤 团建烧烤", 780)
         db.commit()
 
 
@@ -351,6 +355,47 @@ def test_semantic_preplan_parser_accepts_contents_subtype_and_entity_scope(monke
     assert "candidate_skus" not in result
 
 
+def test_semantic_preplan_parser_accepts_route_arbiter_schema(monkeypatch):
+    calls = []
+
+    async def fake_chat_completion(db, messages, model=None, temperature=0.2, max_tokens=1200, *, purpose="chat", api_model_override=None, response_format=None, thinking=None, metadata=None):
+        calls.append(purpose)
+        return json.dumps(
+            {
+                "route_family": "structured_query",
+                "entity_scope": "category_scope",
+                "field_type": "material",
+                "confidence": "high",
+                "reason": "category field filter",
+            },
+            ensure_ascii=False,
+        )
+
+    monkeypatch.setattr(customer_agent_planner_service.customer_llm_service, "chat_completion", fake_chat_completion)
+
+    result = asyncio.run(
+        customer_agent_planner_service.plan_customer_question_semantic(
+            db=None,
+            question="哪些水杯是不锈钢的？",
+            deterministic_plan={"primary_intent": "", "answer_type": ""},
+            context={},
+        )
+    )
+
+    assert calls == ["semantic_preplan"]
+    assert result["called"] is True
+    assert result["route_family"] == "structured_query"
+    assert result["entity_scope"] == "category_scope"
+    assert result["field_type"] == "material"
+    assert result["confidence_label"] == "high"
+    assert result["route_hint"] == "query_products"
+    assert result["question_type"] == "filter"
+    assert result["subtype"] == "structured_query"
+    assert result["confidence"] == pytest.approx(0.9)
+    assert "result_skus" not in result
+    assert "candidate_skus" not in result
+
+
 def test_semantic_preplan_parser_accepts_unknown_realtime_subtype_and_entity_scope(monkeypatch):
     calls = []
 
@@ -379,6 +424,124 @@ def test_semantic_preplan_parser_accepts_unknown_realtime_subtype_and_entity_sco
     assert result["entities"] == ["CS-B14（LX）"]
     assert result["unknown_field"] is True
     assert result["confidence"] == pytest.approx(0.93)
+
+def test_named_product_shortcut_binds_resolved_single_product_detail_scope(
+    route_client_and_db,
+    monkeypatch,
+):
+    _client, _headers, Session = route_client_and_db
+
+    with Session() as db:
+        product = db.query(Product).filter(Product.sku == "KW-K32-白").first()
+        assert product is not None
+        monkeypatch.setattr(
+            customer_service_service,
+            "_products_named_in_question",
+            lambda _db, _question: [product],
+        )
+        monkeypatch.setattr(
+            customer_service_service,
+            "_subject_strongly_matches_product",
+            lambda _subject, _product: True,
+        )
+        result = asyncio.run(
+            customer_service_service._try_named_product_shortcut(
+                db,
+                user_id="route-test-user",
+                question="天鹅壶9杯白 能不能明火直烧？",
+            )
+        )
+
+    assert result is not None
+    assert result["answer_type"] == "product_detail", result
+    assert result["result_skus"] == ["KW-K32-白"], result
+    assert result.get("debug", {}).get("agent_mode") == "named_product_detail_shortcut", result
+
+
+def test_entity_scope_guard_blocks_unresolved_product_like_recommendation_even_when_preplan_looks_category_like(
+    route_client_and_db,
+):
+    _client, _headers, Session = route_client_and_db
+
+    with Session() as db:
+        result = customer_service_service._entity_scope_pre_route_guard_result(
+            db,
+            "不存在的咖啡器具推荐一下",
+            None,
+            {
+                "called": True,
+                "route_family": "recommendation",
+                "entity_scope": "category_scope",
+                "field_type": "recommendation",
+                "confidence": 0.9,
+            },
+        )
+
+    assert result is not None
+    assert result["answer_type"] == "clarification", result
+    assert result.get("result_skus") in ([], None), result
+    assert result.get("candidate_skus") in ([], None), result
+    assert (result.get("answer_metadata") or {}).get("source") in {
+        "entity_scope_product_not_found",
+        "unresolved_product_like_unknown_field_clarification",
+        "unknown_field_product_not_found",
+    }, result
+
+
+def test_pre_route_high_risk_contract_does_not_bind_single_candidate_without_strong_grounded_match(
+    route_client_and_db,
+    monkeypatch,
+):
+    _client, _headers, Session = route_client_and_db
+
+    with Session() as db:
+        _add_product(db, "TEST-WEAK-ENTITY-01", "荒野套锅", "锅具", "1L", "铝合金", "燃气炉", "测试商品", "测试场景", 199)
+        db.commit()
+        product = db.query(Product).filter(Product.sku == "TEST-WEAK-ENTITY-01").first()
+        assert product is not None
+        monkeypatch.setattr(
+            customer_service_service,
+            "_products_named_in_question",
+            lambda _db, _question: [product],
+        )
+        monkeypatch.setattr(
+            customer_service_service,
+            "_resolve_sku",
+            lambda _db, _text, _raw=None: None,
+        )
+        monkeypatch.setattr(
+            customer_service_service,
+            "_product_like_scope_subject",
+            lambda _question: "荒野星壶",
+        )
+        monkeypatch.setattr(
+            customer_service_service,
+            "_subject_strongly_matches_product",
+            lambda _subject, _product: False,
+        )
+
+        result = customer_service_service._pre_route_high_risk_contract_result(
+            db,
+            "荒野星壶多少钱？",
+            {
+                "called": True,
+                "subtype": "known_detail",
+                "entity_scope": "product_like",
+                "entities": ["荒野星壶"],
+                "route_hint": "product_detail",
+                "question_type": "field",
+                "field_hint": "price",
+            },
+        )
+
+    assert result is not None
+    assert result["answer_type"] == "clarification", result
+    assert result.get("result_skus") in ([], None), result
+    assert result.get("candidate_skus") in ([], None), result
+    assert (result.get("answer_metadata") or {}).get("source") in {
+        "unresolved_product_like_unknown_field_clarification",
+        "unknown_field_product_not_found",
+    }, result
 
 
 @pytest.mark.parametrize(
@@ -1497,6 +1660,7 @@ def test_route_level_structured_field_filter_queries_do_not_fall_into_product_de
     allowed_sources,
 ):
     client, headers, Session = route_client_and_db
+    _seed_contents_resolution_priority_products(Session)
 
     response = client.post("/api/customer-service/ask?debug=true", json={"question": question}, headers=headers)
     assert response.status_code == 200, response.text
@@ -1906,6 +2070,836 @@ def _assert_structured_result_rows_match_filters(
                 "actual": getattr(business, "usage_scenarios", None),
                 "expected": usage_scenarios,
             }
+
+
+def _structured_contract_source_rows(db, question: str, intent) -> list[dict]:
+    filters = dict((intent.filters or {}) if intent else {})
+    product_ref = str(filters.get("product.category") or "").strip() or customer_service_service._semantic_catalog_product_ref(question)
+    if product_ref == "水壶":
+        rows = [
+            row
+            for row in customer_service_service._phase1_catalog_rows(db, "产品")
+            if customer_service_service._phase1_is_strict_water_kettle_candidate(row)
+        ]
+    else:
+        rows = customer_service_service._phase1_catalog_rows(db, product_ref)
+    if product_ref == "锅具" and str(filters.get("specs.heat_source") or "").strip() == "酒精炉":
+        rows = [
+            row
+            for row in rows
+            if customer_service_service._is_service_pot_or_cookware_set_candidate(row)
+            and customer_service_service._phase1_row_has_explicit_alcohol_stove_support(db, row)
+        ]
+    return rows
+
+
+def _qualified_structured_rows(Session, question: str) -> tuple[object, dict, list[dict]]:
+    contract = customer_service_service._structured_hard_filter_contract(question)
+    assert contract, question
+    intent = contract.get("intent")
+    assert intent is not None, question
+    with Session() as db:
+        product_ref = str(contract.get("product_ref") or "").strip() or str((intent.filters or {}).get("product.category") or "").strip()
+        if product_ref == "水壶":
+            source_rows = [
+                row for row in customer_service_service._phase1_catalog_rows(db, "产品")
+                if customer_service_service._phase1_is_strict_water_kettle_candidate(row)
+            ]
+        else:
+            source_rows = customer_service_service._phase1_catalog_rows(db, product_ref)
+        filters = dict(contract.get("filters") or {})
+        if product_ref == "锅具" and str(filters.get("specs.heat_source") or "").strip() == "酒精炉":
+            source_rows = [
+                row for row in source_rows
+                if customer_service_service._is_service_pot_or_cookware_set_candidate(row)
+                and customer_service_service._phase1_row_has_explicit_alcohol_stove_support(db, row)
+            ]
+        rows = [row for row in source_rows if customer_service_service._structured_row_matches_contract(row, contract)]
+    return intent, contract, rows
+
+
+def _assert_structured_no_match_contract(payload: dict) -> None:
+    assert payload["answer_type"] in {"product_query", "query_products"}, payload
+    assert payload["result_skus"] == [], payload
+    assert "当前结构化商品库未找到符合条件的商品" in payload["answer"], payload["answer"]
+    assert payload["answer_type"] != "recommendation", payload
+    assert payload["answer_type"] != "knowledge_base_answer", payload
+    assert payload["answer_type"] != "product_detail", payload
+
+
+def _assert_structured_result_skus_are_exactly_qualified(Session, payload: dict, qualified_rows: list[dict]) -> None:
+    expected_skus = [
+        str(row.get("sku") or "").strip().upper()
+        for row in qualified_rows
+        if str(row.get("sku") or "").strip()
+    ]
+    assert payload["answer_type"] in {"product_query", "query_products"}, payload
+    assert payload["answer_type"] != "recommendation", payload
+    assert payload["answer_type"] != "knowledge_base_answer", payload
+    assert payload["answer_type"] != "product_detail", payload
+    assert payload["result_skus"], payload
+    assert payload["result_skus"] == expected_skus[: len(payload["result_skus"])], {
+        "actual": payload["result_skus"],
+        "expected": expected_skus,
+        "payload": payload,
+    }
+    assert set(payload["result_skus"]).issubset(set(expected_skus)), {
+        "actual": payload["result_skus"],
+        "expected": expected_skus,
+    }
+    assert len(payload["result_skus"]) == min(len(expected_skus), len(payload["result_skus"])), payload["result_skus"]
+    with Session() as db:
+        loaded = {
+            str(product.sku or "").strip().upper(): product.category
+            for product in db.query(Product).filter(Product.sku.in_(payload["result_skus"])).all()
+        }
+    assert set(payload["result_skus"]).issubset(set(loaded.keys())), {"result_skus": payload["result_skus"], "loaded": loaded}
+
+
+@pytest.mark.parametrize(
+    "question",
+    [
+        "哪些杯子是钛的？",
+        "有哪些钛杯？",
+        "有哪些咖啡相关配件？",
+    ],
+)
+def test_route_level_structured_zero_match_queries_return_hard_no_match_without_padding(
+    route_client_and_db,
+    question,
+):
+    client, headers, Session = route_client_and_db
+
+    intent, _contract, qualified_rows = _qualified_structured_rows(Session, question)
+    assert qualified_rows == [], {"question": question, "filters": intent.filters, "negative_filters": intent.negative_filters}
+
+    response = client.post("/api/customer-service/ask?debug=true", json={"question": question}, headers=headers)
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    answer_metadata = payload.get("answer_metadata") or {}
+
+    _assert_structured_no_match_contract(payload)
+    assert answer_metadata.get("source") == "structured_category_field_filter_query", answer_metadata
+
+
+@pytest.mark.parametrize(
+    "question",
+    [
+        "可以明火直烧的不锈钢水壶有哪些？",
+        "适合卡式炉的锅具有哪些？",
+        "硬氧材质的锅具有哪些？",
+        "有哪些铝合金锅具？",
+        "适合两个人的锅具有哪些？",
+        "有哪些轻量锅具？",
+        "有哪些预算低一点的炉具？",
+    ],
+)
+def test_route_level_structured_combined_hard_filter_queries_only_return_qualified_rows(
+    route_client_and_db,
+    question,
+):
+    client, headers, Session = route_client_and_db
+
+    intent, _contract, qualified_rows = _qualified_structured_rows(Session, question)
+    assert intent.filters, (question, intent)
+
+    response = client.post("/api/customer-service/ask?debug=true", json={"question": question}, headers=headers)
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    answer_metadata = payload.get("answer_metadata") or {}
+
+    assert answer_metadata.get("source") == "structured_category_field_filter_query", answer_metadata
+    if not qualified_rows:
+        _assert_structured_no_match_contract(payload)
+        return
+    _assert_structured_result_skus_are_exactly_qualified(Session, payload, qualified_rows)
+    assert len(payload["result_skus"]) <= len(qualified_rows), {
+        "question": question,
+        "actual": payload["result_skus"],
+        "qualified": [str(row.get("sku") or "").strip().upper() for row in qualified_rows],
+    }
+
+
+@pytest.mark.parametrize(
+    "question",
+    [
+        "公园野餐轻便装备",
+        "户外野餐轻便装备怎么选？",
+        "公园野餐想要轻一点的装备",
+        "不要太重的水壶",
+        "轻一点的水壶推荐",
+    ],
+)
+def test_product_recommendation_intent_does_not_fallback_to_generic_knowledge_answer(
+    route_client_and_db,
+    question,
+):
+    client, headers, Session = route_client_and_db
+
+    response = client.post("/api/customer-service/ask?debug=true", json={"question": question}, headers=headers)
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    answer = str(payload.get("answer") or "")
+    answer_type = str(payload.get("answer_type") or "")
+
+    assert answer_type in {"recommendation", "product_query", "query_products", "clarification"}, payload
+    assert answer_type != "knowledge_base_answer", payload
+    assert answer, payload
+
+    result_skus = payload.get("result_skus") or []
+    candidate_skus = payload.get("candidate_skus") or []
+    if result_skus:
+        with Session() as db:
+            categories = {
+                str(product.sku or "").strip().upper(): str(product.category or "").strip()
+                for product in db.query(Product).filter(Product.sku.in_(result_skus)).all()
+            }
+        assert categories, payload
+        if "水壶" in question or "水具" in question:
+            assert all(category in {"水具", "水壶", "水杯", "杯子", "杯"} for category in categories.values()), categories
+    else:
+        assert answer_type in {"recommendation", "clarification"}, payload
+
+    assert candidate_skus == result_skus or not result_skus, {
+        "result_skus": result_skus,
+        "candidate_skus": candidate_skus,
+        "payload": payload,
+    }
+
+@pytest.mark.parametrize(
+    "question",
+    [
+        "哪些杯是不锈钢的？",
+        "有哪些适合徒步的水杯？",
+        "哪些水杯能直接加热？",
+        "哪些锅具能进洗碗机？",
+        "哪些锅具可以放洗碗机？",
+        "可洗碗机清洗的锅具有哪些？",
+        "有哪些钛杯？",
+        "适合徒步的钛杯有哪些？",
+    ],
+)
+def test_route_level_structured_hard_filter_queries_prioritize_structured_route(
+    route_client_and_db,
+    question,
+):
+    client, headers, Session = route_client_and_db
+
+    contract = customer_service_service._structured_hard_filter_contract(question)
+    assert contract, question
+
+    response = client.post("/api/customer-service/ask?debug=true", json={"question": question}, headers=headers)
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    answer_metadata = payload.get("answer_metadata") or {}
+
+    assert payload["answer_type"] in {"product_query", "query_products"}, payload
+    assert payload["answer_type"] != "product_detail", payload
+    assert payload["answer_type"] != "knowledge_base_answer", payload
+    assert payload["answer_type"] != "recommendation", payload
+    assert answer_metadata.get("source") == "structured_category_field_filter_query", answer_metadata
+
+
+@pytest.mark.parametrize(
+    "question",
+    [
+        "星河钛杯是钛的吗？",
+        "月影炉能用卡式炉吗？",
+        "不存在的咖啡器具推荐一下",
+        "荒野星壶多少钱？",
+        "虚构品牌咖啡壶推荐",
+        "不存在商品名 有哪些锅具？",
+        "完全不存在的产品名 包含哪些东西？",
+    ],
+)
+def test_route_level_unresolved_product_like_queries_do_not_leak_into_catalog_recommendation_or_qa(
+    route_client_and_db,
+    question,
+):
+    client, headers, _ = route_client_and_db
+
+    response = client.post("/api/customer-service/ask?debug=true", json={"question": question}, headers=headers)
+    assert response.status_code in {200, 404}, response.text
+    if response.status_code == 404:
+        assert "Product not found" in response.text or "没有找到" in response.text, response.text
+        return
+
+    payload = response.json()
+    answer = str(payload.get("answer") or "")
+    answer_type = str(payload.get("answer_type") or "")
+    answer_metadata = payload.get("answer_metadata") or {}
+
+    assert payload.get("result_skus") in ([], None), payload
+    assert answer_type in {"clarification", "product_detail"}, payload
+    assert answer_metadata.get("source") in {
+        "entity_scope_ambiguous_clarification",
+        "unresolved_product_like_unknown_field_clarification",
+        "unknown_field_product_not_found",
+        "unresolved_product_like_contents_clarification",
+    }, answer_metadata
+    assert answer, payload
+    assert "推荐" not in answer or "提供 SKU" in answer or "产品名" in answer or "没有找到" in answer, answer
+    assert "哪些" not in answer or "没有找到" in answer or "提供 SKU" in answer or "产品名" in answer, answer
+    assert answer_type != "recommendation", payload
+    assert answer_type != "knowledge_base_answer", payload
+    assert answer_type != "product_query", payload
+
+
+def test_product_like_unknown_field_does_not_bind_single_candidate_without_strong_entity_match(
+    route_client_and_db,
+):
+    client, headers, Session = route_client_and_db
+    question = "荒野星壶多少钱？"
+
+    response = client.post("/api/customer-service/ask?debug=true", json={"question": question}, headers=headers)
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    answer_metadata = payload.get("answer_metadata") or {}
+
+    subject = customer_service_service._product_like_scope_subject(question) or customer_agent_intent_service._detail_subject_from_question(question).strip()
+    with Session() as db:
+        named_products = customer_service_service._products_named_in_question(db, question)
+        strong_skus = {
+            str(product.sku or "").strip().upper()
+            for product in named_products
+            if customer_service_service._subject_strongly_matches_product(subject, product)
+        }
+
+    result_skus = {str(sku or "").strip().upper() for sku in (payload.get("result_skus") or [])}
+    candidate_skus = {str(sku or "").strip().upper() for sku in (payload.get("candidate_skus") or [])}
+
+    assert strong_skus == set(), {"subject": subject, "named_products": [str(getattr(product, "sku", "") or "").strip().upper() for product in named_products]}
+    assert payload["answer_type"] != "product_detail", payload
+    assert payload["answer_type"] != "product_query", payload
+    assert payload["answer_type"] != "recommendation", payload
+    assert payload["answer_type"] != "knowledge_base_answer", payload
+    assert result_skus == set(), payload
+    assert candidate_skus == set(), payload
+    assert answer_metadata.get("source") in {
+        "unresolved_product_like_unknown_field_clarification",
+        "unknown_field_product_not_found",
+    }, answer_metadata
+
+
+@pytest.mark.parametrize(
+    "question",
+    [
+        "月影炉能用卡式炉吗？",
+        "月影炉可以配卡式炉吗？",
+    ],
+)
+def test_grounded_single_product_capability_question_does_not_return_product_not_found(
+    route_client_and_db,
+    question,
+):
+    client, headers, _ = route_client_and_db
+
+    response = client.post("/api/customer-service/ask?debug=true", json={"question": question}, headers=headers)
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    answer_type = str(payload.get("answer_type") or "")
+    answer_metadata = payload.get("answer_metadata") or {}
+    result_skus = payload.get("result_skus") or []
+    candidate_skus = payload.get("candidate_skus") or []
+
+    assert answer_type in {"product_detail", "clarification"}, payload
+    assert answer_type != "knowledge_base_answer", payload
+    assert answer_type != "product_query", payload
+    assert answer_type != "recommendation", payload
+    assert answer_metadata.get("source") != "unknown_field_product_not_found", answer_metadata
+    assert result_skus == candidate_skus, {
+        "result_skus": result_skus,
+        "candidate_skus": candidate_skus,
+        "payload": payload,
+    }
+    assert set(result_skus).issubset({"CS-G25", "CS-G25-B"}), payload
+
+@pytest.mark.parametrize(
+    "question",
+    [
+        "天鹅壶9杯白 能不能明火直烧？",
+        "天鹅壶4杯-黑色 适合徒步吗？",
+        "天鹅壶4杯白 适合几个人？",
+    ],
+)
+def test_route_level_product_like_detail_questions_do_not_leak_unrelated_catalog_rows(
+    route_client_and_db,
+    question,
+):
+    client, headers, Session = route_client_and_db
+
+    response = client.post("/api/customer-service/ask?debug=true", json={"question": question}, headers=headers)
+    assert response.status_code == 200, response.text
+    payload = response.json()
+
+    subject = customer_service_service._product_like_scope_subject(question) or customer_agent_intent_service._detail_subject_from_question(question).strip()
+    with Session() as db:
+        named_products = customer_service_service._products_named_in_question(db, question)
+        strong_skus = {
+            str(product.sku or "").strip().upper()
+            for product in named_products
+            if customer_service_service._subject_strongly_matches_product(subject, product)
+        }
+
+    result_skus = {str(sku or "").strip().upper() for sku in (payload.get("result_skus") or [])}
+    assert payload["answer_type"] != "recommendation", payload
+    assert payload["answer_type"] != "knowledge_base_answer", payload
+    if len(strong_skus) == 1:
+        assert payload["answer_type"] != "product_query", payload
+    assert result_skus.issubset(strong_skus), {"result_skus": sorted(result_skus), "strong_skus": sorted(strong_skus), "payload": payload}
+    assert payload.get("answer"), payload
+
+
+def test_route_level_structured_category_scope_question_requires_semantic_preplan():
+    question = "哪些水杯是不锈钢的？"
+    phase1_plan = customer_agent_planner_service.plan_customer_question(question)
+
+    assert customer_service_service._should_call_semantic_preplan(
+        question,
+        phase1_plan,
+        conversation_id=None,
+    )
+
+
+def test_route_level_entity_scope_guard_defers_to_llm_structured_category_scope(route_client_and_db):
+    _client, _headers, Session = route_client_and_db
+    question = "哪些水杯是不锈钢的？"
+    semantic_preplan = {
+        "called": True,
+        "route_family": "structured_query",
+        "route_hint": "query_products",
+        "question_type": "filter",
+        "subtype": "structured_query",
+        "entity_scope": "category_scope",
+        "field_type": "material",
+        "confidence_label": "high",
+        "confidence": 0.9,
+    }
+
+    with Session() as db:
+        result = customer_service_service._entity_scope_pre_route_guard_result(
+            db,
+            question,
+            {},
+            semantic_preplan,
+        )
+
+    assert result is None
+
+
+@pytest.mark.parametrize(
+    ("question", "expected_bucket", "forbidden_bucket"),
+    [
+        ("哪些水杯是不锈钢的？", "cup", "kettle"),
+        ("哪些杯是不锈钢的？", "cup", "kettle"),
+        ("有哪些适合徒步的水杯？", "cup", "kettle"),
+        ("哪些水杯比较轻？", "cup", "kettle"),
+        ("轻便水杯有哪些？", "cup", "kettle"),
+        ("哪些水壶是不锈钢的？", "kettle", "cup"),
+        ("有哪些不锈钢水壶？", "kettle", "cup"),
+        ("可以明火直烧的不锈钢水壶有哪些？", "kettle", "cup"),
+    ],
+)
+def test_route_level_structured_waterware_boundary_queries_do_not_mix_cup_and_kettle(
+    route_client_and_db,
+    question,
+    expected_bucket,
+    forbidden_bucket,
+):
+    client, headers, Session = route_client_and_db
+    _seed_contents_resolution_priority_products(Session)
+
+    response = client.post("/api/customer-service/ask?debug=true", json={"question": question}, headers=headers)
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    answer_metadata = payload.get("answer_metadata") or {}
+
+    assert payload["answer_type"] in {"product_query", "query_products"}, payload
+    assert answer_metadata.get("source") == "structured_category_field_filter_query", answer_metadata
+    if not payload["result_skus"]:
+        _assert_structured_no_match_contract(payload)
+        return
+
+    with Session() as db:
+        products = {
+            str(product.sku or "").strip().upper(): str(product.category or "").strip()
+            for product in db.query(Product).filter(Product.sku.in_(payload["result_skus"])).all()
+        }
+
+    assert products, payload
+    if expected_bucket == "cup":
+        assert all(category in {"水具", "水杯", "杯子", "杯"} for category in products.values()), products
+        assert not any(category == "水壶" for category in products.values()), products
+    else:
+        assert all(category == "水壶" for category in products.values()), products
+        assert not any(category in {"水具", "水杯", "杯子", "杯"} for category in products.values()), products
+    assert forbidden_bucket in {"cup", "kettle"}
+
+
+@pytest.mark.parametrize(
+    "question",
+    [
+        "有哪些水具？",
+        "户外水具有哪些？",
+    ],
+)
+def test_route_level_broad_waterware_queries_keep_broad_waterware_scope(route_client_and_db, question):
+    client, headers, Session = route_client_and_db
+
+    response = client.post("/api/customer-service/ask?debug=true", json={"question": question}, headers=headers)
+    assert response.status_code == 200, response.text
+    payload = response.json()
+
+    assert payload["answer_type"] in {"product_query", "query_products", "recommendation"}, payload
+    assert payload["result_skus"], payload
+
+    with Session() as db:
+        categories = {
+            str(product.sku or "").strip().upper(): str(product.category or "").strip()
+            for product in db.query(Product).filter(Product.sku.in_(payload["result_skus"])).all()
+        }
+    assert categories, payload
+    assert all(category in {"水具", "水壶", "水杯", "杯子", "杯"} for category in categories.values()), categories
+
+
+@pytest.mark.parametrize(
+    "question",
+    [
+        "轻便水杯推荐几个",
+        "轻量钛杯推荐",
+        "给我推荐一个钛杯",
+        "适合卡式炉的锅具推荐",
+        "公园野餐轻便装备",
+        "不要太重的水壶",
+        "预算低一点的炉具",
+    ],
+)
+def test_route_level_recommendation_queries_post_filter_results_to_explicit_constraints(
+    route_client_and_db,
+    question,
+):
+    client, headers, Session = route_client_and_db
+
+    response = client.post("/api/customer-service/ask?debug=true", json={"question": question}, headers=headers)
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    answer = str(payload.get("answer") or "")
+
+    assert payload["answer_type"] == "recommendation", payload
+    assert payload["answer_type"] != "knowledge_base_answer", payload
+    assert payload["answer_type"] != "product_detail", payload
+    assert answer, payload
+    if not payload["result_skus"]:
+        assert "未找到符合条件" in answer or "放宽" in answer, answer
+        return
+
+    with Session() as db:
+        rows = (
+            db.query(Product, ProductSpecs, ProductBusiness)
+            .outerjoin(ProductSpecs, ProductSpecs.product_id == Product.id)
+            .outerjoin(ProductBusiness, ProductBusiness.product_id == Product.id)
+            .filter(Product.sku.in_(payload["result_skus"]))
+            .all()
+        )
+    by_sku = {str(product.sku or "").strip().upper(): (product, specs, business) for product, specs, business in rows}
+    assert set(payload["result_skus"]).issubset(by_sku.keys()), {"result_skus": payload["result_skus"], "loaded": sorted(by_sku.keys())}
+
+    for sku in payload["result_skus"]:
+        product, specs, business = by_sku[sku]
+        row_text = " ".join(
+            str(part or "")
+            for part in (
+                getattr(product, "name", ""),
+                getattr(product, "category", ""),
+                getattr(specs, "body_material", ""),
+                getattr(specs, "heat_source", ""),
+                getattr(business, "usage_scenarios", ""),
+            )
+        )
+        if "水杯" in question or "钛杯" in question or "杯" in question:
+            assert str(product.category or "").strip() in {"水具", "水杯", "杯子", "杯"}, {"sku": sku, "category": product.category, "question": question}
+        if "水壶" in question:
+            assert str(product.category or "").strip() == "水壶", {"sku": sku, "category": product.category, "question": question}
+        if "锅具" in question:
+            assert str(product.category or "").strip() == "锅具", {"sku": sku, "category": product.category, "question": question}
+        if "炉具" in question:
+            assert str(product.category or "").strip() == "炉具", {"sku": sku, "category": product.category, "question": question}
+        if "钛杯" in question:
+            assert _structured_field_match(getattr(specs, "body_material", None), "钛"), {"sku": sku, "material": getattr(specs, "body_material", None), "question": question}
+        if "卡式炉" in question:
+            assert _structured_field_match(getattr(specs, "heat_source", None), "卡式炉"), {"sku": sku, "heat_source": getattr(specs, "heat_source", None), "question": question}
+        if "轻便" in question or "轻量" in question or "不要太重" in question:
+            assert (
+                any(term in row_text for term in ("轻量", "轻便", "便携"))
+                or (getattr(product, "gross_weight_g", None) or 0) and float(getattr(product, "gross_weight_g", 0) or 0) <= 350
+            ), {"sku": sku, "row_text": row_text, "question": question}
+        if "预算低" in question:
+            joined = row_text.lower()
+            assert any(term in joined for term in ("基础", "性价比", "入门")), {"sku": sku, "row_text": row_text, "question": question}
+
+
+def test_unresolved_product_like_recommendation_returns_clarification_or_no_match(
+    route_client_and_db,
+):
+    client, headers, _ = route_client_and_db
+    question = "不存在的咖啡器具推荐一下"
+
+    response = client.post("/api/customer-service/ask?debug=true", json={"question": question}, headers=headers)
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    answer = str(payload.get("answer") or "")
+    answer_metadata = payload.get("answer_metadata") or {}
+
+    assert payload["answer_type"] in {"clarification", "recommendation"}, payload
+    assert payload.get("result_skus") in ([], None), payload
+    assert payload.get("candidate_skus") in ([], None), payload
+    assert answer_metadata.get("source") in {
+        "entity_scope_product_not_found",
+        "unknown_field_product_not_found",
+        "unresolved_product_like_unknown_field_clarification",
+        "product_catalog_structured_recommendation",
+    }, answer_metadata
+    if payload["answer_type"] == "recommendation":
+        assert "未找到符合条件" in answer, payload
+
+
+def test_recommendation_post_filter_keeps_answer_and_result_skus_consistent(
+    route_client_and_db,
+):
+    client, headers, Session = route_client_and_db
+    question = "预算低一点的炉具"
+
+    response = client.post("/api/customer-service/ask?debug=true", json={"question": question}, headers=headers)
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    answer = str(payload.get("answer") or "")
+
+    assert payload["answer_type"] == "recommendation", payload
+    result_skus = [str(sku or "").strip().upper() for sku in (payload.get("result_skus") or []) if str(sku or "").strip()]
+    candidate_skus = [str(sku or "").strip().upper() for sku in (payload.get("candidate_skus") or []) if str(sku or "").strip()]
+    assert result_skus == candidate_skus, payload
+    if not result_skus:
+        assert "未找到符合条件" in answer, payload
+        return
+
+    with Session() as db:
+        products = db.query(Product).filter(Product.sku.in_(result_skus)).all()
+    product_names = [
+        str(product.product_name_cn or product.product_name_en or product.sku or "").strip()
+        for product in products
+    ]
+    assert product_names, {"result_skus": result_skus, "payload": payload}
+    assert any(name and name in answer for name in product_names), {
+        "answer": answer,
+        "result_skus": result_skus,
+        "product_names": product_names,
+        "payload": payload,
+    }
+
+
+@pytest.mark.parametrize(
+    "question",
+    [
+        "不存在的咖啡器具推荐一下",
+        "不存在的咖啡壶推荐几个",
+        "虚构款咖啡器具有什么推荐？",
+    ],
+)
+def test_unresolved_product_like_recommendation_does_not_return_real_products(
+    route_client_and_db,
+    question,
+):
+    client, headers, _ = route_client_and_db
+
+    response = client.post("/api/customer-service/ask?debug=true", json={"question": question}, headers=headers)
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    answer = str(payload.get("answer") or "")
+    answer_metadata = payload.get("answer_metadata") or {}
+    result_skus = [str(sku or "").strip().upper() for sku in (payload.get("result_skus") or []) if str(sku or "").strip()]
+    candidate_skus = [str(sku or "").strip().upper() for sku in (payload.get("candidate_skus") or []) if str(sku or "").strip()]
+
+    assert payload["answer_type"] in {"clarification", "recommendation"}, payload
+    assert result_skus == [], payload
+    assert candidate_skus == [], payload
+    assert answer_metadata.get("source") in {
+        "entity_scope_product_not_found",
+        "unknown_field_product_not_found",
+        "unresolved_product_like_unknown_field_clarification",
+        "product_catalog_structured_recommendation",
+    }, answer_metadata
+    assert not any(sku in answer for sku in ("CW-K31", "KW-K25-35", "PA-KW-K25-02")), payload
+    assert any(term in answer for term in ("没找到", "未找到", "确认商品名", "提供 SKU", "符合条件")), payload
+
+
+@pytest.mark.parametrize(
+    "question",
+    [
+        "荒野星壶多少钱？",
+        "荒野星水壶价格是多少？",
+        "这个不存在的壶多少钱？",
+    ],
+)
+def test_low_confidence_product_like_entity_does_not_bind_single_candidate(
+    route_client_and_db,
+    question,
+):
+    client, headers, _ = route_client_and_db
+
+    response = client.post("/api/customer-service/ask?debug=true", json={"question": question}, headers=headers)
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    answer = str(payload.get("answer") or "")
+    answer_metadata = payload.get("answer_metadata") or {}
+
+    assert payload["answer_type"] == "clarification", payload
+    assert payload.get("result_skus") in ([], None), payload
+    assert payload.get("candidate_skus") in ([], None), payload
+    assert answer_metadata.get("source") in {
+        "entity_scope_product_not_found",
+        "unknown_field_product_not_found",
+        "unresolved_product_like_unknown_field_clarification",
+    }, answer_metadata
+    assert "CW-C47-1" not in answer, payload
+    assert any(term in answer for term in ("没找到", "未找到", "确认商品名", "提供 SKU")), payload
+
+
+@pytest.mark.parametrize(
+    "question",
+    [
+        "疯狂游乐园X-Power桌面炉（不含炉配件-烤盘） 运费多少？",
+        "疯狂游乐园X-Power桌面炉（不含炉配件-烤盘） 包邮吗？",
+        "疯狂游乐园X-Power桌面炉（不含炉配件-烤盘） 今天能发吗？",
+    ],
+)
+def test_route_level_long_named_unknown_realtime_queries_do_not_fall_into_usage_care(route_client_and_db, question):
+    client, headers, _ = route_client_and_db
+
+    response = client.post("/api/customer-service/ask?debug=true", json={"question": question}, headers=headers)
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    answer = str(payload.get("answer") or "")
+    answer_metadata = payload.get("answer_metadata") or {}
+
+    assert payload["answer_type"] in {"product_detail", "clarification"}, payload
+    assert payload["answer_type"] != "product_usage_care", payload
+    assert answer_metadata.get("source") in {
+        "resolved_entity_unknown_field_fallback",
+        "named_product_unknown_field_clarification",
+        "unresolved_product_like_unknown_field_clarification",
+        "unknown_field_product_not_found",
+    }, answer_metadata
+    assert any(term in answer for term in ("未标注", "无法确认", "平台", "店铺页面", "人工客服", "没有找到", "提供 SKU")), answer
+    assert not any(term in answer for term in ("功率", "材质", "开箱", "配件", "使用方法")), answer
+
+
+def test_named_single_product_people_count_question_does_not_fallback_to_usage_scene(
+    route_client_and_db,
+    monkeypatch,
+):
+    _client, _headers, Session = route_client_and_db
+    question = "天鹅壶4杯白 适合几个人？"
+
+    with Session() as db:
+        product = db.query(Product).filter(Product.sku == "KW-K31-白").first()
+        assert product is not None
+        monkeypatch.setattr(
+            customer_service_service,
+            "_products_named_in_question",
+            lambda _db, _question: [product],
+        )
+        monkeypatch.setattr(
+            customer_service_service,
+            "_subject_strongly_matches_product",
+            lambda _subject, _product: True,
+        )
+        result = asyncio.run(
+            customer_service_service._try_named_product_shortcut(
+                db,
+                user_id="route-test-user",
+                question=question,
+            )
+        )
+
+    assert result is not None
+    answer = str(result.get("answer") or "")
+    assert result["answer_type"] == "product_detail", result
+    assert result["result_skus"] == ["KW-K31-白"], result
+    assert result.get("debug", {}).get("agent_mode") == "named_product_detail_shortcut", result
+    assert "适用场景" not in answer, result
+    assert "当前资料里没有找到" not in answer or "几个人" in answer or "适用人数" in answer, result
+
+
+@pytest.mark.parametrize(
+    "question",
+    [
+        "\u54ea\u4e9b\u9505\u662f\u786c\u6c27\u6750\u8d28\uff1f",
+        "\u53ef\u4ee5\u660e\u706b\u76f4\u70e7\u7684\u4e0d\u9508\u94a2\u6c34\u58f6\u6709\u54ea\u4e9b\uff1f",
+        "\u786c\u6c27\u6750\u8d28\u7684\u9505\u5177\u6709\u54ea\u4e9b\uff1f",
+        "\u6709\u54ea\u4e9b\u9002\u5408\u5f92\u6b65\u7684\u6c34\u676f\uff1f",
+        "\u6709\u54ea\u4e9b\u9002\u5408\u65b0\u624b\u7684\u7089\u5177\uff1f",
+    ],
+)
+def test_route_level_structured_positive_db_match_queries_must_not_return_empty(
+    route_client_and_db,
+    question,
+):
+    client, headers, Session = route_client_and_db
+    _seed_contents_resolution_priority_products(Session)
+
+    intent, _contract, qualified_rows = _qualified_structured_rows(Session, question)
+    assert intent.filters, (question, intent)
+    assert qualified_rows, {"question": question, "filters": intent.filters, "negative_filters": intent.negative_filters}
+
+    response = client.post("/api/customer-service/ask?debug=true", json={"question": question}, headers=headers)
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    answer_metadata = payload.get("answer_metadata") or {}
+
+    assert answer_metadata.get("source") == "structured_category_field_filter_query", answer_metadata
+    assert payload["result_skus"], payload
+    assert str(payload.get("answer") or "").strip(), payload
+    assert "未找到符合条件的商品" not in str(payload.get("answer") or ""), payload["answer"]
+    _assert_structured_result_skus_are_exactly_qualified(Session, payload, qualified_rows)
+
+
+@pytest.mark.parametrize(
+    "question",
+    [
+        "\u9002\u5408\u4e24\u4e2a\u4eba\u7684\u9505\u5177\u6709\u54ea\u4e9b\uff1f",
+        "\u6709\u54ea\u4e9b\u9505\u9002\u5408\u53cc\u4eba\u9732\u8425\uff1f",
+        "\u6709\u54ea\u4e9b\u8f7b\u91cf\u9505\u5177\uff1f",
+        "\u6709\u54ea\u4e9b\u9884\u7b97\u4f4e\u4e00\u70b9\u7684\u7089\u5177\uff1f",
+        "\u6709\u54ea\u4e9b\u9002\u5408\u65b0\u624b\u7684\u7089\u5177\uff1f",
+        "\u6709\u54ea\u4e9b\u9002\u5408\u5f92\u6b65\u7684\u6c34\u676f\uff1f",
+    ],
+)
+def test_route_level_structured_trait_queries_only_return_hard_qualified_rows(
+    route_client_and_db,
+    question,
+):
+    client, headers, Session = route_client_and_db
+    _seed_contents_resolution_priority_products(Session)
+
+    intent, _contract, qualified_rows = _qualified_structured_rows(Session, question)
+    assert intent.filters, (question, intent)
+
+    response = client.post("/api/customer-service/ask?debug=true", json={"question": question}, headers=headers)
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    answer_metadata = payload.get("answer_metadata") or {}
+
+    assert answer_metadata.get("source") == "structured_category_field_filter_query", answer_metadata
+    if not qualified_rows:
+        _assert_structured_no_match_contract(payload)
+        return
+    assert payload["result_skus"], payload
+    _assert_structured_result_skus_are_exactly_qualified(Session, payload, qualified_rows)
+    assert len(payload["result_skus"]) <= len(qualified_rows), {
+        "question": question,
+        "actual": payload["result_skus"],
+        "qualified": [str(row.get("sku") or "").strip().upper() for row in qualified_rows],
+    }
 
 
 @pytest.mark.parametrize(
