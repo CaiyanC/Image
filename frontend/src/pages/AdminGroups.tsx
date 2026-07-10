@@ -254,7 +254,7 @@ export default function AdminGroups() {
       <div className="flex items-center justify-between mb-6">
         <div>
           <h1 className="text-2xl font-bold text-apple-text tracking-tight">部门与权限</h1>
-          <p className="text-sm text-apple-gray-medium mt-1">总经办管理员可以按部门统一分配生图、智能客服、产品数据和视觉素材权限。</p>
+          <p className="text-sm text-apple-gray-medium mt-1">总经办与 IT 部拥有全部权限，可按部门统一分配生图、智能客服、产品数据和视觉素材权限。</p>
         </div>
         <button
           onClick={() => setShowCreate(true)}

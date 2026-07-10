@@ -8,7 +8,7 @@ from sqlalchemy.orm import Session
 
 from .config import settings
 from .database import get_db
-from .permission_constants import MANAGEMENT_GROUP_NAME, PRODUCT_TEAM_GROUP_NAME
+from .permission_constants import FULL_ACCESS_GROUP_NAMES, PRODUCT_TEAM_GROUP_NAME
 from ..models.user import User
 from ..models.group import Group
 from ..models.user_group import UserGroup
@@ -98,7 +98,10 @@ def _is_in_group(db: Session, user_id: str, group_name: str) -> bool:
 
 
 def _is_in_management(db: Session, user_id: str) -> bool:
-    return _is_in_group(db, user_id, MANAGEMENT_GROUP_NAME)
+    return db.query(UserGroup).join(Group, UserGroup.group_id == Group.id).filter(
+        UserGroup.user_id == user_id,
+        Group.group_name.in_(FULL_ACCESS_GROUP_NAMES),
+    ).first() is not None
 
 
 def has_permission(db: Session, user_id: str, permission_key: str) -> bool:

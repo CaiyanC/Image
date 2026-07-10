@@ -23,6 +23,7 @@ OVERSEAS_MARKETING_GROUP_NAME = INTERNATIONAL_TRADE_GROUP_NAME
 AI_CONTENT_GROUP_NAME = BRAND_GROUP_NAME
 CUSTOMER_SERVICE_GROUP_NAME = BUSINESS_GROUP_NAME
 AI_ENGINEER_GROUP_NAME = IT_GROUP_NAME
+FULL_ACCESS_GROUP_NAMES = frozenset({EXECUTIVE_OFFICE_GROUP_NAME, IT_GROUP_NAME})
 
 DEFAULT_GROUPS = [
     (EXECUTIVE_OFFICE_GROUP_NAME, "公司经营管理与系统最高权限"),
@@ -134,11 +135,7 @@ GROUP_PERMISSION_KEYS = {
     ],
     FINANCIAL_SERVICES_GROUP_NAME: list(_OFFICE_KEYS),
     VISUAL_TWO_GROUP_NAME: list(_VISUAL_KEYS),
-    IT_GROUP_NAME: [
-        "product.read", "product.edit", "media.upload", "media.review", "media.download",
-        "tag.edit", "ai.call", "ai.generate", "ai.customer_service", "ai.authorize",
-        "competitor.view", "new_product.view",
-    ],
+    IT_GROUP_NAME: [key for key, _, _ in PERMISSION_DEFS],
 }
 
 PERMISSION_ROUTE_MAP = {

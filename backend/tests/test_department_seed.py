@@ -8,6 +8,8 @@ from app.core.permission_constants import (
     BRAND_GROUP_NAME,
     DEFAULT_GROUPS,
     EXECUTIVE_OFFICE_GROUP_NAME,
+    IT_GROUP_NAME,
+    PERMISSION_DEFS,
 )
 from app.models.group import Group
 from app.models.permissions import GroupPermission, Permission
@@ -49,8 +51,16 @@ class DepartmentSeedTest(unittest.TestCase):
         self.assertEqual({name for name, _ in DEFAULT_GROUPS}, names)
         membership = self.db.query(UserGroup).filter(UserGroup.user_id == "legacy-user").one()
         self.assertEqual(membership.group.group_name, BRAND_GROUP_NAME)
-        executive = self.db.query(Group).filter(Group.group_name == EXECUTIVE_OFFICE_GROUP_NAME).one()
-        self.assertGreater(self.db.query(GroupPermission).filter(GroupPermission.group_id == executive.id).count(), 0)
+        all_permission_keys = {key for key, _, _ in PERMISSION_DEFS}
+        for group_name in (EXECUTIVE_OFFICE_GROUP_NAME, IT_GROUP_NAME):
+            group = self.db.query(Group).filter(Group.group_name == group_name).one()
+            permission_keys = {
+                key for (key,) in self.db.query(Permission.permission_key)
+                .join(GroupPermission, GroupPermission.permission_id == Permission.id)
+                .filter(GroupPermission.group_id == group.id)
+                .all()
+            }
+            self.assertEqual(permission_keys, all_permission_keys)
 
 
 if __name__ == "__main__":

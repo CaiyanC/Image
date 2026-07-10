@@ -7,7 +7,7 @@ from ..models.generation import Generation
 from ..models.operation_logs import OperationLog
 from ..schemas.user import UserCreate, UserUpdate, UserProfileUpdate
 from ..core.security import get_password_hash, verify_password
-from ..core.permission_constants import MANAGEMENT_GROUP_NAME
+from ..core.permission_constants import FULL_ACCESS_GROUP_NAMES
 
 
 def get_user_by_username(db: Session, username: str):
@@ -31,7 +31,7 @@ def get_users(db: Session, skip: int = 0, limit: int = 100):
 def _is_management_user(db: Session, user_id: str) -> bool:
     return db.query(UserGroup).join(Group, UserGroup.group_id == Group.id).filter(
         UserGroup.user_id == user_id,
-        Group.group_name == MANAGEMENT_GROUP_NAME,
+        Group.group_name.in_(FULL_ACCESS_GROUP_NAMES),
     ).first() is not None
 
 
@@ -40,7 +40,7 @@ def _active_management_count(db: Session) -> int:
         Group, UserGroup.group_id == Group.id
     ).filter(
         User.is_active == True,  # noqa: E712
-        Group.group_name == MANAGEMENT_GROUP_NAME,
+        Group.group_name.in_(FULL_ACCESS_GROUP_NAMES),
     ).count()
 
 
