@@ -377,6 +377,40 @@ class CustomerIntent:
         }
 
 
+_EXPLICIT_SINGLE_PRODUCT_BINDINGS = {
+    "explicit_sku",
+    "resolved_entity_contract",
+    "previous_single_entity",
+    "ordinal_selection",
+}
+_SEARCH_SINGLE_PRODUCT_PROMOTIONS = {
+    "search_top1",
+    "query_rows_top1",
+    "fallback_rank_top1",
+    "retrieval_top1",
+}
+
+
+def _can_promote_candidate_to_single_product(
+    *,
+    allow_search_top1_promotion: bool,
+    binding_provenance: str,
+    explicit_sku: str | None = None,
+    resolved_sku: str | None = None,
+    previous_single_sku: str | None = None,
+) -> bool:
+    provenance = str(binding_provenance or "none").strip()
+    if provenance == "explicit_sku":
+        return bool(explicit_sku)
+    if provenance == "resolved_entity_contract":
+        return bool(resolved_sku)
+    if provenance in {"previous_single_entity", "ordinal_selection"}:
+        return bool(previous_single_sku or resolved_sku)
+    if provenance in _SEARCH_SINGLE_PRODUCT_PROMOTIONS:
+        return bool(allow_search_top1_promotion)
+    return provenance in _EXPLICIT_SINGLE_PRODUCT_BINDINGS
+
+
 async def process_intent_request(
     db: Session,
     *,
@@ -386,6 +420,7 @@ async def process_intent_request(
     previous_result_skus: list[str] | None = None,
     allow_llm_fallback: bool = True,
     scoped_comparison_candidates: bool = False,
+    allow_search_top1_promotion: bool = True,
 ) -> dict | None:
     request_start = perf_counter()
     previous_result_skus = previous_result_skus or []
@@ -466,7 +501,10 @@ async def process_intent_request(
             ]
             selected_row = (exact_name_rows or fuzzy_rows)[0]
             selected_sku = str(selected_row.get("sku") or "").strip().upper()
-            if selected_sku:
+            if selected_sku and _can_promote_candidate_to_single_product(
+                allow_search_top1_promotion=allow_search_top1_promotion,
+                binding_provenance="fallback_rank_top1",
+            ):
                 return await _product_detail_result(
                     db,
                     CustomerIntent(
@@ -479,6 +517,8 @@ async def process_intent_request(
                         is_single_field_sufficient=True,
                     ),
                     original_question=question,
+                    allow_search_top1_promotion=allow_search_top1_promotion,
+                    binding_provenance="fallback_rank_top1",
                 )
 
     explicit_named_products = _explicit_products_from_question(db, question)
@@ -546,12 +586,22 @@ async def process_intent_request(
     if intent.intent == "product_usage_care":
         return await answer_product_usage_care_request(db, question=question)
     if intent.intent == "product_detail":
-        return await _product_detail_result(db, intent, original_question=question)
+        return await _product_detail_result(
+            db,
+            intent,
+            original_question=question,
+            allow_search_top1_promotion=allow_search_top1_promotion,
+        )
     if intent.intent == "compare_products":
         return await _compare_result(db, intent, question)
     if intent.intent == "recommend_products" and intent.target_skus and intent.requested_fields:
         intent.intent = "product_detail"
-        return await _product_detail_result(db, intent, original_question=question)
+        return await _product_detail_result(
+            db,
+            intent,
+            original_question=question,
+            allow_search_top1_promotion=allow_search_top1_promotion,
+        )
     if intent.intent == "recommend_products":
         return await _recommend_result(
             db,
@@ -564,9 +614,20 @@ async def process_intent_request(
     if intent.intent == "propose_update":
         return await _propose_update_result(db, user_id, intent)
     if intent.intent == "query_products" and intent.target_skus and intent.requested_fields and len(intent.target_skus) == 1:
-        return await _product_detail_result(db, intent, original_question=question)
+        return await _product_detail_result(
+            db,
+            intent,
+            original_question=question,
+            allow_search_top1_promotion=allow_search_top1_promotion,
+        )
     if intent.intent == "query_products":
-        return await _query_products_result(db, user_id, intent, original_question=question)
+        return await _query_products_result(
+            db,
+            user_id,
+            intent,
+            original_question=question,
+            allow_search_top1_promotion=allow_search_top1_promotion,
+        )
     return None
 
 
@@ -1626,7 +1687,10 @@ def _requested_fields_for_detail_question(text: str) -> list[str]:
         ("使用限制", ("使用限制", "限制", "注意事项", "禁忌")),
     ]
     for label, aliases in additions:
-        if any(alias in value for alias in aliases) and label not in fields:
+        matched = any(alias in value for alias in aliases)
+        if label == "容量" and matched and "尺寸" in fields:
+            matched = any(alias != "多大" and alias in value for alias in aliases)
+        if matched and label not in fields:
             fields.append(label)
     if _looks_like_water_container_capability_question(value) and "适配情况" not in fields:
         fields.append("适配情况")
@@ -1658,7 +1722,15 @@ def _is_single_field_sufficient(text: str, requested_fields: list[str], target_s
     return not any(term in text for term in complex_terms + PART_WORDS)
 
 
-async def _query_products_result(db: Session, user_id: str, intent: CustomerIntent, original_question: str = "") -> dict:
+async def _query_products_result(
+    db: Session,
+    user_id: str,
+    intent: CustomerIntent,
+    original_question: str = "",
+    *,
+    allow_search_top1_promotion: bool = True,
+    blocked_promotion_source: str = "query_rows_top1",
+) -> dict:
     warnings: list[str] = []
     # Use the original question for QA/KB search for better context
     search_question_text = (original_question or intent.term or intent.semantic_query or "").strip()
@@ -1854,10 +1926,34 @@ async def _query_products_result(db: Session, user_id: str, intent: CustomerInte
     # When user asked for specific fields and we found 1 product: upgrade to detail answer
     answer_type = None
     used_filter_finalizer = False
+    search_top1_promotion_blocked = False
     if _has_specs_filter(intent) and rows and intent.intent == "query_products":
         answer = await _compose_filter_answer(db, original_question or search_question_text, rows, intent)
         answer_type = "product_query"
         used_filter_finalizer = True
+    elif (
+        intent.requested_fields
+        and intent.intent in {"query_products", "product_detail"}
+        and not _can_promote_candidate_to_single_product(
+            allow_search_top1_promotion=allow_search_top1_promotion,
+            binding_provenance="query_rows_top1",
+        )
+    ):
+        query_intent = CustomerIntent(
+            intent="query_products",
+            filters=dict(intent.filters or {}),
+            negative_filters=dict(intent.negative_filters or {}),
+            semantic_query=intent.semantic_query,
+            target_skus=[],
+            requested_fields=[],
+            term=intent.term,
+            source_context=intent.source_context,
+            is_single_field_sufficient=False,
+        )
+        answer = _compose_row_answer(rows, query_intent, warnings, anomalies, followups, qa_results, kb_results)
+        answer_type = "query_products"
+        intent = query_intent
+        search_top1_promotion_blocked = True
     elif intent.requested_fields and rows and intent.intent in {"query_products", "product_detail"}:
         sku = rows[0].get("sku", "")
         detail = product_service.get_product_detail(db, sku)
@@ -1931,7 +2027,7 @@ async def _query_products_result(db: Session, user_id: str, intent: CustomerInte
     response = _build_response(
         intent=intent,
         answer=answer,
-        sku=rows[0]["sku"] if len(rows) == 1 else None,
+        sku=None if search_top1_promotion_blocked else (rows[0]["sku"] if len(rows) == 1 else None),
         sources=[
             {"type": "product_search", "label": "意图解析查询", "query": query, "count": len(rows)},
             *supporting_sources,
@@ -1955,12 +2051,45 @@ async def _query_products_result(db: Session, user_id: str, intent: CustomerInte
     )
     if rows:
         _attach_knowledge_enrichment(response, primary_source="product_db", supporting=supporting)
+    if answer_type == "product_detail":
+        response_debug = response.get("debug") if isinstance(response.get("debug"), dict) else {}
+        response_debug["binding_provenance"] = (
+            "previous_single_entity"
+            if intent.target_skus and intent.source_context == "previous_results"
+            else "explicit_sku"
+            if intent.target_skus and _extract_skus(original_question)
+            else "query_rows_top1"
+        )
+        response_debug["search_top1_promotion_blocked"] = False
+        response["debug"] = response_debug
+    if search_top1_promotion_blocked:
+        response_debug = response.get("debug") if isinstance(response.get("debug"), dict) else {}
+        response_debug["binding_provenance"] = "none"
+        response_debug["allow_search_top1_promotion"] = False
+        response_debug["search_top1_promotion_blocked"] = True
+        response_debug["blocked_promotion_source"] = blocked_promotion_source
+        response_debug["blocked_promotion_sources"] = list(dict.fromkeys([
+            blocked_promotion_source,
+            "query_rows_top1",
+        ]))
+        response["debug"] = response_debug
+        if len(response.get("result_skus") or []) == 1:
+            response["result_skus"] = []
     if used_filter_finalizer or answer_type == "product_detail":
+        response["skip_polish"] = True
+    if search_top1_promotion_blocked:
         response["skip_polish"] = True
     return response
 
 
-async def _product_detail_result(db: Session, intent: CustomerIntent, original_question: str = "") -> dict:
+async def _product_detail_result(
+    db: Session,
+    intent: CustomerIntent,
+    original_question: str = "",
+    *,
+    allow_search_top1_promotion: bool = True,
+    binding_provenance: str | None = None,
+) -> dict:
     intent.requested_fields = [
         str(field).strip()
         for field in (intent.requested_fields or [])
@@ -1977,9 +2106,37 @@ async def _product_detail_result(db: Session, intent: CustomerIntent, original_q
             candidate_rows = _filter_rows(candidate_rows, filters={}, negative_filters={}, term=intent.term)
             candidate_rows = _focus_detail_rows(candidate_rows, intent, intent.semantic_query or intent.term)
         if candidate_rows:
+            if not _can_promote_candidate_to_single_product(
+                allow_search_top1_promotion=allow_search_top1_promotion,
+                binding_provenance="search_top1",
+            ):
+                return await _query_products_result(
+                    db,
+                    "intent-product-detail",
+                    intent,
+                    original_question=intent.semantic_query or original_question or intent.term or "",
+                    allow_search_top1_promotion=allow_search_top1_promotion,
+                    blocked_promotion_source="search_top1",
+                )
             intent.target_skus = [str(candidate_rows[0].get("sku") or "").strip().upper()]
+            binding_provenance = "search_top1"
         else:
-            return await _query_products_result(db, "intent-product-detail", intent, original_question=intent.semantic_query or intent.term or "")
+            return await _query_products_result(
+                db,
+                "intent-product-detail",
+                intent,
+                original_question=intent.semantic_query or original_question or intent.term or "",
+                allow_search_top1_promotion=allow_search_top1_promotion,
+                blocked_promotion_source="query_rows_top1",
+            )
+    else:
+        binding_provenance = binding_provenance or (
+            "previous_single_entity"
+            if intent.target_skus and intent.source_context == "previous_results"
+            else "explicit_sku"
+            if intent.target_skus and _extract_skus(original_question)
+            else "none"
+        )
     intent.target_skus = [_resolve_existing_sku(db, sku) for sku in intent.target_skus]
     rows = []
     field_paths = [_resolve_query_field(field) for field in intent.requested_fields]
@@ -2156,6 +2313,11 @@ async def _product_detail_result(db: Session, intent: CustomerIntent, original_q
     if rows:
         _attach_knowledge_enrichment(response, primary_source="product_db", supporting=supporting)
     response["skip_polish"] = True
+    response_debug = response.get("debug") if isinstance(response.get("debug"), dict) else {}
+    response_debug["binding_provenance"] = binding_provenance or "none"
+    response_debug["allow_search_top1_promotion"] = allow_search_top1_promotion
+    response_debug["search_top1_promotion_blocked"] = False
+    response["debug"] = response_debug
     return response
 
 

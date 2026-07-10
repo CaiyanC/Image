@@ -5,7 +5,7 @@ import re
 
 from typing import Any
 from ..core.config import settings
-from . import customer_agent_service, customer_llm_service
+from . import customer_agent_service, customer_field_contract, customer_llm_service
 
 
 EXPLICIT_SKU_RE = re.compile(
@@ -405,6 +405,7 @@ def _validate_semantic_preplan(data: dict[str, Any] | None, *, raw_content: str 
         subtype = ""
     if entity_scope not in SEMANTIC_PREPLAN_ENTITY_SCOPES:
         entity_scope = ""
+    field_type = customer_field_contract.semantic_preplan_field_type(field_type)
     if field_type not in SEMANTIC_PREPLAN_FIELD_TYPES:
         field_type = ""
     result = _empty_semantic_preplan(called=True)
