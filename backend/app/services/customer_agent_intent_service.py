@@ -5002,7 +5002,7 @@ def _normalize_structured_filter_value(field_path: str, value: str) -> str:
     if field_path == "specs.surface_finish":
         cleaned = cleaned.replace("不沾", "不粘")
     if field_path == "specs.heat_source":
-        if "液体酒精" in cleaned or "固体酒精" in cleaned or "酒精炉" in cleaned:
+        if any(term in cleaned for term in ("液体酒精", "固体酒精", "酒精燃料", "酒精炉")):
             return "酒精炉"
         if "卡式炉" in cleaned:
             return "卡式炉"
@@ -5622,15 +5622,16 @@ def _is_water_container_like_cookware_row(row: dict[str, Any]) -> bool:
 
 def _alcohol_stove_support_verdict(text: str) -> bool | None:
     value = str(text or "").strip().lower()
-    if not value or ("酒精炉" not in value and "alcohol stove" not in value):
+    alcohol_terms = r"酒精炉|液体(?:工业)?酒精|固体酒精|酒精燃料|alcohol stove"
+    if not value or not re.search(alcohol_terms, value):
         return None
-    if re.search(r"(不支持|未显示支持|不适合|不建议|不能|不可).{0,8}(酒精炉|alcohol stove)", value):
+    if re.search(rf"(不支持|未显示支持|不适合|不建议|不能|不可).{{0,8}}({alcohol_terms})", value):
         return False
-    if re.search(r"(支持|适合|可用|可以用|能用|兼容|适配).{0,8}(酒精炉|alcohol stove)", value):
+    if re.search(rf"(支持|适合|可用|可以用|能用|兼容|适配).{{0,8}}({alcohol_terms})", value):
         return True
-    if re.search(r"(酒精炉|alcohol stove).{0,8}(可用|适用|适配|兼容|支持)", value):
+    if re.search(rf"({alcohol_terms}).{{0,8}}(可用|适用|适配|兼容|支持)", value):
         return True
-    if re.search(r"(^|[\s,，、/|\n])(?:酒精炉|alcohol stove)(?=$|[\s,，、/|\n])", value):
+    if re.search(rf"(^|[\s,，、/|\n])(?:{alcohol_terms})(?=$|[\s,，、/|\n])", value):
         return True
     return None
 
@@ -7801,13 +7802,14 @@ def _build_contents_accessories_ambiguity_result(question: str, products: list[P
         is_single_field_sufficient=False,
     )
     result = _clarify_result(intent)
-    result["results"] = _usage_care_named_product_results(products[:5])
-    result["result_skus"] = [
+    candidate_skus = [
         str(getattr(product, "sku", "") or "").strip().upper()
         for product in products[:5]
         if str(getattr(product, "sku", "") or "").strip()
     ]
-    result["candidate_skus"] = list(result["result_skus"])
+    result["results"] = []
+    result["result_skus"] = []
+    result["candidate_skus"] = candidate_skus
     result["answer_metadata"] = {
         "source": "resolved_entity_contents_accessories_clarification",
         "evidence_status": "ambiguous_product",

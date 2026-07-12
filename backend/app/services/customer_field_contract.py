@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import dataclass
 from typing import Any, Iterable
 
@@ -10,6 +11,7 @@ class FieldContract:
     field_type: str
     aliases: tuple[str, ...]
     semantic_preplan_field_type: str
+    full_phrases: tuple[str, ...] = ()
 
 
 # Field concepts only. This taxonomy does not select products or answer users.
@@ -19,13 +21,40 @@ FIELD_CONTRACTS: tuple[FieldContract, ...] = (
     FieldContract("specification", ("规格",), "unknown"),
     FieldContract("capacity", ("毫升数", "升数", "容量", "能装多少", "装多少"), "capacity"),
     FieldContract("weight", ("净重", "毛重", "重量", "多重"), "unknown"),
-    FieldContract("people", ("适用人数", "几个人", "几人用"), "unknown"),
-    FieldContract("material", ("材质",), "material"),
+    FieldContract(
+        "people",
+        ("适用人数", "几个人", "多少人", "几人用", "适用几人", "几人份"),
+        "unknown",
+        ("适合几个人", "适合多少人", "几个人用", "适用几人", "适用人数", "能供几个人使用", "可供几人", "几人份", "够几个人用"),
+    ),
+    FieldContract(
+        "material",
+        ("材质", "材料"),
+        "material",
+        ("用的是什么材质", "由什么材料制成", "什么材料做的", "是什么材质", "是什么材料", "用什么材料", "材质是什么", "什么材质"),
+    ),
     FieldContract("color", ("颜色",), "unknown"),
-    FieldContract("heat_source", ("电陶炉", "电磁炉", "热源", "明火"), "heat_source"),
+    FieldContract(
+        "heat_source",
+        ("电陶炉", "电磁炉", "卡式炉", "酒精炉", "热源", "明火", "直火"),
+        "heat_source",
+        ("可以直火加热吗", "能放什么炉上用", "能不能明火用", "能不能明火烧", "能不能直火", "可以用酒精炉吗", "能用卡式炉吗", "支持什么热源", "能明火烧吗", "能明火用吗", "可以明火吗", "支持明火吗", "适用什么炉"),
+    ),
     FieldContract("dishwasher", ("洗碗机",), "unknown"),
     FieldContract("gift", ("赠品",), "gift"),
     FieldContract("price", ("多少钱", "价格"), "price"),
+    FieldContract(
+        "warranty",
+        ("保修", "质保", "保修期", "质保期"),
+        "unknown",
+        ("质保多长时间", "保修多长时间", "保修期多久", "质保期多久", "有没有保修", "有没有质保", "保不保修", "有保修吗", "质保多久", "保修多久", "质保几年", "保几年"),
+    ),
+    FieldContract(
+        "shipping",
+        ("发货", "寄出", "发出", "发货时效", "配送时效", "送到"),
+        "unknown",
+        ("现在下单什么时候发", "能不能马上发货", "什么时候能送到", "今天能发货吗", "现在下单多久发", "现在下单几天发", "多久可以寄出", "多久可以发出", "什么时候发货", "多久能发货", "什么时候寄出", "可以当天发吗", "几天能寄出", "什么时候发", "今天能发吗", "发货时效", "配送时效", "多久送到"),
+    ),
     FieldContract("accessories", ("套装内容", "包含什么", "配件"), "contents"),
 )
 
@@ -42,6 +71,8 @@ DETAIL_FIELD_LABELS = {
     "dishwasher": "洗碗机适配",
     "gift": "赠品",
     "price": "价格",
+    "warranty": "保修",
+    "shipping": "发货时效",
     "accessories": "配件",
 }
 
@@ -82,6 +113,31 @@ class FieldEvidencePolicy:
 class DimensionEvidence:
     value: str
     scope: str
+
+
+@dataclass(frozen=True)
+class EntityScopeNormalization:
+    entity_subject: str
+    requested_scope: str
+    removed_scope_span: tuple[int, int] | None
+    normalization_reason: str | None
+
+
+@dataclass(frozen=True)
+class EntitySubjectSelection:
+    entity_subject: str
+    source: str
+    field: str | None
+    field_span: tuple[int, int] | None
+    raw_subject: str
+    requested_scope: str
+    removed_scope_span: tuple[int, int] | None
+    normalization_reason: str | None
+    fallback_used: bool
+    reason: str
+    core_field_span: tuple[int, int] | None = None
+    full_field_phrase_span: tuple[int, int] | None = None
+    full_field_phrase: str = ""
 
 
 def _aliases(field_type: str) -> tuple[str, ...]:
@@ -141,6 +197,42 @@ def requested_evidence_scope(question: str, field_type: str | None) -> str:
     return "package" if any(term in text for term in ("包装尺寸", "外箱尺寸", "包裹尺寸")) else "subject"
 
 
+def normalize_field_adjacent_entity_scope(
+    *,
+    question: str,
+    raw_subject: str,
+    canonical_field: str | None,
+    field_phrase: str = "",
+) -> EntityScopeNormalization:
+    subject = str(raw_subject or "").strip()
+    scope = requested_evidence_scope(question, canonical_field)
+    if not subject:
+        return EntityScopeNormalization(subject, scope, None, None)
+    contract = next((item for item in FIELD_CONTRACTS if item.field_type == canonical_field), None)
+    if contract is None:
+        return EntityScopeNormalization(subject, scope, None, None)
+    remainder = str(question or "")[len(subject):] if str(question or "").startswith(subject) else ""
+    expected_field_starts = tuple(
+        value
+        for value in (str(field_phrase or "").strip(), *contract.aliases)
+        if value
+    )
+    if not any(remainder.startswith(value) for value in expected_field_starts):
+        return EntityScopeNormalization(subject, scope, None, None)
+    suffixes = (
+        (("的包装", "外包装", "包装后", "包装"), "package", "field_adjacent_package_scope"),
+        (("商品本身", "本身的", "自身的", "的主体", "本身", "自身", "本体", "主体"), "subject", "field_adjacent_subject_scope"),
+    )
+    for terms, expected_scope, reason in suffixes:
+        for term in sorted(terms, key=len, reverse=True):
+            if subject.endswith(term) and scope == expected_scope:
+                start = len(subject) - len(term)
+                entity_subject = subject[:start].rstrip().removesuffix("的").rstrip()
+                if entity_subject:
+                    return EntityScopeNormalization(entity_subject, scope, (start, len(subject)), reason)
+    return EntityScopeNormalization(subject, scope, None, None)
+
+
 def _dimension_scope(label: str) -> str:
     value = str(label or "").strip()
     if value in {"", "尺寸", "大小", "长宽高", "展开尺寸", "收纳尺寸", "展开后尺寸", "收起后尺寸"}:
@@ -181,12 +273,93 @@ def iter_field_aliases() -> Iterable[tuple[str, FieldContract]]:
     return tuple(sorted(pairs, key=lambda item: len(item[0]), reverse=True))
 
 
-def detect_field_contract(text: str) -> FieldContract | None:
+def iter_full_field_phrases() -> Iterable[tuple[str, FieldContract]]:
+    pairs = [(phrase, contract) for contract in FIELD_CONTRACTS for phrase in contract.full_phrases]
+    return tuple(sorted(pairs, key=lambda item: len(item[0]), reverse=True))
+
+
+def _field_phrase_match(text: str) -> tuple[FieldContract, str, int, bool] | None:
     value = str(text or "")
+    for phrase, contract in iter_full_field_phrases():
+        index = value.lower().find(phrase.lower())
+        if index >= 0:
+            return contract, phrase, index, True
     for alias, contract in iter_field_aliases():
-        if alias in value:
-            return contract
+        index = value.lower().find(alias.lower())
+        if index >= 0:
+            return contract, alias, index, False
     return None
+
+
+def detect_field_contract(text: str) -> FieldContract | None:
+    match = _field_phrase_match(text)
+    return match[0] if match else None
+
+
+def detect_shipping_intent_signal(text: str) -> bool:
+    match = _field_phrase_match(text)
+    return bool(match and match[0].field_type == "shipping")
+
+
+def select_entity_subject_for_routing(
+    *,
+    raw_question: str,
+    fallback_product_like_subject: str = "",
+    fallback_named_subject: str = "",
+) -> EntitySubjectSelection:
+    text = str(raw_question or "").strip(" ，。？！；;：:")
+    match = _field_phrase_match(text)
+    if match is not None:
+        contract, phrase, index, is_full_phrase = match
+        full_span = (index, index + len(phrase))
+        core_match = next(
+            (
+                (phrase.lower().find(alias.lower()), alias)
+                for alias in sorted(contract.aliases, key=len, reverse=True)
+                if phrase.lower().find(alias.lower()) >= 0
+            ),
+            (0, phrase),
+        )
+        core_index, core_alias = core_match
+        core_span = (index + core_index, index + core_index + len(core_alias))
+        raw_subject = text[:index].strip(" ，。？！；;：:")
+        raw_subject = re.sub(r"(?:的|有)\s*$", "", raw_subject).strip()
+        normalized = normalize_field_adjacent_entity_scope(
+            question=text,
+            raw_subject=raw_subject,
+            canonical_field=contract.field_type,
+            field_phrase=phrase,
+        )
+        reason = normalized.normalization_reason or "field_contract_subject"
+        return EntitySubjectSelection(
+            entity_subject=normalized.entity_subject,
+            source="field_contract",
+            field=contract.field_type,
+            field_span=full_span,
+            raw_subject=raw_subject,
+            requested_scope=normalized.requested_scope,
+            removed_scope_span=normalized.removed_scope_span,
+            normalization_reason=normalized.normalization_reason,
+            fallback_used=False,
+            reason=reason if normalized.entity_subject else "field_contract_empty_subject",
+            core_field_span=core_span,
+            full_field_phrase_span=full_span,
+            full_field_phrase=phrase if is_full_phrase else "",
+        )
+
+    fallback = str(fallback_product_like_subject or fallback_named_subject or "").strip()
+    return EntitySubjectSelection(
+        entity_subject=fallback,
+        source="product_like_fallback" if fallback_product_like_subject else "named_fallback",
+        field=None,
+        field_span=None,
+        raw_subject=fallback,
+        requested_scope="subject",
+        removed_scope_span=None,
+        normalization_reason=None,
+        fallback_used=bool(fallback),
+        reason="field_contract_not_detected" if fallback else "no_entity_subject",
+    )
 
 
 def detect_field_types(text: str) -> tuple[str, ...]:

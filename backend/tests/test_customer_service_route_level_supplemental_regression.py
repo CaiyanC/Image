@@ -5,7 +5,12 @@ import re
 import pytest
 
 from app.models import Product, ProductBusiness, ProductSpecs
-from app.services import customer_agent_intent_service, customer_agent_planner_service, customer_service_service
+from app.services import (
+    customer_agent_intent_service,
+    customer_agent_planner_service,
+    customer_entity_resolution_contract,
+    customer_service_service,
+)
 from test_customer_service_route_level_regression import (
     _add_product,
     _add_knowledge_chunk,
@@ -13,6 +18,46 @@ from test_customer_service_route_level_regression import (
     route_client_and_db,
 )
 from test_customer_service_route_level_regression import _parse_sse_payload
+
+
+def _mock_strong_resolved_named_product(
+    monkeypatch,
+    *,
+    product: Product,
+    canonical_name: str | None = None,
+) -> None:
+    name = str(canonical_name or product.product_name_cn or product.product_name_en or "").strip()
+    sku = str(product.sku or "").strip().upper()
+    contract = customer_entity_resolution_contract.EntityResolutionContract(
+        entity_text=name,
+        normalized_entity_text=re.sub(r"[\s\-_]+", "", name).lower(),
+        status="resolved",
+        resolved_sku=sku,
+        resolver_candidate_skus=[sku],
+        diagnostic_candidate_skus=[],
+        candidate_skus=[sku],
+        matched_by="canonical_name_exact",
+        confidence="high",
+        is_unique=True,
+        matched_span=None,
+        field_type=None,
+        status_reason="resolver_unique_exact",
+    )
+    monkeypatch.setattr(
+        customer_service_service,
+        "_products_named_in_question",
+        lambda _db, _question: [product],
+    )
+    monkeypatch.setattr(
+        customer_service_service,
+        "_subject_strongly_matches_product",
+        lambda _subject, _product: True,
+    )
+    monkeypatch.setattr(
+        customer_service_service.customer_entity_resolution_contract,
+        "build_entity_resolution_contract",
+        lambda *_args, **_kwargs: contract,
+    )
 
 
 def _seed_contents_grounding_evidence(Session) -> None:
@@ -434,16 +479,7 @@ def test_named_product_shortcut_binds_resolved_single_product_detail_scope(
     with Session() as db:
         product = db.query(Product).filter(Product.sku == "KW-K32-白").first()
         assert product is not None
-        monkeypatch.setattr(
-            customer_service_service,
-            "_products_named_in_question",
-            lambda _db, _question: [product],
-        )
-        monkeypatch.setattr(
-            customer_service_service,
-            "_subject_strongly_matches_product",
-            lambda _subject, _product: True,
-        )
+        _mock_strong_resolved_named_product(monkeypatch, product=product)
         result = asyncio.run(
             customer_service_service._try_named_product_shortcut(
                 db,
@@ -456,6 +492,60 @@ def test_named_product_shortcut_binds_resolved_single_product_detail_scope(
     assert result["answer_type"] == "product_detail", result
     assert result["result_skus"] == ["KW-K32-白"], result
     assert result.get("debug", {}).get("agent_mode") == "named_product_detail_shortcut", result
+
+
+def test_named_product_shortcut_does_not_promote_weak_single_candidate(
+    route_client_and_db,
+    monkeypatch,
+):
+    _client, _headers, Session = route_client_and_db
+
+    with Session() as db:
+        product = db.query(Product).filter(Product.sku == "KW-K32-白").first()
+        assert product is not None
+        sku = str(product.sku or "").strip().upper()
+        weak_contract = customer_entity_resolution_contract.EntityResolutionContract(
+            entity_text="天鹅壶9杯",
+            normalized_entity_text="天鹅壶9杯",
+            status="ambiguous",
+            resolved_sku=None,
+            resolver_candidate_skus=[sku],
+            diagnostic_candidate_skus=[],
+            candidate_skus=[sku],
+            matched_by="substring",
+            confidence="medium",
+            is_unique=False,
+            matched_span=None,
+            field_type="heat_source",
+            status_reason="resolver_weak_single_candidate",
+        )
+        monkeypatch.setattr(
+            customer_service_service,
+            "_products_named_in_question",
+            lambda _db, _question: [product],
+        )
+        monkeypatch.setattr(
+            customer_service_service,
+            "_subject_strongly_matches_product",
+            lambda _subject, _product: True,
+        )
+        monkeypatch.setattr(
+            customer_service_service.customer_entity_resolution_contract,
+            "build_entity_resolution_contract",
+            lambda *_args, **_kwargs: weak_contract,
+        )
+        result = asyncio.run(
+            customer_service_service._try_named_product_shortcut(
+                db,
+                user_id="route-test-user",
+                question="天鹅壶9杯 能不能明火直烧？",
+            )
+        )
+
+    assert result is not None
+    assert result["answer_type"] == "clarification", result
+    assert result.get("result_skus") == [], result
+    assert (result.get("answer_metadata") or {}).get("source") == "entity_strength_gate_clarification", result
 
 
 def test_entity_scope_guard_blocks_unresolved_product_like_recommendation_even_when_preplan_looks_category_like(
@@ -2048,14 +2138,34 @@ def _assert_structured_result_rows_match_filters(
     assert set(result_skus).issubset(by_sku.keys()), {"result_skus": result_skus, "loaded": sorted(by_sku.keys())}
     for sku in result_skus:
         product, specs, business = by_sku[sku]
-        assert product.category == category, {"sku": sku, "actual_category": product.category, "expected_category": category}
+        row = {
+            "sku": product.sku,
+            "product_name_cn": product.product_name_cn,
+            "category": product.category,
+            "sub_category": getattr(product, "sub_category", None),
+            "body_material": getattr(specs, "body_material", None),
+        }
+        subject_decision = customer_service_service.customer_structured_query_contract.resolve_structured_subject_scope(
+            row=row,
+            subject_category=category,
+        )
+        assert subject_decision["matched"] is True, {"sku": sku, "subject_decision": subject_decision}
+        assert subject_decision["scope"] == "subject", {"sku": sku, "subject_decision": subject_decision}
         if body_material:
-            assert _structured_field_match(getattr(specs, "body_material", None), body_material), {
-                "sku": sku,
-                "field": "body_material",
-                "actual": getattr(specs, "body_material", None),
-                "expected": body_material,
-            }
+            material_contract = customer_service_service.customer_structured_query_contract.StructuredQueryContract(
+                subject_category=category,
+                field="material",
+                operator="contains",
+                value=body_material,
+                status="resolved",
+            )
+            material_proof = customer_service_service.customer_structured_query_contract.match_material_condition(
+                contract=material_contract,
+                row=row,
+            )
+            assert material_proof["matched"] is True, {"sku": sku, "material_proof": material_proof}
+            assert material_proof["field_source"] == "body_material", material_proof
+            assert material_proof["subject_scope"] == "subject", material_proof
         if heat_source:
             assert _structured_field_match(getattr(specs, "heat_source", None), heat_source), {
                 "sku": sku,
@@ -2099,6 +2209,23 @@ def _qualified_structured_rows(Session, question: str) -> tuple[object, dict, li
     intent = contract.get("intent")
     assert intent is not None, question
     with Session() as db:
+        central_contract = customer_service_service.customer_structured_query_contract.build_structured_query_contract(question)
+        if central_contract.status == "resolved":
+            source_rows, evaluations = customer_service_service._evaluate_structured_query_contract_rows(
+                db,
+                central_contract,
+            )
+            matched_skus = {
+                str(item.get("sku") or "").strip().upper()
+                for item in evaluations
+                if item.get("matched") and str(item.get("sku") or "").strip()
+            }
+            rows = [
+                row
+                for row in source_rows
+                if str(row.get("sku") or "").strip().upper() in matched_skus
+            ]
+            return intent, contract, rows
         product_ref = str(contract.get("product_ref") or "").strip() or str((intent.filters or {}).get("product.category") or "").strip()
         if product_ref == "水壶":
             source_rows = [
@@ -2521,9 +2648,15 @@ def test_route_level_structured_waterware_boundary_queries_do_not_mix_cup_and_ke
         return
 
     with Session() as db:
+        loaded_rows = (
+            db.query(Product, ProductSpecs)
+            .outerjoin(ProductSpecs, ProductSpecs.product_id == Product.id)
+            .filter(Product.sku.in_(payload["result_skus"]))
+            .all()
+        )
         products = {
             str(product.sku or "").strip().upper(): str(product.category or "").strip()
-            for product in db.query(Product).filter(Product.sku.in_(payload["result_skus"])).all()
+            for product, _specs in loaded_rows
         }
 
     assert products, payload
@@ -2531,8 +2664,44 @@ def test_route_level_structured_waterware_boundary_queries_do_not_mix_cup_and_ke
         assert all(category in {"水具", "水杯", "杯子", "杯"} for category in products.values()), products
         assert not any(category == "水壶" for category in products.values()), products
     else:
-        assert all(category == "水壶" for category in products.values()), products
-        assert not any(category in {"水具", "水杯", "杯子", "杯"} for category in products.values()), products
+        resolver_decisions = []
+        for product, specs in loaded_rows:
+            row = {
+                "sku": product.sku,
+                "product_name_cn": product.product_name_cn,
+                "category": product.category,
+                "sub_category": getattr(product, "sub_category", None),
+                "body_material": getattr(specs, "body_material", None),
+            }
+            decision = customer_service_service.customer_structured_query_contract.resolve_structured_subject_scope(
+                row=row,
+                subject_category="水壶",
+            )
+            resolver_decisions.append(decision)
+            assert decision["matched"] is True, {"sku": product.sku, "decision": decision}
+            assert decision["scope"] == "subject", {"sku": product.sku, "decision": decision}
+            assert decision["subject_kind"] in {"kettle", "coffee_kettle"}, decision
+            material_contract = customer_service_service.customer_structured_query_contract.StructuredQueryContract(
+                subject_category="水壶",
+                field="material",
+                operator="contains",
+                value="不锈钢",
+                status="resolved",
+            )
+            material_proof = customer_service_service.customer_structured_query_contract.match_material_condition(
+                contract=material_contract,
+                row=row,
+            )
+            assert material_proof["matched"] is True, {"sku": product.sku, "material_proof": material_proof}
+            assert material_proof["field_source"] == "body_material", material_proof
+            assert material_proof["subject_scope"] == "subject", material_proof
+        assert all(
+            decision["matched"] is True
+            and decision["scope"] == "subject"
+            and decision["subject_kind"] in {"kettle", "coffee_kettle"}
+            for decision in resolver_decisions
+        ), resolver_decisions
+        assert not any(decision["subject_kind"] == "cup" for decision in resolver_decisions), resolver_decisions
     assert forbidden_bucket in {"cup", "kettle"}
 
 
@@ -2603,6 +2772,11 @@ def test_route_level_recommendation_queries_post_filter_results_to_explicit_cons
         )
     by_sku = {str(product.sku or "").strip().upper(): (product, specs, business) for product, specs, business in rows}
     assert set(payload["result_skus"]).issubset(by_sku.keys()), {"result_skus": payload["result_skus"], "loaded": sorted(by_sku.keys())}
+    verification_by_sku = {
+        str(item.get("sku") or "").strip().upper(): item
+        for item in (payload.get("debug") or {}).get("candidate_verifications") or []
+        if isinstance(item, dict) and str(item.get("sku") or "").strip()
+    }
 
     for sku in payload["result_skus"]:
         product, specs, business = by_sku[sku]
@@ -2629,10 +2803,18 @@ def test_route_level_recommendation_queries_post_filter_results_to_explicit_cons
         if "卡式炉" in question:
             assert _structured_field_match(getattr(specs, "heat_source", None), "卡式炉"), {"sku": sku, "heat_source": getattr(specs, "heat_source", None), "question": question}
         if "轻便" in question or "轻量" in question or "不要太重" in question:
-            assert (
-                any(term in row_text for term in ("轻量", "轻便", "便携"))
-                or (getattr(product, "gross_weight_g", None) or 0) and float(getattr(product, "gross_weight_g", 0) or 0) <= 350
-            ), {"sku": sku, "row_text": row_text, "question": question}
+            verification = verification_by_sku.get(sku) or {}
+            weight_evidence = (verification.get("evidence_by_constraint") or {}).get("weight") or {}
+            assert weight_evidence.get("status") == "verified", {"sku": sku, "verification": verification}
+            assert weight_evidence.get("field_source") == "gross_weight_g", {"sku": sku, "weight_evidence": weight_evidence}
+            assert specs is not None, {"sku": sku, "question": question}
+            normalized_g = float(weight_evidence.get("normalized_g") or 0)
+            assert normalized_g == float(specs.gross_weight_g or 0), {
+                "sku": sku,
+                "weight_evidence": weight_evidence,
+                "specs_gross_weight_g": specs.gross_weight_g,
+            }
+            assert 0 < normalized_g <= 350, {"sku": sku, "weight_evidence": weight_evidence}
         if "预算低" in question:
             joined = row_text.lower()
             assert any(term in joined for term in ("基础", "性价比", "入门")), {"sku": sku, "row_text": row_text, "question": question}
@@ -2803,16 +2985,7 @@ def test_named_single_product_people_count_question_does_not_fallback_to_usage_s
     with Session() as db:
         product = db.query(Product).filter(Product.sku == "KW-K31-白").first()
         assert product is not None
-        monkeypatch.setattr(
-            customer_service_service,
-            "_products_named_in_question",
-            lambda _db, _question: [product],
-        )
-        monkeypatch.setattr(
-            customer_service_service,
-            "_subject_strongly_matches_product",
-            lambda _subject, _product: True,
-        )
+        _mock_strong_resolved_named_product(monkeypatch, product=product)
         result = asyncio.run(
             customer_service_service._try_named_product_shortcut(
                 db,
@@ -3213,7 +3386,8 @@ def test_route_level_ambiguous_product_name_unknown_field_clarifies_instead_of_p
 
     assert payload["answer_type"] == "clarification", payload
     assert payload.get("needs_clarification") is True, payload
-    assert set(payload.get("result_skus") or []) >= {"CW-S10-1", "CW-S10-A"}, payload.get("result_skus")
+    assert payload.get("result_skus") in ([], None), payload.get("result_skus")
+    assert set(payload.get("candidate_skus") or []) >= {"CW-S10-1", "CW-S10-A"}, payload.get("candidate_skus")
     assert any(term in answer for term in ("\u8bf7\u5148\u6307\u5b9a", "\u5177\u4f53\u6b3e\u5f0f", "\u591a\u4e2a\u76f8\u5173\u5546\u54c1")), answer
     assert answer_metadata.get("source") == "named_product_unknown_field_clarification", answer_metadata
 
@@ -4310,7 +4484,8 @@ def test_route_level_contents_family_ambiguous_names_must_clarify(
     assert payload["answer_type"] == "clarification", payload
     assert payload.get("needs_clarification") is True, payload
     assert "Product not found" not in answer, answer
-    assert payload.get("result_skus"), payload
+    assert payload.get("result_skus") in ([], None), payload
+    assert payload.get("candidate_skus"), payload
     assert payload["answer_type"] not in {"query_products", "product_query"}, payload
     assert "当前匹配到【配件】类产品共有" not in answer, answer
     assert "当前资料未标注该商品的套装包含内容" not in answer, answer

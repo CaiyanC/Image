@@ -29,6 +29,8 @@ from . import (
     customer_field_contract,
     customer_llm_service,
     customer_perf_service,
+    customer_recommendation_verification_contract,
+    customer_structured_query_contract,
     knowledge_service,
     product_service,
 )
@@ -651,6 +653,29 @@ def _phase1_product_field_result(db: Session, plan: dict) -> dict | None:
         resolved_ref = exact_question_product.sku
         plan["product_ref"] = resolved_ref
         plan["sku"] = resolved_ref
+    identity_source = str(plan.get("product_identity_source") or "").strip() or None
+    if product:
+        identity_decision = customer_entity_resolution_contract.can_trust_bound_product_identity(
+            product=product,
+            sku=resolved_ref,
+            identity_source=identity_source,
+        )
+        if not identity_decision.allowed:
+            return {
+                "intent": "clarify",
+                "answer_type": "clarification",
+                "answer": f"我还不能把“{product_ref}”稳定定位到唯一商品。请补充 SKU 或更完整的商品名。",
+                "results": [],
+                "result_skus": [],
+                "candidate_skus": [],
+                "needs_clarification": True,
+                "answer_metadata": {"source": "entity_strength_gate_clarification"},
+                "debug": {
+                    "agent_mode": "entity_strength_gate_clarification",
+                    "bound_product_identity_decision": identity_decision.to_dict(),
+                },
+                "skip_polish": True,
+            }
     if not product:
         return {
             "intent": "product_detail",
@@ -1059,7 +1084,7 @@ def _phase1_catalog_rows(db: Session, product_ref: str) -> list[dict]:
             category_text = " ".join(str(row.get(key) or "") for key in ("category", "sub_category", "product_name_cn", "product_name_en"))
             matched = "水壶" in category_text
         elif ref == "锅具":
-            matched = _is_service_pot_or_cookware_set_candidate(row, product)
+            matched = customer_structured_query_contract.resolve_material_subject_scope(row, "锅具")["eligible"]
         elif ref in category_scope_config:
             matched = _matches_category_scope(row, category_scope_config[ref])
         elif ref == "套锅":
@@ -1122,6 +1147,8 @@ def _phase1_catalog_count_result(db: Session, plan: dict) -> dict:
 
 def _phase1_catalog_display_label(product_ref: str) -> str:
     ref = str(product_ref or "").strip()
+    if ref == "all_products":
+        return "全部产品"
     if ref == "天幕/地垫/帐篷":
         return "天幕、地垫、帐篷"
     return ref
@@ -1262,22 +1289,14 @@ def _structured_row_matches_category_value(row: dict[str, Any], value: str) -> b
 
 
 def _structured_row_matches_material_value(row: dict[str, Any], value: str) -> bool:
-    text = " ".join(
-        str(row.get(key) or "").strip()
-        for key in ("body_material", "features", "long_description_cn", "product_name_cn")
+    contract = customer_structured_query_contract.StructuredQueryContract(
+        subject_category="all_products",
+        field="material",
+        operator="contains",
+        value=str(value or "").strip(),
+        status="resolved",
     )
-    normalized = str(value or "").strip()
-    if not normalized:
-        return True
-    if "硬质氧化" in normalized or "硬氧" in normalized:
-        return any(token in text for token in ("硬质氧化", "硬氧"))
-    if "不锈钢" in normalized:
-        return "不锈钢" in text
-    if "铝合金" in normalized:
-        return "铝合金" in text
-    if normalized == "钛":
-        return "钛" in text
-    return normalized in text
+    return customer_structured_query_contract.match_material_condition(contract=contract, row=row)["matched"]
 
 
 def _structured_row_matches_heat_value(row: dict[str, Any], value: str) -> bool:
@@ -1367,6 +1386,9 @@ def _detect_resolved_entity_unknown_fact_label(question: str) -> str | None:
     text = str(question or "").strip()
     if not text:
         return None
+    field_contract = customer_field_contract.detect_field_contract(text)
+    if field_contract and field_contract.field_type == "shipping":
+        return "发货时效"
     for label, terms in _RESOLVED_ENTITY_UNKNOWN_FACT_TERMS.items():
         if any(term in text for term in terms):
             return label
@@ -1434,10 +1456,13 @@ def _build_resolved_product_unknown_field_result(
     *,
     label: str,
     source: str,
+    resolution_decision: customer_entity_resolution_contract.SingleProductResolutionDecision,
 ) -> dict:
     row = _product_row_from_model(product)
     name = str(product.product_name_cn or product.product_name_en or product.sku or "").strip()
     sku = str(product.sku or "").strip().upper()
+    if not resolution_decision.allowed or resolution_decision.resolved_sku != sku:
+        raise ValueError("resolved unknown-field answer requires an allowed exact entity decision")
     prefix = f"{name}（{sku}）" if name else sku
     answer = _resolved_entity_unknown_fact_answer(prefix, label)
     return {
@@ -1451,6 +1476,7 @@ def _build_resolved_product_unknown_field_result(
         "answer_metadata": {"source": source, "requested_field": label, "evidence_status": "missing"},
         "debug": {
             "agent_mode": source,
+            "single_product_resolution_decision": resolution_decision.to_dict(),
             "plan": {"primary_intent": "product_field", "product_ref": sku, "requested_field": label},
             "raw_results": [row],
             "candidate_skus": [sku],
@@ -1459,23 +1485,45 @@ def _build_resolved_product_unknown_field_result(
     }
 
 
-def _build_ambiguous_named_product_unknown_field_result(products: list[Product], *, label: str) -> dict:
-    rows = [_product_row_from_model(product) for product in products[:5]]
+def _clarification_compatible_products(question: str, products: list[Product]) -> list[Product]:
+    explicit_colors = [term for term in customer_agent_service.PRODUCT_COLOR_TERMS if term in str(question or "")]
+    if not explicit_colors:
+        return list(products)
+    return [
+        product
+        for product in products
+        if any(color in str(product.product_name_cn or product.product_name_en or "") for color in explicit_colors)
+    ]
+
+
+def _build_ambiguous_named_product_unknown_field_result(
+    products: list[Product],
+    *,
+    label: str,
+    question: str = "",
+) -> dict:
+    display_products = _clarification_compatible_products(question, products)[:5]
+    rows = [_product_row_from_model(product) for product in display_products]
     options = "；".join(
         f"{str(product.product_name_cn or product.product_name_en or product.sku).strip()}（{str(product.sku or '').strip().upper()}）"
-        for product in products[:5]
+        for product in display_products
     )
     answer = (
-        f"匹配到多个相关商品：{options}。"
-        f"请先指定 SKU 或具体款式；另外，当前资料也未标注该类实时{label}信息，不能直接确认。"
+        f"匹配到多个相关商品：{options}。请先指定 SKU 或具体款式；"
+        f"另外，当前资料也未标注该类实时{label}信息，不能直接确认。"
+        if options
+        else f"没有找到与当前显式条件一致的明确商品。请提供 SKU 或更完整型号，再确认{label}信息。"
     )
+    resolver_candidate_skus = [str(product.sku or "").strip().upper() for product in products[:5] if str(product.sku or "").strip()]
+    clarification_candidate_skus = [str(product.sku or "").strip().upper() for product in display_products if str(product.sku or "").strip()]
     return {
         "intent": "clarify",
         "answer_type": "clarification",
         "answer": answer,
-        "results": rows,
-        "result_skus": [str(product.sku or "").strip().upper() for product in products[:5] if str(product.sku or "").strip()],
-        "candidate_skus": [str(product.sku or "").strip().upper() for product in products[:5] if str(product.sku or "").strip()],
+        "results": [],
+        "result_skus": [],
+        "candidate_skus": resolver_candidate_skus,
+        "clarification_candidate_skus": clarification_candidate_skus,
         "sku": None,
         "needs_clarification": True,
         "suggested_followups": ["请直接提供 SKU 或完整产品名。"],
@@ -1485,7 +1533,160 @@ def _build_ambiguous_named_product_unknown_field_result(products: list[Product],
             "agent_mode": "named_product_unknown_field_clarification",
             "plan": {"primary_intent": "clarify", "requested_field": label},
             "raw_results": rows,
-            "candidate_skus": [str(product.sku or "").strip().upper() for product in products[:5] if str(product.sku or "").strip()],
+            "candidate_skus": resolver_candidate_skus,
+            "clarification_candidate_skus": clarification_candidate_skus,
+        },
+        "skip_polish": True,
+    }
+
+
+def _build_structured_query_contract_result(
+    db: Session,
+    contract: customer_structured_query_contract.StructuredQueryContract,
+) -> dict:
+    rows, evaluations = _evaluate_structured_query_contract_rows(db, contract)
+    matched_skus = [item["sku"] for item in evaluations if item["matched"] and item["sku"]]
+    by_sku = {str(row.get("sku") or "").strip().upper(): row for row in rows}
+    filtered_rows = [by_sku[sku] for sku in matched_skus if sku in by_sku]
+    display_rows = filtered_rows[:10]
+    display_skus = [str(row.get("sku") or "").strip().upper() for row in display_rows if str(row.get("sku") or "").strip()]
+    evidence = [item for item in evaluations if item["sku"] in set(display_skus)]
+    evidence_guard = customer_structured_query_contract.validate_structured_evidence(
+        contract=contract,
+        filtered_rows=display_rows,
+        evidence_rows=evidence,
+    )
+    evidence = evidence_guard["accepted_evidence"]
+    subject_display = _phase1_catalog_display_label(str(contract.subject_category or ""))
+    condition_summary = customer_structured_query_contract.format_structured_condition_summary(contract)
+    if display_rows:
+        samples = "、".join(
+            f"{row.get('sku')} {row.get('product_name_cn')}".strip()
+            for row in display_rows
+        )
+        if len(filtered_rows) > len(display_rows):
+            answer = f"共找到 {len(filtered_rows)} 款符合“{condition_summary}”条件的【{subject_display}】商品，以下先展示前 {len(display_rows)} 款：{samples}。"
+        else:
+            answer = f"当前在【{subject_display}】中筛到 {len(filtered_rows)} 款符合“{condition_summary}”条件的商品：{samples}。"
+    else:
+        answer = (
+            "当前结构化商品库未找到符合条件的商品。"
+            f"查询类目：【{subject_display}】；筛选条件：{condition_summary}。"
+        )
+    contract_data = contract.to_dict()
+    runtime_plan = {
+        "product_ref": contract.subject_category,
+        "requested_field": customer_field_contract.product_detail_field_label(contract.field) or contract.field,
+    }
+    return {
+        "intent": "query_products",
+        "answer_type": "product_query",
+        "answer": answer,
+        "results": display_rows,
+        "result_skus": display_skus,
+        "candidate_skus": display_skus,
+        "answer_metadata": {
+            "source": "structured_category_field_filter_query",
+            "contract_source": "structured_query_contract",
+            "product_ref": contract.subject_category,
+            "matched_count": len(filtered_rows),
+            "total_match_count": len(filtered_rows),
+            "returned_count": len(display_rows),
+            "is_truncated": len(filtered_rows) > len(display_rows),
+            "condition_summary": condition_summary,
+            "structured_query_contract": contract_data,
+            "structured_match_evidence": evidence,
+            "structured_rejected_evidence": evidence_guard["rejected_evidence"],
+        },
+        "debug": {
+            "agent_mode": "structured_query_contract",
+            "plan": runtime_plan,
+            "structured_query_contract": contract_data,
+            "structured_match_evidence": evidence,
+            "raw_results": display_rows,
+            "candidate_skus": display_skus,
+        },
+        "skip_polish": True,
+    }
+
+
+def _evaluate_structured_query_contract_rows(
+    db: Session,
+    contract: customer_structured_query_contract.StructuredQueryContract,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """Evaluate structured filters across the canonical catalog candidate scope."""
+    rows = _phase1_catalog_rows(db, "产品")
+    evaluations = [customer_structured_query_contract.evaluate_structured_row(row, contract) for row in rows]
+    return rows, evaluations
+
+
+def _build_category_field_general_result(
+    db: Session,
+    contract: customer_structured_query_contract.StructuredQueryContract,
+) -> dict:
+    rows = _phase1_catalog_rows(db, "产品")
+    aggregation = customer_structured_query_contract.aggregate_category_field_rows(rows, contract)
+    field_label = {
+        "heat_source": "适用炉具",
+    }.get(str(contract.field or "")) or customer_field_contract.product_detail_field_label(contract.field) or "字段"
+    subject_display = _phase1_catalog_display_label(str(contract.subject_category or ""))
+    aggregated_values = list(aggregation["aggregated_values"])
+    if aggregated_values and contract.field == "heat_source":
+        groups = aggregation["value_groups"]
+        appliances = "、".join(groups["appliance"])
+        answer = (
+            f"当前已标注的商品资料中，【{subject_display}】的适用炉具主要有：{appliances}。"
+            if appliances
+            else f"当前已标注的商品资料中，【{subject_display}】没有明确的适用炉具信息。"
+        )
+        additional_parts = []
+        if groups["fuel_source"]:
+            additional_parts.append(f"燃料或气源：{'、'.join(groups['fuel_source'])}")
+        if groups["heating_method"]:
+            additional_parts.append(f"其他加热方式：{'、'.join(groups['heating_method'])}")
+        if groups["other"]:
+            additional_parts.append(f"其他已标注信息：{'、'.join(groups['other'])}")
+        if additional_parts:
+            answer += f"另外，部分资料还标注了{'；'.join(additional_parts)}。"
+    elif aggregated_values:
+        displayed_values = aggregated_values[:12]
+        values_text = "、".join(displayed_values)
+        remainder = f"（共 {len(aggregated_values)} 种已标注值）" if len(aggregated_values) > len(displayed_values) else ""
+        answer = f"当前已标注的商品资料中，【{subject_display}】的{field_label}主要有：{values_text}{remainder}。"
+    else:
+        answer = f"当前已标注的商品资料中没有找到明确的{field_label}信息。"
+    contract_data = contract.to_dict()
+    search_top1_promotion_blocked = bool(
+        contract.status == "generic"
+        and contract.subject_category
+        and contract.field
+        and contract.operator is None
+        and contract.value is None
+    )
+    return {
+        "intent": "query_products",
+        "answer_type": "product_query",
+        "answer": answer,
+        "results": [],
+        "result_skus": [],
+        "candidate_skus": [],
+        "answer_metadata": {
+            "source": "category_field_general",
+            "subject_category": contract.subject_category,
+            "field": contract.field,
+            "structured_query_contract": contract_data,
+            **aggregation,
+        },
+        "debug": {
+            "agent_mode": "category_field_general",
+            "structured_query_contract": contract_data,
+            "candidate_skus": [],
+            "aggregated_values": aggregated_values,
+            "supporting_skus": aggregation["supporting_skus"],
+            "binding_provenance": "none" if search_top1_promotion_blocked else None,
+            "allow_search_top1_promotion": not search_top1_promotion_blocked,
+            "search_top1_promotion_blocked": search_top1_promotion_blocked,
+            "blocked_promotion_source": "category_field_general" if search_top1_promotion_blocked else None,
         },
         "skip_polish": True,
     }
@@ -1498,7 +1699,9 @@ def _build_generic_ambiguous_unknown_field_clarification_result(
     products: list[Product] | None = None,
     subject_override: str | None = None,
 ) -> dict:
-    rows = [_product_row_from_model(product) for product in (products or [])[:5]]
+    resolver_products = list(products or [])[:5]
+    display_products = _clarification_compatible_products(question, resolver_products)
+    rows = [_product_row_from_model(product) for product in display_products]
     subject = subject_override or customer_agent_intent_service._detail_subject_from_question(question) or "这款商品"
     if rows:
         options = "；".join(
@@ -1515,14 +1718,16 @@ def _build_generic_ambiguous_unknown_field_clarification_result(
             f"“{subject}”这个叫法可能对应多个相关商品。"
             f"请先提供 SKU 或更完整的商品名；另外，当前资料也未标注该类实时{label}信息，不能直接确认。"
         )
-    candidate_skus = [str(row.get("sku") or "").strip().upper() for row in rows if str(row.get("sku") or "").strip()]
+    candidate_skus = [str(product.sku or "").strip().upper() for product in resolver_products if str(product.sku or "").strip()]
+    clarification_candidate_skus = [str(row.get("sku") or "").strip().upper() for row in rows if str(row.get("sku") or "").strip()]
     return {
         "intent": "clarify",
         "answer_type": "clarification",
         "answer": answer,
-        "results": rows,
-        "result_skus": candidate_skus,
+        "results": [],
+        "result_skus": [],
         "candidate_skus": candidate_skus,
+        "clarification_candidate_skus": clarification_candidate_skus,
         "sku": None,
         "needs_clarification": True,
         "suggested_followups": ["请直接提供 SKU 或完整产品名。"],
@@ -1533,6 +1738,7 @@ def _build_generic_ambiguous_unknown_field_clarification_result(
             "plan": {"primary_intent": "clarify", "requested_field": label},
             "raw_results": rows,
             "candidate_skus": candidate_skus,
+            "clarification_candidate_skus": clarification_candidate_skus,
         },
         "skip_polish": True,
     }
@@ -1587,6 +1793,7 @@ def _enforce_field_evidence_policy(db: Session, question: str, agent_result: dic
         "sku": result_skus[0],
         "requested_field": requested_label,
         "field_only": True,
+        "product_identity_source": "field_evidence_repair",
         "raw_question": question,
     })
     if not replacement:
@@ -1706,25 +1913,32 @@ def _try_resolved_product_unknown_field_shortcut(db: Session, question: str) -> 
     if not label:
         return None
 
-    resolved_sku = _resolve_sku(db, text, None)
-    if resolved_sku:
-        product = db.query(Product).filter(Product.sku == resolved_sku).first()
-        if product:
-            if _has_direct_structured_detail_answer(db, product, text):
-                return None
-            exact_qa = _best_product_qa_match(db, product, text)
-            if exact_qa and _is_exact_product_qa_question_match(exact_qa, text):
-                return None
-            return _build_resolved_product_unknown_field_result(
-                product,
-                label=label,
-                source="resolved_entity_unknown_field_fallback",
-            )
-        return None
-
+    products = db.query(Product).order_by(Product.sku.asc()).all()
     named_products = _products_named_in_question(db, text)
-    if len(named_products) == 1:
-        product = named_products[0]
+    subject_selection = customer_field_contract.select_entity_subject_for_routing(
+        raw_question=text,
+        fallback_product_like_subject=_product_like_scope_subject(text),
+        fallback_named_subject=customer_agent_intent_service._detail_subject_from_question(text).strip(),
+    )
+    subject = subject_selection.entity_subject
+    entity_selection = _choose_effective_entity_contract(
+        text,
+        products,
+        resolver_candidates=named_products,
+        override_subject=subject or None,
+    )
+    entity_contract = entity_selection.contract
+    resolution_decision = customer_entity_resolution_contract.can_resolve_single_product(
+        entity_contract,
+        products,
+    )
+    if resolution_decision.allowed:
+        product = next(
+            (item for item in products if str(item.sku or "").strip().upper() == resolution_decision.resolved_sku),
+            None,
+        )
+        if not product:
+            return None
         if _has_direct_structured_detail_answer(db, product, text):
             return None
         exact_qa = _best_product_qa_match(db, product, text)
@@ -1734,9 +1948,10 @@ def _try_resolved_product_unknown_field_shortcut(db: Session, question: str) -> 
             product,
             label=label,
             source="resolved_entity_unknown_field_fallback",
+            resolution_decision=resolution_decision,
         )
     if len(named_products) > 1:
-        return _build_ambiguous_named_product_unknown_field_result(named_products, label=label)
+        return _build_ambiguous_named_product_unknown_field_result(named_products, label=label, question=text)
     return None
 
 
@@ -1759,25 +1974,33 @@ def _pre_route_high_risk_contract_result(
     supported_detail_field = customer_field_contract.is_supported_detail_field(
         field_contract.field_type if field_contract else None
     )
+    subject_selection = customer_field_contract.select_entity_subject_for_routing(
+        raw_question=text,
+        fallback_product_like_subject=_product_like_scope_subject(text),
+        fallback_named_subject=customer_agent_intent_service._detail_subject_from_question(text).strip(),
+    )
+    subject = subject_selection.entity_subject
+    contract_products: list[Product] = []
     try:
         contract_products = db.query(Product).order_by(Product.sku.asc()).all()
-        entity_contract = customer_entity_resolution_contract.build_entity_resolution_contract(text, contract_products)
+        entity_selection = _choose_effective_entity_contract(
+            text,
+            contract_products,
+            override_subject=subject or None,
+        )
+        entity_contract = entity_selection.contract
     except Exception:
         entity_contract = None
-    if (
-        entity_contract
-        and entity_contract.status == "resolved"
-        and entity_contract.resolved_sku
-        and entity_contract.is_unique
-        and entity_contract.confidence == "high"
-        and entity_contract.matched_by in _PHASE2_EXACT_ENTITY_MATCHES
-        and entity_contract.resolver_candidate_skus == [entity_contract.resolved_sku]
-    ):
+    resolution_decision = customer_entity_resolution_contract.can_resolve_single_product(
+        entity_contract,
+        contract_products,
+    )
+    if resolution_decision.allowed:
         product = next(
             (
                 item
                 for item in contract_products
-                if str(item.sku or "").strip().upper() == entity_contract.resolved_sku
+                if str(item.sku or "").strip().upper() == resolution_decision.resolved_sku
             ),
             None,
         )
@@ -1786,6 +2009,7 @@ def _pre_route_high_risk_contract_result(
                 product,
                 label=label,
                 source="resolved_entity_unknown_field_fallback",
+                resolution_decision=resolution_decision,
             )
             debug = result.get("debug") if isinstance(result.get("debug"), dict) else {}
             debug["entity_resolution_contract"] = entity_contract.to_dict()
@@ -1799,50 +2023,7 @@ def _pre_route_high_risk_contract_result(
         if str(item or "").strip()
     ]
     primary_entity = entity_texts[0] if entity_texts else ""
-    subject = _product_like_scope_subject(text) or customer_agent_intent_service._detail_subject_from_question(text).strip()
 
-    def _subject_candidates_for_grounding() -> list[str]:
-        candidates: list[str] = []
-        raw_candidates = (
-            subject,
-            customer_agent_intent_service._clean_detail_subject(subject) if subject else "",
-            primary_entity,
-            customer_agent_intent_service._clean_detail_subject(primary_entity) if primary_entity else "",
-        )
-        for candidate in raw_candidates:
-            value = str(candidate or "").strip()
-            if value and value not in candidates:
-                candidates.append(value)
-            trimmed_value = re.sub(r"(?:\s+|[，。？！；;:：])(?:有|是|为)$", "", value).strip()
-            if trimmed_value and trimmed_value not in candidates:
-                candidates.append(trimmed_value)
-        return candidates
-
-    def _has_strong_grounded_subject(product: Product) -> bool:
-        return any(
-            _subject_strongly_matches_product(candidate, product)
-            for candidate in _subject_candidates_for_grounding()
-        )
-
-    resolved_sku = _resolve_sku(db, text, None)
-    if resolved_sku:
-        product = db.query(Product).filter(Product.sku == resolved_sku).first()
-        if product:
-            if subject and _looks_like_unresolved_product_like_question(text) and not _has_strong_grounded_subject(product):
-                unresolved = _build_unresolved_product_like_unknown_field_clarification_result(
-                    text,
-                    label=label,
-                    subject_override=subject,
-                )
-                if unresolved:
-                    return unresolved
-                return _build_unknown_field_product_not_found_result(text, label=label, subject_override=subject)
-            return _build_resolved_product_unknown_field_result(
-                product,
-                label=label,
-                source="resolved_entity_unknown_field_fallback",
-            )
-        return _build_unknown_field_product_not_found_result(text, label=label, subject_override=primary_entity)
     named_products = _products_named_in_question(db, text)
     if primary_entity:
         entity_named_products = customer_agent_service.resolve_named_product_candidates(
@@ -1854,7 +2035,7 @@ def _pre_route_high_risk_contract_result(
             named_products = entity_named_products
     if entity_scope_hint == "ambiguous_product_name":
         if len(named_products) > 1:
-            return _build_ambiguous_named_product_unknown_field_result(named_products, label=label)
+            return _build_ambiguous_named_product_unknown_field_result(named_products, label=label, question=text)
         return _build_generic_ambiguous_unknown_field_clarification_result(
             text,
             label=label,
@@ -1862,27 +2043,7 @@ def _pre_route_high_risk_contract_result(
             subject_override=primary_entity,
         )
     if len(named_products) > 1:
-        return _build_ambiguous_named_product_unknown_field_result(named_products, label=label)
-    if len(named_products) == 1 and subtype != "no_match":
-        product = named_products[0]
-        if subject and _looks_like_unresolved_product_like_question(text) and not _has_strong_grounded_subject(product):
-            unresolved = _build_unresolved_product_like_unknown_field_clarification_result(
-                text,
-                label=label,
-                subject_override=primary_entity or subject,
-            )
-            if unresolved:
-                return unresolved
-            return _build_unknown_field_product_not_found_result(
-                text,
-                label=label,
-                subject_override=primary_entity or subject,
-            )
-        return _build_resolved_product_unknown_field_result(
-            product,
-            label=label,
-            source="resolved_entity_unknown_field_fallback",
-        )
+        return _build_ambiguous_named_product_unknown_field_result(named_products, label=label, question=text)
     if subtype == "no_match":
         return _build_unknown_field_product_not_found_result(text, label=label, subject_override=primary_entity)
     unresolved_clarification = _build_unresolved_product_like_unknown_field_clarification_result(
@@ -2237,9 +2398,20 @@ def _structured_row_matches_contract(row: dict[str, Any], contract: dict[str, An
     heat_source_value = str(filters.pop("specs.heat_source", "") or "").strip()
     usage_value = str(filters.pop("business.usage_scenarios", "") or "").strip()
 
-    if category_value and not _structured_row_matches_category_value(row, category_value):
-        return False
-    if body_material_value and not _structured_row_matches_material_value(row, body_material_value):
+    if body_material_value:
+        material_contract = customer_structured_query_contract.StructuredQueryContract(
+            subject_category=category_value or "all_products",
+            field="material",
+            operator="contains",
+            value=body_material_value,
+            status="resolved",
+        )
+        if not customer_structured_query_contract.match_material_condition(
+            contract=material_contract,
+            row=row,
+        )["matched"]:
+            return False
+    elif category_value and not _structured_row_matches_category_value(row, category_value):
         return False
     if heat_source_value and not _structured_row_matches_heat_value(row, heat_source_value):
         return False
@@ -2369,8 +2541,8 @@ def _looks_like_multi_condition_cookware_recommendation(question: str) -> bool:
         return False
     if any(term in text for term in ("水壶", "水具", "水杯", "壶")):
         return False
-    has_group_or_scene = any(term in text for term in ("4人以上", "4人", "多人", "家庭", "露营", "户外", "新手"))
-    has_constraints = any(term in text for term in ("容量大", "大容量", "燃气炉", "卡式炉", "明火", "别太重", "轻", "轻量", "轻便"))
+    has_group_or_scene = any(term in text for term in ("4人以上", "4人", "四口", "多人", "家庭", "露营", "户外", "新手"))
+    has_constraints = any(term in text for term in ("容量大", "容量要大", "大容量", "燃气炉", "卡式炉", "明火", "别太重", "轻", "轻量", "轻便"))
     has_budget_preference = any(term in text for term in ("价格别太高", "别太贵", "不要太贵", "预算不高", "预算有限", "便宜点", "性价比"))
     has_selection = any(term in text for term in ("推荐", "怎么选", "买什么", "买锅具", "有哪些", "用什么"))
     return has_group_or_scene and (has_constraints or has_budget_preference) and (has_selection or "。" in text)
@@ -2383,6 +2555,16 @@ def _structured_cookware_multi_condition_recommendation_result(db: Session, ques
     rows = [row for row in _phase1_catalog_rows(db, "产品") if _is_service_pot_or_cookware_set_candidate(row)]
     if not rows:
         return None
+    verification_contract = customer_recommendation_verification_contract.build_recommendation_request_contract(text)
+    verifications = customer_recommendation_verification_contract.verify_recommendation_candidates(
+        verification_contract,
+        rows,
+    )
+    verified_rows = customer_recommendation_verification_contract.select_recommendation_candidates(
+        rows,
+        verifications,
+    )
+    rejected_candidates = [item.to_dict() for item in verifications if item.verification_level == "rejected"]
     wants_group_capacity = any(term in text for term in ("4人以上", "4人", "多人", "家庭", "大容量", "容量大"))
     wants_gas = any(term in text for term in ("燃气炉", "卡式炉", "明火"))
     wants_light = any(term in text for term in ("别太重", "轻", "轻量", "轻便"))
@@ -2430,38 +2612,19 @@ def _structured_cookware_multi_condition_recommendation_result(db: Session, ques
                 score -= 3
         return (-score, str(row.get("sku") or ""))
 
-    selected = sorted(rows, key=_rank)[:5]
+    selected = sorted(verified_rows, key=_rank)[:5]
     if not selected:
-        return None
-    top_row = selected[0]
-    top_name = top_row.get("product_name_cn") or top_row.get("sku")
-    top_sku = str(top_row.get("sku") or "").strip().upper()
-    top_reason = str(top_row.get("usage_scenarios") or top_row.get("features") or top_row.get("positioning") or "").strip("。；; ")
-    demand_bits: list[str] = []
-    if wants_group_capacity:
-        demand_bits.append("多人/大容量")
-    if wants_gas:
-        demand_bits.append("燃气炉适配")
-    if wants_light:
-        demand_bits.append("轻量好带")
-    if wants_beginner:
-        demand_bits.append("新手友好")
-    if wants_budget:
-        demand_bits.append("预算别太高")
-    demand_label = "、".join(demand_bits) or "锅具需求"
-    answer = f"这类需求我会优先在锅具/套锅里筛，不先把水具、烤盘或配件当主推。优先推荐 {top_name}（{top_sku}），更贴合“{demand_label}”这类条件。"
-    if top_reason:
-        answer += f" 主要理由是：{top_reason}。"
-    backups: list[str] = []
-    for row in selected[1:3]:
-        name = row.get("product_name_cn") or row.get("sku")
-        sku = str(row.get("sku") or "").strip().upper()
-        reason = str(row.get("usage_scenarios") or row.get("features") or row.get("positioning") or "可作为同域备选").strip("。；; ")
-        backups.append(f"{name}（{sku}），{reason}")
-    if backups:
-        answer += " 备选可以看" + "；".join(backups) + "。"
-    if wants_budget:
-        answer += " 当前资料未标注实时价格，预算相关还需要以店铺报价为准，但我会先按轻量、容量和使用场景帮你缩小范围。"
+        answer = customer_recommendation_verification_contract.build_verified_recommendation_answer(
+            verification_contract,
+            [],
+            verifications,
+        )
+    else:
+        answer = customer_recommendation_verification_contract.build_verified_recommendation_answer(
+            verification_contract,
+            selected,
+            verifications,
+        )
     skus = [str(row.get("sku") or "").strip().upper() for row in selected if row.get("sku")]
     return {
         "intent": "recommendation",
@@ -2470,8 +2633,35 @@ def _structured_cookware_multi_condition_recommendation_result(db: Session, ques
         "results": selected,
         "result_skus": skus,
         "candidate_skus": skus,
-        "debug": {"agent_mode": "planner_recommendation_guard_rebuild"},
-        "answer_metadata": {"source": "product_catalog_structured_recommendation"},
+        "debug": {
+            "agent_mode": "planner_recommendation_guard_rebuild",
+            "initial_candidate_skus": [
+                str(row.get("sku") or "").strip().upper()
+                for row in rows
+                if str(row.get("sku") or "").strip()
+            ],
+            "verified_candidate_skus": skus,
+            "candidate_verifications": [
+                item.to_dict()
+                for item in verifications
+                if item.sku in skus
+            ],
+            "fully_verified_candidates": [item.to_dict() for item in verifications if item.verification_level == "fully_verified"],
+            "partially_verified_candidates": [item.to_dict() for item in verifications if item.verification_level == "partially_verified"],
+            "rejected_candidates": rejected_candidates,
+        },
+        "answer_metadata": {
+            "source": "product_catalog_structured_recommendation",
+            "recommendation_contract": verification_contract.to_dict(),
+            "verification_level": (
+                "fully_verified"
+                if any(item.verification_level == "fully_verified" and item.sku in skus for item in verifications)
+                else "partially_verified" if skus else "rejected"
+            ),
+            "fully_verified_count": sum(item.verification_level == "fully_verified" for item in verifications),
+            "partially_verified_count": sum(item.verification_level == "partially_verified" for item in verifications),
+            "rejected_count": sum(item.verification_level == "rejected" for item in verifications),
+        },
         "skip_polish": True,
     }
 
@@ -2761,6 +2951,7 @@ async def _try_explicit_sku_detail_shortcut(db: Session, question: str) -> dict 
             {
                 "primary_intent": "product_field",
                 "product_ref": resolved_sku,
+                "product_identity_source": "explicit_sku_exact",
                 "requested_field": "heat_source",
                 "raw_question": text,
                 "sku": resolved_sku,
@@ -3098,7 +3289,14 @@ def _looks_like_ordinal_product_field_followup(question: str) -> bool:
     return any(term in text for term in ("第一个", "第一款", "最前面那个", "第二个", "第二款", "第三个", "第三款", "最后一个", "最后一款", "最后那个"))
 
 
-def _product_field_followup_result(db: Session, sku: str, requested_field: str, question: str) -> dict | None:
+def _product_field_followup_result(
+    db: Session,
+    sku: str,
+    requested_field: str,
+    question: str,
+    *,
+    identity_source: str | None = "explicit_sku_exact",
+) -> dict | None:
     if not sku or not requested_field:
         return None
     plan = {
@@ -3109,6 +3307,7 @@ def _product_field_followup_result(db: Session, sku: str, requested_field: str, 
         "requested_field": requested_field,
         "field_only": True,
         "confidence": "high",
+        "product_identity_source": identity_source,
         "raw_question": question,
         "tasks": [{"type": "product_field", "product_ref": sku, "requested_field": requested_field}],
     }
@@ -3121,12 +3320,119 @@ def _product_field_followup_result(db: Session, sku: str, requested_field: str, 
     return result
 
 
+def _active_product_anchor_field_followup_result(
+    db: Session,
+    question: str,
+    recommendation_context: dict[str, Any] | None,
+) -> dict | None:
+    text = str(question or "").strip()
+    if not any(term in text for term in ("刚才那个", "刚刚那个", "前面那个", "上一个", "刚才说的那个", "刚才推荐的那个")):
+        return None
+    context = recommendation_context if isinstance(recommendation_context, dict) else {}
+    anchor_sku = str(context.get("active_single_product_anchor") or "").strip().upper()
+    if not anchor_sku:
+        return None
+    field_contract = customer_field_contract.detect_field_contract(text)
+    if not field_contract:
+        return None
+    detail_label = customer_field_contract.product_detail_field_label(field_contract.field_type)
+    if customer_field_contract.is_supported_detail_field(field_contract.field_type) and detail_label:
+        result = _product_field_followup_result(
+            db,
+            anchor_sku,
+            detail_label,
+            text,
+            identity_source="recommendation_context_anchor",
+        )
+    else:
+        product = db.query(Product).filter(Product.sku == anchor_sku).first()
+        label = _resolved_entity_unknown_field_guard_label(text)
+        if not product or not label:
+            return None
+        decision = customer_entity_resolution_contract.SingleProductResolutionDecision(
+            allowed=True,
+            resolved_sku=anchor_sku,
+            resolved_product_id=str(product.id),
+            reason="resolved_context_anchor",
+            match_level="recommendation_context_anchor",
+        )
+        result = _build_resolved_product_unknown_field_result(
+            product,
+            label=label,
+            source="recommendation_context_unknown_field",
+            resolution_decision=decision,
+        )
+    if not isinstance(result, dict):
+        return None
+    debug = result.get("debug") if isinstance(result.get("debug"), dict) else {}
+    debug.update({
+        "agent_mode": "recommendation_context_product_field",
+        "product_identity_source": "recommendation_context_anchor",
+        "active_single_product_anchor": anchor_sku,
+    })
+    result["debug"] = debug
+    return result
+
+
 def _product_heat_source_followup_result(db: Session, question: str, sku: str) -> dict | None:
-    result = _product_field_followup_result(db, sku, "heat_source", question)
+    result = _product_field_followup_result(
+        db,
+        sku,
+        "heat_source",
+        question,
+        identity_source="recommendation_context_anchor",
+    )
     if isinstance(result, dict):
         debug = result.get("debug") if isinstance(result.get("debug"), dict) else {}
         debug["agent_mode"] = "recommendation_context_product_compatibility"
         result["debug"] = debug
+    return result
+
+
+def _recommendation_context_turn(context: dict[str, Any] | None) -> int:
+    values = (context or {}).get("contract_merge_provenance") or {}
+    turns = [
+        int(item.get("source_turn") or 0)
+        for item in values.values()
+        if isinstance(item, dict)
+    ]
+    return max(turns or [1]) + 1
+
+
+def _attach_recommendation_followup_contract(
+    result: dict | None,
+    question: str,
+    recommendation_context: dict[str, Any] | None,
+    *,
+    anchor_sku: str | None = None,
+) -> dict | None:
+    if not isinstance(result, dict) or not isinstance(recommendation_context, dict):
+        return result
+    inherited_data = (
+        recommendation_context.get("effective_recommendation_contract")
+        or recommendation_context.get("recommendation_request_contract")
+    )
+    if not isinstance(inherited_data, dict):
+        return result
+    inherited = customer_recommendation_verification_contract.RecommendationRequestContract.from_dict(inherited_data)
+    current = customer_recommendation_verification_contract.build_recommendation_request_contract(question)
+    effective, provenance = customer_recommendation_verification_contract.merge_recommendation_request_contracts(
+        inherited,
+        current,
+        previous_result_skus=list(recommendation_context.get("previous_result_skus") or []),
+        anchor_sku=anchor_sku,
+        current_turn=_recommendation_context_turn(recommendation_context),
+    )
+    metadata = dict(result.get("answer_metadata") or {})
+    metadata.update(
+        {
+            "current_recommendation_contract": current.to_dict(),
+            "inherited_recommendation_contract": inherited.to_dict(),
+            "effective_recommendation_contract": effective.to_dict(),
+            "contract_merge_provenance": provenance,
+        }
+    )
+    result["answer_metadata"] = metadata
     return result
 
 
@@ -3148,7 +3454,6 @@ def _alternative_recommendation_followup_result(
     alternative_skus = [sku for sku in ordered if sku and sku != anchor_sku]
     if not alternative_skus:
         alternative_skus = ordered[1:]
-    alternative_skus = alternative_skus[:3]
     if not alternative_skus:
         return None
 
@@ -3166,37 +3471,56 @@ def _alternative_recommendation_followup_result(
     if not rows:
         return None
 
-    top_row = rows[0]
-    top_name = top_row.get("product_name_cn") or top_row.get("sku")
-    top_sku = str(top_row.get("sku") or "").strip().upper()
-    top_reason = str(
-        top_row.get("usage_scenarios")
-        or top_row.get("features")
-        or top_row.get("positioning")
-        or "会更适合作为替代方向"
-    ).strip("。；; ")
-    answer = f"如果不继续用刚才那款，我会先把替代建议收回到同一批候选里。主推 {top_name}（{top_sku}），{top_reason}。"
-    backups: list[str] = []
-    for row in rows[1:3]:
-        name = row.get("product_name_cn") or row.get("sku")
-        sku = str(row.get("sku") or "").strip().upper()
-        reason = str(row.get("usage_scenarios") or row.get("features") or row.get("positioning") or "也可以作为同场景备选").strip("。；; ")
-        backups.append(f"{name}（{sku}），{reason}")
-    if backups:
-        answer += " 备选可以看" + "；".join(backups) + "。"
+    inherited_data = context.get("effective_recommendation_contract") or context.get("recommendation_request_contract")
+    if not isinstance(inherited_data, dict):
+        return None
+    inherited = customer_recommendation_verification_contract.RecommendationRequestContract.from_dict(inherited_data)
+    current = customer_recommendation_verification_contract.build_recommendation_request_contract(question)
+    effective, provenance = customer_recommendation_verification_contract.merge_recommendation_request_contracts(
+        inherited,
+        current,
+        previous_result_skus=ordered,
+        anchor_sku=anchor_sku,
+        current_turn=_recommendation_context_turn(context),
+    )
+    verifications = customer_recommendation_verification_contract.verify_recommendation_candidates(effective, rows)
+    selected = customer_recommendation_verification_contract.select_recommendation_candidates(rows, verifications)[:3]
+    answer = customer_recommendation_verification_contract.build_verified_recommendation_answer(
+        effective,
+        selected,
+        verifications,
+    )
+    if effective.relative_price_preference:
+        answer = (
+            "现有资料没有可靠价格信息，无法验证是否比上一款更便宜。"
+            "以下候选仅按已继承的其他条件重新核验，并已排除上一款。\n" + answer
+        )
 
-    result_skus = [str(row.get("sku") or "").strip().upper() for row in rows if str(row.get("sku") or "").strip()]
-    return {
+    result_skus = [str(row.get("sku") or "").strip().upper() for row in selected if str(row.get("sku") or "").strip()]
+    result = {
         "intent": "recommendation",
         "answer_type": "recommendation",
         "answer": answer,
-        "results": rows,
+        "results": selected,
         "result_skus": result_skus,
         "candidate_skus": result_skus,
-        "debug": {"agent_mode": "recommendation_context_alternative_followup"},
-        "answer_metadata": {"source": "recommendation_context_alternative_followup"},
+        "debug": {
+            "agent_mode": "recommendation_context_alternative_followup",
+            "initial_candidate_skus": [str(row.get("sku") or "").strip().upper() for row in rows],
+            "fully_verified_candidates": [item.to_dict() for item in verifications if item.verification_level == "fully_verified"],
+            "partially_verified_candidates": [item.to_dict() for item in verifications if item.verification_level == "partially_verified"],
+            "rejected_candidates": [item.to_dict() for item in verifications if item.verification_level == "rejected"],
+        },
+        "answer_metadata": {
+            "source": "recommendation_context_alternative_followup",
+            "current_recommendation_contract": current.to_dict(),
+            "inherited_recommendation_contract": inherited.to_dict(),
+            "effective_recommendation_contract": effective.to_dict(),
+            "contract_merge_provenance": provenance,
+        },
         "skip_polish": True,
     }
+    return result
 
 
 def _context_skus_for_pair_followup(*contexts: dict[str, Any] | None) -> list[str]:
@@ -3346,7 +3670,11 @@ def _entity_scope_pre_route_guard_result(
     if customer_agent_intent_service._looks_like_multi_product_relation_question(text):
         return None
     if _contains_explicit_negative_product_marker(text):
-        subject = _product_like_scope_subject(text) or customer_agent_intent_service._detail_subject_from_question(text).strip()
+        subject = customer_field_contract.select_entity_subject_for_routing(
+            raw_question=text,
+            fallback_product_like_subject=_product_like_scope_subject(text),
+            fallback_named_subject=customer_agent_intent_service._detail_subject_from_question(text).strip(),
+        ).entity_subject
         unknown_label = (
             _resolved_entity_realtime_commercial_field_guard_label(text)
             or _detect_unknown_product_fact_label(text)
@@ -3388,8 +3716,13 @@ def _entity_scope_pre_route_guard_result(
     ):
         return None
 
-    extracted_subject = _product_like_scope_subject(text) or customer_agent_intent_service._detail_subject_from_question(text).strip()
-    subject = extracted_subject or text
+    subject_selection = customer_field_contract.select_entity_subject_for_routing(
+        raw_question=text,
+        fallback_product_like_subject=_product_like_scope_subject(text),
+        fallback_named_subject=customer_agent_intent_service._detail_subject_from_question(text).strip(),
+    )
+    extracted_subject = subject_selection.entity_subject
+    subject = extracted_subject or ("" if subject_selection.source == "field_contract" else text)
     unresolved_scope = _has_unresolved_product_like_scope(db, text)
     subject_product_like = (
         (bool(extracted_subject) and _looks_like_product_like_scope_subject(extracted_subject))
@@ -3402,6 +3735,20 @@ def _entity_scope_pre_route_guard_result(
         return None
 
     named_products = _products_named_in_question(db, text)
+    if extracted_subject and named_products:
+        all_products = db.query(Product).order_by(Product.sku.asc()).all()
+        entity_contract = customer_entity_resolution_contract.build_entity_resolution_contract(
+            text,
+            all_products,
+            resolver_candidates=named_products,
+            entity_text_override=extracted_subject,
+        )
+        entity_decision = customer_entity_resolution_contract.can_resolve_single_product(
+            entity_contract,
+            all_products,
+        )
+        if entity_decision.allowed:
+            return None
     if (
         subject
         and named_products
@@ -3461,7 +3808,7 @@ def _entity_scope_pre_route_guard_result(
                 "answer_type": "clarification",
                 "answer": answer,
                 "results": [],
-                "result_skus": candidate_skus,
+                "result_skus": [],
                 "candidate_skus": candidate_skus,
                 "needs_clarification": True,
                 "answer_metadata": {"source": "unresolved_product_like_contents_clarification", "evidence_status": "ambiguous_product"},
@@ -3800,6 +4147,26 @@ def _recommendation_question_contract(question: str) -> dict[str, Any]:
     return {"filters": filters, "negative_filters": negative_filters}
 
 
+def _should_use_central_subject_recommendation(
+    *,
+    question: str,
+    recommendation_contract: customer_recommendation_verification_contract.RecommendationRequestContract,
+) -> bool:
+    text = str(question or "").strip()
+    if not text or not recommendation_contract.subject_category:
+        return False
+    comparison_signal = bool(
+        customer_agent_planner_service._is_compare_question(text)
+        or customer_agent_planner_service._is_compare_choice_question(text)
+        or customer_agent_intent_service._is_compare_question(text)
+        or _phase1_is_griddle_vs_cookware_scenario(text)
+        or "还是" in text
+    )
+    if comparison_signal:
+        return False
+    return _looks_like_recommendation_request(text)
+
+
 def _post_filter_recommendation_result(db: Session, question: str, agent_result: dict) -> dict:
     if not isinstance(agent_result, dict):
         return agent_result
@@ -3844,19 +4211,130 @@ def _post_filter_recommendation_result(db: Session, question: str, agent_result:
         debug["agent_mode"] = debug.get("agent_mode") or "recommendation_post_filter_no_match"
         agent_result["debug"] = debug
         return agent_result
+    verification_contract = customer_recommendation_verification_contract.build_recommendation_request_contract(question)
+    eligibility_filters = dict(contract.get("filters") or {})
+    eligibility_filters.pop("_contract.lightweight", None)
+    if verification_contract.subject_kind == "stove" and not verification_contract.heat_sources:
+        eligibility_filters.pop("specs.heat_source", None)
+    eligibility_contract = {
+        "filters": eligibility_filters,
+        "negative_filters": dict(contract.get("negative_filters") or {}),
+    }
     qualified_rows = [
         row for row in rows
-        if _structured_row_matches_contract(
-            row,
-            {
-                "filters": dict(contract.get("filters") or {}),
-                "negative_filters": dict(contract.get("negative_filters") or {}),
-            },
-        )
+        if _structured_row_matches_contract(row, eligibility_contract)
     ]
+    if (
+        not qualified_rows
+        and verification_contract.soft_preferences
+        and not verification_contract.hard_constraints
+    ):
+        qualified_rows = [
+            row
+            for row in _phase1_catalog_rows(db, "产品")
+            if _structured_row_matches_contract(row, eligibility_contract)
+        ]
     debug = dict(agent_result.get("debug") or {})
+    subject_entry_enabled = _should_use_central_subject_recommendation(
+        question=question,
+        recommendation_contract=verification_contract,
+    )
+    verification_enabled = bool(
+        subject_entry_enabled
+        or (
+            not verification_contract.subject_category
+            and (verification_contract.hard_constraints or verification_contract.soft_preferences)
+        )
+    )
+    debug["central_subject_recommendation_eligible"] = subject_entry_enabled
+    debug["initial_candidate_skus"] = [
+        str(row.get("sku") or "").strip().upper()
+        for row in qualified_rows
+        if str(row.get("sku") or "").strip()
+    ]
+    strict_subject_rejections: list[dict[str, Any]] = []
+    if verification_enabled and verification_contract.subject_category == "锅具":
+        subject_rows: list[dict[str, Any]] = []
+        for row in qualified_rows:
+            if _is_service_pot_or_cookware_set_candidate(row):
+                subject_rows.append(row)
+                continue
+            strict_subject_rejections.append(
+                {
+                    "sku": str(row.get("sku") or "").strip().upper(),
+                    "subject_eligible": False,
+                    "hard_constraints_passed": False,
+                    "evidence_by_constraint": {
+                        "subject": {
+                            "status": "conflict",
+                            "field_source": "catalog_subject_classifier",
+                            "raw_value": str(row.get("sub_category") or row.get("category") or "").strip(),
+                        }
+                    },
+                    "verified_preferences": [],
+                    "unsupported_preferences": [],
+                    "rejection_reasons": ["subject_category_mismatch"],
+                }
+            )
+        qualified_rows = subject_rows
+    verifications = (
+        customer_recommendation_verification_contract.verify_recommendation_candidates(
+            verification_contract,
+            qualified_rows,
+        )
+        if verification_enabled
+        else []
+    )
+    if verification_enabled:
+        matched_rows = customer_recommendation_verification_contract.select_recommendation_candidates(
+            qualified_rows,
+            verifications,
+        )
+        verified_skus = {
+            str(row.get("sku") or "").strip().upper()
+            for row in matched_rows
+            if str(row.get("sku") or "").strip()
+        }
+        qualified_rows, return_metadata = customer_recommendation_verification_contract.prepare_recommendation_return_rows(
+            matched_rows,
+            limit=5,
+        )
+        metadata["recommendation_contract"] = verification_contract.to_dict()
+        metadata.update(return_metadata)
+        metadata["verification_level"] = (
+            "fully_verified"
+            if any(item.verification_level == "fully_verified" and item.sku in verified_skus for item in verifications)
+            else "partially_verified" if verified_skus else "rejected"
+        )
+        metadata["fully_verified_count"] = sum(item.verification_level == "fully_verified" for item in verifications)
+        metadata["partially_verified_count"] = sum(item.verification_level == "partially_verified" for item in verifications)
+        metadata["rejected_count"] = len(strict_subject_rejections) + sum(item.verification_level == "rejected" for item in verifications)
+        debug["all_verified_candidate_skus"] = [
+            str(row.get("sku") or "").strip().upper()
+            for row in matched_rows
+            if str(row.get("sku") or "").strip()
+        ]
+        debug["verified_candidate_skus"] = [
+            str(row.get("sku") or "").strip().upper()
+            for row in qualified_rows
+            if str(row.get("sku") or "").strip()
+        ]
+        debug["candidate_verifications"] = [item.to_dict() for item in verifications if item.sku in verified_skus]
+        debug["fully_verified_candidates"] = [item.to_dict() for item in verifications if item.verification_level == "fully_verified"]
+        debug["partially_verified_candidates"] = [item.to_dict() for item in verifications if item.verification_level == "partially_verified"]
+        debug["rejected_candidates"] = strict_subject_rejections + [
+            item.to_dict() for item in verifications if item.verification_level == "rejected"
+        ]
     if not qualified_rows:
-        answer = "当前未找到符合条件的推荐商品，可以尝试放宽类目、材质或使用条件。"
+        answer = (
+            customer_recommendation_verification_contract.build_verified_recommendation_answer(
+                verification_contract,
+                [],
+                verifications,
+            )
+            if verification_enabled
+            else "当前未找到符合条件的推荐商品，可以尝试放宽类目、材质或使用条件。"
+        )
         agent_result["intent"] = "recommendation"
         agent_result["answer_type"] = "recommendation"
         agent_result["answer"] = answer
@@ -3913,26 +4391,34 @@ def _post_filter_recommendation_result(db: Session, question: str, agent_result:
             if any(name and name.upper() in normalized_answer for name in candidate_names):
                 answer_mentions_outside = True
                 break
-    should_rebuild_answer = not answer or not answer_mentions_filtered or answer_mentions_outside
+    should_rebuild_answer = verification_enabled or not answer or not answer_mentions_filtered or answer_mentions_outside
     if should_rebuild_answer:
-        top_row = qualified_rows[0]
-        top_name = top_row.get("product_name_cn") or top_row.get("sku")
-        top_sku = str(top_row.get("sku") or "").strip().upper()
-        top_reason = str(
-            top_row.get("usage_scenarios")
-            or top_row.get("features")
-            or top_row.get("positioning")
-            or "匹配当前使用场景"
-        ).strip("。；; ")
-        rebuilt_answer = f"优先推荐 {top_name}（{top_sku}），因为它更贴合你当前场景，{top_reason}。"
-        backups: list[str] = []
-        for row in qualified_rows[1:3]:
-            name = row.get("product_name_cn") or row.get("sku")
-            sku = str(row.get("sku") or "").strip().upper()
-            reason = str(row.get("usage_scenarios") or row.get("features") or row.get("positioning") or "匹配当前使用场景").strip("。；; ")
-            backups.append(f"{name}（{sku}），{reason}")
-        if backups:
-            rebuilt_answer += " 备选可以看" + "；".join(backups) + "。"
+        if verification_enabled:
+            rebuilt_answer = customer_recommendation_verification_contract.build_verified_recommendation_answer(
+                verification_contract,
+                qualified_rows,
+                verifications,
+                total_match_count=metadata.get("total_match_count"),
+            )
+        else:
+            top_row = qualified_rows[0]
+            top_name = top_row.get("product_name_cn") or top_row.get("sku")
+            top_sku = str(top_row.get("sku") or "").strip().upper()
+            top_reason = str(
+                top_row.get("usage_scenarios")
+                or top_row.get("features")
+                or top_row.get("positioning")
+                or "匹配当前使用场景"
+            ).strip("。；; ")
+            rebuilt_answer = f"优先推荐 {top_name}（{top_sku}），因为它更贴合你当前场景，{top_reason}。"
+            backups: list[str] = []
+            for row in qualified_rows[1:3]:
+                name = row.get("product_name_cn") or row.get("sku")
+                sku = str(row.get("sku") or "").strip().upper()
+                reason = str(row.get("usage_scenarios") or row.get("features") or row.get("positioning") or "匹配当前使用场景").strip("。；; ")
+                backups.append(f"{name}（{sku}），{reason}")
+            if backups:
+                rebuilt_answer += " 备选可以看" + "；".join(backups) + "。"
         agent_result["answer"] = rebuilt_answer
         agent_result["skip_polish"] = True
     debug["recommendation_post_filter_applied"] = True
@@ -4298,30 +4784,10 @@ def _phase1_is_water_kettle_candidate(row: dict[str, Any]) -> bool:
 
 
 def _phase1_is_strict_water_kettle_candidate(row: dict[str, Any]) -> bool:
-    if not _phase1_is_water_kettle_candidate(row):
-        return False
-    category = str(row.get("category") or "").strip()
-    if category == "锅具":
-        return False
-    text = " ".join(
-        str(row.get(key) or "")
-        for key in (
-            "sku",
-            "product_name_cn",
-            "product_name_en",
-            "category",
-            "sub_category",
-            "features",
-            "usage_scenarios",
-            "positioning",
-            "long_description_cn",
-        )
-    )
-    if category in {"水壶", "水具"}:
-        return True
-    if category == "咖啡器具":
-        return any(term in text for term in ("壶", "手冲", "天鹅壶", "细口壶", "咖啡壶"))
-    return False
+    return customer_structured_query_contract.resolve_structured_subject_scope(
+        row=row,
+        subject_category="水壶",
+    )["matched"]
 
 
 def _phase1_structured_water_kettle_result(scenario: str, rows: list[dict]) -> dict | None:
@@ -4759,6 +5225,9 @@ def _phase1_filter_alcohol_stove_cookware_result(
 ) -> dict | None:
     if not isinstance(agent_result, dict) or not _phase1_is_alcohol_stove_cookware_question(question, candidate_context, agent_result):
         return agent_result
+    debug = agent_result.get("debug") if isinstance(agent_result.get("debug"), dict) else {}
+    if str(debug.get("agent_mode") or "").startswith("recommendation_context_product_"):
+        return agent_result
     is_list_query = bool(
         customer_agent_intent_service._looks_like_alcohol_stove_cookware_recommendation_question(question)
         and not customer_agent_service._extract_skus(question)
@@ -4869,7 +5338,13 @@ def _resolve_single_product_field_evidence(
             "missing": True,
         }
 
-    result = _product_field_followup_result(db, resolved_sku, detail_label, question)
+    result = _product_field_followup_result(
+        db,
+        resolved_sku,
+        detail_label,
+        question,
+        identity_source="phase2_resolved_entity",
+    )
     metadata = result.get("answer_metadata") if isinstance(result, dict) and isinstance(result.get("answer_metadata"), dict) else {}
     evidence_status = str(metadata.get("evidence_status") or "").strip()
     missing = evidence_status in {"", "missing"}
@@ -4963,6 +5438,34 @@ _PHASE2_EXACT_ENTITY_MATCHES = {
 }
 
 
+def _choose_effective_entity_contract(
+    question: str,
+    products: list[Product],
+    *,
+    resolver_candidates: list[Product] | None = None,
+    override_subject: str | None = None,
+) -> customer_entity_resolution_contract.EntityContractSelection:
+    default_contract = customer_entity_resolution_contract.build_entity_resolution_contract(
+        question,
+        products,
+        resolver_candidates=resolver_candidates,
+    )
+    override_contract = None
+    normalized_override = customer_agent_service.normalize_search_text(override_subject or "").strip()
+    if normalized_override and normalized_override != default_contract.normalized_entity_text:
+        override_contract = customer_entity_resolution_contract.build_entity_resolution_contract(
+            question,
+            products,
+            resolver_candidates=resolver_candidates,
+            entity_text_override=override_subject,
+        )
+    return customer_entity_resolution_contract.choose_effective_entity_contract(
+        default_contract,
+        override_contract,
+        products,
+    )
+
+
 def _phase2_requested_fields(question: str) -> list[str]:
     return resolve_requested_field_contract(question)["requested_fields"]
 
@@ -5054,6 +5557,56 @@ def _phase2_entity_arbitration_signals(
         "multi_product": bool(len(plan.get("product_refs") or []) > 1),
         "dedicated_route": bool(dedicated_route),
     }
+
+
+def _category_general_exclusion_signals(
+    *,
+    phase1_plan: dict | None,
+    entity_contract: Any | None,
+    entity_arbitration_signals: dict[str, bool] | None,
+) -> dict[str, bool]:
+    """Build the broader exclusions used only by category-field aggregation."""
+    plan = phase1_plan if isinstance(phase1_plan, dict) else {}
+    signals = entity_arbitration_signals or {}
+    primary_intent = str(plan.get("primary_intent") or "").strip()
+    entity_status = str(getattr(entity_contract, "status", "") or "")
+    return {
+        "entity_resolved": bool(getattr(entity_contract, "resolved_sku", None)),
+        "entity_ambiguous": entity_status == "ambiguous" or bool(
+            list(getattr(entity_contract, "resolver_candidate_skus", None) or [])
+        ),
+        "recommendation_explicit": bool(
+            primary_intent == "recommendation" or signals.get("recommendation")
+        ),
+        "scenario_like": bool(
+            signals.get("scenario_like") or _phase1_should_use_structured_recommendation(plan)
+        ),
+        "multi_condition": bool(signals.get("multi_condition_recommendation")),
+        "comparison": bool(
+            primary_intent in {"comparison", "product_compare_recommendation"}
+            or signals.get("comparison")
+        ),
+        "compound": bool(signals.get("compound")),
+        "multi_product": bool(signals.get("multi_product")),
+        "dedicated_route": bool(signals.get("dedicated_route")),
+    }
+
+
+def _should_use_category_field_general(
+    *,
+    structured_contract: customer_structured_query_contract.StructuredQueryContract,
+    exclusions: dict[str, bool] | None,
+) -> bool:
+    if (
+        structured_contract.status != "generic"
+        or not structured_contract.subject_category
+        or not structured_contract.field
+        or structured_contract.operator is not None
+        or structured_contract.value is not None
+        or structured_contract.relation is not None
+    ):
+        return False
+    return not any(bool(value) for value in (exclusions or {}).values())
 
 
 def _classify_phase2_entity_state_action(
@@ -5202,13 +5755,24 @@ def _build_phase2_entity_state_response(db: Session, question: str, decision: di
         )
         if not product:
             return None
+        resolution_decision = customer_entity_resolution_contract.can_resolve_single_product(
+            contract,
+            products,
+        )
         result = _build_resolved_product_unknown_field_result(
             product,
             label=requested_field,
             source="resolved_entity_detail_contract",
+            resolution_decision=resolution_decision,
         )
     else:
-        result = _product_field_followup_result(db, contract.resolved_sku, requested_field, question)
+        result = _product_field_followup_result(
+            db,
+            contract.resolved_sku,
+            requested_field,
+            question,
+            identity_source="phase2_resolved_entity",
+        )
         if not result:
             return None
 
@@ -5615,6 +6179,29 @@ async def ask_customer_service(
     if isinstance(semantic_preplan, dict) and semantic_preplan.get("called"):
         phase1_plan["semantic_preplan"] = semantic_preplan
 
+    active_anchor_context = _latest_recommendation_context_for_sources(db, conversation_id)
+    active_anchor_result = _active_product_anchor_field_followup_result(
+        db,
+        question,
+        active_anchor_context,
+    )
+    if active_anchor_result:
+        active_anchor_result = _attach_phase1_plan_and_timing(
+            active_anchor_result,
+            phase1_plan,
+            _phase1_timing(request_start=request_start, planner_duration_ms=planner_duration_ms),
+        )
+        return await _save_agent_result_and_return(
+            db,
+            user_id=user_id,
+            question=question,
+            conversation_id=conversation_id,
+            agent_result=active_anchor_result,
+            request_start=request_start,
+            branch="active_product_anchor_field",
+            semantic_preplan=semantic_preplan,
+        )
+
     high_risk_contract_result = _pre_route_high_risk_contract_result(
         db,
         question,
@@ -5650,6 +6237,9 @@ async def ask_customer_service(
         phase1_plan,
         semantic_preplan,
     )
+    structured_query_contract = customer_structured_query_contract.build_structured_query_contract(question)
+    if structured_query_contract.status == "resolved":
+        phase2_arbitration_signals["structured_query"] = True
     phase2_field_request = resolve_requested_field_contract(question, phase1_plan)
     if isinstance(phase1_plan, dict):
         phase1_plan["requested_fields"] = phase2_field_request["requested_fields"]
@@ -5681,6 +6271,20 @@ async def ask_customer_service(
         if phase2_context_needed
         else None
     )
+    category_general_exclusions = _category_general_exclusion_signals(
+        phase1_plan=phase1_plan,
+        entity_contract=(phase2_entity_context or {}).get("contract"),
+        entity_arbitration_signals=phase2_arbitration_signals,
+    )
+    category_general_eligible = _should_use_category_field_general(
+        structured_contract=structured_query_contract,
+        exclusions=category_general_exclusions,
+    )
+    if isinstance(phase1_plan, dict):
+        phase1_plan["entity_arbitration_signals"] = dict(phase2_arbitration_signals)
+        phase1_plan["category_general_exclusions"] = category_general_exclusions
+        phase1_plan["category_general_eligible"] = category_general_eligible
+    phase2_arbitration_signals["category_general"] = category_general_eligible
     phase2_entity_detail_result = _phase2_entity_state_arbitration_result(
         db,
         question,
@@ -5764,6 +6368,28 @@ async def ask_customer_service(
             agent_result=compound_detail_result,
             request_start=request_start,
             branch="resolved_entity_compound_detail",
+            semantic_preplan=semantic_preplan,
+        )
+
+    if structured_query_contract.status == "resolved" or category_general_eligible:
+        structured_contract_result = (
+            _build_structured_query_contract_result(db, structured_query_contract)
+            if structured_query_contract.status == "resolved"
+            else _build_category_field_general_result(db, structured_query_contract)
+        )
+        structured_contract_result = _attach_phase1_plan_and_timing(
+            structured_contract_result,
+            phase1_plan,
+            _phase1_timing(request_start=request_start, planner_duration_ms=planner_duration_ms),
+        )
+        return await _save_agent_result_and_return(
+            db,
+            user_id=user_id,
+            question=question,
+            conversation_id=conversation_id,
+            agent_result=structured_contract_result,
+            request_start=request_start,
+            branch="structured_query_contract",
             semantic_preplan=semantic_preplan,
         )
 
@@ -5989,6 +6615,7 @@ async def ask_customer_service(
                 ordinal_followup_sku,
                 ordinal_requested_field,
                 question,
+                identity_source="recommendation_context_ordinal",
             )
     plural_heat_source_followup = bool(
         phase1_plan.get("primary_intent") == "product_field"
@@ -6363,7 +6990,10 @@ async def ask_customer_service(
         }
 
     stage_start = perf_counter()
+    shipping_intent_signal = customer_field_contract.detect_shipping_intent_signal(question)
     agent_result = customer_enterprise_guardrail_service.evaluate_question(question)
+    if shipping_intent_signal:
+        agent_result = None
     customer_perf_service.log_stage("guardrail.evaluate_question", stage_start, matched=bool(agent_result))
     if not agent_result and context_pair_result:
         agent_result = context_pair_result
@@ -6516,7 +7146,7 @@ async def ask_customer_service(
 
     qa_start = perf_counter()
     qa_result = None
-    if not agent_result:
+    if not agent_result and not shipping_intent_signal:
         qa_result = _try_product_qa_shortcut(db, question)
         agent_result = qa_result
     customer_perf_service.log_stage(
@@ -6589,7 +7219,18 @@ async def ask_customer_service(
                 ),
             )
         if ordinal_followup_sku and requested_followup_field:
-            agent_result = _product_field_followup_result(db, ordinal_followup_sku, requested_followup_field, question)
+            agent_result = _product_field_followup_result(
+                db,
+                ordinal_followup_sku,
+                requested_followup_field,
+                question,
+                identity_source="recommendation_context_ordinal",
+            )
+            agent_result = _attach_recommendation_followup_contract(
+                agent_result,
+                question,
+                recommendation_followup_context,
+            )
     if not agent_result:
         heat_source_followup_sku = ""
         latest_ordered_followup_skus: list[str] = []
@@ -6629,7 +7270,18 @@ async def ask_customer_service(
         if not heat_source_followup_sku and latest_ordered_followup_skus:
             heat_source_followup_sku = latest_ordered_followup_skus[0]
         if heat_source_followup_sku and requested_followup_field:
-            agent_result = _product_field_followup_result(db, heat_source_followup_sku, requested_followup_field, question)
+            agent_result = _product_field_followup_result(
+                db,
+                heat_source_followup_sku,
+                requested_followup_field,
+                question,
+                identity_source="recommendation_context_pronoun",
+            )
+            agent_result = _attach_recommendation_followup_contract(
+                agent_result,
+                question,
+                recommendation_followup_context,
+            )
     if not agent_result and _asks_for_alternative_recommendation(question):
         agent_result = _alternative_recommendation_followup_result(
             db,
@@ -7032,6 +7684,7 @@ async def ask_customer_service(
                 ordered_followup_sku,
                 requested_followup_field,
                 question,
+                identity_source="recommendation_context_anchor",
             )
             if repaired_followup_result:
                 agent_result = repaired_followup_result
@@ -7946,6 +8599,24 @@ def _touch_conversation(conversation: CustomerServiceConversation, sku: str | No
     conversation.updated_at = datetime.now(timezone.utc)
 
 
+def update_active_product_anchor(
+    *,
+    previous_anchor: str | None,
+    current_result_skus: list[str],
+    answer_type: str,
+    user_question: str,
+) -> tuple[str | None, str]:
+    previous = str(previous_anchor or "").strip().upper() or None
+    if any(term in str(user_question or "") for term in ("不说这个了", "换个话题", "重新开始", "清空上下文")):
+        return None, "explicit_reset"
+    confirmed = [str(sku or "").strip().upper() for sku in current_result_skus if str(sku or "").strip()]
+    if answer_type == "product_detail" and len(confirmed) == 1:
+        return confirmed[0], "confirmed_single_product"
+    if previous:
+        return previous, "preserved_without_new_single_product"
+    return None, "no_active_single_product"
+
+
 def _sources_with_result_context(
     agent_result: dict,
     turn_index: int | None = None,
@@ -8026,6 +8697,12 @@ def _sources_with_result_context(
         for sku in result_skus
         if str(sku or "").strip()
     ]
+    active_anchor, anchor_update_reason = update_active_product_anchor(
+        previous_anchor=(inherited_recommendation_context or {}).get("active_single_product_anchor"),
+        current_result_skus=current_ordered_skus,
+        answer_type=str(agent_result.get("answer_type") or ""),
+        user_question=str(user_question or ""),
+    )
     preserve_inherited_candidate_domain = bool(
         agent_result.get("answer_type") == "recommendation"
         and inherited_candidate_skus
@@ -8099,6 +8776,18 @@ def _sources_with_result_context(
                 else None
             ),
         }
+    answer_metadata = agent_result.get("answer_metadata") if isinstance(agent_result.get("answer_metadata"), dict) else {}
+    debug_metadata = agent_result.get("debug") if isinstance(agent_result.get("debug"), dict) else {}
+    current_contract = answer_metadata.get("recommendation_contract") or answer_metadata.get("current_recommendation_contract")
+    effective_contract = answer_metadata.get("effective_recommendation_contract") or current_contract
+    merge_provenance = answer_metadata.get("contract_merge_provenance") or (
+        effective_contract.get("field_provenance") if isinstance(effective_contract, dict) else {}
+    )
+    verification_by_sku = {
+        str(item.get("sku") or "").strip().upper(): dict(item)
+        for item in (debug_metadata.get("candidate_verifications") or [])
+        if isinstance(item, dict) and str(item.get("sku") or "").strip()
+    }
     if agent_result.get("answer_type") == "recommendation" and result_skus:
         recommendation_context = {
             "recommended_skus": result_skus,
@@ -8109,6 +8798,14 @@ def _sources_with_result_context(
             "answer_type": "recommendation",
             "top_recommended_sku": current_ordered_skus[0] if current_ordered_skus else None,
             "last_referenced_sku": current_ordered_skus[0] if current_ordered_skus else None,
+            "active_single_product_anchor": active_anchor,
+            "anchor_update_reason": anchor_update_reason,
+            "recommendation_request_contract": dict(current_contract) if isinstance(current_contract, dict) else {},
+            "effective_recommendation_contract": dict(effective_contract) if isinstance(effective_contract, dict) else {},
+            "verification_by_sku": verification_by_sku,
+            "previous_result_skus": result_skus,
+            "excluded_skus": list((effective_contract or {}).get("exclusions") or []) if isinstance(effective_contract, dict) else [],
+            "contract_merge_provenance": dict(merge_provenance) if isinstance(merge_provenance, dict) else {},
         }
     elif isinstance(inherited_recommendation_context, dict) and inherited_recommendation_context.get("recommended_skus"):
         recommendation_context = {
@@ -8147,6 +8844,27 @@ def _sources_with_result_context(
                 or ""
             ).strip().upper() or None,
             "last_referenced_sku": str(inherited_recommendation_context.get("last_referenced_sku") or "").strip().upper() or None,
+            "active_single_product_anchor": active_anchor,
+            "anchor_update_reason": anchor_update_reason,
+            "recommendation_request_contract": dict(inherited_recommendation_context.get("recommendation_request_contract") or {}),
+            "effective_recommendation_contract": dict(
+                answer_metadata.get("effective_recommendation_contract")
+                or inherited_recommendation_context.get("effective_recommendation_contract")
+                or inherited_recommendation_context.get("recommendation_request_contract")
+                or {}
+            ),
+            "verification_by_sku": dict(inherited_recommendation_context.get("verification_by_sku") or {}),
+            "previous_result_skus": list(inherited_recommendation_context.get("previous_result_skus") or inherited_recommendation_context.get("recommended_skus") or []),
+            "excluded_skus": list(
+                (answer_metadata.get("effective_recommendation_contract") or {}).get("exclusions")
+                or inherited_recommendation_context.get("excluded_skus")
+                or []
+            ),
+            "contract_merge_provenance": dict(
+                answer_metadata.get("contract_merge_provenance")
+                or inherited_recommendation_context.get("contract_merge_provenance")
+                or {}
+            ),
         }
         if agent_result.get("answer_type") == "product_detail" and len(result_skus) == 1:
             recommendation_context["last_referenced_sku"] = result_skus[0]
@@ -9926,7 +10644,36 @@ async def _try_named_product_shortcut(db: Session, *, user_id: str, question: st
             return unresolved_clarification
     if not products:
         return None
-    subject = _product_like_scope_subject(question) or customer_agent_intent_service._detail_subject_from_question(question).strip()
+    subject_selection = customer_field_contract.select_entity_subject_for_routing(
+        raw_question=question,
+        fallback_product_like_subject=_product_like_scope_subject(question),
+        fallback_named_subject=customer_agent_intent_service._detail_subject_from_question(question).strip(),
+    )
+    subject = subject_selection.entity_subject
+    all_products = db.query(Product).order_by(Product.sku.asc()).all()
+    named_entity_contract = customer_entity_resolution_contract.build_entity_resolution_contract(
+        question,
+        all_products,
+        resolver_candidates=products,
+        entity_text_override=subject or None,
+    )
+    named_resolution_decision = customer_entity_resolution_contract.can_resolve_single_product(
+        named_entity_contract,
+        all_products,
+    )
+    if named_resolution_decision.allowed:
+        products = [
+            product
+            for product in products
+            if str(product.sku or "").strip().upper() == named_resolution_decision.resolved_sku
+        ]
+    named_identity_provenance = None
+    if len(products) == 1:
+        named_identity_provenance = customer_entity_resolution_contract.identity_provenance_from_entity_contract(
+            named_entity_contract,
+            bound_sku=str(products[0].sku or "").strip().upper(),
+            origin_stage="named_product_resolver",
+        )
     if subject and _looks_like_product_like_scope_subject(subject):
         strong_products = [product for product in products if _subject_strongly_matches_product(subject, product)]
         if strong_products:
@@ -9991,6 +10738,11 @@ async def _try_named_product_shortcut(db: Session, *, user_id: str, question: st
                     str(products[0].sku or "").strip().upper(),
                     requested_field,
                     question,
+                    identity_source=(
+                        named_identity_provenance.source
+                        if named_identity_provenance is not None
+                        else "planner_candidate"
+                    ),
                 )
                 if detail_result:
                     debug = detail_result.get("debug") if isinstance(detail_result.get("debug"), dict) else {}

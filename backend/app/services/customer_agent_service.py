@@ -13,6 +13,9 @@ from ..models.product_specs import ProductSpecs
 from . import agent_action_service, product_service
 
 
+PRODUCT_COLOR_TERMS = ("黑色", "白色", "蓝色", "绿色", "粉色", "红色", "灰色", "银色", "金色")
+
+
 SKU_RE = re.compile(
     r"(?<![A-Za-z0-9])("
     r"(?:[A-Za-z]{1,6}[A-Za-z0-9]{0,12}(?:[-_](?:[A-Za-z0-9]{1,24}(?:\([A-Za-z0-9]{1,24}\))?|[\u4e00-\u9fff]{1,8}))+)"
@@ -136,7 +139,7 @@ def product_name_aliases(value: Any) -> list[str]:
                 and (
                     re.search(r"\d", prefix)
                     or suffix.lower() in {"pro", "max"}
-                    or suffix in {"黑色", "白色", "蓝色", "绿色", "粉色", "红色", "灰色", "银色", "金色"}
+                    or suffix in PRODUCT_COLOR_TERMS
                 )
             ):
                 candidates.append(prefix)
