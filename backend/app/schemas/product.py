@@ -454,12 +454,12 @@ class QaBatchImportItem(BaseModel):
     file_name: Optional[str] = None
     qa_items: list[QaImportItem] = Field(default_factory=list)
     review_items: list[QaReviewImportItem] = Field(default_factory=list)
-    mode: str = "replace"
+    mode: str = "append"
 
 
 class QaBatchImportRequest(BaseModel):
     items: list[QaBatchImportItem] = Field(default_factory=list)
-    mode: str = "replace"
+    mode: str = "append"
 
 
 class ShareContentRequest(BaseModel):

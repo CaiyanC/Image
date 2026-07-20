@@ -1076,14 +1076,14 @@ def _normalize_qa_question(question: str) -> str:
     return re.sub(r"\s+", "", question or "").lower()
 
 
-def import_qa_batch(db: Session, items: list[dict], mode: str = "replace") -> dict:
+def import_qa_batch(db: Session, items: list[dict], mode: str = "append") -> dict:
     results = []
     total_qa_created = 0
     total_negative_updated = 0
 
     for item in items:
         sku = (item.get("sku") or "").strip()
-        item_mode = item.get("mode") or mode or "replace"
+        item_mode = item.get("mode") or mode or "append"
         qa_items = item.get("qa_items") or []
         review_items = item.get("review_items") or []
         result = {

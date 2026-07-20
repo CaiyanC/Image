@@ -1,4 +1,6 @@
 import unittest
+from types import SimpleNamespace
+from unittest.mock import patch
 
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
@@ -22,7 +24,7 @@ from app.models.product_prompts import ProductPrompts
 from app.models.product_qa import ProductQa, ProductQaNegative
 from app.models.product_specs import ProductSpecs
 from app.services import customer_cache_service
-from app.services import product_service
+from app.services import draft_service, product_service
 from app.services.product_service import _normalize_size_info
 
 
@@ -230,6 +232,109 @@ class ProductServiceSpecsUpdateTest(unittest.TestCase):
 
         detail_after_update = product_service.get_product_detail(self.db, "SPECS-JSON-1")
         self.assertEqual(detail_after_update["specs"]["capacity"], [{"label": "锅", "value": "2000ML"}])
+
+
+class ProductImportSafetyTest(unittest.TestCase):
+    def setUp(self):
+        engine = create_engine("sqlite:///:memory:")
+        Base.metadata.create_all(
+            engine,
+            tables=[
+                Product.__table__,
+                ProductQa.__table__,
+                ProductQaNegative.__table__,
+                ProductPrompts.__table__,
+            ],
+        )
+        self.Session = sessionmaker(bind=engine)
+        self.db = self.Session()
+        self.product = Product(
+            id="safe-import-product",
+            sku="SAFE-IMPORT-1",
+            barcode="safe-import-barcode",
+            product_name_cn="原产品名称",
+            brand="alocs",
+        )
+        self.db.add(self.product)
+        self.db.add(ProductQa(
+            id="existing-qa",
+            product_id=self.product.id,
+            question="已有问题",
+            answer="已有答案",
+        ))
+        self.db.add(ProductQaNegative(
+            id="existing-negative",
+            product_id=self.product.id,
+            high_freq_negative_words="破损",
+            response_tone="原有回复",
+        ))
+        self.db.add(ProductPrompts(
+            id="existing-prompt",
+            product_id=self.product.id,
+            sku=self.product.sku,
+            prompt_text="原有提示词",
+        ))
+        self.db.commit()
+
+    def tearDown(self):
+        customer_cache_service.product_detail_cache.clear()
+        self.db.close()
+
+    def test_qa_batch_import_defaults_to_append_and_skips_existing_question(self):
+        result = product_service.import_qa_batch(
+            self.db,
+            [{
+                "sku": self.product.sku,
+                "qa_items": [
+                    {"question": "已 有 问题", "answer": "新的重复答案"},
+                    {"question": "新增问题", "answer": "新增答案"},
+                ],
+            }],
+        )
+
+        questions = [qa.question for qa in self.db.query(ProductQa).order_by(ProductQa.question).all()]
+        self.assertEqual(questions, ["已有问题", "新增问题"])
+        self.assertEqual(result["results"][0]["qa_skipped_duplicate"], 1)
+
+    def test_qa_batch_import_replace_remains_explicitly_destructive(self):
+        product_service.import_qa_batch(
+            self.db,
+            [{
+                "sku": self.product.sku,
+                "qa_items": [{"question": "替换后问题", "answer": "替换后答案"}],
+            }],
+            mode="replace",
+        )
+
+        questions = [qa.question for qa in self.db.query(ProductQa).all()]
+        self.assertEqual(questions, ["替换后问题"])
+
+    def test_publishing_l1_l4_draft_preserves_existing_relations(self):
+        draft = SimpleNamespace(
+            id="l1-l4-draft",
+            sku=self.product.sku,
+            created_by="tester",
+            draft_data={
+                "product_name_cn": "导入后名称",
+                "barcode": self.product.barcode,
+                "brand": self.product.brand,
+            },
+        )
+
+        with (
+            patch.object(draft_service, "get_draft_by_id", return_value=draft),
+            patch.object(draft_service, "get_product_by_sku", return_value=self.product),
+            patch.object(product_service, "_validate_product_data"),
+            patch.object(product_service, "sync_product_m2m"),
+            patch.object(draft_service, "get_product_detail", return_value={"sku": self.product.sku}),
+            patch.object(self.db, "delete"),
+        ):
+            draft_service.publish_draft(self.db, draft.id, "tester")
+
+        self.assertEqual(self.product.product_name_cn, "导入后名称")
+        self.assertEqual(self.db.query(ProductQa).count(), 1)
+        self.assertEqual(self.db.query(ProductQaNegative).count(), 1)
+        self.assertEqual(self.db.query(ProductPrompts).count(), 1)
 
 
 class ProductServicePaginationTest(unittest.TestCase):

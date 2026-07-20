@@ -265,35 +265,37 @@ def publish_draft(db: Session, draft_id: str, user_id: str = None) -> dict:
                     listing_ja=cd.get("listing_ja"),
                 ))
 
-        # QA items - delete old and insert new
+        # Only explicitly supplied relation sections replace existing records.
+        # L1-L4 imports omit them and must not erase product-maintained data.
         from ..models.product_qa import ProductQa, ProductQaNegative
-        db.query(ProductQa).filter(ProductQa.product_id == pid).delete()
-        for qa in (draft_data.get("qa_items") or []):
-            if qa.get("question") or qa.get("answer"):
-                db.add(ProductQa(product_id=pid, question=qa.get("question", ""),
-                    answer=qa.get("answer", ""), tags=qa.get("tags"), priority=qa.get("priority")))
+        if "qa_items" in draft_data:
+            db.query(ProductQa).filter(ProductQa.product_id == pid).delete()
+            for qa in draft_data["qa_items"] or []:
+                if qa.get("question") or qa.get("answer"):
+                    db.add(ProductQa(product_id=pid, question=qa.get("question", ""),
+                        answer=qa.get("answer", ""), tags=qa.get("tags"), priority=qa.get("priority")))
 
-        # QA negative
-        qa_neg = draft_data.get("qa_negative") or {}
-        db.query(ProductQaNegative).filter(ProductQaNegative.product_id == pid).delete()
-        if qa_neg.get("high_freq_negative_words") or qa_neg.get("response_tone"):
-            db.add(ProductQaNegative(product_id=pid,
-                high_freq_negative_words=qa_neg.get("high_freq_negative_words"),
-                response_tone=qa_neg.get("response_tone"), priority=qa_neg.get("priority")))
+        if "qa_negative" in draft_data:
+            qa_neg = draft_data["qa_negative"] or {}
+            db.query(ProductQaNegative).filter(ProductQaNegative.product_id == pid).delete()
+            if qa_neg.get("high_freq_negative_words") or qa_neg.get("response_tone"):
+                db.add(ProductQaNegative(product_id=pid,
+                    high_freq_negative_words=qa_neg.get("high_freq_negative_words"),
+                    response_tone=qa_neg.get("response_tone"), priority=qa_neg.get("priority")))
 
-        # Product prompts - delete old and insert new
-        from ..models.product_prompts import ProductPrompts
-        db.query(ProductPrompts).filter(ProductPrompts.product_id == pid).delete()
-        prompts_raw = draft_data.get("prompts") or []
-        if isinstance(prompts_raw, dict):
-            prompts = prompts_raw.get("prompts") or []
-        else:
-            prompts = prompts_raw if isinstance(prompts_raw, list) else []
-        for p in prompts:
-            if isinstance(p, dict) and p.get("prompt_text"):
-                db.add(ProductPrompts(product_id=pid, sku=existing_product.sku,
-                    prompt_name=p.get("prompt_name"), prompt_type=p.get("prompt_type"),
-                    prompt_text=p.get("prompt_text"), version=p.get("version")))
+        if "prompts" in draft_data:
+            from ..models.product_prompts import ProductPrompts
+            db.query(ProductPrompts).filter(ProductPrompts.product_id == pid).delete()
+            prompts_raw = draft_data["prompts"] or []
+            if isinstance(prompts_raw, dict):
+                prompts = prompts_raw.get("prompts") or []
+            else:
+                prompts = prompts_raw if isinstance(prompts_raw, list) else []
+            for p in prompts:
+                if isinstance(p, dict) and p.get("prompt_text"):
+                    db.add(ProductPrompts(product_id=pid, sku=existing_product.sku,
+                        prompt_name=p.get("prompt_name"), prompt_type=p.get("prompt_type"),
+                        prompt_text=p.get("prompt_text"), version=p.get("version")))
 
         # Sync M2M associations from draft data
         from .product_service import sync_product_m2m

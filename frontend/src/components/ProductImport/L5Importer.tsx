@@ -22,7 +22,7 @@ export default function L5Importer({ onImportComplete }: L5ImporterProps) {
   const [importing, setImporting] = useState(false)
   const [done, setDone] = useState(false)
   const [summary, setSummary] = useState('')
-  const [mode, setMode] = useState<'replace' | 'append'>('replace')
+  const [mode, setMode] = useState<'replace' | 'append'>('append')
 
   const handleFiles = async (files: File[]) => {
     setParsing(true)
@@ -183,8 +183,8 @@ export default function L5Importer({ onImportComplete }: L5ImporterProps) {
                             onChange={(e) => setMode(e.target.value as 'replace' | 'append')}
                             className="bg-white/10 border border-white/10 text-white text-xs rounded-lg px-2 py-1"
                           >
-                            <option value="replace">替换已有 QA</option>
                             <option value="append">追加到已有 QA</option>
+                            <option value="replace">替换已有 QA</option>
                           </select>
                         </div>
                       </div>
