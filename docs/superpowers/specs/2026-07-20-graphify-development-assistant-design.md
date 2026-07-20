@@ -18,11 +18,11 @@
 2. 在该工作树中加入 `.graphifyignore`，明确排除敏感或大体积非代码内容；该文件仅保留在分析工作树，不提交到应用仓库。
 3. 安装 Graphify 0.9.20（PyPI 包名 `graphifyy`），并以 `graphify extract` 对限定范围构建 `graphify-out/graph.json`、`GRAPH_REPORT.md` 和 `graph.html`。
 4. 进行本地验证：检查 CLI 版本、输出文件存在、报告记录的源文件范围不包含被排除目录，并用 `graphify explain` 查询一个后端模块与一个前端页面。
-5. 将 Codex 的 Graphify skill 安装到用户级配置中；不使用 `graphify codex install`，因此不改写项目的 `AGENTS.md`，也不安装 Git hooks 或文件监视器。
+5. 将 Codex 的 Graphify skill 安装到用户级配置中，并在 `dev` 的 `AGENTS.md` 加入一段明确、可撤销的开发规则：开始改动前读取或查询图谱；改动完成后更新图谱并检查受影响社区。不会安装 Git hooks 或文件监视器。
 
 ## 使用方式
 
-日常开发时，先在分析工作树运行 Graphify 查询，或由 Codex skill 从 `graphify-out/GRAPH_REPORT.md` 和 `graph.json` 导航代码关系；当 `dev` 上的改动稳定后，手动执行一次更新以刷新图谱。图谱仅作为理解和检索加速层，不替代测试、代码审查或实际文件检查。
+日常开发时，Codex 默认先从 `graphify-out/GRAPH_REPORT.md` 和 `graph.json` 导航代码关系，再读取必要的源文件；完成改动后默认更新图谱并核对受影响社区。用户无须每次重复提出这一要求，但仍可明确要求跳过图谱流程或只进行快速修改。图谱仅作为理解和检索加速层，不替代测试、代码审查或实际文件检查。
 
 ## 风险与处理
 
@@ -30,3 +30,4 @@
 - AST 边缘关系可能存在推断误差；关键结论仍回到源文件与测试验证。
 - `graphify-out/` 可能较大，因此仅保留在专用分析工作树，不进入 Git。
 - Graphify 更新频繁；首次固定验证通过的 0.9.20 版本，后续升级需单独复核。
+- `AGENTS.md` 只能约束后续在 `dev` 工作树中启动的 Codex 任务，不能让 Graphify 在用户未发起任务时自行运行；图谱也会在代码变化后通过默认完成步骤刷新，而非持续后台监控。
