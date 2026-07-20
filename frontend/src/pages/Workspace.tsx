@@ -2,9 +2,9 @@ import { useState, useEffect, useCallback } from 'react'
 import { api } from '../services/api'
 import { ImagePreview } from '../components/ImageUploader/ImageUploader'
 import Lightbox from '../components/Lightbox'
-import { SecureImage, SecureVideo } from '../components/SecureFile'
+import { SecureImage } from '../components/SecureFile'
 
-type GenerationMode = 'txt2img' | 'img2img' | 'txt2vid'
+type GenerationMode = 'txt2img' | 'img2img'
 
 interface ModelInfo {
   id: string
@@ -65,7 +65,7 @@ export default function Workspace() {
           negative_prompt: negativePrompt.trim() || undefined,
           params,
         })
-      } else if (mode === 'img2img') {
+      } else {
         if (sourceFiles.length === 0) {
           setError('请上传参考图像')
           setLoading(false)
@@ -94,13 +94,6 @@ export default function Workspace() {
             background: params.background,
           })
         }
-      } else {
-        result = await api.generation.txt2vid({
-          prompt: prompt.trim(),
-          model_name: selectedModel,
-          negative_prompt: negativePrompt.trim() || undefined,
-          params,
-        })
       }
 
       if (result.result_images && result.result_images.length > 0) {
@@ -120,7 +113,6 @@ export default function Workspace() {
   }
 
   const filteredModels = models.filter((m) => {
-    if (mode === 'txt2vid') return m.type === 'video'
     return m.type === 'image'
   })
 
@@ -138,7 +130,6 @@ export default function Workspace() {
   const modes: { key: GenerationMode; label: string }[] = [
     { key: 'txt2img', label: '文生图' },
     { key: 'img2img', label: '图生图' },
-    { key: 'txt2vid', label: '文生视频' },
   ]
 
   function handleClearResult() {
@@ -499,10 +490,6 @@ export default function Workspace() {
                   ))}
                 </div>
               </div>
-            </div>
-          ) : mode === 'txt2vid' && resultUrls.length === 1 ? (
-            <div className="w-full h-full flex items-center justify-center">
-              <SecureVideo src={resultUrls[0]} controls className="max-w-full max-h-full rounded-xl" />
             </div>
           ) : (
             <ImagePreview imageUrl={resultUrls[0] || null} onClear={handleClearResult} />

@@ -25,6 +25,7 @@ class ModelItem(BaseModel):
     chat_url: str = ""
     embedding_url: str = ""
     enabled: bool = True
+    is_default: bool = False
 
 
 class ModelsConfigRequest(BaseModel):

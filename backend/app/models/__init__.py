@@ -32,7 +32,7 @@ from .product_associations import (
     Keyword, ProductKeyword,
 )
 from .knowledge_base import (
-    KnowledgeDocument, KnowledgeChunk, KnowledgeParseTask,
+    KnowledgeDocument, KnowledgeChunk, KnowledgeParseTask, KnowledgeJob,
     CustomerServiceConversation, CustomerServiceMessage,
 )
 
@@ -49,6 +49,6 @@ __all__ = [
     "SalesRegion", "ProductSalesRegion",
     "Certification", "ProductCertification",
     "Keyword", "ProductKeyword",
-    "KnowledgeDocument", "KnowledgeChunk", "KnowledgeParseTask",
+    "KnowledgeDocument", "KnowledgeChunk", "KnowledgeParseTask", "KnowledgeJob",
     "CustomerServiceConversation", "CustomerServiceMessage",
 ]

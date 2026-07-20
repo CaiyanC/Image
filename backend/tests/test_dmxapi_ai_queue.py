@@ -1,6 +1,12 @@
 import asyncio
 import unittest
+from unittest.mock import patch
 
+from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker
+
+from app.core.database import Base
+from app.models.system_config import SystemConfig
 from app.services import dmxapi_service
 
 
@@ -84,6 +90,58 @@ class ActualEmbeddingConfigTest(unittest.TestCase):
         self.assertEqual(cfg["api_key"], "sk-test-dashscope")
         self.assertTrue(cfg["actual"])
         self.assertEqual(cfg["managed_by"], "DASHSCOPE_API_KEY")
+
+
+class ModelConfigurationSafetyTest(unittest.TestCase):
+    def setUp(self):
+        engine = create_engine("sqlite:///:memory:")
+        Base.metadata.create_all(engine, tables=[SystemConfig.__table__])
+        self.db = sessionmaker(bind=engine)()
+        self.original_secret = dmxapi_service.settings.SECRET_KEY
+        self.original_model_secret = getattr(dmxapi_service.settings, "MODEL_CONFIG_ENCRYPTION_KEY", "")
+        self.original_dmx_key = dmxapi_service.settings.DMXAPI_API_KEY
+        dmxapi_service.settings.SECRET_KEY = "test-secret"
+        dmxapi_service.settings.MODEL_CONFIG_ENCRYPTION_KEY = ""
+
+    def tearDown(self):
+        dmxapi_service.settings.SECRET_KEY = self.original_secret
+        dmxapi_service.settings.MODEL_CONFIG_ENCRYPTION_KEY = self.original_model_secret
+        dmxapi_service.settings.DMXAPI_API_KEY = self.original_dmx_key
+        self.db.close()
+
+    def test_model_keys_are_encrypted_at_rest_and_masked_in_admin_response(self):
+        dmxapi_service.set_model_config(self.db, [{
+            "id": "safe-chat",
+            "name": "Safe chat",
+            "type": "chat",
+            "api_key": "sk-secret-value",
+            "api_base_url": "https://provider.example",
+            "api_model": "safe-chat-v1",
+            "enabled": True,
+            "is_default": True,
+        }])
+
+        stored = self.db.query(SystemConfig).filter(SystemConfig.config_key == "model_safe-chat").one()
+        self.assertNotIn("sk-secret-value", stored.config_value)
+        resolved = dmxapi_service._resolve_model_config(self.db, "safe-chat")
+        self.assertEqual(resolved["api_key"], "sk-secret-value")
+        visible = dmxapi_service.get_available_models(self.db)
+        visible_model = next(model for model in visible if model["id"] == "safe-chat")
+        self.assertEqual(visible_model["api_key"], "")
+        self.assertTrue(visible_model["api_key_configured"])
+
+    def test_blank_key_keeps_existing_secret_and_default_selection_is_explicit(self):
+        dmxapi_service.set_model_config(self.db, [
+            {"id": "chat-b", "name": "B", "type": "chat", "api_key": "key-b", "enabled": True},
+            {"id": "chat-a", "name": "A", "type": "chat", "api_key": "key-a", "enabled": True, "is_default": True},
+        ])
+        dmxapi_service.set_model_config(self.db, [
+            {"id": "chat-b", "name": "B", "type": "chat", "api_key": "", "enabled": True},
+            {"id": "chat-a", "name": "A", "type": "chat", "api_key": "", "enabled": True, "is_default": True},
+        ])
+
+        self.assertEqual(dmxapi_service._resolve_model_config(self.db, "chat-b")["api_key"], "key-b")
+        self.assertEqual(dmxapi_service.get_default_model_by_type(self.db, "chat")["id"], "chat-a")
 
 
 if __name__ == "__main__":

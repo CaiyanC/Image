@@ -129,7 +129,7 @@ def create_reindex_job(
     current_user: User = Depends(get_current_super_admin),
 ):
     enforce_rate_limit(user_id=current_user.id, scope="knowledge.reindex_job", limit=10, window_seconds=600)
-    return knowledge_job_service.create_reindex_job(
+    return knowledge_job_service.create_reindex_job(db,
         created_by=current_user.id,
         mode=body.mode,
         limit=body.limit,
@@ -144,7 +144,7 @@ def create_embedding_retry_job(
 ):
     enforce_rate_limit(user_id=current_user.id, scope="knowledge.embedding_retry", limit=20, window_seconds=600)
     limit = min(max(body.limit or 20, 1), 500)
-    return knowledge_job_service.create_embedding_retry_job(created_by=current_user.id, limit=limit)
+    return knowledge_job_service.create_embedding_retry_job(db, created_by=current_user.id, limit=limit)
 
 
 @router.get("/jobs")
@@ -152,7 +152,7 @@ def list_jobs(
     limit: int = Query(20, ge=1, le=100),
     current_user: User = Depends(get_current_super_admin),
 ):
-    return knowledge_job_service.list_jobs(limit=limit)
+    return knowledge_job_service.list_jobs(db, limit=limit)
 
 
 @router.get("/jobs/{job_id}")
@@ -160,7 +160,7 @@ def get_job(
     job_id: str,
     current_user: User = Depends(get_current_super_admin),
 ):
-    job = knowledge_job_service.get_job(job_id)
+    job = knowledge_job_service.get_job(db, job_id)
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
     return job

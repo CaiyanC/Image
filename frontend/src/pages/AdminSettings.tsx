@@ -16,6 +16,8 @@ interface ModelItem {
   chat_url: string
   embedding_url: string
   enabled: boolean
+  is_default: boolean
+  api_key_configured?: boolean
   actual?: boolean
   managed_by?: string
 }
@@ -41,6 +43,7 @@ const emptyModel: ModelItem = {
   chat_url: '',
   embedding_url: '',
   enabled: true,
+  is_default: false,
 }
 
 const deepseekPreset: ModelItem = {
@@ -99,6 +102,13 @@ export default function AdminSettings() {
 
   function update(id: string, field: keyof ModelItem, value: string | boolean) {
     setModels((prev) => prev.map((model) => model.id === id ? { ...model, [field]: value } : model))
+  }
+
+  function setDefault(id: string) {
+    setModels((prev) => prev.map((model) => ({
+      ...model,
+      is_default: model.type === prev.find((item) => item.id === id)?.type && model.id === id,
+    })))
   }
 
   async function addDeepSeek() {
@@ -184,6 +194,10 @@ export default function AdminSettings() {
                     </div>
                   )}
 
+                  {model.actual ? (
+                    <p className="rounded-xl bg-slate-50 px-4 py-3 text-sm text-slate-600">向量模型由环境变量管理，不能在此页面修改。</p>
+                  ) : <>
+
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                     <Field label="配置 ID" hint="系统内部配置标识" value={model.id} onChange={(v) => update(model.id, 'id', v)} />
                     <Field label="显示名称" hint="页面展示名称" value={model.name} onChange={(v) => update(model.id, 'name', v)} />
@@ -217,7 +231,7 @@ export default function AdminSettings() {
                   )}
 
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                    <Field label="API Key" value={model.api_key} type="password" onChange={(v) => update(model.id, 'api_key', v)} />
+                    <Field label="API Key" hint={model.api_key_configured ? '已保存；留空不会覆盖现有密钥' : undefined} value={model.api_key} type="password" onChange={(v) => update(model.id, 'api_key', v)} />
                     <Field label="描述" value={model.description} onChange={(v) => update(model.id, 'description', v)} />
                   </div>
 
@@ -226,11 +240,16 @@ export default function AdminSettings() {
                       <input type="checkbox" checked={model.enabled} onChange={(e) => update(model.id, 'enabled', e.target.checked)} />
                       启用
                     </label>
+                    <label className="flex items-center gap-3 text-sm text-apple-text">
+                      <input type="checkbox" checked={model.is_default} onChange={() => setDefault(model.id)} />
+                      设为此类型默认模型
+                    </label>
                     <div className="flex items-center gap-3">
                       <button onClick={() => remove(model.id)} className="px-3 py-2 text-sm text-red-500 hover:bg-red-50 rounded-lg">删除</button>
                       <button onClick={() => save()} disabled={saving} className="btn-primary px-5 py-2 text-sm disabled:opacity-50">保存</button>
                     </div>
                   </div>
+                  </>}
                 </div>
               )}
             </section>

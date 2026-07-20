@@ -1,14 +1,12 @@
-import json
-import os
-import tempfile
 import unittest
 from unittest.mock import patch
 
 from sqlalchemy import create_engine
-from sqlalchemy.pool import StaticPool
 from sqlalchemy.orm import sessionmaker
+from sqlalchemy.pool import StaticPool
 
 from app.core.database import Base
+from app.models.knowledge_base import KnowledgeJob
 from app.models.operation_logs import OperationLog
 from app.models.user import User
 from app.services import knowledge_job_service
@@ -16,130 +14,46 @@ from app.services import knowledge_job_service
 
 class KnowledgeJobServiceTest(unittest.TestCase):
     def setUp(self):
-        self.runtime_dir = tempfile.TemporaryDirectory()
-        self.old_runtime_dir = knowledge_job_service._RUNTIME_DIR
-        self.old_job_store_path = knowledge_job_service._JOB_STORE_PATH
-        knowledge_job_service._RUNTIME_DIR = self.runtime_dir.name
-        knowledge_job_service._JOB_STORE_PATH = os.path.join(self.runtime_dir.name, "knowledge_jobs.json")
-        knowledge_job_service._LOADED = False
-        engine = create_engine(
-            "sqlite://",
-            connect_args={"check_same_thread": False},
-            poolclass=StaticPool,
-        )
-        Base.metadata.create_all(engine, tables=[
-            User.__table__,
-            OperationLog.__table__,
-        ])
+        engine = create_engine("sqlite://", connect_args={"check_same_thread": False}, poolclass=StaticPool)
+        Base.metadata.create_all(engine, tables=[User.__table__, OperationLog.__table__, KnowledgeJob.__table__])
         self.Session = sessionmaker(bind=engine)
-        knowledge_job_service._JOBS.clear()
+        self.db = self.Session()
+        self.db.add(User(id="user-1", username="tester", email="tester@example.com", password_hash="hash"))
+        self.db.commit()
 
     def tearDown(self):
-        knowledge_job_service._JOBS.clear()
-        knowledge_job_service._LOADED = False
-        knowledge_job_service._RUNTIME_DIR = self.old_runtime_dir
-        knowledge_job_service._JOB_STORE_PATH = self.old_job_store_path
-        self.runtime_dir.cleanup()
+        self.db.close()
 
-    def test_reindex_job_runs_in_background_registry(self):
-        def submit_now(fn, *args, **kwargs):
-            fn(*args, **kwargs)
-            return None
+    def test_create_job_persists_then_dispatches_celery_task(self):
+        with patch("app.tasks.knowledge_tasks.run_knowledge_job.delay") as delay:
+            created = knowledge_job_service.create_embedding_retry_job(self.db, created_by="user-1", limit=3)
 
-        with (
-            patch.object(knowledge_job_service, "SessionLocal", self.Session),
-            patch.object(knowledge_job_service._EXECUTOR, "submit", side_effect=submit_now),
-            patch("app.services.product_vector_index_service.index_all_products", return_value={"products": 2, "documents": 4, "chunks": 4}),
-            patch("app.services.product_vector_index_service.run_embed_pending_chunks", return_value={"total": 4, "embedded": 4, "failed": 0}),
-            patch("app.services.knowledge_service.health_report", return_value={"grade": "healthy"}),
-        ):
-            created = knowledge_job_service.create_reindex_job(
-                created_by="user-1",
-                mode="full",
-                embed=True,
-            )
+        stored = self.db.query(KnowledgeJob).filter(KnowledgeJob.id == created["id"]).one()
+        self.assertEqual(stored.status, "queued")
+        self.assertEqual(created["payload"], {"limit": 3})
+        delay.assert_called_once_with(created["id"])
 
-        job = knowledge_job_service.get_job(created["id"])
-
-        self.assertEqual(job["status"], "succeeded")
-        self.assertEqual(job["stage"], "completed")
-        self.assertEqual(job["result"]["indexed"]["products"], 2)
-        self.assertEqual(job["result"]["embedding"]["embedded"], 4)
-
-    def test_embedding_retry_job_records_failure(self):
-        def submit_now(fn, *args, **kwargs):
-            fn(*args, **kwargs)
-            return None
-
-        with (
-            patch.object(knowledge_job_service, "SessionLocal", self.Session),
-            patch.object(knowledge_job_service._EXECUTOR, "submit", side_effect=submit_now),
-            patch("app.services.product_vector_index_service.run_embed_pending_chunks", side_effect=RuntimeError("provider down")),
-        ):
-            created = knowledge_job_service.create_embedding_retry_job(created_by="user-1", limit=3)
-
-        job = knowledge_job_service.get_job(created["id"])
-
-        self.assertEqual(job["status"], "failed")
-        self.assertIn("provider down", job["error"])
-
-    def test_jobs_are_persisted_and_reloaded(self):
-        def submit_now(fn, *args, **kwargs):
-            fn(*args, **kwargs)
-            return None
-
-        with (
-            patch.object(knowledge_job_service, "SessionLocal", self.Session),
-            patch.object(knowledge_job_service._EXECUTOR, "submit", side_effect=submit_now),
-            patch("app.services.product_vector_index_service.run_embed_pending_chunks", return_value={"total": 1, "embedded": 1, "failed": 0}),
-            patch("app.services.knowledge_service.health_report", return_value={"grade": "healthy"}),
-        ):
-            created = knowledge_job_service.create_embedding_retry_job(created_by="user-1", limit=1)
-
-        knowledge_job_service._JOBS.clear()
-        knowledge_job_service._LOADED = False
-        restored = knowledge_job_service.get_job(created["id"])
-
-        self.assertEqual(restored["status"], "succeeded")
-        self.assertEqual(restored["result"]["embedding"]["embedded"], 1)
-
-    def test_loaded_active_job_is_marked_interrupted_after_restart(self):
-        interrupted_id = "job-interrupted"
-        os.makedirs(self.runtime_dir.name, exist_ok=True)
-        with open(knowledge_job_service._JOB_STORE_PATH, "w", encoding="utf-8") as file:
-            json.dump([
-                {
-                    "id": interrupted_id,
-                    "kind": "embedding_retry",
-                    "status": "running",
-                    "stage": "embedding_retry",
-                    "created_by": "user-1",
-                    "payload": {"limit": 1},
-                    "result": None,
-                    "error": None,
-                    "created_at": "2026-06-13T00:00:00+00:00",
-                    "updated_at": "2026-06-13T00:00:01+00:00",
-                    "started_at": "2026-06-13T00:00:01+00:00",
-                    "finished_at": None,
-                }
-            ], file)
-
-        restored = knowledge_job_service.get_job(interrupted_id)
-
-        self.assertEqual(restored["status"], "failed")
-        self.assertEqual(restored["stage"], "interrupted")
-        self.assertIn("restarted", restored["error"])
-
-    def test_duplicate_active_jobs_return_existing_job(self):
-        def do_not_run(*_args, **_kwargs):
-            return None
-
-        with patch.object(knowledge_job_service._EXECUTOR, "submit", side_effect=do_not_run):
-            first = knowledge_job_service.create_embedding_retry_job(created_by="user-1", limit=1)
-            second = knowledge_job_service.create_reindex_job(created_by="user-1", mode="full")
+    def test_duplicate_active_job_returns_existing_database_record(self):
+        with patch("app.tasks.knowledge_tasks.run_knowledge_job.delay"):
+            first = knowledge_job_service.create_embedding_retry_job(self.db, created_by="user-1", limit=1)
+            second = knowledge_job_service.create_reindex_job(self.db, created_by="user-1", mode="full")
 
         self.assertEqual(first["id"], second["id"])
-        self.assertEqual(second["status"], "queued")
+        self.assertEqual(self.db.query(KnowledgeJob).count(), 1)
+
+    def test_worker_marks_job_succeeded_after_running_reindex(self):
+        with patch("app.tasks.knowledge_tasks.run_knowledge_job.delay"):
+            created = knowledge_job_service.create_reindex_job(self.db, created_by="user-1", mode="full", embed=True)
+        with (
+            patch.object(knowledge_job_service, "SessionLocal", self.Session),
+            patch("app.services.product_vector_index_service.index_all_products", return_value={"products": 2}),
+            patch("app.services.product_vector_index_service.run_embed_pending_chunks", return_value={"embedded": 2}),
+            patch("app.services.knowledge_service.health_report", return_value={"grade": "healthy"}),
+        ):
+            result = knowledge_job_service.run_job(created["id"])
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(knowledge_job_service.get_job(self.db, created["id"])["status"], "succeeded")
 
 
 if __name__ == "__main__":

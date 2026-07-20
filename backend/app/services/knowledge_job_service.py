@@ -1,271 +1,118 @@
 import json
-import os
-import threading
-import uuid
-from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from typing import Any
 
+from sqlalchemy.orm import Session
+
 from ..core.database import SessionLocal
+from ..models.knowledge_base import KnowledgeJob
 from . import knowledge_service, operation_log_service, product_service, product_vector_index_service
 
 
-MAX_JOBS = 100
-_RUNTIME_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "runtime"))
-_JOB_STORE_PATH = os.path.join(_RUNTIME_DIR, "knowledge_jobs.json")
-_LOCK = threading.RLock()
-_EXECUTOR = ThreadPoolExecutor(max_workers=1, thread_name_prefix="knowledge-job")
-_JOBS: dict[str, dict[str, Any]] = {}
-_LOADED = False
+def create_reindex_job(db: Session, *, created_by: str, mode: str = "pending", limit: int | None = None, embed: bool = True) -> dict:
+    return _create_job(db, "product_reindex", created_by, {"mode": mode if mode in {"pending", "full"} else "pending", "limit": limit, "embed": embed})
 
 
-def create_reindex_job(*, created_by: str, mode: str = "pending", limit: int | None = None, embed: bool = True) -> dict:
-    payload = {
-        "mode": mode if mode in {"pending", "full"} else "pending",
-        "limit": limit,
-        "embed": embed,
-    }
-    return _create_job("product_reindex", created_by=created_by, payload=payload)
+def create_embedding_retry_job(db: Session, *, created_by: str, limit: int | None = 20) -> dict:
+    return _create_job(db, "embedding_retry", created_by, {"limit": limit})
 
 
-def create_embedding_retry_job(*, created_by: str, limit: int | None = 20) -> dict:
-    payload = {"limit": limit}
-    return _create_job("embedding_retry", created_by=created_by, payload=payload)
-
-
-def list_jobs(limit: int = 20) -> dict:
-    with _LOCK:
-        _ensure_loaded_locked()
-        items = sorted(_JOBS.values(), key=lambda item: item["created_at"], reverse=True)[:max(1, min(limit, MAX_JOBS))]
-        return {"items": [_public_job(item) for item in items], "total": len(_JOBS)}
-
-
-def get_job(job_id: str) -> dict | None:
-    with _LOCK:
-        _ensure_loaded_locked()
-        job = _JOBS.get(job_id)
-        return _public_job(job) if job else None
-
-
-def _create_job(kind: str, *, created_by: str, payload: dict[str, Any]) -> dict:
-    with _LOCK:
-        _ensure_loaded_locked()
-        active_job = _active_job_locked()
-        if active_job:
-            return _public_job(active_job)
-
-        job_id = str(uuid.uuid4())
-        now = _now()
-        job = {
-            "id": job_id,
-            "kind": kind,
-            "status": "queued",
-            "stage": "queued",
-            "created_by": created_by,
-            "payload": payload,
-            "result": None,
-            "error": None,
-            "created_at": now,
-            "updated_at": now,
-            "started_at": None,
-            "finished_at": None,
-        }
-        _JOBS[job_id] = job
-        _trim_jobs_locked()
-        _persist_jobs_locked()
-    _EXECUTOR.submit(_run_job, job_id)
+def _create_job(db: Session, kind: str, created_by: str, payload: dict[str, Any]) -> dict:
+    active = db.query(KnowledgeJob).filter(KnowledgeJob.status.in_(["queued", "running"])).order_by(KnowledgeJob.created_at.desc()).first()
+    if active:
+        return _public_job(active)
+    job = KnowledgeJob(kind=kind, status="queued", stage="queued", created_by=str(created_by), payload_json=json.dumps(payload, ensure_ascii=False))
+    db.add(job)
+    db.commit()
+    db.refresh(job)
+    from ..tasks.knowledge_tasks import run_knowledge_job
+    run_knowledge_job.delay(job.id)
     return _public_job(job)
 
 
-def _run_job(job_id: str) -> None:
+def list_jobs(db: Session, limit: int = 20) -> dict:
+    rows = db.query(KnowledgeJob).order_by(KnowledgeJob.created_at.desc()).limit(max(1, min(limit, 100))).all()
+    return {"items": [_public_job(row) for row in rows], "total": db.query(KnowledgeJob).count()}
+
+
+def get_job(db: Session, job_id: str) -> dict | None:
+    job = db.query(KnowledgeJob).filter(KnowledgeJob.id == job_id).first()
+    return _public_job(job) if job else None
+
+
+def run_job(job_id: str) -> dict:
     db = SessionLocal()
     try:
-        job = _get_job_for_update(job_id)
+        job = db.query(KnowledgeJob).filter(KnowledgeJob.id == job_id).first()
         if not job:
-            return
-        _update_job(job_id, status="running", stage="starting", started_at=_now())
-        _log_job(db, job, "started")
-        if job["kind"] == "product_reindex":
-            result = _run_product_reindex(db, job_id, job["payload"])
-        elif job["kind"] == "embedding_retry":
-            result = _run_embedding_retry(db, job_id, job["payload"])
+            return {"ok": False, "error": "Knowledge job not found"}
+        if job.status not in {"queued", "running"}:
+            return {"ok": True, "status": job.status, "job_id": job.id}
+        job.status, job.stage, job.started_at = "running", "starting", _now()
+        db.commit()
+        payload = _load_json(job.payload_json)
+        if job.kind == "product_reindex":
+            result = _run_product_reindex(db, job, payload)
+        elif job.kind == "embedding_retry":
+            result = _run_embedding_retry(db, job, payload)
         else:
-            raise RuntimeError(f"Unknown knowledge job kind: {job['kind']}")
-        _update_job(job_id, status="succeeded", stage="completed", result=result, finished_at=_now())
-        _log_job(db, _get_job_for_update(job_id), "succeeded")
+            raise RuntimeError(f"Unknown knowledge job kind: {job.kind}")
+        job.status, job.stage, job.result_json, job.finished_at = "succeeded", "completed", json.dumps(result, ensure_ascii=False), _now()
+        db.commit()
+        _log_job(db, job, "succeeded")
+        return {"ok": True, "job_id": job.id, "status": job.status}
     except Exception as exc:
-        _update_job(job_id, status="failed", stage="failed", error=str(exc), finished_at=_now())
-        failed_job = _get_job_for_update(job_id)
-        if failed_job:
-            _log_job(db, failed_job, "failed", error=str(exc))
+        db.rollback()
+        job = db.query(KnowledgeJob).filter(KnowledgeJob.id == job_id).first()
+        if job:
+            job.status, job.stage, job.error_message, job.finished_at = "failed", "failed", str(exc)[:2000], _now()
+            db.commit()
+            _log_job(db, job, "failed", str(exc))
+        return {"ok": False, "job_id": job_id, "error": str(exc)[:2000]}
     finally:
         db.close()
 
 
-def _run_product_reindex(db, job_id: str, payload: dict[str, Any]) -> dict:
+def _run_product_reindex(db: Session, job: KnowledgeJob, payload: dict) -> dict:
     mode = payload.get("mode") if payload.get("mode") in {"pending", "full"} else "pending"
-    embed = bool(payload.get("embed", True))
-    if mode == "full":
-        _update_job(job_id, stage="indexing_all_products")
-        indexed = product_vector_index_service.index_all_products(db)
-        embed_limit = payload.get("limit")
-    else:
-        limit = min(max(int(payload.get("limit") or 100), 1), 1000)
-        _update_job(job_id, stage="syncing_pending_products")
-        indexed = product_service.sync_pending_products_to_vector_db(db, limit=limit)
-        embed_limit = limit
+    job.stage = "indexing_all_products" if mode == "full" else "syncing_pending_products"
+    db.commit()
+    indexed = product_vector_index_service.index_all_products(db) if mode == "full" else product_service.sync_pending_products_to_vector_db(db, limit=min(max(int(payload.get("limit") or 100), 1), 1000))
     embedded = None
-    if embed:
-        _update_job(job_id, stage="embedding_unsynced_chunks")
-        embedded = product_vector_index_service.run_embed_pending_chunks(db, limit=embed_limit)
-    _update_job(job_id, stage="building_health_report")
-    return {
-        "mode": mode,
-        "indexed": indexed,
-        "embedding": embedded,
-        "health": knowledge_service.health_report(db),
-    }
+    if bool(payload.get("embed", True)):
+        job.stage = "embedding_unsynced_chunks"
+        db.commit()
+        embedded = product_vector_index_service.run_embed_pending_chunks(db, limit=payload.get("limit"))
+    return {"mode": mode, "indexed": indexed, "embedding": embedded, "health": knowledge_service.health_report(db)}
 
 
-def _run_embedding_retry(db, job_id: str, payload: dict[str, Any]) -> dict:
-    limit = min(max(int(payload.get("limit") or 20), 1), 500)
-    _update_job(job_id, stage="embedding_retry")
-    embedded = product_vector_index_service.run_embed_pending_chunks(db, limit=limit)
-    _update_job(job_id, stage="building_health_report")
-    return {
-        "embedding": embedded,
-        "health": knowledge_service.health_report(db),
-    }
+def _run_embedding_retry(db: Session, job: KnowledgeJob, payload: dict) -> dict:
+    job.stage = "embedding_retry"
+    db.commit()
+    embedded = product_vector_index_service.run_embed_pending_chunks(db, limit=min(max(int(payload.get("limit") or 20), 1), 500))
+    return {"embedding": embedded, "health": knowledge_service.health_report(db)}
 
 
-def _log_job(db, job: dict[str, Any] | None, status: str, error: str | None = None) -> None:
-    if not job:
-        return
+def _public_job(job: KnowledgeJob) -> dict:
+    return {"id": job.id, "kind": job.kind, "status": job.status, "stage": job.stage, "payload": _load_json(job.payload_json), "result": _load_json(job.result_json), "error": job.error_message, "created_at": job.created_at, "updated_at": job.updated_at, "started_at": job.started_at, "finished_at": job.finished_at}
+
+
+def _load_json(value: str | None) -> dict | None:
+    if not value:
+        return None
     try:
-        operation_log_service.log_operation(
-            db,
-            operator_id=job["created_by"],
-            action_type="knowledge_job",
-            action_name=f"Knowledge job {job['kind']} {status}",
-            target_type="knowledge_job",
-            target_id=job["id"],
-            target_name=job["kind"],
-            request_data=job.get("payload"),
-            response_data=job.get("result"),
-            status="failed" if status == "failed" else "success",
-            error_message=error,
-        )
+        result = json.loads(value)
+        return result if isinstance(result, dict) else None
+    except (TypeError, json.JSONDecodeError):
+        return None
+
+
+def _now() -> datetime:
+    return datetime.now(timezone.utc)
+
+
+def _log_job(db: Session, job: KnowledgeJob, status: str, error: str | None = None) -> None:
+    try:
+        operation_log_service.log_operation(db, operator_id=job.created_by, action_type="knowledge_job", action_name=f"Knowledge job {job.kind} {status}", target_type="knowledge_job", target_id=job.id, target_name=job.kind, request_data=_load_json(job.payload_json), response_data=_load_json(job.result_json), status="failed" if status == "failed" else "success", error_message=error)
     except Exception:
         db.rollback()
-
-
-def _get_job_for_update(job_id: str) -> dict[str, Any] | None:
-    with _LOCK:
-        _ensure_loaded_locked()
-        job = _JOBS.get(job_id)
-        return dict(job) if job else None
-
-
-def _update_job(job_id: str, **changes: Any) -> None:
-    with _LOCK:
-        _ensure_loaded_locked()
-        job = _JOBS.get(job_id)
-        if not job:
-            return
-        job.update(changes)
-        job["updated_at"] = _now()
-        _persist_jobs_locked()
-
-
-def _public_job(job: dict[str, Any] | None) -> dict:
-    if not job:
-        return {}
-    return {
-        "id": job["id"],
-        "kind": job["kind"],
-        "status": job["status"],
-        "stage": job["stage"],
-        "payload": job["payload"],
-        "result": job["result"],
-        "error": job["error"],
-        "created_at": job["created_at"],
-        "updated_at": job["updated_at"],
-        "started_at": job["started_at"],
-        "finished_at": job["finished_at"],
-    }
-
-
-def _trim_jobs_locked() -> None:
-    if len(_JOBS) <= MAX_JOBS:
-        return
-    ordered = sorted(_JOBS.values(), key=lambda item: item["created_at"])
-    for job in ordered[:len(_JOBS) - MAX_JOBS]:
-        _JOBS.pop(job["id"], None)
-
-
-def _active_job_locked() -> dict[str, Any] | None:
-    active = [
-        job
-        for job in _JOBS.values()
-        if job.get("status") in {"queued", "running"}
-    ]
-    if not active:
-        return None
-    return sorted(active, key=lambda item: item["created_at"])[0]
-
-
-def _ensure_loaded_locked() -> None:
-    global _LOADED
-    if _LOADED:
-        return
-    _LOADED = True
-    if not os.path.exists(_JOB_STORE_PATH):
-        return
-    try:
-        with open(_JOB_STORE_PATH, "r", encoding="utf-8") as file:
-            raw = json.load(file)
-    except Exception:
-        return
-    if not isinstance(raw, list):
-        return
-    changed = False
-    for item in raw:
-        if not isinstance(item, dict) or not item.get("id"):
-            continue
-        job = {
-            "id": str(item.get("id")),
-            "kind": str(item.get("kind") or "unknown"),
-            "status": str(item.get("status") or "failed"),
-            "stage": str(item.get("stage") or ""),
-            "created_by": str(item.get("created_by") or ""),
-            "payload": item.get("payload") if isinstance(item.get("payload"), dict) else {},
-            "result": item.get("result") if isinstance(item.get("result"), dict) else None,
-            "error": item.get("error"),
-            "created_at": str(item.get("created_at") or _now()),
-            "updated_at": str(item.get("updated_at") or _now()),
-            "started_at": item.get("started_at"),
-            "finished_at": item.get("finished_at"),
-        }
-        if job["status"] in {"queued", "running"}:
-            job["status"] = "failed"
-            job["stage"] = "interrupted"
-            job["error"] = "Service restarted before the job finished."
-            job["finished_at"] = _now()
-            job["updated_at"] = job["finished_at"]
-            changed = True
-        _JOBS[job["id"]] = job
-    if changed:
-        _persist_jobs_locked()
-
-
-def _persist_jobs_locked() -> None:
-    os.makedirs(_RUNTIME_DIR, exist_ok=True)
-    items = sorted(_JOBS.values(), key=lambda item: item["created_at"], reverse=True)[:MAX_JOBS]
-    temp_path = f"{_JOB_STORE_PATH}.tmp"
-    with open(temp_path, "w", encoding="utf-8") as file:
-        json.dump(items, file, ensure_ascii=False, indent=2, default=str)
-    os.replace(temp_path, _JOB_STORE_PATH)
-
-
-def _now() -> str:
-    return datetime.now(timezone.utc).isoformat()

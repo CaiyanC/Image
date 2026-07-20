@@ -123,8 +123,7 @@ async def txt2vid(
     current_user: User = Depends(require_permission("ai.generate")),
     db: Session = Depends(get_db),
 ):
-    _enforce_ai_generation_limit(current_user)
-    return await generation_service.create_txt2vid(db, current_user, req)
+    raise HTTPException(status_code=501, detail="视频生成功能暂未开放")
 
 
 @router.post("/upload")

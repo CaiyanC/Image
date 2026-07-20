@@ -1,10 +1,13 @@
 import asyncio
+import base64
+import hashlib
 import httpx
 import json
 import logging
 from time import perf_counter
 from urllib.parse import urljoin, urlparse
 from sqlalchemy.orm import Session
+from cryptography.fernet import Fernet, InvalidToken
 from ..models.system_config import SystemConfig
 from ..core.config import settings
 from ..core.database import release_session_connection
@@ -109,11 +112,12 @@ def _get_model_config(db: Session, model_id: str) -> dict | None:
         data.setdefault("name", model_id)
         data.setdefault("type", "image")
         data.setdefault("description", "")
-        data.setdefault("api_key", "")
+        data["api_key"] = _decrypt_api_key(data.get("api_key", ""))
         data.setdefault("api_base_url", DEFAULT_BASE_URL)
         data.setdefault("api_format", "openai")
         data.setdefault("api_model", data.get("id", model_id))
         data.setdefault("enabled", True)
+        data.setdefault("is_default", False)
         return data
     except (json.JSONDecodeError, TypeError):
         pass
@@ -125,12 +129,40 @@ def _get_model_config(db: Session, model_id: str) -> dict | None:
         "name": parts[0],
         "type": parts[1],
         "description": parts[2],
-        "api_key": parts[3],
+        "api_key": _decrypt_api_key(parts[3]),
         "api_base_url": parts[4] if parts[4] else DEFAULT_BASE_URL,
         "api_format": parts[5] if len(parts) > 5 and parts[5] else "openai",
         "api_model": model_id,
         "enabled": True,
+        "is_default": False,
     }
+
+
+def _fernet() -> Fernet:
+    configured = str(getattr(settings, "MODEL_CONFIG_ENCRYPTION_KEY", "") or "").strip()
+    if configured:
+        return Fernet(configured.encode("utf-8"))
+    secret = str(settings.SECRET_KEY or "").strip()
+    if not secret:
+        raise RuntimeError("MODEL_CONFIG_ENCRYPTION_KEY or SECRET_KEY must be configured to store model API keys")
+    key = base64.urlsafe_b64encode(hashlib.sha256(secret.encode("utf-8")).digest())
+    return Fernet(key)
+
+
+def _encrypt_api_key(value: str) -> str:
+    if not value:
+        return ""
+    return "enc:" + _fernet().encrypt(value.encode("utf-8")).decode("utf-8")
+
+
+def _decrypt_api_key(value: object) -> str:
+    raw = str(value or "")
+    if not raw.startswith("enc:"):
+        return raw
+    try:
+        return _fernet().decrypt(raw[4:].encode("utf-8")).decode("utf-8")
+    except InvalidToken as exc:
+        raise RuntimeError("Unable to decrypt model API key; check MODEL_CONFIG_ENCRYPTION_KEY") from exc
 
 
 def _resolve_model_config(db: Session, model_id: str) -> dict:
@@ -138,11 +170,11 @@ def _resolve_model_config(db: Session, model_id: str) -> dict:
         return get_actual_embedding_config()
     cfg = _get_model_config(db, model_id)
     if cfg:
-        return cfg
+        return _with_dmxapi_fallback(cfg)
     for m in DEFAULT_MODELS:
         if m["id"] == model_id:
-            return dict(m)
-    return {
+            return _with_dmxapi_fallback(dict(m))
+    return _with_dmxapi_fallback({
         "id": model_id,
         "name": model_id,
         "type": "image",
@@ -152,7 +184,15 @@ def _resolve_model_config(db: Session, model_id: str) -> dict:
         "api_format": "openai",
         "api_model": model_id,
         "enabled": True,
-    }
+    })
+
+
+def _with_dmxapi_fallback(cfg: dict) -> dict:
+    result = dict(cfg)
+    if result.get("type") == "image" and result.get("api_base_url") == DEFAULT_BASE_URL and not result.get("api_key"):
+        result["api_base_url"] = settings.DMXAPI_BASE_URL or DEFAULT_BASE_URL
+        result["api_key"] = settings.DMXAPI_API_KEY or ""
+    return result
 
 
 def get_actual_embedding_config() -> dict:
@@ -524,7 +564,7 @@ def _extract_gemini_image(response: dict) -> list[dict]:
     return image_list
 
 
-def get_available_models(db: Session) -> list[dict]:
+def _all_models(db: Session) -> list[dict]:
     configured = (
         db.query(SystemConfig)
         .filter(SystemConfig.config_key.like("model_%", escape="\\"))
@@ -544,9 +584,20 @@ def get_available_models(db: Session) -> list[dict]:
         for model in DEFAULT_MODELS:
             if model["id"] not in configured_ids:
                 result.append(dict(model))
-        return result
+        return [_with_dmxapi_fallback(model) for model in result]
 
-    return [get_actual_embedding_config(), *[dict(m) for m in DEFAULT_MODELS]]
+    return [get_actual_embedding_config(), *[_with_dmxapi_fallback(dict(m)) for m in DEFAULT_MODELS]]
+
+
+def _public_model(model: dict) -> dict:
+    visible = dict(model)
+    visible["api_key_configured"] = bool(visible.get("api_key"))
+    visible["api_key"] = ""
+    return visible
+
+
+def get_available_models(db: Session) -> list[dict]:
+    return [_public_model(model) for model in _all_models(db)]
 
 
 def set_model_config(db: Session, models: list[dict]):
@@ -557,13 +608,18 @@ def set_model_config(db: Session, models: list[dict]):
 
     new_keys = set()
     for m in models:
+        if m.get("type") == "embedding" or m.get("actual"):
+            continue
         key = f"model_{m['id']}"
+        existing = _get_model_config(db, m["id"])
+        submitted_key = str(m.get("api_key") or "").strip()
+        api_key = submitted_key or (existing or {}).get("api_key", "")
         value = json.dumps({
             "id": m.get("id", ""),
             "name": m.get("name", ""),
             "type": m.get("type", "image"),
             "description": m.get("description", ""),
-            "api_key": m.get("api_key", ""),
+            "api_key": _encrypt_api_key(api_key),
             "api_base_url": m.get("api_base_url", DEFAULT_BASE_URL),
             "api_format": m.get("api_format", "openai"),
             "api_model": m.get("api_model") or m.get("id", ""),
@@ -572,6 +628,7 @@ def set_model_config(db: Session, models: list[dict]):
             "chat_url": m.get("chat_url", ""),
             "embedding_url": m.get("embedding_url", ""),
             "enabled": m.get("enabled", True),
+            "is_default": m.get("is_default", False),
         }, ensure_ascii=False)
         config = db.query(SystemConfig).filter(SystemConfig.config_key == key).first()
         if config:
@@ -591,13 +648,15 @@ def set_model_config(db: Session, models: list[dict]):
 def get_default_model_by_type(db: Session, model_type: str) -> dict | None:
     if model_type == "embedding":
         return get_actual_embedding_config()
-    models = get_available_models(db)
-    for model in models:
-        if model.get("type") == model_type and model.get("api_key") and model.get("enabled", True):
-            return model
-    for model in models:
-        if model.get("type") == model_type and model.get("enabled", True):
-            return model
+    models = [model for model in _all_models(db) if model.get("type") == model_type and model.get("enabled", True)]
+    preferred = sorted((model for model in models if model.get("is_default")), key=lambda model: str(model.get("id")))
+    if preferred:
+        return preferred[0]
+    with_key = sorted((model for model in models if model.get("api_key")), key=lambda model: str(model.get("id")))
+    if with_key:
+        return with_key[0]
+    if models:
+        return sorted(models, key=lambda model: str(model.get("id")))[0]
     return None
 
 

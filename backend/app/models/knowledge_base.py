@@ -83,6 +83,24 @@ class KnowledgeParseTask(Base):
     error_message: Mapped[str] = mapped_column(Text, nullable=True)
 
 
+class KnowledgeJob(Base):
+    __tablename__ = "knowledge_jobs"
+    __table_args__ = (Index("idx_knowledge_jobs_status", "status"),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    kind: Mapped[str] = mapped_column(String(50), nullable=False)
+    status: Mapped[str] = mapped_column(String(30), nullable=False, default="queued")
+    stage: Mapped[str] = mapped_column(String(100), nullable=False, default="queued")
+    created_by: Mapped[str] = mapped_column(String(36), nullable=False)
+    payload_json: Mapped[str] = mapped_column(Text, nullable=False, default="{}")
+    result_json: Mapped[str] = mapped_column(Text, nullable=True)
+    error_message: Mapped[str] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(timezone.utc))
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
+    started_at: Mapped[datetime] = mapped_column(DateTime, nullable=True)
+    finished_at: Mapped[datetime] = mapped_column(DateTime, nullable=True)
+
+
 class CustomerServiceConversation(Base):
     __tablename__ = "customer_service_conversations"
 

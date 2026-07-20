@@ -87,6 +87,7 @@ class Settings:
 
     DMXAPI_BASE_URL: str = os.getenv("DMXAPI_BASE_URL", "https://www.dmxapi.cn")
     DMXAPI_API_KEY: str = os.getenv("DMXAPI_API_KEY", "")
+    MODEL_CONFIG_ENCRYPTION_KEY: str = os.getenv("MODEL_CONFIG_ENCRYPTION_KEY", "")
     DASHSCOPE_API_KEY: str = os.getenv("DASHSCOPE_API_KEY", "")
 
     DMXAPI_TXT2IMG_TIMEOUT: int = int(os.getenv("DMXAPI_TXT2IMG_TIMEOUT", "300"))
