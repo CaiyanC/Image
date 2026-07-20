@@ -85,7 +85,7 @@ git checkout dev
 ## Graphify 开发辅助（默认）
 
 - 代码改动前，先读取 `D:\CaiYan\Image-Generation-feature-v5-graphify\graphify-out\GRAPH_REPORT.md` 或使用 `graphify` 查询图谱，确认受影响模块与调用关系。
-- 代码改动后，在 `D:\CaiYan\Image-Generation-feature-v5-graphify` 执行 `graphify update . --no-cluster`，再检查受影响社区和关键路径。该命令只更新代码图谱，不需要 API。
+- 代码改动后，在 `D:\CaiYan\Image-Generation-feature-v5-graphify` 依次执行 `graphify update . --no-cluster` 和 `graphify cluster-only . --no-label`，再检查受影响社区和关键路径。两条命令只处理代码图谱，不需要 API；第二条会同步刷新报告和 HTML。
 - 项目文档由 Codex 在实际任务中按需读取和提炼；未配置付费模型 API 前，不将 Markdown、图片、Office 文档纳入 Graphify 的语义提取。
 - 图谱用于减少重复检索并辅助影响分析；涉及安全、数据库迁移、发布或测试失败时，仍必须核对源代码、迁移脚本和测试结果。
 - 用户明确要求“跳过图谱”或“快速修改”时，可跳过本节流程。
