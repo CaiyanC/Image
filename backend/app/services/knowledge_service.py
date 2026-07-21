@@ -265,7 +265,14 @@ async def semantic_retrieve(db: Session, query: str, sku: str | None = None, lim
         customer_cache_service.recommendation_candidate_cache.set(cache_key, result)
         return result
     except Exception:
-        rows = keyword_retrieve(db, query, sku=sku, limit=limit)
+        # Knowledge retrieval is an optional evidence layer.  When its
+        # underlying table or vector capability is unavailable, the keyword
+        # fallback may fail for the same reason; structured product retrieval
+        # must still be able to finish safely without knowledge rows.
+        try:
+            rows = keyword_retrieve(db, query, sku=sku, limit=limit)
+        except Exception:
+            rows = []
         customer_cache_service.recommendation_candidate_cache.set(cache_key, rows)
         return rows
 

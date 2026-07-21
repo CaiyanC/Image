@@ -1,7 +1,6 @@
 import hashlib
 import json
 import os
-import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -39,7 +38,7 @@ ALLOWED_KNOWLEDGE_FILE_MIME_TYPES = {
     "application/octet-stream",
 }
 MAX_KNOWLEDGE_FILE_BYTES = 20 * 1024 * 1024
-KNOWLEDGE_FILE_DIR = os.path.join(settings.UPLOAD_DIR, "knowledge-files")
+KNOWLEDGE_FILE_DIR = settings.KNOWLEDGE_FILE_DIR
 
 
 class KnowledgeDocumentCreate(BaseModel):
@@ -594,7 +593,12 @@ def _validate_knowledge_file(file: UploadFile) -> str:
 
 
 async def _save_knowledge_file(file: UploadFile, suffix: str) -> tuple[str, str, str]:
-    stored_name = f"{uuid.uuid4().hex}{suffix}"
+    original_name = os.path.basename(file.filename or "").strip().replace("\x00", "")
+    if not original_name:
+        original_name = f"knowledge-file{suffix}"
+    if Path(original_name).suffix.lower() != suffix:
+        original_name = f"{Path(original_name).stem}{suffix}"
+    stored_name = _available_knowledge_file_name(original_name)
     saved_path = os.path.join(KNOWLEDGE_FILE_DIR, stored_name)
     digest = hashlib.sha256()
     total_bytes = 0
@@ -611,6 +615,18 @@ async def _save_knowledge_file(file: UploadFile, suffix: str) -> tuple[str, str,
             digest.update(chunk)
             await handle.write(chunk)
     return saved_path, stored_name, digest.hexdigest()
+
+
+def _available_knowledge_file_name(file_name: str) -> str:
+    """Keep readable source names while preventing same-name uploads from overwriting files."""
+    candidate = Path(file_name)
+    stem = candidate.stem or "knowledge-file"
+    suffix = candidate.suffix
+    index = 1
+    while (Path(KNOWLEDGE_FILE_DIR) / candidate.name).exists():
+        candidate = Path(f"{stem} ({index}){suffix}")
+        index += 1
+    return candidate.name
 
 
 def _normalize_related_skus(values: str | list[str] | None) -> list[str]:

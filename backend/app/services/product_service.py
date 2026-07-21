@@ -1076,7 +1076,7 @@ def _normalize_qa_question(question: str) -> str:
     return re.sub(r"\s+", "", question or "").lower()
 
 
-def import_qa_batch(db: Session, items: list[dict], mode: str = "replace") -> dict:
+def import_qa_batch(db: Session, items: list[dict], mode: str = "append") -> dict:
     results = []
     total_qa_created = 0
     total_negative_updated = 0

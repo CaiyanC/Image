@@ -5,7 +5,7 @@ from time import perf_counter
 from sqlalchemy.orm import Session
 
 from ..core.database import release_session_connection
-from . import agent_action_service, customer_agent_service, customer_cache_service, knowledge_service, product_service
+from . import agent_action_service, customer_agent_service, customer_cache_service, customer_field_contract, knowledge_service, product_service
 from . import customer_perf_service
 
 
@@ -83,6 +83,15 @@ QUERY_FIELD_LABELS = {
     "channels": "上架平台",
     "regions": "售卖地区",
     "keywords": "关键词库",
+}
+
+# These are detail-tool projections of the association evidence namespaces.
+# FieldContract remains the sole owner of the customer-facing canonical field;
+# this table only adapts an already-approved evidence source to the legacy
+# detail payload shape consumed by the tool.
+_ASSOCIATION_EVIDENCE_QUERY_FIELDS = {
+    "associations.channels": "channels",
+    "associations.regions": "regions",
 }
 
 
@@ -406,8 +415,29 @@ def _enrich_fields(db: Session, row: dict, fields: list[str]) -> dict:
 
 
 def query_fields_from_text(text: str) -> list[str]:
-    found = []
+    """Return detail-tool fields for a formal field request, then legacy fallbacks.
+
+    Contextual detail handling predates FieldContract and used to inspect only
+    mutable alias tables.  Resolve the formal contract first so every
+    contract-backed structured evidence field follows the same canonical
+    field/evidence mapping as the main product-detail route.  Alias scanning
+    remains compatibility-only for legacy tool labels outside that contract.
+    """
+    found: list[str] = []
     raw = str(text or "")
+    contract = customer_field_contract.resolve_requested_field_contract(raw)
+    for field_type in contract.get("supported_fields") or ():
+        policy = customer_field_contract.field_evidence_policy(field_type)
+        if policy is None:
+            continue
+        for evidence_source in policy.structured_fields:
+            field_path = _ASSOCIATION_EVIDENCE_QUERY_FIELDS.get(
+                evidence_source,
+                evidence_source,
+            )
+            if field_path in agent_action_service.FIELD_SPECS or field_path in QUERY_FIELD_LABELS:
+                if field_path not in found:
+                    found.append(field_path)
     for label, path in QUERY_FIELD_ALIASES.items():
         if label and label in raw and path not in found:
             found.append(path)
@@ -492,7 +522,9 @@ def _enrich_semantic_rows(db: Session, rows: list[dict]) -> list[dict]:
         try:
             detail = product_service.get_product_detail(db, sku)
         except Exception:
-            enriched_rows.append({**row, "sku": sku})
+            # A semantic snippet cannot establish a product fact on its own.
+            # If the canonical product record cannot be read, discard the
+            # row rather than exposing a stale or unverifiable SKU.
             continue
         specs = detail.get("specs") or {}
         business = detail.get("business") or {}

@@ -43,6 +43,118 @@ def test_request_contract_extracts_people_heat_and_soft_preferences():
     assert "heat_source" in contract.hard_constraints
 
 
+def test_request_contract_uses_validated_semantic_constraints_without_reparsing_question_words():
+    contract = build_recommendation_request_contract(
+        "想找露营用、背起来别太沉的那类。",
+        semantic_constraints={
+            "subject_kind": "cookware",
+            "people": {"min": 2, "max": 2},
+            "heat_sources": ["card_stove"],
+            "scenarios": ["camping"],
+            "weight_preference": "lightweight",
+        },
+    )
+
+    assert contract.subject_category == "锅具"
+    assert contract.subject_kind == "cookware"
+    assert (contract.people_min, contract.people_max) == (2, 2)
+    assert contract.heat_sources == ["卡式炉"]
+    assert contract.scenario == ["camping"]
+    assert contract.weight_preference == "lighter"
+    assert {"people", "heat_source", "scenario"} <= set(contract.hard_constraints)
+    assert "weight" in contract.soft_preferences
+    assert all(item["provenance"] == "validated_semantic_preplan" for item in contract.field_provenance.values())
+
+
+def test_semantic_storage_preference_requires_same_sku_storage_evidence_without_reparsing_question_words():
+    contract = build_recommendation_request_contract(
+        "第一次带孩子野餐，想要一套好收纳的锅具。",
+        semantic_constraints={
+            "subject_kind": "cookware",
+            "storage_preference": "compact_storage",
+        },
+    )
+
+    marked, unmarked = verify_recommendation_candidates(
+        contract,
+        [
+            _row("STORAGE", features="套娃式收纳，不占空间"),
+            _row("UNMARKED", features="硬质氧化工艺"),
+        ],
+    )
+
+    assert contract.storage_required is True
+    assert "storage" in contract.soft_preferences
+    assert contract.field_provenance["storage"]["provenance"] == "validated_semantic_preplan"
+    assert marked.evidence_by_constraint["storage"]["status"] == "verified"
+    assert unmarked.evidence_by_constraint["storage"]["status"] == "unsupported"
+
+
+def test_semantic_affordable_price_preference_requires_same_sku_price_positioning():
+    contract = build_recommendation_request_contract(
+        "预算别太高，推荐一套锅具。",
+        semantic_constraints={
+            "subject_kind": "cookware",
+            "price_preference": "affordable",
+        },
+    )
+    entry, mid, premium = verify_recommendation_candidates(
+        contract,
+        [
+            _row("ENTRY", price_positioning="入门款"),
+            _row("MID", price_positioning="中端"),
+            _row("PREMIUM", price_positioning="高端"),
+        ],
+    )
+
+    assert "price_positioning" in contract.hard_constraints
+    assert contract.field_provenance["price_positioning"]["provenance"] == "validated_semantic_preplan"
+    assert entry.evidence_by_constraint["price_positioning"]["status"] == "verified"
+    assert mid.evidence_by_constraint["price_positioning"]["status"] == "verified"
+    assert premium.verification_level == "rejected"
+    assert "price_positioning_condition_not_met" in premium.rejection_reasons
+
+
+def test_semantic_recommendation_scenario_requires_same_sku_usage_evidence():
+    contract = build_recommendation_request_contract(
+        "露营时想要一套不累赘的锅。",
+        semantic_constraints={"subject_kind": "cookware", "scenarios": ["camping"]},
+    )
+    camping, unmarked = verify_recommendation_candidates(
+        contract,
+        [
+            _row("CAMP", usage_scenarios="露营、野餐"),
+            _row("UNMARKED", usage_scenarios="家庭厨房"),
+        ],
+    )
+
+    assert camping.evidence_by_constraint["scenario"]["status"] == "verified"
+    assert unmarked.verification_level == "rejected"
+    assert "scenario_condition_not_met" in unmarked.rejection_reasons
+
+
+def test_cookware_subject_rejects_a_water_container_even_when_catalog_category_is_broad():
+    """Product identity must not be widened into a cookware recommendation.
+
+    The source category is an inventory label and can be broad.  A row whose
+    own identity is a water container is incompatible with the semantic
+    cookware subject, even if that broad category says ``锅具``.
+    """
+    contract = build_recommendation_request_contract(
+        "推荐能用酒精炉的锅",
+        semantic_constraints={"subject_kind": "cookware", "heat_sources": ["alcohol_stove"]},
+    )
+
+    result = verify_recommendation_candidates(
+        contract,
+        [_row("BROAD-CATEGORY-KETTLE", product_name_cn="时谷水壶", heat_source="酒精炉")],
+    )[0]
+
+    assert result.verification_level == "rejected"
+    assert result.evidence_by_constraint["subject"]["status"] == "conflict"
+    assert "subject_category_mismatch" in result.rejection_reasons
+
+
 def test_request_contract_normalizes_people_ranges_and_budget():
     two = build_recommendation_request_contract("两个人徒步，预算中等，推荐轻便锅具")
     range_contract = build_recommendation_request_contract("四五个人露营，锅具怎么选")
@@ -53,11 +165,29 @@ def test_request_contract_normalizes_people_ranges_and_budget():
     assert (range_contract.people_min, range_contract.people_max) == (4, 5)
 
 
+def test_request_contract_ignores_negated_people_range_and_keeps_positive_people_need():
+    contract = build_recommendation_request_contract("5个人露营做饭，不要1-2人的锅，推荐大容量套锅")
+
+    assert (contract.people_min, contract.people_max) == (5, 5)
+    assert "people" in contract.hard_constraints
+
+
 def test_four_people_rejects_explicit_two_to_three_person_product():
     contract = build_recommendation_request_contract("一家四口露营，推荐能明火加热的套锅")
     result = verify_recommendation_candidates(
         contract,
         [_row("SMALL", target_audience="适合2-3人", heat_source="明火直烧")],
+    )[0]
+
+    assert result.hard_constraints_passed is False
+    assert "people_capacity_conflict" in result.rejection_reasons
+
+
+def test_people_verification_rejects_fullwidth_dash_two_person_range_for_five_person_request():
+    contract = build_recommendation_request_contract("5个人露营，推荐锅具")
+    result = verify_recommendation_candidates(
+        contract,
+        [_row("PAIR", product_name_cn="1－2人露营锅")],
     )[0]
 
     assert result.hard_constraints_passed is False
@@ -656,14 +786,18 @@ def test_partial_answer_discloses_unknown_hard_and_soft_constraints():
     assert "稳定性：" not in answer
 
 
-def test_fully_verified_candidates_take_priority_over_partial_candidates():
+def test_fully_verified_candidates_precede_safe_partial_candidates():
     contract = build_recommendation_request_contract("两个人露营，推荐锅具")
     rows = [_row("PARTIAL"), _row("FULL", target_audience="适合1-2人")]
     verifications = verify_recommendation_candidates(contract, rows)
 
     selected = select_recommendation_candidates(rows, verifications)
 
-    assert [row["sku"] for row in selected] == ["FULL"]
+    # A missing field is not a contradiction.  Keep non-conflicting partial
+    # candidates after fully verified ones so a request for multiple options
+    # can retain a usable comparison set without presenting the partial row
+    # as fully verified.
+    assert [row["sku"] for row in selected] == ["FULL", "PARTIAL"]
 
 
 def test_partial_candidates_are_returned_when_no_fully_verified_candidate_exists():

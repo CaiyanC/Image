@@ -84,6 +84,12 @@ class Settings:
     IMAGE_UPLOAD_DIR: str = os.path.join(UPLOAD_DIR, "images")
     VIDEO_UPLOAD_DIR: str = os.path.join(UPLOAD_DIR, "videos")
     GENERATED_DIR: str = os.path.join(UPLOAD_DIR, "generated")
+    # Keep knowledge-base source files outside disposable app/worktree folders.
+    # Deployments can override this independently from image/video uploads.
+    KNOWLEDGE_FILE_DIR: str = os.getenv(
+        "KNOWLEDGE_FILE_DIR",
+        os.path.join(UPLOAD_DIR, "knowledge-files"),
+    )
 
     DMXAPI_BASE_URL: str = os.getenv("DMXAPI_BASE_URL", "https://www.dmxapi.cn")
     DMXAPI_API_KEY: str = os.getenv("DMXAPI_API_KEY", "")

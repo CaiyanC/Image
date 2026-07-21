@@ -9,6 +9,8 @@ interface ChatMessage {
   role: 'user' | 'assistant'
   content: string
   created_at?: string | null
+  response_started_at?: number
+  response_completed_at?: number
   streaming?: boolean
   status?: string
   intent?: string | null
@@ -31,9 +33,8 @@ interface ChatMessage {
 
 interface CustomerServiceDraft {
   version: number
-  conversationId: string | null
-  question: string
-  messages: ChatMessage[]
+  activeConversationKey: ConversationKey
+  conversationStates: Record<ConversationKey, CustomerConversationState>
   savedAt: string
 }
 
@@ -57,7 +58,7 @@ interface ConversationListItem {
   loading: boolean
 }
 
-const CUSTOMER_SERVICE_DRAFT_VERSION = 1
+const CUSTOMER_SERVICE_DRAFT_VERSION = 2
 
 export default function CustomerService() {
   const { isManagement, user } = useAuthStore()
@@ -72,6 +73,7 @@ export default function CustomerService() {
   const [actionLoadingId, setActionLoadingId] = useState<string | null>(null)
   const [debugMode, setDebugMode] = useState(false)
   const [feedbackLoadingId, setFeedbackLoadingId] = useState<string | null>(null)
+  const [now, setNow] = useState(() => Date.now())
   const bottomRef = useRef<HTMLDivElement | null>(null)
   const chatContainerRef = useRef<HTMLDivElement | null>(null)
   const conversationStatesRef = useRef(conversationStates)
@@ -80,7 +82,6 @@ export default function CustomerService() {
   const skipNextDraftPersistRef = useRef(false)
   const draftCacheKey = useMemo(() => customerServiceDraftKey(user?.id || user?.username), [user?.id, user?.username])
   const activeConversation = conversationStates[activeConversationKey] || createConversationState()
-  const conversationId = activeConversation.conversationId
   const question = activeConversation.question
   const messages = activeConversation.messages
   const loading = activeConversation.loading
@@ -88,6 +89,12 @@ export default function CustomerService() {
 
   useEffect(() => {
     conversationStatesRef.current = conversationStates
+  }, [conversationStates])
+
+  useEffect(() => {
+    if (!Object.values(conversationStates).some((state) => state.loading)) return
+    const timer = window.setInterval(() => setNow(Date.now()), 250)
+    return () => window.clearInterval(timer)
   }, [conversationStates])
 
   useEffect(() => {
@@ -101,15 +108,14 @@ export default function CustomerService() {
     skipNextDraftPersistRef.current = true
     draftHydratedRef.current = false
     const draft = loadCustomerServiceDraft(draftCacheKey)
-    const draftKey = draft?.conversationId ? conversationKeyForId(draft.conversationId) : createLocalConversationKey()
+    const states = draft?.conversationStates && Object.keys(draft.conversationStates).length
+      ? restoreConversationStates(draft.conversationStates)
+      : { [initialConversationKey]: createConversationState() }
+    const draftKey = draft?.activeConversationKey && states[draft.activeConversationKey]
+      ? draft.activeConversationKey
+      : Object.keys(states)[0]
     setActiveConversationKey(draftKey)
-    setConversationStates({
-      [draftKey]: createConversationState({
-        conversationId: draft?.conversationId || null,
-        question: draft?.question || '',
-        messages: draft?.messages || [],
-      }),
-    })
+    setConversationStates(states)
     draftHydratedRef.current = true
   }, [draftCacheKey])
 
@@ -121,12 +127,11 @@ export default function CustomerService() {
     }
     saveCustomerServiceDraft(draftCacheKey, {
       version: CUSTOMER_SERVICE_DRAFT_VERSION,
-      conversationId,
-      question,
-      messages: compactDraftMessages(messages),
+      activeConversationKey,
+      conversationStates: serializeConversationStates(conversationStates),
       savedAt: new Date().toISOString(),
     })
-  }, [conversationId, draftCacheKey, messages, question])
+  }, [activeConversationKey, conversationStates, draftCacheKey])
 
   useEffect(() => {
     // Use scrollTop for instant scroll during streaming; smooth on completion
@@ -222,7 +227,7 @@ export default function CustomerService() {
       messages: [
         ...state.messages,
         { role: 'user', content: userText },
-        { id: assistantId, role: 'assistant', content: '', streaming: true },
+        { id: assistantId, role: 'assistant', content: '', streaming: true, response_started_at: Date.now() },
       ],
     }))
 
@@ -331,13 +336,13 @@ export default function CustomerService() {
       )
       if (streamError) throw new Error(streamError)
       updateConversationMessages(requestKey, (prev) => prev.map((message) => (
-        message.id === assistantId ? { ...message, streaming: false, status: '' } : message
+        message.id === assistantId ? { ...message, streaming: false, status: '', response_completed_at: Date.now() } : message
       )))
       loadSideData()
     } catch (err) {
       if (abortController.signal.aborted || isAbortError(err)) {
         updateConversationMessages(requestKey, (prev) => prev.map((item) => (
-          item.id === assistantId ? { ...item, streaming: false, status: '' } : item
+          item.id === assistantId ? { ...item, streaming: false, status: '', response_completed_at: Date.now() } : item
         )))
         return
       }
@@ -346,7 +351,7 @@ export default function CustomerService() {
         ...state,
         error: message,
         messages: state.messages.map((item) => (
-          item.id === assistantId ? { ...item, content: message, streaming: false, status: '' } : item
+          item.id === assistantId ? { ...item, content: message, streaming: false, status: '', response_completed_at: Date.now() } : item
         )),
       }))
     } finally {
@@ -396,15 +401,23 @@ export default function CustomerService() {
         setConversations((prev) => prev.filter((conversation) => String(conversation.id) !== item.id))
       }
       deletedConversationKeysRef.current.add(item.key)
+      const deletedIndex = conversationListItems.findIndex((conversation) => conversation.key === item.key)
+      const nextItem = conversationListItems[deletedIndex + 1] || conversationListItems[deletedIndex - 1]
       setConversationStates((prev) => {
         const next = { ...prev }
         delete next[item.key]
         return next
       })
       if (activeConversationKey === item.key) {
-        const key = createLocalConversationKey()
-        setConversationStates((prev) => ({ ...prev, [key]: createConversationState() }))
-        setActiveConversationKey(key)
+        if (nextItem?.id) {
+          void openConversation(nextItem.id, nextItem.key)
+        } else if (nextItem) {
+          setActiveConversationKey(nextItem.key)
+        } else {
+          const key = createLocalConversationKey()
+          setConversationStates((prev) => ({ ...prev, [key]: createConversationState() }))
+          setActiveConversationKey(key)
+        }
       }
     } catch (err) {
       updateConversationState(item.key, (state) => ({
@@ -418,7 +431,6 @@ export default function CustomerService() {
     const key = createLocalConversationKey()
     setConversationStates((prev) => ({ ...prev, [key]: createConversationState() }))
     setActiveConversationKey(key)
-    clearCustomerServiceDraft(draftCacheKey)
   }
 
   async function updateAction(actionId: string, mode: 'confirm' | 'cancel') {
@@ -544,6 +556,12 @@ export default function CustomerService() {
                   }`}>
                     {message.content || message.status || ''}
                   </div>
+
+                  {message.role === 'assistant' && message.response_started_at && (
+                    <div className="px-1 text-[11px] text-apple-gray-medium">
+                      {message.streaming ? '回复中' : '回复耗时'} {formatResponseDuration(message.response_started_at, message.response_completed_at || now)}
+                    </div>
+                  )}
 
                   {message.role === 'assistant' && !message.streaming && message.needs_clarification && (
                     <div className="flex flex-wrap gap-2 text-[11px]">
@@ -749,6 +767,33 @@ function createConversationState(overrides: Partial<CustomerConversationState> =
   }
 }
 
+function serializeConversationStates(
+  states: Record<ConversationKey, CustomerConversationState>,
+  maxMessages = 80,
+): Record<ConversationKey, CustomerConversationState> {
+  return Object.fromEntries(Object.entries(states).map(([key, state]) => [key, {
+    ...state,
+    abortController: null,
+    messages: compactDraftMessages(state.messages, maxMessages),
+  }]))
+}
+
+function restoreConversationStates(
+  states: Record<ConversationKey, CustomerConversationState>,
+): Record<ConversationKey, CustomerConversationState> {
+  return Object.fromEntries(Object.entries(states).map(([key, state]) => [key, createConversationState({
+    ...state,
+    loading: false,
+    abortController: null,
+    messages: compactDraftMessages(state.messages || []),
+  })]))
+}
+
+function formatResponseDuration(startedAt: number, endedAt: number): string {
+  const milliseconds = Math.max(0, endedAt - startedAt)
+  return `${(milliseconds / 1000).toFixed(milliseconds < 10_000 ? 1 : 0)} 秒`
+}
+
 function createLocalConversationKey(): ConversationKey {
   return `local:${Date.now()}:${Math.random().toString(36).slice(2)}`
 }
@@ -798,7 +843,12 @@ function loadCustomerServiceDraft(key: string): CustomerServiceDraft | null {
     const raw = localStorage.getItem(key)
     if (!raw) return null
     const draft = JSON.parse(raw) as CustomerServiceDraft
-    if (draft.version !== CUSTOMER_SERVICE_DRAFT_VERSION || !Array.isArray(draft.messages)) {
+    if (
+      draft.version !== CUSTOMER_SERVICE_DRAFT_VERSION
+      || !draft.activeConversationKey
+      || !draft.conversationStates
+      || typeof draft.conversationStates !== 'object'
+    ) {
       localStorage.removeItem(key)
       return null
     }
@@ -810,7 +860,10 @@ function loadCustomerServiceDraft(key: string): CustomerServiceDraft | null {
 }
 
 function saveCustomerServiceDraft(key: string, draft: CustomerServiceDraft) {
-  const hasContent = Boolean(draft.conversationId || draft.question.trim() || draft.messages.length)
+  const states = Object.values(draft.conversationStates)
+  const hasContent = states.length > 1 || states.some((state) => (
+    state.conversationId || state.question.trim() || state.messages.length
+  ))
   if (!hasContent) {
     localStorage.removeItem(key)
     return
@@ -822,7 +875,7 @@ function saveCustomerServiceDraft(key: string, draft: CustomerServiceDraft) {
     try {
       localStorage.setItem(key, JSON.stringify({
         ...draft,
-        messages: compactDraftMessages(draft.messages, 20),
+        conversationStates: serializeConversationStates(draft.conversationStates, 20),
       }))
     } catch {
       // Browser storage may be full or disabled; losing the draft should not break chat.
@@ -830,15 +883,12 @@ function saveCustomerServiceDraft(key: string, draft: CustomerServiceDraft) {
   }
 }
 
-function clearCustomerServiceDraft(key: string) {
-  localStorage.removeItem(key)
-}
-
 function compactDraftMessages(messages: ChatMessage[], maxMessages = 80): ChatMessage[] {
   return messages.slice(-maxMessages).map((message) => ({
     ...message,
     streaming: false,
     status: message.streaming ? '' : message.status,
+    response_completed_at: message.streaming ? Date.now() : message.response_completed_at,
   }))
 }
 

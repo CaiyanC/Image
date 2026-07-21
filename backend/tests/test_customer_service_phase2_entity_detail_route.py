@@ -62,7 +62,7 @@ def phase2_client(route_client_and_db):
         ("RT-P2-300 的 SKU 是什么", "RT-P2-300"),
     ],
 )
-def test_phase2_exact_name_or_sku_model_precedes_category_route(phase2_client, question, sku):
+def test_phase2_exact_name_or_sku_record_key_precedes_category_route(phase2_client, question, sku):
     client, headers = phase2_client
     payload = client.post("/api/customer-service/ask?debug=true", json={"question": question}, headers=headers).json()
 
@@ -94,9 +94,97 @@ def test_phase2_exact_version_specification_keeps_single_product(phase2_client):
         headers=headers,
     ).json()
 
+    debug = payload.get("debug") or {}
+    entity = debug.get("entity_resolution_contract") or {}
+    metadata = payload.get("answer_metadata") or {}
+
+    # This used to protect the pre-structured-specification missing-value
+    # behavior.  The formal field contract now intentionally composes valid
+    # same-SKU specification columns, so retain and strengthen the identity,
+    # field, evidence, and answer-safety assertions instead of expecting a
+    # false missing-data response.
+    assert payload["answer_type"] == "product_detail", payload
+    assert debug.get("agent_mode") == "resolved_entity_detail_contract", payload
+    assert entity.get("status") == "resolved", payload
+    assert entity.get("resolved_sku") == "RT-P2-300", payload
+    assert entity.get("field_type") == "specification", payload
+    assert payload.get("candidate_skus") == ["RT-P2-300"], payload
+    assert payload.get("result_skus") == ["RT-P2-300"], payload
+    assert metadata.get("contract_field_type") == "specification", payload
+    assert metadata.get("evidence_field") == "specification", payload
+    assert metadata.get("evidence_source") == "specification.summary", payload
+    assert metadata.get("evidence_sku") == "RT-P2-300", payload
+    answer = str(payload.get("answer") or "")
+    for expected in ("32 x 28 x 4 cm", "2L", "760g", "铝合金", "本色"):
+        assert expected in answer, payload
+    assert "760.0g" not in answer, payload
+
+
+def test_phase2_purchase_channel_ignores_field_like_token_inside_product_name(phase2_client):
+    client, headers = phase2_client
+    payload = client.post(
+        "/api/customer-service/ask?debug=true",
+        json={"question": "山影Pro烤盘在哪里有售卖"},
+        headers=headers,
+    ).json()
+
+    debug = payload.get("debug") or {}
+    entity = debug.get("entity_resolution_contract") or {}
+    metadata = payload.get("answer_metadata") or {}
+    assert payload["answer_type"] == "product_detail", payload
+    assert debug.get("agent_mode") == "resolved_entity_detail_contract", payload
+    assert entity.get("resolved_sku") == "RT-P2-300", payload
+    assert entity.get("field_type") == "purchase_channel", payload
+    assert payload.get("result_skus") == ["RT-P2-300"], payload
+    assert metadata.get("contract_field_type") == "purchase_channel", payload
+    assert metadata.get("evidence_status") == "missing", payload
+    assert "配件" not in str(payload.get("answer") or ""), payload
+
+
+def test_phase2_selling_point_consumes_structured_policy_evidence(phase2_client):
+    client, headers = phase2_client
+    payload = client.post(
+        "/api/customer-service/ask?debug=true",
+        json={"question": "山影Pro烤盘的核心卖点是什么"},
+        headers=headers,
+    ).json()
+
+    metadata = payload.get("answer_metadata") or {}
     assert payload["answer_type"] == "product_detail", payload
     assert payload.get("result_skus") == ["RT-P2-300"], payload
-    assert "未标注" in payload["answer"], payload
+    assert "均匀导热卖点" in str(payload.get("answer") or ""), payload
+    assert metadata.get("evidence_source") == "business.top_selling_points", payload
+    assert metadata.get("evidence_sku") == "RT-P2-300", payload
+
+
+def test_field_evidence_provider_never_re_resolves_a_sealed_identity_from_raw_question(route_client_and_db):
+    _client, _headers, Session = route_client_and_db
+    _seed_phase2_products(Session)
+    with Session() as db:
+        result = customer_service_service._product_field_followup_result(
+            db,
+            "RT-P2-100",
+            "heat_source",
+            "山影Pro烤盘支持什么热源？",
+            identity_source="phase2_resolved_entity",
+        )
+
+    assert result is not None
+    assert result.get("result_skus") == ["RT-P2-100"], result
+    assert result.get("candidate_skus") == ["RT-P2-100"], result
+    metadata = result.get("answer_metadata") or {}
+    assert metadata.get("evidence_sku") == "RT-P2-100", result
+    assert "RT-P2-300" not in str(result.get("answer") or ""), result
+
+
+def test_phase1_catalog_count_accepts_discourse_prefix_but_not_product_capacity():
+    count_plan = customer_agent_planner_service.plan_customer_question("我们有多少个锅")
+    field_plan = customer_agent_planner_service.plan_customer_question("这口锅容量多少")
+
+    assert count_plan.get("primary_intent") == "catalog_count"
+    assert count_plan.get("product_ref") == "锅具"
+    assert customer_service_service._looks_like_semantic_catalog_query("我们有多少个锅") is True
+    assert field_plan.get("primary_intent") != "catalog_count"
 
 
 def test_phase2_ambiguous_family_does_not_bind_first_candidate(phase2_client):
@@ -137,13 +225,21 @@ def test_phase2_generic_category_field_stays_outside_single_product_gate(phase2_
         headers=headers,
     ).json()
 
-    assert payload.get("debug", {}).get("agent_mode") not in {
-        "resolved_entity_detail_contract",
-        "entity_state_detail_ambiguous",
-        "entity_state_detail_unresolved",
-    }, payload
-    assert len(payload.get("result_skus") or []) != 1, payload
-    assert payload.get("answer_type") != "product_detail", payload
+    # This protects the category boundary rather than the pre-aggregation
+    # single-product clarification used before the structured category
+    # contract existed.  The request must remain unbound while consuming only
+    # capacity evidence from the water-kettle category.
+    metadata = payload.get("answer_metadata") or {}
+    contract = metadata.get("structured_query_contract") or {}
+    assert payload.get("debug", {}).get("agent_mode") == "category_field_general", payload
+    assert payload.get("answer_type") == "product_query", payload
+    assert payload.get("result_skus") == [], payload
+    assert payload.get("candidate_skus") == [], payload
+    assert contract.get("status") == "generic", payload
+    assert contract.get("subject_category") == "水壶", payload
+    assert contract.get("field") == "capacity", payload
+    assert metadata.get("aggregated_values"), payload
+    assert all(proof.get("field_source") == "capacity" for proof in metadata.get("value_proofs") or []), payload
     assert payload.get("debug", {}).get("binding_provenance") == "none", payload
     assert payload.get("debug", {}).get("search_top1_promotion_blocked") is True, payload
 
@@ -188,13 +284,29 @@ def test_explicit_sku_detail_remains_legal_when_search_promotion_is_disabled(rou
             )
         )
 
+    debug = payload.get("debug") or {}
+    entity = debug.get("entity_resolution_contract") or {}
+    metadata = payload.get("answer_metadata") or {}
+
+    # Explicit SKU text is resolver evidence, not permission to bypass the
+    # central entity contract.  Disabling search promotion must still allow
+    # the exact SKU while preserving the sealed-identity provenance.
     assert payload["answer_type"] == "product_detail", payload
+    assert payload.get("candidate_skus") == ["RT-P2-100"], payload
     assert payload.get("result_skus") == ["RT-P2-100"], payload
-    assert payload.get("debug", {}).get("binding_provenance") == "explicit_sku", payload
-    assert payload.get("debug", {}).get("search_top1_promotion_blocked") is False, payload
+    assert debug.get("binding_provenance") == "resolved_entity_contract", payload
+    assert debug.get("search_top1_promotion_blocked") is False, payload
+    assert entity.get("status") == "resolved", payload
+    assert entity.get("resolved_sku") == "RT-P2-100", payload
+    assert entity.get("matched_by") == "sku_exact", payload
+    assert entity.get("field_type") == "sku", payload
+    assert metadata.get("contract_field_type") == "sku", payload
+    assert metadata.get("evidence_field") == "sku", payload
+    assert metadata.get("evidence_source") == "product.sku", payload
+    assert metadata.get("evidence_sku") == "RT-P2-100", payload
 
 
-def test_search_top1_promotion_default_remains_backward_compatible(route_client_and_db):
+def test_exact_name_detail_uses_entity_contract_without_search_promotion(route_client_and_db):
     _, _, Session = route_client_and_db
     _seed_phase2_products(Session)
     with Session() as db:
@@ -207,22 +319,41 @@ def test_search_top1_promotion_default_remains_backward_compatible(route_client_
             )
         )
 
+    debug = payload.get("debug") or {}
+    entity = debug.get("entity_resolution_contract") or {}
+    metadata = payload.get("answer_metadata") or {}
+
+    # A canonical full-name match is deterministic entity evidence.  It must
+    # not be represented as search top-1 promotion now that the formal entity
+    # contract precedes the compatibility executor.
     assert payload["answer_type"] == "product_detail", payload
+    assert payload.get("candidate_skus") == ["RT-P2-100"], payload
     assert payload.get("result_skus") == ["RT-P2-100"], payload
-    assert payload.get("debug", {}).get("binding_provenance") in {"search_top1", "query_rows_top1"}, payload
+    assert debug.get("binding_provenance") == "resolved_entity_contract", payload
+    assert debug.get("search_top1_promotion_blocked") is False, payload
+    assert entity.get("status") == "resolved", payload
+    assert entity.get("resolved_sku") == "RT-P2-100", payload
+    assert entity.get("matched_by") == "canonical_name_exact", payload
+    assert entity.get("field_type") == "capacity", payload
+    assert metadata.get("contract_field_type") == "capacity", payload
+    assert metadata.get("evidence_field") == "capacity", payload
+    assert metadata.get("evidence_source") == "specs.capacity", payload
+    assert metadata.get("evidence_sku") == "RT-P2-100", payload
 
 
 def test_phase2_exact_product_gift_preserves_unknown_field_safety_guard(phase2_client):
+    question = "晨雾Plus水壶有赠品记录吗"
     client, headers = phase2_client
     payload = client.post(
         "/api/customer-service/ask?debug=true",
-        json={"question": "晨雾Plus水壶有赠品记录吗"},
+        json={"question": question},
         headers=headers,
     ).json()
 
     assert payload["answer_type"] == "product_detail", payload
     assert payload.get("result_skus") == ["RT-P2-100"], payload
     assert payload.get("debug", {}).get("agent_mode") == "resolved_entity_unknown_field_fallback", payload
+    assert (payload.get("debug", {}).get("plan") or {}).get("raw_question") == question, payload
     assert "未标注" in payload["answer"], payload
 
 
@@ -233,7 +364,7 @@ def test_phase2_exact_product_gift_preserves_unknown_field_safety_guard(phase2_c
         "云途水壶售价有记录吗",
     ],
 )
-def test_phase2_recognized_unsupported_field_never_enters_entity_arbitration(route_client_and_db, question):
+def test_phase2_recognized_unsupported_field_requires_entity_contract_before_safe_missing(route_client_and_db, question):
     _, _, Session = route_client_and_db
     _seed_phase2_products(Session)
     with Session() as db:
@@ -246,7 +377,21 @@ def test_phase2_recognized_unsupported_field_never_enters_entity_arbitration(rou
         )
 
     assert is_supported_detail_field("price") is False
-    assert result is None
+    if result is None:
+        # No concrete product subject exists, so no product fact or entity
+        # binding is permitted.
+        return
+    # The old expectation protected a pre-contract bypass. A recognised
+    # safety field still forms FieldContract + EntityResolutionContract;
+    # ambiguity must be surfaced rather than selecting a product or dropping
+    # into a generic commercial answer.
+    assert result["answer_type"] == "clarification", result
+    assert result["debug"]["agent_mode"] == "entity_state_detail_ambiguous", result
+    assert result["candidate_skus"] == ["RT-P2-401", "RT-P2-402"], result
+    assert result["result_skus"] == [], result
+    entity = result["debug"]["entity_resolution_contract"]
+    assert entity["status"] == "ambiguous", result
+    assert entity["field_type"] == "price", result
 
 
 def test_phase2_explicit_sku_unsupported_field_keeps_unknown_field_safety(phase2_client):
@@ -260,7 +405,104 @@ def test_phase2_explicit_sku_unsupported_field_keeps_unknown_field_safety(phase2
     assert payload["answer_type"] == "product_detail", payload
     assert payload.get("result_skus") == ["RT-P2-100"], payload
     assert payload.get("debug", {}).get("agent_mode") == "resolved_entity_unknown_field_fallback", payload
-    assert "未标注" in payload["answer"], payload
+    # The central safe-missing formatter may use either “未标注” or
+    # “暂未找到”; preserve the actual safety invariant instead of pinning a
+    # single wording: it must identify the requested price and never invent a
+    # current sale price for this exact entity.
+    answer = str(payload.get("answer") or "")
+    assert "价格" in answer, payload
+    assert any(term in answer for term in ("未标注", "暂未找到")), payload
+    assert "当前售价：" not in answer, payload
+
+
+@pytest.mark.parametrize(
+    ("question", "expected_field"),
+    [
+        ("RT-P2-100 当前售价有记录吗", "price"),
+        ("RT-P2-100 现在有现货吗", "inventory"),
+        ("RT-P2-100 保修多久", "warranty"),
+        ("RT-P2-100 下单后几天发出", "shipping"),
+        ("RT-P2-100 怎么联系售后", "after_sales_contact"),
+    ],
+)
+def test_high_risk_safe_missing_routes_expose_formal_field_contract(
+    phase2_client,
+    question,
+    expected_field,
+):
+    client, headers = phase2_client
+    payload = client.post(
+        "/api/customer-service/ask?debug=true",
+        json={"question": question},
+        headers=headers,
+    ).json()
+
+    debug = payload.get("debug") or {}
+    field_contract = debug.get("field_contract") or (debug.get("plan") or {}).get("field_contract") or {}
+    entity = debug.get("entity_resolution_contract") or {}
+    metadata = payload.get("answer_metadata") or {}
+    assert debug.get("agent_mode") == "resolved_entity_unknown_field_fallback", payload
+    assert field_contract.get("field_type") == expected_field, payload
+    assert entity.get("status") == "resolved", payload
+    assert entity.get("resolved_sku") == "RT-P2-100", payload
+    assert entity.get("field_type") == expected_field, payload
+    assert payload.get("candidate_skus") == ["RT-P2-100"], payload
+    assert payload.get("result_skus") == ["RT-P2-100"], payload
+    assert metadata.get("contract_field_type") == expected_field, payload
+    assert metadata.get("field_evidence_missing") is True, payload
+
+
+@pytest.mark.parametrize(
+    ("question", "expected_field", "expected_status", "expected_source"),
+    [
+        ("RT-P2-100的条码是什么？", "barcode", "structured", "product.barcode"),
+        ("RT-P2-100属于哪个产品系列？", "series", "missing", None),
+        ("RT-P2-100是什么时候上市的？", "launch_date", "missing", None),
+        ("RT-P2-100现在还在售吗？", "lifecycle_status", "structured", "product.lifecycle_status"),
+        ("晨雾Plus水壶现在还在售吗？", "lifecycle_status", "structured", "product.lifecycle_status"),
+        ("RT-P2-100表面用了什么处理工艺？", "surface_finish", "structured", "specs.surface_finish"),
+        ("RT-P2-100的产品定位是什么？", "positioning", "structured", "business.positioning"),
+        ("RT-P2-100属于什么价格定位？", "price_positioning", "structured", "business.price_positioning"),
+        ("RT-P2-100强调的情感价值是什么？", "emotional_value", "missing", None),
+        ("RT-P2-100目前面向哪些地区销售？", "sales_region", "missing", None),
+        ("RT-P2-100有哪些产品认证？", "certification", "missing", None),
+    ],
+)
+def test_customer_relevant_database_fields_use_formal_contract_and_safe_evidence(
+    phase2_client,
+    question,
+    expected_field,
+    expected_status,
+    expected_source,
+):
+    client, headers = phase2_client
+    payload = client.post(
+        "/api/customer-service/ask?debug=true",
+        json={"question": question},
+        headers=headers,
+    ).json()
+
+    debug = payload.get("debug") or {}
+    field_contract = debug.get("field_contract") or (debug.get("plan") or {}).get("field_contract") or {}
+    entity = debug.get("entity_resolution_contract") or {}
+    metadata = payload.get("answer_metadata") or {}
+    assert payload.get("answer_type") == "product_detail", payload
+    assert debug.get("agent_mode") == "resolved_entity_detail_contract", payload
+    assert field_contract.get("field_type") == expected_field, payload
+    assert entity.get("status") == "resolved", payload
+    assert entity.get("resolved_sku") == "RT-P2-100", payload
+    assert entity.get("field_type") == expected_field, payload
+    assert payload.get("candidate_skus") == ["RT-P2-100"], payload
+    assert payload.get("result_skus") == ["RT-P2-100"], payload
+    assert metadata.get("contract_field_type") == expected_field, payload
+    assert metadata.get("evidence_status") == expected_status, payload
+    assert metadata.get("evidence_source") == expected_source, payload
+    if expected_status == "structured":
+        assert metadata.get("evidence_sku") == "RT-P2-100", payload
+    else:
+        assert metadata.get("evidence_sku") is None, payload
+    if expected_field == "lifecycle_status":
+        assert "非实时库存" in str(payload.get("answer") or ""), payload
 
 
 def test_phase2_supported_ambiguous_and_resolved_fields_keep_entity_arbitration(phase2_client):
@@ -315,13 +557,24 @@ def test_phase2_missing_dimension_evidence_preserves_resolved_sku(phase2_client)
         headers=headers,
     ).json()
 
+    debug = payload.get("debug") or {}
+    entity = debug.get("entity_resolution_contract") or {}
+    metadata = payload.get("answer_metadata") or {}
+    answer = str(payload.get("answer") or "")
     assert payload["answer_type"] == "product_detail", payload
+    assert payload.get("candidate_skus") == ["RT-P2-500"], payload
     assert payload.get("result_skus") == ["RT-P2-500"], payload
-    assert "没有找到" in payload["answer"] or "未标注" in payload["answer"], payload
-    assert "12L" not in payload["answer"], payload
+    assert entity.get("status") == "resolved", payload
+    assert entity.get("resolved_sku") == "RT-P2-500", payload
+    assert entity.get("field_type") == "dimensions", payload
+    assert metadata.get("contract_field_type") == "dimensions", payload
+    assert metadata.get("evidence_status") == "missing", payload
+    assert metadata.get("evidence_sku") is None, payload
+    assert "暂未找到" in answer and "收纳尺寸" in answer, payload
+    assert "12L" not in answer, payload
 
 
-def test_phase2_model_answer_does_not_substitute_selling_points(phase2_client):
+def test_phase2_missing_model_number_does_not_substitute_sku_or_selling_points(phase2_client):
     client, headers = phase2_client
     payload = client.post(
         "/api/customer-service/ask?debug=true",
@@ -330,10 +583,13 @@ def test_phase2_model_answer_does_not_substitute_selling_points(phase2_client):
     ).json()
 
     assert payload.get("result_skus") == ["RT-P2-100"], payload
-    assert "RT-P2-100" in payload["answer"], payload
+    assert "当前资料未标注" in payload["answer"], payload
+    assert "SKU：RT-P2-100" not in payload["answer"], payload
     assert "快速加热卖点" not in payload["answer"], payload
     assert payload.get("debug", {}).get("binding_provenance") == "resolved_entity_contract", payload
-    assert payload.get("debug", {}).get("search_top1_promotion_blocked") is False, payload
+    # Exact identity is sealed by EntityResolutionContract; this safe-missing
+    # route does not invoke search promotion at all.
+    assert payload.get("debug", {}).get("search_top1_promotion_blocked") is not True, payload
 
 
 @pytest.mark.parametrize(
@@ -354,6 +610,10 @@ def test_phase2_arbitration_exits_recommendation_compound_and_comparison(phase2_
         "entity_state_detail_unresolved",
         "entity_state_detail_generic_category",
     }, payload
+    if "哪个尺寸大" in question:
+        assert set(payload.get("result_skus") or []) == {"RT-P2-100", "RT-P2-300"}, payload
+        answer = str(payload.get("answer") or "")
+        assert "RT-P2-100" in answer and "RT-P2-300" in answer, payload
 
 
 @pytest.mark.parametrize(
@@ -537,7 +797,10 @@ def test_compound_http_uses_resolved_contract_instead_of_reparsing_product_ref(p
         headers=headers,
     ).json()
 
-    assert payload["debug"]["agent_mode"] == "resolved_entity_compound_detail", payload
+    # Compound FieldContracts now use the central multi-field executor.  This
+    # preserves the same sealed entity and per-field evidence while avoiding
+    # the former route that reparsed the product reference.
+    assert payload["debug"]["agent_mode"] == "resolved_entity_multi_field_contract", payload
     assert payload["result_skus"] == ["RT-P2-100"], payload
     assert [item["requested_field"] for item in payload["answer_metadata"]["compound_fields"]] == ["容量", "适用场景"]
     assert "没有找到" not in payload["answer"]
@@ -671,6 +934,27 @@ def test_attach_phase1_plan_uses_original_when_runtime_plan_is_absent():
     assert attached["debug"]["plan"] == {"requested_field": "容量", "product_ref": "RT-P2-100"}
 
 
+def test_public_result_trace_always_preserves_raw_question_without_overwriting_effective_plan():
+    result = {
+        "answer_metadata": {"timing": {"total_duration_ms": 1}},
+        "debug": {
+            "timing": {"total_duration_ms": 1},
+            "plan": {"requested_field": "manual", "product_ref": "RT-P2-100"},
+        },
+    }
+
+    traced = customer_service_service._ensure_debug_plan_raw_question(
+        result,
+        "RT-P2-100有说明书吗？",
+    )
+
+    assert traced["debug"]["plan"] == {
+        "requested_field": "manual",
+        "product_ref": "RT-P2-100",
+        "raw_question": "RT-P2-100有说明书吗？",
+    }
+
+
 @pytest.mark.parametrize(
     ("question", "expected_route"),
     [
@@ -685,6 +969,68 @@ def test_dedicated_semantic_route_excludes_compound_detail(question, expected_ro
 
     assert customer_service_service._dedicated_semantic_route(question) == expected_route
     assert signals["dedicated_route"] is True
+
+
+def test_validated_semantic_field_ignores_field_words_inside_product_title():
+    question = "旋焰炉芯（作为套装赠品）最大功率多少瓦？"
+    semantic_preplan = {
+        "called": True,
+        "route_family": "product_bound_qa",
+        "route_hint": "product_detail",
+        "question_type": "field",
+        "field_type": "power",
+        "field_hint": "power",
+        "subtype": "known_detail",
+        "canonical_fields": ["power"],
+        "confidence": 0.9,
+        "confidence_label": "high",
+    }
+    plan = customer_agent_planner_service.plan_customer_question(question)
+    plan["semantic_preplan"] = semantic_preplan
+    field_request = customer_service_service.resolve_requested_field_contract(question, plan)
+
+    assert field_request["source"] == "validated_semantic_preplan"
+    assert field_request["canonical_fields"] == ["power"]
+    signals = customer_service_service._phase2_entity_arbitration_signals(
+        question,
+        plan,
+        semantic_preplan,
+        field_request_override=field_request,
+    )
+    assert signals["multi_field"] is False
+    assert signals["compound"] is False
+    assert signals["dedicated_route"] is False
+
+
+def test_semantic_mutually_plausible_fields_fail_closed_with_resolved_entity():
+    class _Contract:
+        def to_dict(self):
+            return {
+                "status": "resolved",
+                "resolved_sku": "RT-P2-100",
+                "candidate_skus": ["RT-P2-100"],
+                "field_type": "dimensions",
+            }
+
+    result = customer_service_service._semantic_field_ambiguity_clarification_result(
+        {
+            "called": True,
+            "route_hint": "product_detail",
+            "canonical_fields": ["capacity", "dimensions"],
+            "confidence": 0.9,
+            "ambiguity": True,
+        },
+        {"contract": _Contract()},
+    )
+
+    assert result["answer_type"] == "clarification"
+    assert result["result_skus"] == []
+    assert result["candidate_skus"] == ["RT-P2-100"]
+    assert result["debug"]["agent_mode"] == "semantic_field_ambiguity_clarification"
+    assert result["debug"]["field_contract"]["canonical_fields"] == ["capacity", "dimensions"]
+    assert result["debug"]["entity_resolution_contract"]["resolved_sku"] == "RT-P2-100"
+    shaped = customer_service_service._shape_answer_for_output(result)
+    assert shaped["answer"] == "这个问法可能对应多个字段。请确认你想查容量还是尺寸。"
 
 
 def test_true_independent_detail_fields_remain_compound_eligible():
@@ -713,13 +1059,15 @@ def test_usage_care_mixed_with_detail_field_does_not_enter_compound_orchestrator
 @pytest.mark.parametrize(
     ("question", "expected_fields", "expected_supported", "expected_unsupported"),
     [
-        ("RT-P2-100 的型号是什么", ["SKU"], ["model"], []),
+        ("RT-P2-100 的型号是什么", ["型号"], [], ["model"]),
         ("RT-P2-100 容量和重量分别多少", ["容量", "重量"], ["capacity", "weight"], []),
         ("RT-P2-300 尺寸多大", ["尺寸"], ["dimensions"], []),
         ("RT-P2-100 价格现在多少", ["价格"], [], ["price"]),
-        ("RT-P2-100 有赠品和配件吗", ["配件"], [], ["accessories", "gift"]),
+        # U-S12 promotes accessories into the formal field/evidence contract;
+        # gift remains safely unsupported and must not borrow accessories data.
+        ("RT-P2-100 有赠品和配件吗", ["配件"], ["accessories"], ["gift"]),
         ("RT-P2-100 使用时有哪些注意事项", ["使用限制", "禁止操作"], [], []),
-        ("RT-P2-100 容量多大，适合什么场景，能用酒精炉吗", ["容量", "适用场景", "热源"], ["capacity", "heat_source"], []),
+        ("RT-P2-100 容量多大，适合什么场景，能用酒精炉吗", ["容量", "适用场景", "热源"], ["capacity", "usage_scene", "heat_source"], []),
     ],
 )
 def test_requested_field_contract_adapter_preserves_phase2_field_parity(
@@ -739,11 +1087,11 @@ def test_requested_field_contract_adapter_preserves_phase2_field_parity(
 @pytest.mark.parametrize(
     ("question", "expected_mode", "expected_skus"),
     [
-        ("晨雾Plus水壶的型号是什么", "resolved_entity_detail_contract", ["RT-P2-100"]),
+        ("晨雾Plus水壶的型号是什么", "resolved_entity_unknown_field_fallback", ["RT-P2-100"]),
         ("云途水壶的规格怎么选", "entity_state_detail_ambiguous", []),
         ("雾海远征壶的型号是什么", "entity_state_detail_unresolved", []),
         ("水壶容量怎么看", None, []),
-        ("晨雾Plus水壶容量和重量分别多少", "resolved_entity_compound_detail", ["RT-P2-100"]),
+        ("晨雾Plus水壶容量和重量分别多少", "resolved_entity_multi_field_contract", ["RT-P2-100"]),
     ],
 )
 def test_phase2_request_reuses_one_entity_contract_build(
@@ -771,7 +1119,6 @@ def test_phase2_request_reuses_one_entity_contract_build(
         json={"question": question},
         headers=headers,
     ).json()
-
     assert len(calls) == 1, payload
     if expected_mode:
         assert payload.get("debug", {}).get("agent_mode") == expected_mode, payload
@@ -791,8 +1138,10 @@ def test_phase2_request_reuses_one_entity_contract_build(
         ("晨雾Plus水壶的型号是什么", {"primary_intent": "product_field"}, "resolved_detail"),
         ("云途水壶的规格怎么选", {"primary_intent": "product_field"}, "ambiguous_clarification"),
         ("雾海远征壶的型号是什么", {"primary_intent": "product_field"}, "unresolved_clarification"),
-        ("水壶容量怎么看", {"primary_intent": "product_field"}, "pass_through"),
-        ("晨雾Plus水壶价格是多少", {"primary_intent": "product_field"}, "pass_through"),
+        ("水壶容量怎么看", {"primary_intent": "product_field"}, "generic_clarification"),
+        # A safety-bound commercial field still seals an exact entity before
+        # the formatter returns its field-specific safe-missing answer.
+        ("晨雾Plus水壶价格是多少", {"primary_intent": "product_field"}, "resolved_detail"),
         ("推荐晨雾Plus水壶的容量", {"primary_intent": "recommendation"}, "pass_through"),
     ],
 )

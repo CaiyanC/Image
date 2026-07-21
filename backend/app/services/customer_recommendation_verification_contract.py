@@ -76,19 +76,58 @@ def _append_unique(values: list[str], value: str) -> None:
 
 
 def _parse_people(text: str) -> tuple[int | None, int | None, tuple[int, int] | None]:
-    fixed_patterns = (
-        (r"(?:一家)?四口|四个人|4个人|4人", (4, 4)),
-        (r"三口之家|三个人|3个人|3人", (3, 3)),
-        (r"两个人|两人|双人|2个人|2人", (2, 2)),
-        (r"一个人|单人|1个人|1人", (1, 1)),
-    )
-    range_match = re.search(r"([一二三四五六七八九])(?:到|至|[-~～])?([一二三四五六七八九])个", text)
-    if range_match:
-        numbers = "一二三四五六七八九"
-        return numbers.index(range_match.group(1)) + 1, numbers.index(range_match.group(2)) + 1, range_match.span()
-    for pattern, people in fixed_patterns:
-        match = re.search(pattern, text)
-        if match:
+    normalized = str(text or "")
+    number_map = {char: index + 1 for index, char in enumerate("一二三四五六七八九十")}
+    number_map["两"] = 2
+
+    def parse_number(value: str) -> int | None:
+        token = str(value or "").strip()
+        if token.isdigit():
+            return int(token)
+        return number_map.get(token)
+
+    def is_negated(span: tuple[int, int]) -> bool:
+        prefix = normalized[max(0, span[0] - 8):span[0]]
+        return any(marker in prefix for marker in ("不要", "排除", "别要", "不考虑", "去掉"))
+
+    candidates: list[tuple[int, int, tuple[int, int]]] = []
+    number = r"[1-9]\d?|[一二两三四五六七八九十]"
+    for match in re.finditer(rf"({number})\s*(?:到|至|[-~～])\s*({number})\s*(?:个)?人", normalized):
+        if is_negated(match.span()):
+            continue
+        lower = parse_number(match.group(1))
+        upper = parse_number(match.group(2))
+        if lower is not None and upper is not None:
+            candidates.append((min(lower, upper), max(lower, upper), match.span()))
+    # Chinese prose commonly writes “四五个人” without a range separator.
+    for match in re.finditer(r"([一二两三四五六七八九])([一二两三四五六七八九])个?人", normalized):
+        if is_negated(match.span()):
+            continue
+        lower = parse_number(match.group(1))
+        upper = parse_number(match.group(2))
+        if lower is not None and upper is not None:
+            candidates.append((min(lower, upper), max(lower, upper), match.span()))
+    for match in re.finditer(rf"({number})\s*(?:个)?人", normalized):
+        if is_negated(match.span()):
+            continue
+        value = parse_number(match.group(1))
+        if value is not None:
+            candidates.append((value, value, match.span()))
+    if candidates:
+        # The earliest non-negated expression is the current request's people
+        # requirement.  Prefer a range when multiple recognizers cover the
+        # same span, then keep the original textual order.
+        candidates.sort(key=lambda item: (item[2][0], -(item[2][1] - item[2][0])))
+        people_min, people_max, span = candidates[0]
+        return people_min, people_max, span
+    for pattern, people in (
+        (r"(?:一家)?四口", (4, 4)),
+        (r"三口之家", (3, 3)),
+        (r"双人", (2, 2)),
+        (r"单人", (1, 1)),
+    ):
+        match = re.search(pattern, normalized)
+        if match and not is_negated(match.span()):
             return people[0], people[1], match.span()
     return None, None, None
 
@@ -134,11 +173,106 @@ def _recommendation_stove_subject(text: str) -> tuple[tuple[int, int], str | Non
     return None
 
 
+def _recommendation_contract_from_validated_semantic_constraints(
+    constraints: dict[str, Any] | None,
+) -> RecommendationRequestContract | None:
+    """Map abstract semantic preferences into the DB-verification contract.
+
+    This intentionally accepts no identity, answer, raw database value, or
+    free-form product wording.  The semantic preplan is responsible for
+    language understanding; this adapter only re-validates its small schema
+    before the existing same-SKU candidate verifier consumes it.
+    """
+    if not isinstance(constraints, dict):
+        return None
+    allowed = {"subject_kind", "people", "heat_sources", "scenarios", "weight_preference", "price_preference", "storage_preference"}
+    if not constraints or any(key not in allowed for key in constraints):
+        return None
+    contract = RecommendationRequestContract()
+    subject_kind = constraints.get("subject_kind")
+    subject_categories = {"cookware": "锅具", "waterware": "水具", "stove": "炉具"}
+    if subject_kind not in subject_categories:
+        return None
+    contract.subject_kind = subject_kind
+    contract.subject_category = subject_categories[subject_kind]
+    people = constraints.get("people")
+    if people is not None:
+        if not isinstance(people, dict) or set(people) != {"min", "max"}:
+            return None
+        lower, upper = people.get("min"), people.get("max")
+        if type(lower) is not int or type(upper) is not int or not (1 <= lower <= upper <= 99):
+            return None
+        contract.people_min, contract.people_max = lower, upper
+        _append_unique(contract.hard_constraints, "people")
+    heat_sources = constraints.get("heat_sources")
+    heat_map = {
+        "card_stove": "卡式炉",
+        "gas_stove": "燃气炉",
+        "alcohol_stove": "酒精炉",
+        "open_flame": "明火",
+        "induction": "电磁炉",
+    }
+    if heat_sources is not None:
+        if not isinstance(heat_sources, list) or not heat_sources or len(heat_sources) > 5:
+            return None
+        if any(item not in heat_map for item in heat_sources):
+            return None
+        contract.heat_sources = list(dict.fromkeys(heat_map[item] for item in heat_sources))
+        _append_unique(contract.hard_constraints, "heat_source")
+    scenarios = constraints.get("scenarios")
+    allowed_scenarios = {"camping", "hiking", "self_drive", "seaside", "soup"}
+    if scenarios is not None:
+        if not isinstance(scenarios, list) or not scenarios or len(scenarios) > 5:
+            return None
+        if any(item not in allowed_scenarios for item in scenarios):
+            return None
+        contract.scenario = list(dict.fromkeys(scenarios))
+        _append_unique(contract.hard_constraints, "scenario")
+    weight_preference = constraints.get("weight_preference")
+    if weight_preference is not None:
+        if weight_preference != "lightweight":
+            return None
+        contract.weight_preference = "lighter"
+        _append_unique(contract.soft_preferences, "weight")
+    price_preference = constraints.get("price_preference")
+    if price_preference is not None:
+        if price_preference not in {"affordable", "premium"}:
+            return None
+        contract.budget_level = price_preference
+        _append_unique(contract.hard_constraints, "price_positioning")
+    storage_preference = constraints.get("storage_preference")
+    if storage_preference is not None:
+        if storage_preference != "compact_storage":
+            return None
+        contract.storage_required = True
+        _append_unique(contract.soft_preferences, "storage")
+    for key in ("subject_category", "people", "heat_sources", "scenario", "weight", "price_positioning", "storage"):
+        present = {
+            "subject_category": bool(contract.subject_category),
+            "people": contract.people_min is not None,
+            "heat_sources": bool(contract.heat_sources),
+            "scenario": bool(contract.scenario),
+            "weight": bool(contract.weight_preference),
+            "price_positioning": bool(contract.budget_level),
+            "storage": bool(contract.storage_required),
+        }[key]
+        if present:
+            contract.field_provenance[key] = {"source_turn": 1, "provenance": "validated_semantic_preplan"}
+    signal_count = len(contract.hard_constraints) + len(contract.soft_preferences)
+    contract.confidence = "high" if contract.subject_category and signal_count >= 2 else "medium"
+    return contract
+
+
 def build_recommendation_request_contract(
     question: str,
     plan: dict[str, Any] | None = None,
     intent_result: dict[str, Any] | None = None,
+    *,
+    semantic_constraints: dict[str, Any] | None = None,
 ) -> RecommendationRequestContract:
+    semantic_contract = _recommendation_contract_from_validated_semantic_constraints(semantic_constraints)
+    if semantic_contract is not None:
+        return semantic_contract
     text = str(question or "").strip()
     contract = RecommendationRequestContract()
     has_cookware_subject = any(term in text for term in ("锅具", "套锅", "炊具", "锅"))
@@ -379,6 +513,39 @@ def _row_scope(row: dict[str, Any]) -> str:
     return "accessory" if any(term in text for term in ("配件", "附件", "锅盖", "手柄", "收纳袋", "替换件")) else "subject"
 
 
+def _cookware_subject_identity_is_valid(row: dict[str, Any]) -> bool:
+    """Keep a broad inventory category from widening the cookware domain.
+
+    Product category is useful primary evidence, but catalogue imports can use
+    ``锅具`` for a broader family.  Product identity and structured descriptive
+    fields are first-party data too.  A water container is not a cookware
+    candidate unless the same row explicitly identifies a cookware shape or
+    cookware set.  This validates candidate evidence; it never parses the
+    customer's wording or selects a SKU.
+    """
+    identity = " ".join(
+        str(row.get(key) or "")
+        for key in ("product_name_cn", "product_name_en", "name", "title")
+    ).lower()
+    descriptive = " ".join(
+        str(row.get(key) or "")
+        for key in (
+            "product_name_cn", "product_name_en", "name", "title",
+            "features", "usage_scenarios", "target_audience",
+            "positioning", "long_description_cn",
+        )
+    ).lower()
+    water_container_terms = ("水壶", "茶壶", "烧水壶", "kettle", "bottle", "flask", "cup", "杯")
+    cookware_shape_terms = (
+        "单锅", "套锅", "炒锅", "汤锅", "锅具套装", "炊具套装", "炊具组合",
+        "野餐锅", "野营锅", "小方锅", "cookware set", "cook set", "pot set",
+    )
+    return not (
+        any(term in identity for term in water_container_terms)
+        and not any(term in descriptive for term in cookware_shape_terms)
+    )
+
+
 def _subject_evidence(contract: RecommendationRequestContract, row: dict[str, Any]) -> tuple[bool, dict[str, Any], str | None]:
     category = str(row.get("category") or "").strip()
     scope = _row_scope(row)
@@ -388,6 +555,9 @@ def _subject_evidence(contract: RecommendationRequestContract, row: dict[str, An
         return False, evidence, "accessory_scope"
     if contract.subject_category == "锅具" and not any(term in category for term in ("锅具", "炉具、锅具")):
         evidence["status"] = "conflict"
+        return False, evidence, "subject_category_mismatch"
+    if contract.subject_kind == "cookware" and not _cookware_subject_identity_is_valid(row):
+        evidence.update({"status": "conflict", "field_source": "product_identity_and_structured_description"})
         return False, evidence, "subject_category_mismatch"
     if contract.subject_category == "水具" and not any(term in category for term in ("水具", "水壶", "水杯")):
         evidence["status"] = "conflict"
@@ -435,11 +605,14 @@ def prepare_recommendation_return_rows(
 
 
 def _people_range(row: dict[str, Any]) -> tuple[int | None, int | None, str, str]:
-    for key in ("people", "target_audience", "capacity", "features"):
+    # Customer-facing product titles are first-party SKU evidence.  They may
+    # be the only place a fixed people range is recorded, so include them
+    # before treating the people constraint as unknown.
+    for key in ("people", "target_audience", "product_name_cn", "product_name_en", "capacity", "features"):
         raw = str(row.get(key) or "").strip()
         if not _usable(raw):
             continue
-        match = re.search(r"(\d+)\s*[-~～至到]\s*(\d+)\s*人", raw)
+        match = re.search(r"(\d+)\s*[-~～－至到]\s*(\d+)\s*人", raw)
         if match:
             return int(match.group(1)), int(match.group(2)), raw, key
         match = re.search(r"(?:适合)?\s*(\d+)\s*人", raw)
@@ -502,6 +675,28 @@ def verify_recommendation_candidates(
                 rejection_reasons.append("people_capacity_conflict")
             else:
                 evidence["people"] = _condition("verified", source, raw, people_min=row_min, people_max=row_max)
+
+        if contract.scenario:
+            raw_scenarios = str(row.get("usage_scenarios") or "").strip()
+            scenario_terms = {
+                "camping": ("露营", "营地"),
+                "hiking": ("徒步",),
+                "self_drive": ("自驾",),
+                "seaside": ("海边",),
+                "soup": ("煮汤",),
+            }
+            if not _usable(raw_scenarios):
+                evidence["scenario"] = _condition("unknown")
+            else:
+                matched = all(any(term in raw_scenarios for term in scenario_terms[item]) for item in contract.scenario)
+                evidence["scenario"] = _condition(
+                    "verified" if matched else "conflict",
+                    "usage_scenarios",
+                    raw_scenarios,
+                    canonical_scenarios=list(contract.scenario),
+                )
+                if not matched:
+                    rejection_reasons.append("scenario_condition_not_met")
 
         capacity_values = _numeric_values(row.get("capacity"), kind="capacity")
         if contract.capacity_min_ml is not None or contract.capacity_max_ml is not None:
@@ -575,14 +770,35 @@ def verify_recommendation_candidates(
             if _usable(raw_material) and not matched:
                 rejection_reasons.append("material_condition_not_met")
 
-        if contract.budget_level or contract.relative_price_preference:
+        if contract.budget_level in {"affordable", "premium"}:
+            raw_price_positioning = str(row.get("price_positioning") or "").strip()
+            if not _usable(raw_price_positioning):
+                evidence["price_positioning"] = _condition("unknown")
+            else:
+                matched = (
+                    any(value in raw_price_positioning for value in ("入门", "中端"))
+                    if contract.budget_level == "affordable"
+                    else "高端" in raw_price_positioning
+                )
+                evidence["price_positioning"] = _condition(
+                    "verified" if matched else "conflict",
+                    "price_positioning",
+                    raw_price_positioning,
+                    preference=contract.budget_level,
+                )
+                if not matched:
+                    rejection_reasons.append("price_positioning_condition_not_met")
+        elif contract.budget_level or contract.relative_price_preference:
             evidence["budget"] = _condition("unsupported")
             unsupported_preferences.append("budget")
 
         for label, required, fields in (
             ("stability", contract.stability_required, ("features", "positioning")),
             ("portability", contract.portability_required, ("features", "positioning")),
-            ("storage", contract.storage_required, ("features", "positioning")),
+            # These are sealed first-party product fields.  They may establish
+            # a storage fact only when the same SKU explicitly records it;
+            # they do not route the customer's wording or infer compactness.
+            ("storage", contract.storage_required, ("features", "top_selling_points", "positioning", "long_description_cn", "bullet_points", "size_info")),
         ):
             if not required:
                 continue
@@ -593,7 +809,7 @@ def verify_recommendation_candidates(
                 "storage": ("收纳", "套娃"),
             }[label]
             if raw and any(term in raw for term in terms):
-                evidence[label] = _condition("verified", "features/positioning", raw)
+                evidence[label] = _condition("verified", "/".join(fields), raw)
                 verified_preferences.append(label)
             else:
                 evidence[label] = _condition("unsupported")
@@ -650,18 +866,31 @@ def select_recommendation_candidates(
         if verification_by_sku.get(str(row.get("sku") or "").strip().upper())
         and verification_by_sku[str(row.get("sku") or "").strip().upper()].verification_level == "fully_verified"
     ]
-    if fully_verified:
-        return fully_verified
-    return [
+    partially_verified = [
         row
         for row in candidate_rows
         if verification_by_sku.get(str(row.get("sku") or "").strip().upper())
         and verification_by_sku[str(row.get("sku") or "").strip().upper()].verification_level == "partially_verified"
     ]
+    if not fully_verified:
+        return partially_verified
+    # A missing people-range label is safe to disclose as uncertainty behind a
+    # fully verified candidate.  Missing heat-source, material, capacity, or
+    # other safety-relevant hard evidence must not be reinserted when a fully
+    # verified option exists.
+    safely_supplemental = [
+        row
+        for row in partially_verified
+        if set(
+            verification_by_sku[str(row.get("sku") or "").strip().upper()].unsupported_constraints
+        ).issubset({"people"})
+    ]
+    return [*fully_verified, *safely_supplemental]
 
 
 _CONSTRAINT_LABELS = {
     "people": "人数",
+    "scenario": "使用场景",
     "capacity": "容量",
     "weight": "重量",
     "heat_source": "热源",
@@ -686,9 +915,9 @@ def build_verified_recommendation_answer(
         return "当前未找到符合条件且能验证所有硬性条件的商品。"
     partial_result = any(accepted[str(row.get("sku") or "").strip().upper()].verification_level == "partially_verified" for row in rows)
     lines = (
-        ["当前没有找到所有条件都能完整验证的商品。以下候选未发现明确冲突，但部分条件缺少资料，仅供参考。这里按保守推荐方式列出，首项优先参考，其余作为备选："]
+        ["当前没有找到所有条件都能完整验证的商品。以下推荐锅具候选未发现明确冲突，但部分条件缺少资料，仅供参考；首项优先参考，其余作为备选："]
         if partial_result
-        else ["根据当前商品资料，以下候选通过了可验证的硬性条件："]
+        else ["\u63a8\u8350\u4f18\u5148\u770b\u4ee5\u4e0b\u5019\u9009\uff1b\u5b83\u4eec\u901a\u8fc7\u4e86\u53ef\u9a8c\u8bc1\u7684\u786c\u6027\u6761\u4ef6\uff1a"]
     )
     if contract.subject_kind == "stove":
         subject_label = {
@@ -696,13 +925,24 @@ def build_verified_recommendation_answer(
             "alcohol_stove": "酒精炉",
         }.get(contract.subject_subtype, "炉具类商品")
         lines.append(f"本次按“{subject_label}”主体范围筛选：")
+    if contract.heat_sources:
+        heat_source_label = "、".join(contract.heat_sources)
+        lines.append(f"本次仅保留同 SKU 热源字段明确标注支持{heat_source_label}的候选。")
     total = len(rows) if total_match_count is None else max(int(total_match_count), 0)
     if total > len(rows):
         lines.insert(0, f"共找到{total}款可供参考的商品，以下先展示前{len(rows)}款：")
     if partial_result and contract.subject_category == "锅具":
-        people_label = "双人" if contract.people_min == contract.people_max == 2 else ""
+        people_label = ""
+        if contract.people_min is not None:
+            people_label = (
+                f"{contract.people_min} 人"
+                if contract.people_min == contract.people_max
+                else f"{contract.people_min}-{contract.people_max} 人"
+            )
         scenario_label = "露营" if "camping" in contract.scenario else ""
-        lines.append(f"本次按{people_label}{scenario_label}锅具主体范围筛选，不先把水壶当主推。")
+        if people_label:
+            lines.append(f"当前资料未明确标注 {people_label} 适用的候选；以下仅保留未见明确冲突的备选。")
+        lines.append(f"本次仅按{people_label}{scenario_label}锅具主体范围筛选。")
     for row in rows[:5]:
         sku = str(row.get("sku") or "").strip().upper()
         item = accepted[sku]

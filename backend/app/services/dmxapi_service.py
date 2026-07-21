@@ -43,6 +43,21 @@ async def _get_http_client(timeout: object, *, trust_env: bool = False) -> httpx
     return client
 
 
+async def _discard_http_client(timeout: object, *, trust_env: bool = False) -> None:
+    """Drop one loop-local client after a connection setup failure.
+
+    A ``ConnectError`` happens before an HTTP response exists, so retrying once
+    with a new connection pool is safe and prevents a transient DNS/TLS failure
+    from leaving a long-lived API worker unable to use semantic planning until
+    it is restarted.  Response/read failures deliberately do not use this path.
+    """
+    loop_id = id(asyncio.get_running_loop())
+    key = (loop_id, _timeout_key(timeout), trust_env)
+    client = _HTTP_CLIENTS.pop(key, None)
+    if client is not None and not client.is_closed:
+        await client.aclose()
+
+
 async def _run_ai_request(factory, *, timeout: float | None = None):
     if _AI_SEMAPHORE.locked():
         raise RuntimeError("当前请求较多，请稍后再试")
@@ -642,8 +657,18 @@ async def chat_completion(
     release_session_connection(db)
 
     async def _request():
-        client = await _get_http_client(float(settings.AI_REQUEST_TIMEOUT_SECONDS), trust_env=False)
-        return await client.post(url, headers=headers, json=body)
+        timeout_seconds = float(settings.AI_REQUEST_TIMEOUT_SECONDS)
+        client = await _get_http_client(timeout_seconds, trust_env=False)
+        try:
+            return await client.post(url, headers=headers, json=body)
+        except httpx.ConnectError:
+            # A connection was never established, so a single retry cannot
+            # duplicate a model response.  Discard the loop-local client first
+            # to avoid reusing an unhealthy pool for every later semantic call.
+            await _discard_http_client(timeout_seconds, trust_env=False)
+            agent_trace_service.trace("AI_CONNECT_RETRY", {"url": url})
+            retry_client = await _get_http_client(timeout_seconds, trust_env=False)
+            return await retry_client.post(url, headers=headers, json=body)
 
     response = await _run_ai_request(_request)
     if response.status_code >= 400:

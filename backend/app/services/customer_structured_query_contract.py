@@ -60,6 +60,7 @@ def format_structured_condition_summary(contract: StructuredQueryContract) -> st
         "people": "适用人数",
         "color": "颜色",
         "heat_source": "适用炉具",
+        "usage_scene": "适用场景",
         "waterproof": "防水",
     }.get(field, "条件")
     if operator == "supports":
@@ -107,6 +108,17 @@ _SUBJECT_ALIASES = (
     ("帐篷", "帐篷"),
     ("产品", "all_products"),
     ("商品", "all_products"),
+)
+
+# A deictic noun phrase needs an entity from conversation context; it is not
+# a catalogue category.  Keep these markers at the structured-query boundary
+# so “这个锅/那款水壶/该产品” cannot silently expand into an all-products
+# filter before EntityResolutionContract has had a chance to clarify or bind
+# the reference.
+_DEICTIC_SUBJECT_PREFIXES = (
+    "这个", "这款", "这件", "这只", "这口", "这种", "这类",
+    "那个", "那款", "那件", "那只", "那口", "那种", "那类",
+    "该", "本", "此",
 )
 
 _COMPOSITE_SUBJECT_ALIASES = (
@@ -208,13 +220,43 @@ def _subject_match(text: str) -> tuple[str | None, tuple[int, int] | None, str |
     matches = []
     for alias, category in _SUBJECT_ALIASES:
         start = text.find(alias)
-        if start >= 0 and start < condition_start:
+        is_deictic_reference = any(
+            text[:start].endswith(prefix)
+            for prefix in _DEICTIC_SUBJECT_PREFIXES
+        )
+        if start >= 0 and start < condition_start and not is_deictic_reference:
             matches.append((start, -len(alias), alias, category))
     if not matches:
         return None, None, None, "subject"
     start, _, alias, category = sorted(matches)[0]
     subject_kind = {"水壶": "kettle", "水杯": "cup"}.get(category)
     return category, (start, start + len(alias)), subject_kind, "subject"
+
+
+def _validated_semantic_subject_category(
+    question: str,
+    subject_text: Any,
+) -> tuple[str, tuple[int, int], str | None, str] | None:
+    """Validate an LLM subject span against the existing category taxonomy.
+
+    This is deliberately not a product lookup or a second language router.
+    The semantic preplan supplies a verbatim subject span; deterministic code
+    only accepts it when it is exactly one existing generic category alias in
+    the current customer question and not a deictic product reference.
+    """
+    text = str(question or "")
+    candidate = str(subject_text or "").strip()
+    if not text or not candidate:
+        return None
+    categories = {category for alias, category in _SUBJECT_ALIASES if alias == candidate}
+    if len(categories) != 1:
+        return None
+    start = text.find(candidate)
+    if start < 0 or any(text[:start].endswith(prefix) for prefix in _DEICTIC_SUBJECT_PREFIXES):
+        return None
+    category = next(iter(categories))
+    subject_kind = {"水壶": "kettle", "水杯": "cup"}.get(category)
+    return category, (start, start + len(candidate)), subject_kind, "subject"
 
 
 def _numeric_condition(text: str, field: str) -> tuple[str | None, Any, str | None, tuple[int, int] | None]:
@@ -357,6 +399,126 @@ def build_structured_query_contract(question: str) -> StructuredQueryContract:
         subject_category=subject, field=field, operator=operator, value=value, unit=unit, relation=relation,
         confidence="low", status="unresolved", source_spans=spans,
         subject_kind=subject_kind, requested_scope=requested_scope, subject_span=spans.get("subject"),
+    )
+
+
+_SEMANTIC_STRUCTURED_OPERATORS = {
+    "material": {"contains"},
+    "capacity": {">=", ">", "<=", "<", "=", "between"},
+    "weight": {">=", ">", "<=", "<", "=", "between"},
+    "dimensions": {"contains", "="},
+    "people": {">=", ">", "<=", "<", "=", "between"},
+    "color": {"contains", "="},
+    "heat_source": {"supports", "not_supports"},
+    "usage_scene": {"contains"},
+    "waterproof": {"="},
+}
+
+
+def adapt_semantic_structured_query_contract(
+    *,
+    question: str,
+    base_contract: StructuredQueryContract,
+    semantic_preplan: dict[str, Any] | None,
+) -> StructuredQueryContract | None:
+    """Merge a validated semantic multi-field plan into a literal query contract.
+
+    Semantic planning owns which field concepts the customer expressed.  This
+    adapter deliberately accepts no product identity or database value from the
+    model: each predicate must be allowlisted and quote an exact span from the
+    customer's current question.  The caller still evaluates every predicate
+    against database rows before returning a SKU.
+    """
+    preplan = semantic_preplan if isinstance(semantic_preplan, dict) else {}
+    if not (
+        preplan.get("called")
+        and str(preplan.get("route_family") or "").strip() == "structured_query"
+        and str(preplan.get("route_hint") or "").strip() == "query_products"
+        and str(preplan.get("question_type") or "").strip() == "filter"
+        and str(preplan.get("subtype") or "").strip() == "structured_query"
+        and not preplan.get("ambiguity")
+    ):
+        return None
+    try:
+        confidence = float(preplan.get("confidence") or 0.0)
+    except (TypeError, ValueError):
+        return None
+    if confidence < 0.9 or confidence > 1.0:
+        return None
+    canonical_fields = [str(item or "").strip() for item in (preplan.get("canonical_fields") or [])]
+    canonical_fields = list(dict.fromkeys(item for item in canonical_fields if item in _SEMANTIC_STRUCTURED_OPERATORS))
+    raw_constraints = preplan.get("structured_query_constraints")
+    if len(canonical_fields) < 2 or not isinstance(raw_constraints, list) or not (2 <= len(raw_constraints) <= 4):
+        return None
+    subject_category = base_contract.subject_category
+    subject_span = base_contract.subject_span
+    subject_kind = base_contract.subject_kind
+    requested_scope = base_contract.requested_scope
+    if not subject_category:
+        validated_subject = _validated_semantic_subject_category(
+            question,
+            preplan.get("subject_text"),
+        )
+        if validated_subject is None:
+            return None
+        subject_category, subject_span, subject_kind, requested_scope = validated_subject
+
+    text = str(question or "")
+    conditions: list[dict[str, Any]] = []
+    source_spans = dict(base_contract.source_spans or {})
+    if subject_span is not None:
+        source_spans["subject"] = subject_span
+    for raw in raw_constraints:
+        if not isinstance(raw, dict):
+            return None
+        field = str(raw.get("field") or "").strip()
+        operator = str(raw.get("operator") or "").strip()
+        value = raw.get("value")
+        evidence_span = str(raw.get("evidence_span") or "").strip()
+        unit = raw.get("unit")
+        if (
+            field not in canonical_fields
+            or operator not in _SEMANTIC_STRUCTURED_OPERATORS.get(field, set())
+            or not evidence_span
+            or evidence_span not in text
+            or value in (None, "")
+        ):
+            return None
+        # Semantic values must remain a literal customer phrase for textual
+        # predicates. Numeric normalization remains deterministic and uses the
+        # existing measurement evaluator below.
+        if field in {"material", "dimensions", "color", "heat_source", "usage_scene"} and str(value).strip() not in evidence_span:
+            return None
+        if field == "waterproof" and value is not True:
+            return None
+        condition = {
+            "field": field,
+            "operator": operator,
+            "value": value,
+            "unit": unit,
+            "relation": "compatible_with" if field == "heat_source" else None,
+        }
+        if condition not in conditions:
+            conditions.append(condition)
+        source_spans.setdefault(f"semantic_value_{field}", (text.index(evidence_span), text.index(evidence_span) + len(evidence_span)))
+
+    if set(item["field"] for item in conditions) != set(canonical_fields):
+        return None
+    primary = conditions[0]
+    return StructuredQueryContract(
+        subject_category=subject_category,
+        field=primary["field"],
+        operator=primary["operator"],
+        value=primary["value"],
+        unit=primary.get("unit"),
+        relation=primary.get("relation"),
+        confidence="high",
+        status="resolved",
+        source_spans=source_spans,
+        conditions=conditions,
+        subject_kind=subject_kind,
+        requested_scope=requested_scope,
+        subject_span=subject_span,
     )
 
 
@@ -704,6 +866,7 @@ def evaluate_structured_row(row: dict[str, Any], contract: StructuredQueryContra
         "material": ("body_material", row.get("body_material")),
         "capacity": ("capacity", row.get("capacity")),
         "heat_source": ("heat_source", row.get("heat_source")),
+        "usage_scene": ("usage_scenarios", row.get("usage_scenarios")),
         "dimensions": ("size", row.get("size") or row.get("size_info")),
         "weight": ("gross_weight_g", row.get("gross_weight_g")),
         "people": ("target_audience", row.get("target_audience")),

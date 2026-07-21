@@ -192,6 +192,7 @@ def test_customer_service_ask_and_stream_share_single_turn_public_shape(client_a
 
         stream_response = client.post("/api/customer-service/ask-stream", json={"question": question}, headers=headers)
         assert stream_response.status_code == 200, stream_response.text
+        assert stream_response.headers.get("connection", "").lower() == "close"
         stream_payload = _parse_sse(stream_response.text)
         stream_meta = stream_payload["meta"]
 

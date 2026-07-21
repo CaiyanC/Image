@@ -1,6 +1,7 @@
 ﻿import json
 import re
 from dataclasses import dataclass, field
+from difflib import SequenceMatcher
 from time import perf_counter
 from typing import Any
 
@@ -13,7 +14,7 @@ from ..models.product_qa import ProductQa
 from ..models.product_specs import ProductSpecs
 from ..internal.experience_layer.implicit_intent import infer_secondary_intents
 from ..internal.experience_layer.query_rewrite import build_retrieval_query
-from . import agent_action_service, customer_agent_service, customer_agent_tool_service, customer_cache_service, customer_llm_service, customer_perf_service, customer_recommendation_ranker, knowledge_service, product_service
+from . import agent_action_service, customer_agent_service, customer_agent_tool_service, customer_cache_service, customer_entity_resolution_contract, customer_field_contract, customer_llm_service, customer_perf_service, customer_recommendation_ranker, knowledge_service, product_service
 
 
 CONTEXT_WORDS = (
@@ -34,6 +35,9 @@ FOLLOWUP_NARROW_WORDS = ("排除", "不要", "去掉", "剔除", "排掉")
 PLACEHOLDER_WORDS = {"tbd", "todo", "test", "null", "none", "n/a", "na", "-", "--", "unknown"}
 PART_WORDS = ("主体", "配件", "手柄", "锅体", "盖子", "锅盖", "把手", "煎盘", "炉体", "炉架", "壶身", "壶嘴", "杯身", "杯盖")
 USAGE_CARE_TERMS = (
+    "怎么使用",
+    "如何使用",
+    "使用方法",
     "清洗",
     "保养",
     "护理",
@@ -424,6 +428,20 @@ async def process_intent_request(
 ) -> dict | None:
     request_start = perf_counter()
     previous_result_skus = previous_result_skus or []
+    # A high-precision category-scope count/people question has no sealed
+    # single-product subject.  Resolve it before contents/accessories deferral
+    # so a broad catalogue request cannot be shadowed by an incidental field
+    # alias (including a legacy-encoding collision).
+    category_scope_result = _category_scope_structured_result(db, question)
+    if category_scope_result:
+        return category_scope_result
+    field_contract = customer_field_contract.detect_field_contract(question)
+    if (
+        (_looks_like_contents_grounding_question(question) and not field_contract)
+        or (field_contract and field_contract.field_type in {"accessories", "gift", "manual"})
+    ):
+        # The service layer owns the FieldContract -> EntityResolutionContract path.
+        return None
     # don't poison the intent parser with old SKUs
     # don't poison the intent parser with old SKUs
     # If there are previous SKUs and the question doesn't reference them, clear them
@@ -438,6 +456,31 @@ async def process_intent_request(
         previous_result_skus = []
     # Try regex parser first - it's fast and accurate for structured queries
     intent = parse_intent(question, sku=sku, previous_result_skus=previous_result_skus)
+    unscoped_field_intent = parse_intent(question, sku=sku, previous_result_skus=[])
+    # A follow-up may intentionally omit the product noun because the
+    # immediately preceding result set already seals its domain.  Preserve
+    # that domain as a query only when the formal FieldContract supplies the
+    # predicate; never infer a SKU from the candidate order.
+    if (
+        scoped_comparison_candidates
+        and (not intent or intent.intent == "clarify")
+        and field_contract
+        and field_contract.field_type == "heat_source"
+        and previous_result_skus
+        and unscoped_field_intent
+        and unscoped_field_intent.intent == "query_products"
+        and (unscoped_field_intent.filters or {}).get("specs.heat_source")
+    ):
+        requested_label = customer_field_contract.product_detail_field_label(field_contract.field_type)
+        intent = CustomerIntent(
+            intent="query_products",
+            target_skus=[str(item or "").strip().upper() for item in previous_result_skus if str(item or "").strip()],
+            requested_fields=[requested_label] if requested_label else [],
+            filters=dict(unscoped_field_intent.filters or {}),
+            semantic_query=str(question or "").strip(),
+            source_context="previous_results",
+            is_single_field_sufficient=False,
+        )
     # Only use LLM if regex parser failed or returned clarify
     if allow_llm_fallback and (not intent or intent.intent == "clarify"):
         llm_start = perf_counter()
@@ -461,7 +504,7 @@ async def process_intent_request(
     if intent:
         intent = _sanitize_intent(intent)
         intent.target_skus = _normalize_resolved_skus(db, intent.target_skus)
-        if scoped_comparison_candidates and intent.intent == "recommend_products" and previous_result_skus:
+        if scoped_comparison_candidates and intent.intent in {"recommend_products", "query_products"} and previous_result_skus:
             intent.target_skus = [
                 str(item or "").strip().upper()
                 for item in previous_result_skus
@@ -485,7 +528,10 @@ async def process_intent_request(
             intent = _sanitize_intent(llm_intent)
     if not intent:
         return None
-    if _should_defer_ordinal_context_to_runtime(question, intent, previous_result_skus):
+    if (
+        not scoped_comparison_candidates
+        and _should_defer_ordinal_context_to_runtime(question, intent, previous_result_skus)
+    ):
         return None
 
     fuzzy_people_cookware_subject = _fuzzy_people_cookware_subject(question)
@@ -532,6 +578,61 @@ async def process_intent_request(
             source_context="question",
             is_single_field_sufficient=False,
         )
+    # This executor is a compatibility path, but it still must not promote a
+    # product-search row into a product fact. A parsed field and a named
+    # product are independently contracted here; only a unique, high-strength
+    # EntityResolutionContract may bind the field provider to one SKU.
+    explicit_subject = (
+        str(explicit_named_products[0].product_name_cn or explicit_named_products[0].product_name_en or "").strip()
+        if len(explicit_named_products) == 1
+        else ""
+    )
+    field_request = customer_field_contract.resolve_requested_field_contract(
+        question,
+        compatibility_fields=intent.requested_fields,
+        subject=explicit_subject,
+        subject_is_catalog_exact=bool(explicit_subject),
+    )
+    if (
+        len(field_request.get("supported_fields") or []) == 1
+        and explicit_named_products
+        and len(relation_products) <= 1
+    ):
+        all_products = db.query(Product).order_by(Product.sku.asc()).all()
+        entity_contract = customer_entity_resolution_contract.build_entity_resolution_contract(
+            question,
+            all_products,
+            entity_text_override=explicit_subject or None,
+            field_type_override=field_request.get("field_type"),
+        )
+        resolution = customer_entity_resolution_contract.can_resolve_single_product(
+            entity_contract,
+            all_products,
+        )
+        if resolution.allowed and resolution.resolved_sku:
+            detail_intent = CustomerIntent(
+                intent="product_detail",
+                target_skus=[resolution.resolved_sku],
+                requested_fields=list(field_request.get("requested_fields") or []),
+                semantic_query="",
+                source_context="question",
+                is_single_field_sufficient=True,
+            )
+            detail_result = await _product_detail_result(
+                db,
+                detail_intent,
+                original_question=question,
+                allow_search_top1_promotion=allow_search_top1_promotion,
+                binding_provenance="resolved_entity_contract",
+            )
+            debug = detail_result.get("debug") if isinstance(detail_result.get("debug"), dict) else {}
+            debug["field_contract"] = dict(field_request)
+            debug["entity_resolution_contract"] = entity_contract.to_dict()
+            detail_result["debug"] = debug
+            metadata = detail_result.get("answer_metadata") if isinstance(detail_result.get("answer_metadata"), dict) else {}
+            metadata["contract_field_type"] = field_request.get("field_type")
+            detail_result["answer_metadata"] = metadata
+            return detail_result
     if (
         (_looks_like_usage_care_question(question) or (_looks_like_contents_grounding_question(question) and explicit_named_products))
         and not _looks_like_water_container_capability_question(question)
@@ -546,12 +647,13 @@ async def process_intent_request(
         if usage_care_result:
             return usage_care_result
 
-    if _looks_like_customer_faq_question(question):
+    if _looks_like_customer_faq_question(question) and not (
+        scoped_comparison_candidates
+        and intent.intent == "query_products"
+        and str(intent.source_context or "") == "previous_results"
+        and intent.target_skus
+    ):
         return None
-
-    category_scope_result = _category_scope_structured_result(db, question)
-    if category_scope_result:
-        return category_scope_result
 
     scenario_rescue = _looks_like_scenario_recommendation_question(question) or (
         not _extract_skus(question)
@@ -658,6 +760,29 @@ def _compose_safety_usage_care_answer(question: str) -> str:
     ])
 
 
+def _same_sku_safety_usage_care_evidence(
+    target_skus: list[str],
+    qa_hits: list[dict],
+    knowledge_hits: list[dict],
+) -> str:
+    """Return one grounded safety snippet only for a unique, same-SKU target."""
+    normalized_targets = {
+        str(sku or "").strip().upper()
+        for sku in (target_skus or [])
+        if str(sku or "").strip()
+    }
+    if len(normalized_targets) != 1:
+        return ""
+    target_sku = next(iter(normalized_targets))
+    for item in [*qa_hits, *knowledge_hits]:
+        if str(item.get("sku") or "").strip().upper() != target_sku:
+            continue
+        snippet = _normalize_usage_care_snippet(item.get("answer") or item.get("content") or "")
+        if snippet:
+            return snippet.strip("。；; ")
+    return ""
+
+
 async def answer_product_usage_care_request(
     db: Session,
     *,
@@ -720,7 +845,17 @@ async def answer_product_usage_care_request(
         search_debug["filtered_or_downgraded"] = search_debug.get("filtered_or_downgraded", []) + qa_filtered + knowledge_filtered
     compose_start = perf_counter()
     if usage_subtype == "safety":
-        answer = _compose_safety_usage_care_answer(text)
+        grounded_safety_evidence = _same_sku_safety_usage_care_evidence(
+            intent.target_skus,
+            qa_hits,
+            knowledge_hits,
+        )
+        safety_fallback = _compose_safety_usage_care_answer(text)
+        answer = (
+            f"产品资料：{grounded_safety_evidence}。\n{safety_fallback}"
+            if grounded_safety_evidence
+            else safety_fallback
+        )
         compose_answer_ms = customer_perf_service.perf_ms(compose_start)
         results = _usage_care_results_for_response(qa_hits, knowledge_hits)
         sources: list[dict] = []
@@ -754,6 +889,7 @@ async def answer_product_usage_care_request(
                 "qa_result_count": len(qa_hits),
                 "knowledge_result_count": len(knowledge_hits),
                 "safety_answer_guard": True,
+                "grounded_safety_evidence": bool(grounded_safety_evidence),
                 "product_qa_ms": search_debug["product_qa_ms"],
                 "knowledge_search_ms": search_debug["knowledge_search_ms"],
                 "rerank_ms": search_debug["rerank_ms"],
@@ -776,11 +912,7 @@ async def answer_product_usage_care_request(
             answer = "系统暂未配置对应清洗/保养资料，建议联系人工客服确认。"
         compose_answer_ms = customer_perf_service.perf_ms(compose_start)
         total_ms = customer_perf_service.perf_ms(request_start)
-        fallback_results = (
-            _usage_care_named_product_results(named_products)
-            if usage_subtype == "composition"
-            else []
-        )
+        fallback_results = _usage_care_named_product_results(named_products)
         return _build_response(
             intent=intent,
             answer=answer,
@@ -1754,12 +1886,21 @@ async def _query_products_result(
     if intent.target_skus:
         source_rows_for_context_filter = _rows_for_target_skus(db, intent.target_skus)
         rows = source_rows_for_context_filter
-        rows = _filter_rows(
-            rows,
-            filters=intent.filters,
-            negative_filters=intent.negative_filters,
-            term="" if intent.source_context == "previous_results" else intent.term,
-        )
+        # A closed candidate domain may be filtered by evidence that is not
+        # duplicated in the catalogue's indexed column.  Retain the sealed
+        # rows for the dedicated same-SKU predicate evaluator below; applying
+        # the generic index filter first would erase admissible candidates
+        # before their evidence can be checked.
+        if not (
+            intent.source_context == "previous_results"
+            and (intent.filters or {}).get("specs.heat_source")
+        ):
+            rows = _filter_rows(
+                rows,
+                filters=intent.filters,
+                negative_filters=intent.negative_filters,
+                term="" if intent.source_context == "previous_results" else intent.term,
+            )
         tool_name = "filter_previous_results"
         query = intent.term or intent.semantic_query or "上下文结果筛选"
     elif intent.special_filter:
@@ -2312,6 +2453,29 @@ async def _product_detail_result(
     )
     if rows:
         _attach_knowledge_enrichment(response, primary_source="product_db", supporting=supporting)
+        formal_field = customer_field_contract.resolve_requested_field_contract(
+            detail_question,
+            compatibility_fields=intent.requested_fields,
+        )
+        canonical_field = str(formal_field.get("field_type") or "").strip()
+        policy = customer_field_contract.field_evidence_policy(canonical_field)
+        if len(rows) == 1 and len(field_paths) == 1 and policy and field_paths[0] in policy.structured_fields:
+            evidence_sku = str(rows[0].get("sku") or "").strip().upper()
+            evidence_label = _field_label(field_paths[0])
+            evidence_value = str((rows[0].get("field_values") or {}).get(evidence_label) or "").strip()
+            if evidence_sku and evidence_sku in intent.target_skus and evidence_value not in {"", "暂无"}:
+                metadata = response.get("answer_metadata") if isinstance(response.get("answer_metadata"), dict) else {}
+                metadata.update(
+                    {
+                        "contract_field_type": canonical_field,
+                        "evidence_status": "structured",
+                        "evidence_field": canonical_field,
+                        "evidence_source": field_paths[0],
+                        "evidence_sku": evidence_sku,
+                        "evidence_value": evidence_value,
+                    }
+                )
+                response["answer_metadata"] = metadata
     response["skip_polish"] = True
     response_debug = response.get("debug") if isinstance(response.get("debug"), dict) else {}
     response_debug["binding_provenance"] = binding_provenance or "none"
@@ -3025,15 +3189,14 @@ def _apply_people_capacity_constraint_to_ranked(
     min_people = _extract_min_people_constraint(query)
     if not min_people:
         return ranked, []
-    query_text = str(query or "")
-    if (
-        min_people < 5
-        and not scoped_comparison_candidates
-        and not any(term in query_text for term in ("大容量", "多人", "多人使用", "多人露营", "多人做饭"))
-    ):
-        return ranked, []
 
     exclude_small = _has_small_capacity_exclusion(query)
+    # A broad 1-3 person discovery request should retain a useful candidate
+    # set for follow-up comparison.  Its people wording remains a ranking
+    # preference; strict exclusion is reserved for larger-group needs,
+    # explicit exclusions, or an already sealed comparison domain.
+    if min_people <= 3 and not exclude_small and not scoped_comparison_candidates:
+        return ranked, []
     strict_matches: list[dict[str, Any]] = []
     close_matches: list[dict[str, Any]] = []
     downgraded: list[dict[str, Any]] = []
@@ -4734,16 +4897,6 @@ def _extract_structured_list_query_filters(text: str) -> dict[str, Any]:
         return {}
 
     filters: dict[str, Any] = {}
-    subject_match = re.search(
-        r"(?:哪些|有哪些|哪几款|哪几种|哪几个)(?P<subject>[^，,。；;？?]{1,12}?)(?:是|为|材质|材料|能用|可以用|可用|支持|适用热源|热源|适合|$)",
-        normalized,
-        flags=re.I,
-    )
-    category_scope = str(subject_match.group("subject") or "").strip() if subject_match else normalized
-    category = _extract_category_alias(category_scope)
-    if category:
-        filters["product.category"] = category
-
     material_patterns = (
         r"(?:哪些|有哪些|哪几款|哪几种|哪几个).{0,12}?(?:是|为)\s*(?P<value>[^，,。；;？?\s]{1,24})\s*(?:材质|材料)",
         r"(?:哪些|有哪些|哪几款|哪几种|哪几个).{0,12}?(?:主体材质|壶身材质|锅身材质|材质|材料)\s*(?:是|为|=)\s*(?P<value>[^，,。；;？?\s]{1,24})",
@@ -4756,6 +4909,27 @@ def _extract_structured_list_query_filters(text: str) -> dict[str, Any]:
         if value:
             filters["specs.body_material"] = value
             break
+
+    # High-precision fallback for category predicates such as
+    # "哪些水具是不锈钢".  Only recognized material values are accepted here;
+    # arbitrary copula complements must remain for semantic planning instead
+    # of being guessed into a deterministic field.
+    if not filters.get("specs.body_material"):
+        copula_material = re.search(
+            r"(?:哪些|有哪些|哪几款|哪几种|哪几个)[^，,。；;？?]{1,18}?(?:是|为)\s*(?P<value>[^，,。；;？?\s]{1,24})",
+            normalized,
+            flags=re.I,
+        )
+        if copula_material:
+            raw_value = _clean_filter_value(copula_material.group("value"))
+            recognized_material_terms = (
+                "304不锈钢", "不锈钢304", "硬质氧化铝", "铝合金",
+                "不锈钢", "塑料", "硅胶", "钛",
+            )
+            if any(term in raw_value for term in recognized_material_terms):
+                value = _normalize_structured_filter_value("specs.body_material", raw_value)
+                if value:
+                    filters["specs.body_material"] = value
 
     heat_source_patterns = (
         r"(?:哪些|有哪些|哪几款|哪几种|哪几个).{0,12}?(?:能用|可以用|可用|支持|是否支持)\s*(?P<value>[^，,。；;？?\s]{1,24})",
@@ -4782,28 +4956,10 @@ def _extract_structured_list_query_filters(text: str) -> dict[str, Any]:
             filters["business.usage_scenarios"] = value
             break
 
-    if category and not any(
-        filters.get(field_path)
-        for field_path in ("specs.body_material", "specs.heat_source", "business.usage_scenarios")
-    ):
-        copula_match = re.search(
-            r"(?:哪些|有哪些|哪几款|哪几种|哪几个)[^，,。；;？?]{0,12}?(?:是|为)\s*(?P<value>[^，,。；;？?\s]{1,24})",
-            normalized,
-            flags=re.I,
-        )
-        if copula_match:
-            raw_value = _clean_filter_value(copula_match.group("value"))
-            inferred_specs = (
-                ("specs.body_material", "材质"),
-                ("specs.heat_source", "热源"),
-                ("business.usage_scenarios", "适用场景"),
-            )
-            for field_path, _field_label in inferred_specs:
-                value = _normalize_structured_filter_value(field_path, raw_value)
-                if value:
-                    filters[field_path] = value
-                    break
-
+    # This helper only extracts explicitly structured predicates.  Category
+    # inference must run after the central parser has consumed those values;
+    # otherwise a predicate value such as "酒精炉" is incorrectly reused as the
+    # independent product category "炉具".
     return filters
 
 
@@ -5716,7 +5872,22 @@ def _narrow_alcohol_stove_cookware_query_rows(
     if not _is_alcohol_stove_cookware_query(intent, question, rows=source_rows or rows):
         return rows
     base_rows = source_rows or rows or []
-    narrowed = [row for row in base_rows if _case71_eligible_cookware_row(row, db)]
+    candidate_domain = str(getattr(intent, "source_context", "") or "") == "previous_results"
+    narrowed = [
+        row
+        for row in base_rows
+        if (
+            _row_supports_alcohol_stove(row, db)
+            if candidate_domain
+            else _case71_eligible_cookware_row(row, db)
+        )
+    ]
+    if candidate_domain:
+        # A context-set filter is a closed-world operation: no catalogue
+        # supplement may enter after Entity/candidate resolution has sealed
+        # the domain.  Same-SKU supporting evidence remains admissible for
+        # the candidate already in that domain.
+        return narrowed
     seen = {str(row.get("sku") or "").strip().upper() for row in narrowed if str(row.get("sku") or "").strip()}
     supplement_rows = customer_agent_service.search_products(db, "", limit=120, filters={"product.category": "锅具"})
     for row in supplement_rows:
@@ -6181,6 +6352,8 @@ def _is_multi_product_detail_question(text: str) -> bool:
 def _is_multi_product_filter_query(text: str, subject: str = "") -> bool:
     normalized = str(text or "")
     if _is_multi_product_detail_question(normalized):
+        return True
+    if re.match(r"^(?:你们|咱们|店里|公司).{0,8}(?:有没|有没有)", normalized):
         return True
     if _is_generic_multi_product_subject(subject):
         return True
@@ -6753,6 +6926,7 @@ def _compound_single_product_detail_answer(
             sku=sku,
             supporting=supporting,
             term_groups=[("煎盘",), ("单独", "单用")],
+            customer_question=text,
         )
         if not standalone and any(term in str(_value_from_detail(detail, "specs.capacity") or "") for term in ("煎盘", "英寸")):
             standalone = "资料显示套装内含煎盘，可单独作为平底煎盘使用。"
@@ -6764,6 +6938,7 @@ def _compound_single_product_detail_answer(
             sku=sku,
             supporting=supporting,
             term_groups=[("手柄", "把手")],
+            customer_question=text,
         )
         if not handle:
             handle = "当前资料未单独标注独立手柄信息。"
@@ -6823,6 +6998,7 @@ def _best_same_sku_evidence_text(
     sku: str,
     supporting: dict[str, Any] | None,
     term_groups: list[tuple[str, ...]],
+    customer_question: str = "",
 ) -> str | None:
     candidates: list[tuple[int, str]] = []
     product = db.query(Product).filter(Product.sku.ilike(sku)).first()
@@ -6839,7 +7015,11 @@ def _best_same_sku_evidence_text(
                 continue
             answer = _strip_qa_answer(qa.answer)
             if answer:
-                candidates.append((_term_group_score(combined, term_groups), answer))
+                candidates.append((
+                    _term_group_score(combined, term_groups)
+                    + _same_sku_qa_question_alignment_score(qa.question, customer_question),
+                    answer,
+                ))
     for bucket in ("qa", "kb"):
         for item in (supporting or {}).get(bucket) or []:
             if str(item.get("sku") or "").strip().upper() != str(sku or "").strip().upper():
@@ -6854,6 +7034,23 @@ def _best_same_sku_evidence_text(
         return None
     candidates.sort(key=lambda item: item[0], reverse=True)
     return candidates[0][1].strip(" 。")
+
+
+def _same_sku_qa_question_alignment_score(evidence_question: Any, customer_question: Any) -> int:
+    """Prefer the QA whose question most specifically matches this sub-question.
+
+    Term groups remain the hard field/safety gate. They can legitimately tie
+    when two answers mention a shared component, so tie breaking must use the
+    full customer wording rather than row recency. The longest common
+    contiguous span is language-agnostic and only ranks already sealed
+    same-SKU evidence; it never routes a request or creates a product fact.
+    """
+    evidence = re.sub(r"\s+", "", str(evidence_question or "")).casefold()
+    customer = re.sub(r"\s+", "", str(customer_question or "")).casefold()
+    if not evidence or not customer:
+        return 0
+    match = SequenceMatcher(None, evidence, customer, autojunk=False).find_longest_match()
+    return min(match.size, 24)
 
 
 def _matches_all_term_groups(text: str, term_groups: list[tuple[str, ...]]) -> bool:
@@ -7530,7 +7727,14 @@ async def _multi_query_semantic_retrieve(
         try:
             rows = await knowledge_service.semantic_retrieve(db, query, sku=sku, limit=max(limit, 5))
         except Exception:
-            rows = knowledge_service.keyword_retrieve(db, query, sku=sku, limit=max(limit, 5))
+            # Supporting knowledge is optional.  A structured product answer
+            # must remain available when the knowledge store is absent or
+            # temporarily unavailable; do not turn its fallback failure into
+            # a product-fact failure.
+            try:
+                rows = knowledge_service.keyword_retrieve(db, query, sku=sku, limit=max(limit, 5))
+            except Exception:
+                rows = []
         for row in rows:
             if not isinstance(row, dict) or not str(row.get("content") or "").strip():
                 continue
@@ -9753,7 +9957,10 @@ def _uncertainty_for_response(
         return "ambiguous_product"
     if not results and "没有找到" in (answer or ""):
         return "insufficient_data"
-    if any(text in (answer or "") for text in ("没有标注", "不能直接确认", "暂时不能确认", "资料未标注")):
+    answer_text = str(answer or "")
+    if any(text in answer_text for text in ("没有标注", "不能直接确认", "暂时不能确认", "资料未标注")) or (
+        "暂未找到" in answer_text and "明确" in answer_text
+    ):
         return "not_recorded"
     if warnings:
         return "insufficient_data"

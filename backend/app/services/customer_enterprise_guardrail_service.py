@@ -2,7 +2,15 @@ import re
 from typing import Any
 
 
-SKU_RE = re.compile(r"\b[A-Z]{1,6}(?:-[A-Z0-9]{1,8}){1,4}\b", flags=re.IGNORECASE)
+# Chinese characters count as ``\w`` in Python, so a trailing ``\b`` does
+# not match a SKU immediately followed by natural Chinese prose (for example
+# ``CW-K31现在还在售吗``).  Bound the identifier by ASCII alphanumerics
+# instead: punctuation, whitespace and CJK text are all valid neighbours,
+# while embedded fragments remain excluded.
+SKU_RE = re.compile(
+    r"(?<![A-Z0-9])[A-Z]{1,6}(?:-[A-Z0-9]{1,8}){1,4}(?![A-Z0-9])",
+    flags=re.IGNORECASE,
+)
 
 PROMPT_INJECTION_TERMS = (
     "忽略之前",
@@ -62,7 +70,10 @@ UNSUPPORTED_FACT_TERMS = (
 TRAVEL_SAFETY_TERMS = ("飞机", "航班", "安检", "托运", "随身", "高铁", "火车", "地铁")
 FLAMMABLE_PRODUCT_TERMS = ("酒精炉", "酒精", "燃料", "炉具", "气罐", "燃气", "CS-B14", "CS-B02")
 REALTIME_WEATHER_TERMS = ("天气", "下雨", "降雨", "气温", "风力", "台风", "今天", "明天", "现在")
-INTERNAL_BUSINESS_TERMS = ("成本价", "成本", "进价", "利润", "毛利", "底价", "采购价")
+INTERNAL_BUSINESS_TERMS = (
+    "成本价", "成本", "进价", "利润", "毛利", "底价", "采购价",
+    "负责人", "生命周期", "生命周期状态", "产品状态",
+)
 BUSINESS_SUPPORT_TERMS = ("退换货", "退货", "换货", "退换", "瑕疵", "破损", "坏了", "物流", "快递", "发货", "支付", "售后政策", "售后")
 CREATIVE_REQUEST_TERMS = ("写游记", "露营游记", "写文章", "写一篇", "作文", "文案")
 CASUAL_WEATHER_TERMS = ("天气真好", "今天天气真好", "适合出去玩吗", "出去玩吗")

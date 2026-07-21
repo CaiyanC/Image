@@ -26,7 +26,7 @@ SKU_PREFIX_RE = re.compile(
     r"(?<![A-Za-z0-9])(?:[A-Za-z]{1,6}[A-Za-z0-9]{0,12}(?:[-_](?:[A-Za-z0-9]{1,24}(?:\([A-Za-z0-9]{1,24}\))?|[\u4e00-\u9fff]{1,2}))+)"
 )
 PLAIN_SKU_PREFIX_RE = re.compile(
-    r"(?<![A-Za-z0-9])(?:[A-Za-z]{1,6}\d{2,12}[A-Za-z0-9]{0,12}(?:\([A-Za-z0-9]{1,24}\))?)"
+    r"(?<![A-Za-z0-9_-])(?:[A-Za-z]{1,6}\d{2,12}[A-Za-z0-9]{0,12}(?:\([A-Za-z0-9]{1,24}\))?)"
 )
 SKU_TAIL_TRIM_PATTERNS = (
     re.compile(r"^([A-Z]{1,6}[A-Z0-9]{0,12}(?:-[A-Z0-9]{1,24})+[（(][A-Z0-9]{1,24}[)）])[\u4e00-\u9fff].*$"),
@@ -164,6 +164,10 @@ def product_name_aliases(value: Any) -> list[str]:
 
 VERSION_TOKENS = ("pro", "plus", "max", "lite", "mini", "ultra")
 VERSION_SUFFIX_RE = re.compile(r"(?:pro|plus|max|lite|mini|ultra)$", re.I)
+VARIANT_SUFFIX_RE = re.compile(
+    r"(?:pro|plus|max|lite|mini|ultra|基础款|标准版|升级款|入门款|高配版|低配版)$",
+    re.I,
+)
 
 
 def product_name_family_aliases(value: Any) -> list[str]:
@@ -171,7 +175,7 @@ def product_name_family_aliases(value: Any) -> list[str]:
     family_aliases: list[str] = []
     seen = {alias.lower() for alias in aliases}
     for alias in aliases:
-        stripped = VERSION_SUFFIX_RE.sub("", alias).strip(" -_()（）")
+        stripped = VARIANT_SUFFIX_RE.sub("", alias).strip(" -_()（）")
         stripped = re.sub(r"(?:饭盒|水壶|保温杯|套锅|单锅|炒锅|煎锅|烤盘|茶具|炉|炉具)$", "", stripped).strip(" -_()（）")
         if len(stripped) >= 2 and stripped.lower() not in seen:
             family_aliases.append(stripped)
@@ -433,13 +437,16 @@ def process_agent_request(
     if barcode_result:
         return barcode_result
 
-    filter_result = _try_filter_products(db, clean)
-    if filter_result:
-        return filter_result
-
     detail_result = _try_get_field_answer(db, clean, sku)
     if detail_result:
         return detail_result
+
+    # A sealed explicit identity plus a requested detail field is not a
+    # catalogue filter.  Resolve it before collection filtering so words such
+    # as "容量" cannot turn a single-SKU request into a product list.
+    filter_result = _try_filter_products(db, clean)
+    if filter_result:
+        return filter_result
 
     collection_field_result = _try_collection_field_answer(db, clean)
     if collection_field_result:
@@ -566,7 +573,18 @@ def _try_create_delete_product_action(db: Session, user_id: str, question: str, 
 
 
 def _try_get_field_answer(db: Session, question: str, sku: str | None) -> dict | None:
-    skus = _extract_skus(question) or ([sku] if sku else [])
+    extracted = _extract_skus(question) or ([sku] if sku else [])
+    # Extraction deliberately retains shorter SKU-shaped suffixes for search
+    # recall.  A direct detail request must instead arbitrate those candidates
+    # against the catalogue: discard only candidates that do not name a real
+    # product, and preserve ambiguity if more than one real product remains.
+    normalized = list(dict.fromkeys(str(item).strip().upper() for item in extracted if str(item).strip()))
+    existing = {
+        str(value).strip().upper()
+        for (value,) in db.query(Product.sku).filter(Product.sku.in_(normalized)).all()
+        if str(value or "").strip()
+    }
+    skus = [item for item in normalized if item in existing] or normalized
     if len(skus) != 1:
         return None
     field_path = _find_field_path_in_text(question)

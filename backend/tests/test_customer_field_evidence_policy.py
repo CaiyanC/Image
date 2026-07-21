@@ -1,9 +1,18 @@
 import json
+from types import SimpleNamespace
 
 import pytest
 
-from app.models import Product, ProductSpecs
-from app.services import customer_service_service
+from app.models import Product, ProductBusiness, ProductSpecs
+from app.models.product_associations import (
+    Certification,
+    ListingChannel,
+    ProductCertification,
+    ProductListingChannel,
+    ProductSalesRegion,
+    SalesRegion,
+)
+from app.services import customer_agent_planner_service, customer_field_contract, customer_service_service
 from app.services.customer_field_contract import (
     field_evidence_policy,
     qa_evidence_matches_field,
@@ -45,6 +54,13 @@ def field_evidence_client(route_client_and_db):
         product_id = db.query(Product.id).filter(Product.sku == "FE-200").scalar()
         db.query(ProductSpecs).filter(ProductSpecs.product_id == product_id).update(
             {
+                "capacity": json.dumps(
+                    [
+                        {"label": "", "value": "材", "unit": ""},
+                        {"label": "质", "value": "食品级塑料", "unit": ""},
+                    ],
+                    ensure_ascii=False,
+                ),
                 "size_info": json.dumps(
                     [
                         {"label": "包装尺寸", "value": "42 x 30 x 8", "unit": "cm"},
@@ -54,18 +70,41 @@ def field_evidence_client(route_client_and_db):
                 )
             }
         )
+        water_product_id = db.query(Product.id).filter(Product.sku == "FE-100").scalar()
+        db.query(ProductSpecs).filter(ProductSpecs.product_id == water_product_id).update(
+            {"usage_instruction": "首次使用前用清水冲洗，使用后擦干并通风存放。"}
+        )
         db.commit()
     return client, headers, Session
 
 
-@pytest.mark.parametrize("alias", ["型号", "SKU", "货号", "产品编码", "商品编码"])
-def test_model_policy_unifies_natural_aliases(alias):
-    policy = field_evidence_policy("model")
+@pytest.mark.parametrize("alias", ["SKU", "货号", "产品编码", "商品编码"])
+def test_sku_policy_uses_only_the_record_key_aliases(alias):
+    policy = field_evidence_policy("sku")
 
     assert policy is not None
     assert alias in policy.aliases
     assert "product.sku" in policy.structured_fields
-    assert qa_evidence_matches_field("核心卖点是什么", "", "model") is False
+    assert qa_evidence_matches_field("核心卖点是什么", "", "sku") is False
+
+
+def test_model_policy_does_not_substitute_sku_for_missing_model_number():
+    policy = field_evidence_policy("model")
+
+    assert policy is not None
+    assert "型号" in policy.aliases
+    assert "product.sku" not in policy.structured_fields
+
+
+def test_safely_missing_model_uses_field_specific_non_realtime_copy():
+    answer = customer_service_service._resolved_entity_unknown_fact_answer(
+        "示例商品（DEMO-1）",
+        "型号",
+    )
+
+    assert "型号" in answer
+    assert "实时" not in answer
+    assert "SKU" not in answer
 
 
 def test_weight_policy_rejects_selling_point_qa():
@@ -89,8 +128,820 @@ def test_dimension_policy_keeps_package_scope_separate_from_subject_scope():
     assert package.scope == "package"
 
 
-@pytest.mark.parametrize("alias", ["型号", "货号", "产品编码"])
-def test_explicit_model_question_uses_sku_evidence_not_selling_points(field_evidence_client, alias):
+def test_dimension_policy_rejects_label_without_measurement():
+    assert select_dimension_evidence(
+        json.dumps([{"label": "收纳尺寸", "value": "收纳尺寸", "unit": ""}], ensure_ascii=False),
+        requested_scope="subject",
+    ) is None
+
+
+def test_dimension_policy_removes_source_label_delimiter_before_formatting():
+    evidence = select_dimension_evidence(":9.5x6.7mm", requested_scope="subject")
+
+    assert evidence is not None
+    assert evidence.value == "9.5x6.7mm"
+
+
+def test_capacity_name_and_structured_value_conflict_fails_closed():
+    assert customer_service_service._capacity_evidence_conflict(
+        "1.4L示例水壶",
+        '[{"label": "容量", "value": "4L"}]',
+    ) == ("1.4L", "4L")
+    assert customer_service_service._capacity_evidence_conflict(
+        "1400ml示例水壶",
+        '[{"label": "容量", "value": "1.4L"}]',
+    ) is None
+
+
+def test_explicit_name_color_and_structured_color_conflict_fails_closed():
+    assert customer_service_service._color_evidence_conflict(
+        "示例水壶(电光绿)",
+        "锖色",
+    ) == ("电光绿", "锖色")
+    assert customer_service_service._color_evidence_conflict(
+        "示例水壶-竹灰绿",
+        "绿色",
+    ) is None
+
+
+def test_color_provider_drops_cross_field_tokens():
+    assert customer_service_service._color_field_evidence("铝、黑色") == "黑色"
+    assert customer_service_service._color_field_evidence("锖色、牛油果绿") == "锖色、牛油果绿"
+
+
+def test_liquid_temperature_capability_requires_liquid_specific_same_sku_evidence():
+    """High-temperature food is not evidence that a vessel can hold hot water."""
+    product = SimpleNamespace(
+        product_name_cn="示例搪瓷餐具",
+        product_name_en="",
+        category="餐具",
+        sub_category="",
+    )
+    specs = SimpleNamespace(
+        usage_instruction="适用于户外用餐场景，可接触高温食物。"
+    )
+
+    value, source = customer_service_service._structured_product_field_evidence(
+        "usage_instruction",
+        db=None,
+        product=product,
+        specs=specs,
+        business=None,
+        content=None,
+        requested_subtype="liquid_temperature_capability",
+    )
+
+    assert value == ""
+    assert source is None
+
+
+def test_liquid_temperature_capability_rejects_warm_water_cleaning_instructions():
+    product = SimpleNamespace(
+        product_name_cn="示例搪瓷餐具",
+        product_name_en="",
+        category="餐具",
+        sub_category="",
+    )
+    specs = SimpleNamespace(
+        usage_instruction="首次使用前用温水清洗。使用后用温水冲洗并擦干。"
+    )
+
+    value, source = customer_service_service._structured_product_field_evidence(
+        "usage_instruction",
+        db=None,
+        product=product,
+        specs=specs,
+        business=None,
+        content=None,
+        requested_subtype="liquid_temperature_capability",
+    )
+
+    assert value == ""
+    assert source is None
+
+
+def test_material_answer_normalizer_removes_source_tabs_without_repeating_handle_material():
+    answer = customer_service_service._normalize_handle_material_phrase(
+        "示例产品的材质：腕带材质：\t尼龙\n手柄材质：\tEVA发泡海绵。"
+    )
+
+    assert answer == "示例产品的材质：腕带材质：尼龙\n手柄材质：EVA发泡海绵。"
+
+
+def test_catalog_subject_override_keeps_field_word_inside_product_name():
+    contract = customer_service_service.resolve_requested_field_contract(
+        "示例酒精炉PRO的型号是什么？",
+        subject_override="示例酒精炉PRO",
+    )
+
+    assert contract["field_type"] == "model"
+    assert contract["canonical_fields"] == ["model"]
+    assert contract["subject"] == "示例酒精炉PRO"
+
+
+def test_catalog_exact_subject_can_correct_semantic_entity_scope_without_trusting_semantic_identity():
+    plan = {
+        "semantic_preplan": {
+            "called": True,
+            "route_family": "product_bound_qa",
+            "route_hint": "product_detail",
+            "question_type": "field",
+            "field_type": "contents",
+            "subtype": "known_detail",
+            "entity_scope": "category_scope",
+            "confidence": 0.9,
+        }
+    }
+
+    contract = customer_service_service.resolve_requested_field_contract(
+        "示例旅行筷原装开箱会附带哪些东西？",
+        plan,
+        subject_override="示例旅行筷",
+    )
+
+    assert contract["field_type"] == "accessories"
+    assert contract["source"] == "validated_semantic_preplan"
+    assert contract["subject"] == "示例旅行筷"
+
+
+def test_supported_semantic_field_is_adapted_to_the_existing_field_contract():
+    plan = {
+        "semantic_preplan": {
+            "called": True,
+            "route_family": "product_bound_qa",
+            "route_hint": "product_detail",
+            "question_type": "field",
+            "field_type": "series",
+            "field_hint": "series",
+            "subtype": "known_detail",
+            "entity_scope": "resolved_product",
+            "confidence": 0.95,
+        }
+    }
+
+    contract = customer_service_service.resolve_requested_field_contract(
+        "示例旅行筷是哪个产品线的？",
+        plan,
+        subject_override="示例旅行筷",
+    )
+
+    assert contract["field_type"] == "series"
+    assert contract["source"] == "validated_semantic_preplan"
+    assert contract["canonical_fields"] == ["series"]
+
+
+def test_high_confidence_semantic_field_is_not_overridden_by_legacy_usage_care_classifier():
+    """Usage/care is evidence routing, not a second field-intent authority."""
+    plan = {
+        "semantic_preplan": {
+            "called": True,
+            "route_family": "product_bound_qa",
+            "route_hint": "product_detail",
+            "question_type": "field",
+            "field_type": "cleaning",
+            "field_hint": "cleaning",
+            "canonical_fields": ["cleaning"],
+            "subtype": "known_detail",
+            "entity_scope": "product_like",
+            "confidence": 0.9,
+        }
+    }
+
+    contract = customer_service_service.resolve_requested_field_contract(
+        "示例锅怎么清洁？",
+        plan,
+        subject_override="示例锅",
+    )
+
+    assert contract["field_type"] == "cleaning"
+    assert contract["source"] == "validated_semantic_preplan"
+
+
+def test_high_confidence_target_audience_semantic_is_not_overridden_by_generic_suitable_for_phrase():
+    """"Suitable for whom" is semantic audience intent, not a scenario predicate."""
+    plan = {
+        "semantic_preplan": {
+            "called": True,
+            "route_family": "product_bound_qa",
+            "route_hint": "product_detail",
+            "question_type": "field",
+            "field_type": "target_audience",
+            "field_hint": "target_audience",
+            "canonical_fields": ["target_audience"],
+            "subtype": "known_detail",
+            "entity_scope": "product_like",
+            "confidence": 0.9,
+        }
+    }
+
+    contract = customer_service_service.resolve_requested_field_contract(
+        "示例收纳包更适合谁用？",
+        plan,
+        subject_override="示例收纳包",
+    )
+
+    assert contract["field_type"] == "target_audience"
+    assert contract["source"] == "validated_semantic_preplan"
+
+
+def test_explicit_people_contract_outranks_conflicting_semantic_target_audience_label():
+    semantic = customer_agent_planner_service._deterministic_semantic_field_fallback(
+        "示例旅行筷通常供几人使用？"
+    )
+    assert semantic is not None
+    assert semantic["field_type"] == "people"
+    plan = {"semantic_preplan": semantic}
+
+    contract = customer_service_service.resolve_requested_field_contract(
+        "示例旅行筷通常供几人使用？",
+        plan,
+        subject_override="示例旅行筷",
+    )
+
+    assert contract["field_type"] == "people"
+
+
+def test_explicit_technical_advantages_contract_rejects_conflicting_semantic_selling_point_label():
+    # A high-confidence semantic plan owns natural-language interpretation,
+    # but a direct canonical FieldContract span is a deterministic contract
+    # constraint.  It must reject a contradictory label rather than letting a
+    # generic selling-point route consume technical evidence.
+    plan = {
+        "semantic_preplan": {
+            "called": True,
+            "route_family": "product_bound_qa",
+            "route_hint": "product_detail",
+            "question_type": "field",
+            "field_type": "selling_point",
+            "field_hint": "selling_point",
+            "canonical_fields": ["selling_point"],
+            "subtype": "known_detail",
+            "entity_scope": "product_like",
+            "confidence": 0.9,
+        }
+    }
+
+    contract = customer_service_service.resolve_requested_field_contract(
+        "示例旅行筷的技术优势是什么？",
+        plan,
+        subject_override="示例旅行筷",
+    )
+
+    assert contract["field_type"] == "technical_advantages"
+    assert contract["canonical_fields"] == ["technical_advantages"]
+    assert contract["source"] == "explicit_contract_semantic_conflict"
+
+
+def test_people_structured_evidence_rejects_capacity_and_requires_headcount():
+    policy = field_evidence_policy("people")
+    # target_audience and selling points are both admissible only after the
+    # central value validator finds an explicit headcount; capacity and generic
+    # marketing text remain invalid people evidence.
+    assert policy.structured_fields == ("business.target_audience", "business.top_selling_points")
+    assert customer_service_service._is_valid_structured_field_value("people", "8L") is False
+    assert customer_service_service._is_valid_structured_field_value("people", "户外露营者") is False
+    assert customer_service_service._is_valid_structured_field_value("people", "适合2-3人使用") is True
+
+
+def test_compositional_price_tier_adapter_outranks_incidental_brand_alias():
+    semantic = customer_agent_planner_service._deterministic_semantic_field_fallback(
+        "示例旅行筷在品牌的价位梯度中处于哪一档？"
+    )
+    assert semantic is not None
+    assert semantic["field_type"] == "price_positioning"
+
+    contract = customer_service_service.resolve_requested_field_contract(
+        "示例旅行筷在品牌的价位梯度中处于哪一档？",
+        {"semantic_preplan": semantic},
+        subject_override="示例旅行筷",
+    )
+
+    assert contract["field_type"] == "price_positioning"
+    assert contract["source"] == "validated_semantic_preplan"
+
+
+def test_semantic_price_positioning_keeps_its_compositionally_confirmed_field_over_incidental_brand_label():
+    plan = {
+        "semantic_preplan": {
+            "called": True,
+            "route_family": "product_bound_qa",
+            "route_hint": "product_detail",
+            "question_type": "field",
+            "field_type": "price_positioning",
+            "field_hint": "price_positioning",
+            "canonical_fields": ["price_positioning"],
+            "subtype": "known_detail",
+            "entity_scope": "product_like",
+            "confidence": 0.9,
+        }
+    }
+
+    contract = customer_service_service.resolve_requested_field_contract(
+        "示例旅行筷在品牌的价位梯度中处于哪一档？",
+        plan,
+        subject_override="示例旅行筷",
+    )
+
+    assert contract["field_type"] == "price_positioning"
+    assert contract["source"] == "validated_semantic_preplan"
+
+
+def test_semantic_safe_field_forms_the_only_field_contract_without_a_phrase_alias():
+    plan = {
+        "semantic_preplan": {
+            "called": True,
+            "route_family": "product_bound_qa",
+            "route_hint": "product_detail",
+            "question_type": "field",
+            "field_type": "manual",
+            "field_hint": "manual",
+            "canonical_fields": ["manual"],
+            "subtype": "known_detail",
+            "entity_scope": "product_like",
+            "confidence": 0.9,
+        }
+    }
+
+    contract = customer_service_service.resolve_requested_field_contract(
+        "示例野炊锅的官方操作文档在哪儿看？",
+        plan,
+        subject_override="示例野炊锅",
+    )
+
+    assert contract["field_type"] == "manual"
+    assert contract["canonical_fields"] == ["manual"]
+    assert contract["supported_fields"] == []
+    assert contract["unsupported_fields"] == ["manual"]
+    assert contract["source"] == "validated_semantic_preplan"
+
+
+@pytest.mark.parametrize(("question", "field_type"), [
+    ("示例烤炉是否适配常见炉具？", "heat_source"),
+    ("示例收纳包能否机洗？", "cleaning"),
+    ("示例水袋属于A类还是B类？", "product_level"),
+    ("示例炉具最大功率多少瓦？", "power"),
+    ("示例折叠箱操作步骤怎么走？", "usage_instruction"),
+    ("示例折叠箱日常清洗怎么做？", "cleaning"),
+    ("示例折叠箱长期不用怎么维护？", "care"),
+])
+def test_compositional_field_adapter_handles_unseen_supported_field_wording(question, field_type):
+    semantic = customer_agent_planner_service._deterministic_semantic_field_fallback(question)
+    assert semantic is not None
+    assert semantic["field_type"] == field_type
+    contract = customer_service_service.resolve_requested_field_contract(question, {"semantic_preplan": semantic})
+    assert contract["field_type"] == field_type
+
+
+def test_contents_composition_fallback_forms_contract_when_semantic_is_unavailable():
+    question = "示例野炊套锅包含哪些？"
+    contract = customer_service_service.resolve_requested_field_contract(
+        question,
+        {"semantic_preplan": {"called": True, "fallback_reason": "semantic_unavailable"}},
+        subject_override="示例野炊套锅",
+    )
+
+    assert contract["field_type"] == "accessories"
+    # Semantic planning is explicitly unavailable here. The formal contract
+    # remains valid, but its source must truthfully record the conservative
+    # deterministic fallback rather than impersonate an AI decision.
+    assert contract["source"] == "legacy_requested_fields"
+
+
+def test_purchase_predicate_fallback_beats_product_name_heat_source_alias():
+    question = "示例酒精炉在哪里可以买到？"
+    contract = customer_service_service.resolve_requested_field_contract(
+        question,
+        {"semantic_preplan": {"called": True, "fallback_reason": "semantic_unavailable"}},
+        subject_override="示例酒精炉",
+    )
+
+    assert contract["field_type"] == "purchase_channel"
+    assert contract["source"] == "deterministic_full_predicate"
+
+
+def test_semantic_outage_fallback_keeps_an_independent_audience_field_in_a_compound_request():
+    # This is deliberately not a production title or a historical failed
+    # sentence.  When semantic planning is unavailable, an explicit material
+    # field must not hide the independent customer-audience intent.
+    question = "示例野炊锅的锅盖材质是什么，更适合哪类用户？"
+    contract = customer_service_service.resolve_requested_field_contract(
+        question,
+        {"semantic_preplan": {"called": True, "fallback_reason": "semantic_unavailable"}},
+        subject_override="示例野炊锅",
+    )
+
+    assert contract["canonical_fields"] == ["material", "target_audience"]
+    assert contract["compound"] is True
+
+
+def test_semantic_field_keeps_a_full_explicit_sku_when_legacy_extraction_emits_a_suffix():
+    plan = {
+        "semantic_preplan": {
+            "called": True,
+            "route_family": "product_bound_qa",
+            "route_hint": "product_detail",
+            "question_type": "field",
+            "field_type": "series",
+            "field_hint": "series",
+            "subtype": "known_detail",
+            "entity_scope": "resolved_product",
+            "confidence": 0.95,
+        }
+    }
+
+    contract = customer_service_service.resolve_requested_field_contract(
+        "CW-C95属于什么系列？",
+        plan,
+    )
+
+    assert contract["subject"] == "CW-C95"
+    assert contract["field_type"] == "series"
+
+
+def test_natural_named_product_fact_is_eligible_for_constrained_semantic_preplan():
+    assert customer_service_service._should_call_semantic_preplan(
+        "示例旅行筷主打什么定位？",
+        {"primary_intent": "product_detail", "requested_field": ""},
+        conversation_id=None,
+    ) is True
+
+
+def test_validated_semantic_field_is_not_blocked_by_legacy_product_refs():
+    # A planner reference is only an identity hint.  Once the semantic layer
+    # has formed a supported FieldContract, Phase 2 must seal that identity
+    # rather than fall back to the planner's broad lexical field label.
+    field_request = {
+        "field_type": "price_positioning",
+        "requested_field": "价格定位",
+        "requested_fields": ["价格定位"],
+        "canonical_fields": ["price_positioning"],
+        "source": "validated_semantic_preplan",
+    }
+    assert customer_service_service._phase2_single_field_arbitration_eligible(
+        "example travel box price tier?",
+        {"primary_intent": "product_field", "product_refs": ["FE-100"]},
+        conversation_id=None,
+        field_request_override=field_request,
+    ) is True
+
+
+def test_validated_semantic_detail_field_precedes_legacy_unknown_fact_guard():
+    # The semantic plan supplies only a validated canonical field.  It does
+    # not supply entity identity or evidence; Phase 2 must still create the
+    # EntityResolutionContract and obtain same-SKU evidence.
+    result = customer_service_service._pre_route_high_risk_contract_result(
+        None,
+        "示例旅行筷拿到过什么合规认证？",
+        {
+            "called": True,
+            "route_family": "product_bound_qa",
+            "route_hint": "product_detail",
+            "question_type": "field",
+            "field_type": "certification",
+            "field_hint": "certification",
+            "subtype": "known_detail",
+            "entity_scope": "resolved_product",
+            "confidence": 0.95,
+        },
+    )
+
+    assert result is None
+
+
+@pytest.mark.parametrize(
+    ("field_type", "expected_value", "expected_source"),
+    [
+        ("purchase_channel", "字段验收渠道", "product_listing_channels->listing_channels"),
+        ("sales_region", "字段验收区域", "product_sales_regions->sales_regions"),
+        ("certification", "字段验收认证", "product_certifications->certifications"),
+    ],
+)
+def test_association_evidence_uses_the_sealed_product_only(
+    field_evidence_client,
+    field_type,
+    expected_value,
+    expected_source,
+):
+    _client, _headers, Session = field_evidence_client
+    with Session() as db:
+        product = db.query(Product).filter(Product.sku == "FE-100").one()
+        if field_type == "purchase_channel":
+            item = ListingChannel(channel_name=expected_value, channel_code="field-check")
+            db.add(item)
+            db.flush()
+            db.add(ProductListingChannel(product_id=product.id, channel_id=item.id))
+        elif field_type == "sales_region":
+            item = SalesRegion(region_name=expected_value, region_code="field-check")
+            db.add(item)
+            db.flush()
+            db.add(ProductSalesRegion(product_id=product.id, region_id=item.id))
+        else:
+            item = Certification(certification_name=expected_value, certification_code="field-check")
+            db.add(item)
+            db.flush()
+            db.add(ProductCertification(product_id=product.id, certification_id=item.id))
+        db.commit()
+        specs = db.query(ProductSpecs).filter(ProductSpecs.product_id == product.id).first()
+        value, source = customer_service_service._structured_product_field_evidence(
+            field_type,
+            db=db,
+            product=product,
+            specs=specs,
+            business=None,
+            content=None,
+        )
+
+    assert value == expected_value
+    assert source == expected_source
+
+
+def test_certification_association_preserves_its_database_explanation(
+    field_evidence_client,
+):
+    """A standard label must not lose its DB meaning and become a bare certification claim."""
+    _client, _headers, Session = field_evidence_client
+    with Session() as db:
+        product = db.query(Product).filter(Product.sku == "FE-100").one()
+        item = Certification(
+            certification_name="GB",
+            certification_code="GB",
+            description="中国国家标准",
+        )
+        db.add(item)
+        db.flush()
+        db.add(ProductCertification(product_id=product.id, certification_id=item.id))
+        db.commit()
+        specs = db.query(ProductSpecs).filter(ProductSpecs.product_id == product.id).first()
+        value, source = customer_service_service._structured_product_field_evidence(
+            "certification",
+            db=db,
+            product=product,
+            specs=specs,
+            business=None,
+            content=None,
+        )
+
+    assert value == "GB（中国国家标准）"
+    assert source == "product_certifications->certifications"
+
+
+def test_usage_provider_rejects_instruction_from_another_product_domain():
+    cup = Product(product_name_cn="示例随行杯", category="水杯")
+    kettle_copy = "烹饪前将水壶置于灶具上小火预热，洗净后确保壶底干燥，严禁干烧。"
+    kettle = Product(product_name_cn="示例咖啡壶", category="咖啡器具")
+    grinder_copy = "按冲煮方式调节研磨粗细，定期清理研磨器刀盘。"
+
+    assert customer_service_service._usage_instruction_matches_product(cup, kettle_copy) is False
+    assert customer_service_service._usage_instruction_matches_product(kettle, grinder_copy) is False
+    assert customer_service_service._color_evidence_conflict(
+        "金波系列示例水杯",
+        "橙色",
+    ) is None
+
+
+@pytest.mark.parametrize(
+    "raw_value",
+    [
+        '[{"label": "", "value": "/", "unit": ""}]',
+        '[{"label": "", "value": "材"}, {"label": "质", "value": "食品级塑料"}]',
+        '[{"label": "", "value": "13*8.5", "unit": "cm"}]',
+    ],
+)
+def test_capacity_evidence_rejects_placeholders_and_cross_field_values(raw_value):
+    assert customer_service_service._capacity_field_evidence(raw_value) == ""
+
+
+def test_capacity_evidence_keeps_only_capacity_unit_items():
+    raw_value = json.dumps(
+        [
+            {"label": "大锅", "value": "3L", "unit": ""},
+            {"label": "煎盘", "value": "8寸", "unit": ""},
+            {"label": "水壶", "value": "800ml", "unit": ""},
+        ],
+        ensure_ascii=False,
+    )
+
+    assert customer_service_service._capacity_field_evidence(raw_value) == "大锅 3L，水壶 800ml"
+
+
+def test_usage_field_evidence_keeps_complete_numbered_items():
+    instruction = """【使用步骤】
+1.展开产品并检查锁扣。
+【日常养护】
+1.使用后清洁杖身泥土，保持锁扣洁净。
+2.长期不用时松开锁扣，放在干燥处。
+【禁止事项】
+1.避免用冷水清洗高温部件。"""
+
+    cleaning = customer_service_service._usage_instruction_field_evidence(instruction, "cleaning")
+    care = customer_service_service._usage_instruction_field_evidence(instruction, "care")
+
+    assert "保持锁扣洁净" in cleaning
+    assert "避免用冷水清洗高温部件" in cleaning
+    assert "长期不用时松开锁扣，放在干燥处" in care
+    assert "展开产品" not in cleaning
+
+
+def test_machine_wash_evidence_requires_an_explicit_laundry_machine_wash_clause():
+    generic_cleaning = "首次使用前用湿布擦拭表面。使用后用湿布擦拭干净。"
+    explicit_machine_wash = "本产品不可放入洗衣机机洗，请使用湿布擦拭。"
+
+    assert customer_service_service._machine_wash_specific_evidence(generic_cleaning) == ""
+    assert customer_service_service._machine_wash_specific_evidence(explicit_machine_wash) == explicit_machine_wash
+
+
+def test_requested_cleaning_subtype_distinguishes_laundry_machine_wash_from_dishwasher():
+    assert customer_field_contract.requested_cleaning_subtype("示例收纳包能否机洗？") == "machine_wash"
+    assert customer_field_contract.requested_cleaning_subtype("示例收纳包能放洗衣机吗？") == "machine_wash"
+    assert customer_field_contract.requested_cleaning_subtype("示例餐盘能放洗碗机吗？") is None
+
+
+def test_usage_field_evidence_removes_stray_terminal_ascii_fragment():
+    instruction = "4.酒精存放：密封后远离火源，放在儿童接触不到的地方，常温存放aLocs"
+
+    result = customer_service_service._usage_instruction_field_evidence(instruction, "care")
+
+    assert "酒精存放" in result
+    assert "远离火源" in result
+    assert "aLocs" not in result
+    assert "aLocs" not in customer_service_service._usage_instruction_field_evidence(
+        instruction,
+        "usage_instruction",
+    )
+
+
+def test_usage_field_evidence_normalizes_whitespace_and_filtered_section_numbering():
+    instruction = """【首次使用】
+1.用温水冲洗。\n\n【日常清洁】
+1.使用后擦洗干净。\n\n【禁止事项】
+1.不要使用钢丝球刷洗。"""
+
+    full = customer_service_service._usage_instruction_field_evidence(instruction, "usage_instruction")
+    cleaning = customer_service_service._usage_instruction_field_evidence(instruction, "cleaning")
+
+    assert "\n" not in full
+    assert cleaning == "用温水冲洗。 使用后擦洗干净。 不要使用钢丝球刷洗。"
+
+
+def test_heat_source_evidence_normalizes_multiline_and_duplicate_separators():
+    result = customer_service_service._heat_source_field_evidence(
+        "明火直烧\n燃气炉、卡式炉\n\n燃气炉"
+    )
+
+    assert result == "明火直烧、燃气炉、卡式炉"
+
+
+def test_heat_source_answer_consumes_the_normalized_structured_value():
+    metadata = {}
+    answer, status = customer_service_service._phase1_heat_source_capability_answer(
+        None,
+        {
+            "sku": "DEMO-HEAT",
+            "product_name_cn": "示例炉具",
+            "heat_source": "明火直烧\n燃气炉、卡式炉\n\n燃气炉",
+        },
+        "支持什么热源？",
+        evidence_metadata=metadata,
+    )
+
+    assert status == "structured"
+    assert "明火直烧、燃气炉、卡式炉" in answer
+    assert "\n" not in answer
+    assert metadata["evidence_value"] == "明火直烧、燃气炉、卡式炉"
+
+
+def test_usage_field_evidence_keeps_unmarked_continuation_after_matched_clause():
+    instruction = (
+        "2.彻底烘干：洗净后务必用抹布擦干，"
+        "或置于灶具上小火加热1分钟，确保锅身和锅底水分完全蒸发。"
+    )
+
+    result = customer_service_service._usage_instruction_field_evidence(instruction, "care")
+
+    assert "用抹布擦干" in result
+    assert "小火加热1分钟" in result
+    assert "水分完全蒸发" in result
+
+
+def test_care_evidence_does_not_treat_take_from_storage_bag_as_maintenance():
+    instruction = "1.从收纳包取出炉具，放置在稳固水平面上。"
+
+    assert customer_service_service._usage_instruction_field_evidence(instruction, "care") == ""
+
+
+def test_field_only_output_keeps_all_valid_evidence_sentences():
+    answer = "示例产品（DEMO-1）的清洁：先冲洗。再擦拭干净。"
+
+    assert customer_service_service._shape_product_detail_output(
+        answer,
+        [],
+        answer_metadata={"answer_policy": "field_only"},
+    ) == answer
+
+
+def test_invalid_capacity_column_fails_closed_without_cross_field_answer(field_evidence_client):
+    client, headers, _ = field_evidence_client
+    payload = client.post(
+        "/api/customer-service/ask?debug=true",
+        json={"question": "星海收纳包的容量是多少？"},
+        headers=headers,
+    ).json()
+
+    debug = payload.get("debug") or {}
+    entity = debug.get("entity_resolution_contract") or {}
+    metadata = payload.get("answer_metadata") or {}
+    answer = str(payload.get("answer") or "")
+    assert payload.get("candidate_skus") == ["FE-200"], payload
+    assert payload.get("result_skus") == ["FE-200"], payload
+    assert entity.get("status") == "resolved", payload
+    assert entity.get("resolved_sku") == "FE-200", payload
+    assert entity.get("field_type") == "capacity", payload
+    assert "食品级塑料" not in answer, payload
+    assert "暂未找到" in answer and "容量" in answer, payload
+    assert metadata.get("contract_field_type") == "capacity", payload
+    assert metadata.get("evidence_status") == "missing", payload
+    assert metadata.get("evidence_sku") is None, payload
+
+
+def test_specification_uses_only_valid_same_sku_components(field_evidence_client):
+    client, headers, _ = field_evidence_client
+    payload = client.post(
+        "/api/customer-service/ask?debug=true",
+        json={"question": "星海收纳包的规格是什么？"},
+        headers=headers,
+    ).json()
+
+    metadata = payload.get("answer_metadata") or {}
+    assert payload.get("result_skus") == ["FE-200"], payload
+    assert "规格" in payload["answer"], payload
+    assert "尼龙" in payload["answer"], payload
+    assert "食品级塑料" not in payload["answer"], payload
+    assert metadata.get("evidence_status") == "structured", payload
+    assert metadata.get("evidence_source") == "specification.summary", payload
+    assert metadata.get("evidence_sku") == "FE-200", payload
+
+
+@pytest.mark.parametrize(
+    ("question", "field_type", "expected_fragment", "metadata_fragment"),
+    [
+        ("晨雾Plus水壶的技术优势是什么？", "technical_advantages", "快速加热", "specs.technical_advantages"),
+        ("晨雾Plus水壶的竞品对标是什么？", "competitor_benchmark", "双层隔热", "business.competitor_benchmark"),
+        ("晨雾Plus水壶的生命周期状态是什么？", "lifecycle_status", "常规品", "product.lifecycle_status"),
+        ("晨雾Plus水壶的规格是什么？", "specification", "容量", "specification.summary"),
+    ],
+)
+def test_customer_business_fields_use_formal_same_sku_evidence(
+    field_evidence_client,
+    question,
+    field_type,
+    expected_fragment,
+    metadata_fragment,
+):
+    client, headers, Session = field_evidence_client
+    with Session() as db:
+        product = db.query(Product).filter(Product.sku == "FE-100").one()
+        specs = db.query(ProductSpecs).filter(ProductSpecs.product_id == product.id).one()
+        business = db.query(ProductBusiness).filter(ProductBusiness.product_id == product.id).one()
+        specs.size_info = "12 x 10 cm"
+        specs.technical_advantages = "快速加热，双层隔热结构"
+        business.competitor_benchmark = "相较同类单层水壶，双层隔热结构更利于握持。"
+        db.commit()
+
+    payload = client.post(
+        "/api/customer-service/ask?debug=true",
+        json={"question": question},
+        headers=headers,
+    ).json()
+
+    metadata = payload.get("answer_metadata") or {}
+    entity = (payload.get("debug") or {}).get("entity_resolution_contract") or {}
+    assert payload.get("answer_type") == "product_detail", payload
+    assert payload.get("result_skus") == ["FE-100"], payload
+    assert expected_fragment in payload["answer"], payload
+    assert entity.get("status") == "resolved", payload
+    assert entity.get("resolved_sku") == "FE-100", payload
+    assert entity.get("field_type") == field_type, payload
+    assert metadata.get("contract_field_type") == field_type, payload
+    assert metadata.get("evidence_field") == field_type, payload
+    assert metadata.get("evidence_sku") == "FE-100", payload
+    assert metadata.get("evidence_source") == metadata_fragment, payload
+
+
+def test_lifecycle_status_never_claims_realtime_inventory(field_evidence_client):
+    client, headers, _ = field_evidence_client
+
+    payload = client.post(
+        "/api/customer-service/ask?debug=true",
+        json={"question": "晨雾Plus水壶的生命周期状态是什么？"},
+        headers=headers,
+    ).json()
+
+    assert "非实时库存" in payload["answer"], payload
+    assert "是否有现货" not in payload["answer"], payload
+
+
+@pytest.mark.parametrize("alias", ["SKU", "货号", "产品编码"])
+def test_explicit_sku_question_uses_sku_evidence_not_selling_points(field_evidence_client, alias):
     client, headers, _ = field_evidence_client
     payload = client.post(
         "/api/customer-service/ask?debug=true",
@@ -103,8 +954,8 @@ def test_explicit_model_question_uses_sku_evidence_not_selling_points(field_evid
     assert payload.get("result_skus") == ["FE-100"], payload
     assert "FE-100" in payload["answer"], payload
     assert "核心卖点" not in payload["answer"], payload
-    assert metadata.get("requested_field") == "model", payload
-    assert metadata.get("evidence_field") == "model", payload
+    assert metadata.get("requested_field") == "sku", payload
+    assert metadata.get("evidence_field") == "sku", payload
     assert metadata.get("field_evidence_match") is True, payload
 
 
@@ -118,7 +969,8 @@ def test_weight_question_uses_weight_evidence_not_selling_points(field_evidence_
 
     metadata = payload.get("answer_metadata") or {}
     assert payload.get("result_skus") == ["FE-100"], payload
-    assert "420.0g" in payload["answer"], payload
+    assert "420g" in payload["answer"], payload
+    assert "420.0g" not in payload["answer"], payload
     assert "核心卖点" not in payload["answer"], payload
     assert metadata.get("requested_field") == "weight", payload
     assert metadata.get("evidence_field") == "weight", payload
@@ -132,11 +984,135 @@ def test_missing_weight_rejects_selling_point_qa_and_keeps_resolved_sku(field_ev
         headers=headers,
     ).json()
 
+    debug = payload.get("debug") or {}
+    entity = debug.get("entity_resolution_contract") or {}
     metadata = payload.get("answer_metadata") or {}
+    answer = str(payload.get("answer") or "")
+    assert payload.get("candidate_skus") == ["FE-200"], payload
     assert payload.get("result_skus") == ["FE-200"], payload
-    assert "未标注" in payload["answer"] or "没有找到" in payload["answer"], payload
-    assert "核心卖点" not in payload["answer"], payload
+    assert entity.get("status") == "resolved", payload
+    assert entity.get("resolved_sku") == "FE-200", payload
+    assert entity.get("field_type") == "weight", payload
+    assert "暂未找到" in answer and "重量" in answer, payload
+    assert "核心卖点" not in answer, payload
+    assert metadata.get("contract_field_type") == "weight", payload
+    assert metadata.get("evidence_status") == "missing", payload
+    assert metadata.get("evidence_sku") is None, payload
     assert metadata.get("field_evidence_missing") is True, payload
+
+
+def test_dishwasher_question_rejects_generic_usage_instruction(field_evidence_client):
+    client, headers, _ = field_evidence_client
+    payload = client.post(
+        "/api/customer-service/ask?debug=true",
+        json={"question": "晨雾Plus水壶可以放洗碗机吗？"},
+        headers=headers,
+    ).json()
+
+    metadata = payload.get("answer_metadata") or {}
+    assert payload.get("result_skus") == ["FE-100"], payload
+    assert "未标注" in payload["answer"], payload
+    assert "首次使用" not in payload["answer"], payload
+    assert metadata.get("contract_field_type") == "dishwasher", payload
+    assert metadata.get("field_evidence_missing") is True, payload
+
+
+def test_structured_dishwasher_provider_requires_explicit_dishwasher_evidence():
+    product = SimpleNamespace()
+    specs = SimpleNamespace(usage_instruction="首次使用前用清水冲洗，使用后擦干并通风存放。")
+
+    value, source = customer_service_service._structured_product_field_evidence(
+        "dishwasher",
+        db=None,
+        product=product,
+        specs=specs,
+        business=None,
+        content=None,
+    )
+
+    assert value == ""
+    assert source is None
+
+
+def test_heat_source_fallback_rejects_unrelated_selling_points():
+    product = SimpleNamespace()
+    specs = SimpleNamespace(heat_source="/")
+    business = SimpleNamespace(top_selling_points="大容量储水，双水龙头设计，便携易收纳")
+
+    value, source = customer_service_service._structured_product_field_evidence(
+        "heat_source",
+        db=None,
+        product=product,
+        specs=specs,
+        business=business,
+        content=None,
+    )
+
+    assert value == ""
+    assert source is None
+
+
+def test_field_display_value_removes_only_a_repeated_leading_field_label():
+    assert customer_service_service._field_display_value("材质", "材质：磨毛春亚纺，铝膜") == "磨毛春亚纺，铝膜"
+    assert customer_service_service._field_display_value("材质", "铝膜材质，耐磨") == "铝膜材质，耐磨"
+
+
+def test_cleaning_question_rejects_unrelated_usage_instruction(field_evidence_client):
+    client, headers, Session = field_evidence_client
+    with Session() as db:
+        product_id = db.query(Product.id).filter(Product.sku == "FE-200").scalar()
+        db.query(ProductSpecs).filter(ProductSpecs.product_id == product_id).update(
+            {"usage_instruction": "避免明火直烧，远离高温物体。"}
+        )
+        db.commit()
+
+    payload = client.post(
+        "/api/customer-service/ask?debug=true",
+        json={"question": "星海收纳包怎么清洁？"},
+        headers=headers,
+    ).json()
+
+    debug = payload.get("debug") or {}
+    entity = debug.get("entity_resolution_contract") or {}
+    metadata = payload.get("answer_metadata") or {}
+    answer = str(payload.get("answer") or "")
+    assert payload.get("candidate_skus") == ["FE-200"], payload
+    assert payload.get("result_skus") == ["FE-200"], payload
+    assert entity.get("status") == "resolved", payload
+    assert entity.get("resolved_sku") == "FE-200", payload
+    assert entity.get("field_type") == "cleaning", payload
+    assert "暂未找到" in answer and "清洁" in answer, payload
+    assert "明火直烧" not in answer, payload
+    assert metadata.get("contract_field_type") == "cleaning", payload
+    assert metadata.get("evidence_status") == "missing", payload
+    assert metadata.get("evidence_sku") is None, payload
+    assert metadata.get("field_evidence_missing") is True, payload
+
+
+def test_cleaning_and_care_select_distinct_clauses_from_shared_instruction(field_evidence_client):
+    client, headers, _ = field_evidence_client
+
+    cleaning = client.post(
+        "/api/customer-service/ask?debug=true",
+        json={"question": "晨雾Plus水壶怎么清洁？"},
+        headers=headers,
+    ).json()
+    care = client.post(
+        "/api/customer-service/ask?debug=true",
+        json={"question": "晨雾Plus水壶怎么保养？"},
+        headers=headers,
+    ).json()
+
+    assert "清水冲洗" in cleaning["answer"], cleaning
+    assert "通风存放" not in cleaning["answer"], cleaning
+    assert "擦干" in care["answer"], care
+    assert "通风存放" in care["answer"], care
+    assert "清水冲洗" not in care["answer"], care
+    for payload, field in ((cleaning, "cleaning"), (care, "care")):
+        metadata = payload.get("answer_metadata") or {}
+        assert payload.get("result_skus") == ["FE-100"], payload
+        assert metadata.get("contract_field_type") == field, payload
+        assert metadata.get("evidence_sku") == "FE-100", payload
 
 
 def test_subject_dimension_rejects_component_and_package_evidence(field_evidence_client):
@@ -166,7 +1142,34 @@ def test_package_dimension_allows_package_evidence(field_evidence_client):
     assert (payload.get("answer_metadata") or {}).get("evidence_scope") == "package", payload
 
 
-def test_generic_selling_point_question_keeps_qa_fast_path(field_evidence_client):
+def test_expanded_dimension_rejects_generic_dimension_qa(field_evidence_client):
+    client, headers, Session = field_evidence_client
+    with Session() as db:
+        _add_product_qa(
+            db,
+            "FE-100",
+            "晨雾Plus水壶的尺寸是多少？",
+            "12 x 10 cm。",
+            priority=300,
+        )
+        product_id = db.query(Product.id).filter(Product.sku == "FE-100").scalar()
+        db.query(ProductSpecs).filter(ProductSpecs.product_id == product_id).update({"size_info": ""})
+        db.commit()
+
+    payload = client.post(
+        "/api/customer-service/ask?debug=true",
+        json={"question": "晨雾Plus水壶的展开尺寸是多少？"},
+        headers=headers,
+    ).json()
+
+    metadata = payload.get("answer_metadata") or {}
+    assert payload.get("result_skus") == ["FE-100"], payload
+    assert "12 x 10" not in payload["answer"], payload
+    assert metadata.get("contract_field_type") == "dimensions", payload
+    assert metadata.get("field_evidence_missing") is True, payload
+
+
+def test_generic_selling_point_question_uses_resolved_detail_contract(field_evidence_client):
     client, headers, _ = field_evidence_client
     payload = client.post(
         "/api/customer-service/ask?debug=true",
@@ -175,7 +1178,21 @@ def test_generic_selling_point_question_keeps_qa_fast_path(field_evidence_client
     ).json()
 
     assert "核心卖点" in payload["answer"], payload
-    assert payload.get("debug", {}).get("agent_mode") == "product_qa_fast_path", payload
+    debug = payload.get("debug") or {}
+    entity = debug.get("entity_resolution_contract") or {}
+    assert debug.get("agent_mode") == "resolved_entity_detail_contract", payload
+    assert entity.get("status") == "resolved", payload
+    assert entity.get("resolved_sku") == "FE-100", payload
+    assert entity.get("field_type") == "selling_point", payload
+    assert payload.get("candidate_skus") == ["FE-100"], payload
+    assert payload.get("result_skus") == ["FE-100"], payload
+    metadata = payload.get("answer_metadata") or {}
+    assert metadata.get("contract_field_type") == "selling_point", payload
+    # Selling points have a formal structured evidence policy.  Do not force
+    # this resolved detail path back through the legacy QA shortcut merely to
+    # satisfy an obsolete source label expectation.
+    assert metadata.get("evidence_source") == "business.top_selling_points", payload
+    assert metadata.get("evidence_sku") == "FE-100", payload
 
 
 def test_final_guard_replaces_mismatched_evidence_with_missing_field_result(field_evidence_client):
@@ -200,3 +1217,92 @@ def test_final_guard_replaces_mismatched_evidence_with_missing_field_result(fiel
     assert "核心卖点" not in result["answer"]
     assert result.get("result_skus") == ["FE-100"]
     assert result.get("answer_metadata", {}).get("field_evidence_missing") is True
+
+
+def test_final_guard_preserves_attached_semantic_field_contract_over_incidental_raw_alias(field_evidence_client):
+    _, _, Session = field_evidence_client
+    with Session() as db:
+        result = customer_service_service._enforce_field_evidence_policy(
+            db,
+            "FE-100\u54c1\u724c\u7684\u4ef7\u4f4d\u5982\u4f55\uff1f",
+            {
+                "intent": "product_detail",
+                "answer_type": "product_detail",
+                "answer": "\u54c1\u724c\u8bc1\u636e\u3002",
+                "result_skus": ["FE-100"],
+                "candidate_skus": ["FE-100"],
+                "results": [{"sku": "FE-100"}],
+                "answer_metadata": {
+                    "evidence_field": "brand",
+                    "evidence_sku": "FE-100",
+                    "evidence_value": "example brand",
+                },
+                "debug": {
+                    "field_contract": {
+                        "field_type": "capacity",
+                        "source": "validated_semantic_preplan",
+                    },
+                },
+            },
+        )
+
+    metadata = result.get("answer_metadata") or {}
+    assert metadata.get("evidence_field") == "capacity", result
+
+
+def test_final_guard_uses_attached_contract_when_product_descriptor_contains_another_field_word(field_evidence_client, monkeypatch):
+    client, headers, Session = field_evidence_client
+    with Session() as db:
+        original = {
+            "answer_type": "product_detail",
+            "result_skus": ["FE-100"],
+            "answer_metadata": {"evidence_field": "gift", "evidence_sku": "FE-100", "evidence_value": "无关赠品资料"},
+            "debug": {
+                "field_contract": {"field_type": "power", "source": "validated_semantic_preplan"},
+                "entity_resolution_contract": {"status": "resolved", "resolved_sku": "FE-100"},
+            },
+        }
+        replacement = {
+            "answer_type": "product_detail", "result_skus": ["FE-100"],
+            "answer_metadata": {"evidence_field": "power", "evidence_sku": "FE-100", "evidence_value": "2400W"},
+            "debug": {},
+        }
+        monkeypatch.setattr(customer_service_service, "_explicit_product_from_question", lambda *_: db.query(Product).filter(Product.sku == "FE-100").one())
+        monkeypatch.setattr(customer_service_service, "_phase1_product_field_result", lambda *_args, **_kwargs: dict(replacement))
+        result = customer_service_service._enforce_field_evidence_policy(db, "示例赠品功率是多少？", original)
+
+    assert result["answer_metadata"]["evidence_field"] == "power"
+    assert result["answer_metadata"]["evidence_sku"] == "FE-100"
+    assert result["answer_metadata"]["evidence_value"] == "2400W"
+    assert result["debug"]["field_evidence_guard_applied"] is True
+
+
+def test_heat_source_product_name_does_not_become_requested_compatibility():
+    product_name = "\u9152\u7cbe\u7089\u5957\u88c5"
+    heat_source = "95%\u6db2\u4f53\u5de5\u4e1a\u9152\u7cbe"
+
+    answer, status = customer_service_service._phase1_heat_source_capability_answer(
+        None,
+        {
+            "sku": "DEMO-ALCOHOL",
+            "product_name_cn": product_name,
+            "heat_source": heat_source,
+        },
+        f"{product_name}\u652f\u6301\u4ec0\u4e48\u70ed\u6e90\uff1f",
+    )
+
+    assert status == "structured"
+    assert f"\u9002\u7528\u70ed\u6e90\u4e3a{heat_source}" in answer
+    assert "\u652f\u6301\u9152\u7cbe\u7089" not in answer
+
+
+def test_specification_summary_does_not_repeat_embedded_field_label():
+    product = Product(sku="DEMO-SPEC", product_name_cn="Demo")
+    specs = ProductSpecs(body_material="\u6750\u8d28\uff1a\u78e8\u6bdb\u6625\u4e9a\u7eba")
+
+    summary = customer_service_service._specification_field_evidence(
+        product=product,
+        specs=specs,
+    )
+
+    assert summary == "\u6750\u8d28\uff1a\u78e8\u6bdb\u6625\u4e9a\u7eba"

@@ -270,7 +270,11 @@ async def ask_stream(
             logger.exception("customer service stream failed")
             yield _sse("error", {"message": _public_error_message()})
 
-    return StreamingResponse(event_stream(), media_type="text/event-stream")
+    return StreamingResponse(
+        event_stream(),
+        media_type="text/event-stream",
+        headers={"Connection": "close"},
+    )
 
 
 def _sse(event: str, data: dict) -> str:

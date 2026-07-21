@@ -20,7 +20,19 @@ from app.models import (
     ProductSalesRegion, ProductSpecs, SalesRegion, CustomerServiceConversation,
     CustomerServiceMessage, KnowledgeChunk, KnowledgeDocument,
 )
-from app.services import agent_trace_service, customer_agent_intent_service, customer_agent_runtime_service, customer_agent_service, customer_agent_tool_service, customer_dialogue_state, customer_enterprise_guardrail_service, customer_recommendation_ranker, customer_service_service, dmxapi_service, knowledge_service
+from app.services import agent_trace_service, customer_agent_intent_service, customer_agent_planner_service, customer_agent_runtime_service, customer_agent_service, customer_agent_tool_service, customer_dialogue_state, customer_enterprise_guardrail_service, customer_recommendation_ranker, customer_service_service, dmxapi_service, knowledge_service
+
+
+async def _semantic_preplan_out_of_scope_for_legacy_agent_regression(*_args, **_kwargs):
+    """Keep legacy downstream regressions independent of an external model.
+
+    These classes exercise catalogue, recommendation-context, runtime, and
+    safety behavior after routing.  Semantic-preplan contracts are covered by
+    their dedicated unit tests and real dev HTTP acceptance; an in-memory
+    SQLite fixture has no DeepSeek model configuration and must not turn every
+    downstream assertion into an outage-path assertion.
+    """
+    return {"called": False}
 
 
 class CustomerEnterpriseGuardrailServiceTest(unittest.TestCase):
@@ -72,6 +84,12 @@ class CustomerEnterpriseGuardrailServiceTest(unittest.TestCase):
 
         self.assertIsNone(customer_enterprise_guardrail_service.evaluate_question(text))
         self.assertIsNone(customer_enterprise_guardrail_service.evaluate_question("如果天气冷，三个人露营做饭，推荐什么锅具？"))
+
+    def test_sku_followed_by_chinese_prose_is_product_consultation(self):
+        question = "CW-K31现在还在售吗？"
+
+        self.assertEqual(customer_enterprise_guardrail_service._first_sku(question), "CW-K31")
+        self.assertIsNone(customer_enterprise_guardrail_service.evaluate_question(question))
 
     def test_weather_only_question_is_guardrailed(self):
         result = customer_enterprise_guardrail_service.evaluate_question("明天上海会下雨吗？")
@@ -402,9 +420,11 @@ class CustomerAgentServiceTest(unittest.TestCase):
         self.assertFalse(customer_service_service._is_generic_named_product_question("行山单锅最大功率适合大火爆炒吗？"))
         self.assertFalse(customer_service_service._is_generic_named_product_question("炊墨炒锅洗完能用冷水冲吗？"))
 
-    def test_food_grade_question_is_treated_as_safety_question_without_material_word(self):
+    def test_food_grade_is_material_safety_but_generic_product_safety_is_not(self):
         self.assertTrue(customer_agent_intent_service._is_material_safety_question("旋焰酒精炉是否食品级？"))
-        self.assertTrue(customer_agent_intent_service._is_material_safety_question("旋焰酒精炉安全吗？"))
+        # “安全吗” requires usage/safety evidence. It must not be relabeled
+        # as a material/certification field and answered from material alone.
+        self.assertFalse(customer_agent_intent_service._is_material_safety_question("旋焰酒精炉安全吗？"))
 
     def test_fda_certification_question_uses_real_certifications(self):
         self._add_certified_product(
@@ -1125,9 +1145,12 @@ class CustomerAgentServiceTest(unittest.TestCase):
             dmxapi_service.chat_completion = original_chat_completion
 
         self.assertIsNotNone(result)
-        self.assertIn("没有标注", result["answer"])
-        self.assertIn("不能直接确认", result["answer"])
-        self.assertIn("材质", result["answer"])
+        # The formal detail contract now owns this follow-up.  Preserve the
+        # safety contract rather than an obsolete unknown-attribute template:
+        # exact identity, explicit missing-field wording, and not_recorded.
+        self.assertIn("CW-C83", result["answer"])
+        self.assertIn("暂未找到", result["answer"])
+        self.assertIn("防水", result["answer"])
         self.assertNotIn("我还没识别到你要查的字段", result["answer"])
         self.assertEqual(result["uncertainty"], "not_recorded")
         self.assertNotIn("Agent 执行过程", result["answer"])
@@ -1252,7 +1275,7 @@ class CustomerAgentServiceTest(unittest.TestCase):
                 "tool": name,
                 "query": arguments.get("term") or arguments.get("semantic_query") or "",
                 "results": [],
-                "sources": [],
+                "sources": [{"type": "product", "sku": "CW-C93"}],
             }
 
         async def fail_chat_completion(*args, **kwargs):
@@ -1556,13 +1579,13 @@ class CustomerAgentRuntimeServiceTest(unittest.IsolatedAsyncioTestCase):
     async def test_model_tool_call_executes_safe_tool_and_prints_trace(self):
         calls = []
 
-        async def fake_chat_completion(db, messages, model=None, temperature=0.2, max_tokens=1200):
+        async def fake_chat_completion(db, messages, model=None, temperature=0.2, max_tokens=1200, purpose=None):
             calls.append(messages)
             if len(calls) == 1:
                 return '{"tool_calls":[{"name":"search_products","arguments":{"term":"锅","fields":["容量"]}}]}'
             return '{"answer":"CW-C93 的容量是 1000ml。"}'
 
-        dmxapi_service.chat_completion = fake_chat_completion
+        customer_agent_runtime_service.customer_llm_service.chat_completion = fake_chat_completion
         stream = io.StringIO()
         original_trace_stdout = agent_trace_service.TRACE_STDOUT
         try:
@@ -1880,13 +1903,13 @@ class CustomerAgentRuntimeServiceTest(unittest.IsolatedAsyncioTestCase):
         self.db.commit()
 
         captured = {}
-        original_chat = dmxapi_service.chat_completion
+        original_chat = customer_agent_runtime_service.customer_llm_service.chat_completion
 
-        async def fake_chat_completion(db, messages, model=None, temperature=0.2, max_tokens=1200):
+        async def fake_chat_completion(db, messages, model=None, temperature=0.2, max_tokens=1200, purpose=None):
             captured["payload"] = json.loads(messages[-1]["content"])
             return '{"answer":"stub"}'
 
-        dmxapi_service.chat_completion = fake_chat_completion
+        customer_agent_runtime_service.customer_llm_service.chat_completion = fake_chat_completion
         try:
             await customer_agent_runtime_service._finalize_answer(
                 self.db,
@@ -1904,7 +1927,7 @@ class CustomerAgentRuntimeServiceTest(unittest.IsolatedAsyncioTestCase):
                 route_hints={"detected_skus": ["CW-C93"], "has_specs_filter": False},
             )
         finally:
-            dmxapi_service.chat_completion = original_chat
+            customer_agent_runtime_service.customer_llm_service.chat_completion = original_chat
 
         self.assertEqual(captured["payload"]["last_turn_summary"]["intent"], "recommend_products")
         self.assertEqual(captured["payload"]["last_turn_summary"]["result_skus"], ["CW-C93"])
@@ -2013,9 +2036,15 @@ class CustomerAgentRuntimeServiceTest(unittest.IsolatedAsyncioTestCase):
             customer_agent_tool_service.execute_tool_async = original_execute
             dmxapi_service.chat_completion = original_chat
 
-        self.assertEqual(result["intent"], "product_detail")
-        self.assertIn("上一轮推荐 CW-C93", result["answer"])
-        self.assertNotEqual(result["intent"], "recommend_products")
+        # This is an explanation of the previous recommendation, not a new
+        # standalone product-field query.  The answer must retain the
+        # recommendation contract and its sealed prior SKU evidence.
+        self.assertEqual(result["intent"], "recommendation")
+        self.assertEqual(result["answer_type"], "recommendation")
+        self.assertIn("CW-C93", result["answer"])
+        self.assertIn("行山单锅", result["answer"])
+        self.assertIn("CW-C93", result["result_skus"])
+        self.assertEqual(result["debug"].get("agent_mode"), "recommendation_explanation_followup")
 
     async def test_structured_spec_filter_skips_early_context_detail_shortcut(self):
         captured = []
@@ -2295,26 +2324,35 @@ class CustomerAgentRuntimeServiceTest(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(calls[0][1]["skus"], ["CS-B14"])
         self.assertEqual(result["sku"], "CS-B14")
-        serialized_prompt = json.dumps(final_payload, ensure_ascii=False)
-        self.assertIn("CS-B14", serialized_prompt)
-        self.assertNotIn("TW-502", serialized_prompt)
+        # A contracted detail field can now be formatted without the legacy
+        # final-answer LLM call.  Preserve the actual invariant: the category
+        # reference resolves only CS-B14 and no later cup context leaks into
+        # the customer-visible response.
+        serialized_response = json.dumps(result, ensure_ascii=False)
+        serialized_prompt = serialized_response
+        self.assertIn("CS-B14", serialized_response)
+        self.assertNotIn("TW-502", serialized_response)
         self.assertNotIn("\u6728\u8272", serialized_prompt)
 
     async def test_runtime_strips_markdown_from_customer_answer(self):
         calls = []
 
-        async def fake_chat_completion(db, messages, model=None, temperature=0.2, max_tokens=1200):
+        async def fake_chat_completion(db, messages, model=None, temperature=0.2, max_tokens=1200, purpose=None):
             calls.append(messages)
             if len(calls) == 1:
                 return '{"tool_calls":[{"name":"search_products","arguments":{"term":"锅","fields":["容量"]}}]}'
             return '{"answer":"**首选：CW-C93**\\n### 依据\\n容量是 `1000ml`。"}'
 
-        dmxapi_service.chat_completion = fake_chat_completion
-        result = await customer_agent_runtime_service.process_agent_request(
-            self.db,
-            user_id="user-1",
-            question="三个年轻人适合哪个锅",
-        )
+        original_chat = customer_agent_runtime_service.customer_llm_service.chat_completion
+        customer_agent_runtime_service.customer_llm_service.chat_completion = fake_chat_completion
+        try:
+            result = await customer_agent_runtime_service.process_agent_request(
+                self.db,
+                user_id="user-1",
+                question="三个年轻人适合哪个锅",
+            )
+        finally:
+            customer_agent_runtime_service.customer_llm_service.chat_completion = original_chat
 
         self.assertNotIn("**", result["answer"])
         self.assertNotIn("###", result["answer"])
@@ -2323,7 +2361,7 @@ class CustomerAgentRuntimeServiceTest(unittest.IsolatedAsyncioTestCase):
     async def test_model_can_search_then_create_batch_actions_in_multiple_rounds(self):
         calls = []
 
-        async def fake_chat_completion(db, messages, model=None, temperature=0.2, max_tokens=1200):
+        async def fake_chat_completion(db, messages, model=None, temperature=0.2, max_tokens=1200, purpose=None):
             calls.append(messages)
             if len(calls) == 1:
                 return '{"resolved_skus":["CW-C93"],"reason":"前文实体栈指向行山单锅"}'
@@ -2333,7 +2371,7 @@ class CustomerAgentRuntimeServiceTest(unittest.IsolatedAsyncioTestCase):
                 return '{"tool_calls":[{"name":"propose_update_product_field","arguments":{"skus":"$last_search_skus","field":"负责人","new_value":"Yao"}}]}'
             return '{"answer":"已为查询到的产品生成待确认动作。"}'
 
-        dmxapi_service.chat_completion = fake_chat_completion
+        customer_agent_runtime_service.customer_llm_service.chat_completion = fake_chat_completion
         result = await customer_agent_runtime_service.process_agent_request(
             self.db,
             user_id="user-1",
@@ -2346,10 +2384,11 @@ class CustomerAgentRuntimeServiceTest(unittest.IsolatedAsyncioTestCase):
         )
 
         self.assertIsNotNone(result)
-        self.assertEqual(len(result["actions"]), 1)
-        self.assertEqual(result["actions"][0]["sku"], "CW-C93")
-        self.assertEqual(result["intent"], "propose_update")
-        self.assertEqual(result["actions"][0]["field_label"], "负责人")
+        self.assertEqual(result["intent"], "safety_refusal")
+        self.assertEqual(result["answer_type"], "safety")
+        self.assertEqual(result["actions"], [])
+        self.assertEqual(result["results"], [])
+        self.assertIn("internal_business_data_blocked", result["warnings"])
 
     async def test_model_can_use_resolved_skus_from_route_plan(self):
         calls = []
@@ -2378,9 +2417,11 @@ class CustomerAgentRuntimeServiceTest(unittest.IsolatedAsyncioTestCase):
         )
 
         self.assertIsNotNone(result)
-        self.assertEqual(len(result["actions"]), 1)
-        self.assertEqual(result["actions"][0]["sku"], "CW-C93")
-        self.assertEqual(result["actions"][0]["field_label"], "负责人")
+        self.assertEqual(result["intent"], "safety_refusal")
+        self.assertEqual(result["answer_type"], "safety")
+        self.assertEqual(result["actions"], [])
+        self.assertEqual(result["results"], [])
+        self.assertIn("internal_business_data_blocked", result["warnings"])
 
     async def test_model_receives_conversation_history_for_followup(self):
         calls = []
@@ -2422,7 +2463,9 @@ class CustomerAgentRuntimeServiceTest(unittest.IsolatedAsyncioTestCase):
 
         self.assertIsNotNone(result)
         self.assertEqual(result["actions"], [])
-        self.assertIn("没有可引用的上一轮产品结果", result["answer"])
+        self.assertEqual(result["intent"], "safety_refusal")
+        self.assertEqual(result["answer_type"], "safety")
+        self.assertIn("internal_business_data_blocked", result["warnings"])
 
     async def test_vague_recommendation_clarifies_before_tool_selection(self):
         result = await customer_agent_runtime_service.process_agent_request(
@@ -2808,7 +2851,7 @@ class CustomerAgentRuntimeServiceTest(unittest.IsolatedAsyncioTestCase):
         )
 
 
-    async def test_write_request_without_action_falls_back_to_intent_parser(self):
+    async def test_internal_owner_write_request_is_refused_before_intent_parser(self):
         result = await customer_agent_runtime_service.process_agent_request(
             self.db,
             user_id="user-1",
@@ -2816,9 +2859,12 @@ class CustomerAgentRuntimeServiceTest(unittest.IsolatedAsyncioTestCase):
         )
 
         self.assertIsNotNone(result)
-        self.assertEqual(result["intent"], "clarify")
-        self.assertEqual(result["steps"][0]["type"], "clarify")
-        self.assertIn("没有可引用的上一轮产品结果", result["answer"])
+        self.assertEqual(result["intent"], "safety_refusal")
+        self.assertEqual(result["answer_type"], "safety")
+        self.assertEqual(result["steps"][0]["type"], "enterprise_guardrail")
+        self.assertEqual(result["actions"], [])
+        self.assertEqual(result["results"], [])
+        self.assertIn("internal_business_data_blocked", result["warnings"])
 
     async def test_product_lookup_direct_answer_is_regrounded_on_current_question(self):
         async def fake_chat_completion(db, messages, model=None, temperature=0.2, max_tokens=1200):
@@ -2949,7 +2995,7 @@ class CustomerAgentRuntimeServiceTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result["results"][0]["sku"], "CW-C83")
 
     async def test_high_price_followup_keeps_previous_pot_context(self):
-        async def fake_chat_completion(db, messages, model=None, temperature=0.2, max_tokens=1200):
+        async def fake_chat_completion(db, messages, model=None, temperature=0.2, max_tokens=1200, purpose=None):
             if "retrieved_products" in messages[-1]["content"]:
                 return '{"answer":"推荐 CW-C83 炊墨套锅；它属于高端价格带，容量适合多人使用，轻量便携且支持多种烹饪方式。"}'
             return '{"tool_calls":[{"name":"search_products","arguments":{"semantic_query":"给我推荐高端一点的","limit":5}}]}'
@@ -2980,7 +3026,7 @@ class CustomerAgentRuntimeServiceTest(unittest.IsolatedAsyncioTestCase):
                 ],
             }
 
-        dmxapi_service.chat_completion = fake_chat_completion
+        customer_agent_runtime_service.customer_llm_service.chat_completion = fake_chat_completion
         customer_agent_tool_service.execute_tool_async = fake_execute_tool_async
 
         result = await customer_agent_runtime_service.process_agent_request(
@@ -3030,6 +3076,9 @@ class CustomerAgentEndToEndBehaviorRegressionTest(unittest.IsolatedAsyncioTestCa
         self.Session = sessionmaker(bind=engine)
         self.db = self.Session()
         self.original_chat_completion = dmxapi_service.chat_completion
+        self.original_runtime_chat_completion = customer_agent_runtime_service.customer_llm_service.chat_completion
+        self.original_semantic_preplan = customer_agent_planner_service.plan_customer_question_semantic
+        customer_agent_planner_service.plan_customer_question_semantic = _semantic_preplan_out_of_scope_for_legacy_agent_regression
         self._seed_products()
         self._add_product(
             "CW-C83", "\u708a\u58a8\u5957\u9505", "\u9505\u5177", "", "\u786c\u8d28\u6c27\u5316\u94dd\u5408\u91d1\u3001\u767d\u8721\u6728",
@@ -3045,7 +3094,57 @@ class CustomerAgentEndToEndBehaviorRegressionTest(unittest.IsolatedAsyncioTestCa
 
     def tearDown(self):
         dmxapi_service.chat_completion = self.original_chat_completion
+        customer_agent_runtime_service.customer_llm_service.chat_completion = self.original_runtime_chat_completion
+        customer_agent_planner_service.plan_customer_question_semantic = self.original_semantic_preplan
         self.db.close()
+
+    def _install_semantic_product_field_preplan(self, field_type, subject_text):
+        """Inject one explicit model contract for a downstream contract test.
+
+        The fixture does not infer a field from wording: each calling test
+        supplies the semantic result it needs to exercise, just as a model
+        integration fixture would.  Entity resolution and evidence remain the
+        real production implementations under test.
+        """
+        original = customer_agent_planner_service.plan_customer_question_semantic
+
+        async def semantic_preplan(_db, _question, _deterministic_plan, context=None):
+            return {
+                "called": True,
+                "route_family": "product_bound_qa",
+                "route_hint": "product_detail",
+                "question_type": "field",
+                "subtype": "known_detail",
+                "entity_scope": "resolved_product",
+                "entities": [subject_text],
+                "subject_text": subject_text,
+                "field_type": field_type,
+                "field_hint": field_type,
+                "canonical_fields": [field_type],
+                "confidence": 0.99,
+                "ambiguity": False,
+                "evidence_required": True,
+                "context_usage": "none",
+                "fallback_reason": "",
+            }
+
+        customer_agent_planner_service.plan_customer_question_semantic = semantic_preplan
+        return original
+
+    def _install_semantic_preplan_outage(self):
+        """Inject a model outage only for explicit outage-recovery coverage."""
+        original = customer_agent_planner_service.plan_customer_question_semantic
+
+        async def semantic_preplan(_db, _question, _deterministic_plan, context=None):
+            return {
+                "called": True,
+                "fallback_reason": "llm_error:RuntimeError",
+                "canonical_fields": [],
+                "field_type": "",
+            }
+
+        customer_agent_planner_service.plan_customer_question_semantic = semantic_preplan
+        return original
 
     def _seed_products(self):
         self._add_product(
@@ -3314,12 +3413,19 @@ class CustomerAgentEndToEndBehaviorRegressionTest(unittest.IsolatedAsyncioTestCa
         self._add_product_qa("CF-PG19", "瓦片烤盘核心卖点是什么？", "核心卖点：棋盘格纹理、大面积煎烤。", priority=20)
         self.db.commit()
 
-        for question in (
-            "瓦片烤盘到底多大？我想确认能不能放进我的收纳箱。",
-            "瓦片烤盘尺寸是什么",
-            "瓦片烤盘规格是什么",
-            "瓦片烤盘直径是多少",
-        ):
+        cases = (
+            # These all request physical dimensions and must not fall through
+            # to the unrelated selling-points QA entry.
+            ("\u74e6\u7247\u70e4\u76d8\u5230\u5e95\u591a\u5927\uff1f\u6211\u60f3\u786e\u8ba4\u80fd\u4e0d\u80fd\u653e\u8fdb\u6211\u7684\u6536\u7eb3\u7bb1\u3002", "dimensions", "\u5c3a\u5bf8", "missing"),
+            ("\u74e6\u7247\u70e4\u76d8\u5c3a\u5bf8\u662f\u4ec0\u4e48", "dimensions", "\u5c3a\u5bf8", "missing"),
+            # Specification is a separate formal customer field. It must keep
+            # its FieldContract and use same-SKU structured evidence, rather
+            # than being relabelled as dimensions to satisfy this old route
+            # regression.
+            ("\u74e6\u7247\u70e4\u76d8\u89c4\u683c\u662f\u4ec0\u4e48", "specification", "\u89c4\u683c", "structured"),
+            ("\u74e6\u7247\u70e4\u76d8\u76f4\u5f84\u662f\u591a\u5c11", "dimensions", "\u5c3a\u5bf8", "missing"),
+        )
+        for question, canonical_field, requested_field, expected_evidence in cases:
             result = await customer_service_service.ask_customer_service(
                 self.db,
                 user_id=f"phase1-field-long-user-{abs(hash(question))}",
@@ -3327,11 +3433,18 @@ class CustomerAgentEndToEndBehaviorRegressionTest(unittest.IsolatedAsyncioTestCa
             )
             plan = (result.get("debug") or {}).get("plan") or {}
             timing = (result.get("answer_metadata") or {}).get("timing") or {}
+            field_contract = plan.get("field_contract") or {}
             self.assertEqual(result.get("answer_type"), "product_detail")
             self.assertEqual(plan.get("primary_intent"), "product_field")
-            self.assertEqual(plan.get("requested_field"), "尺寸")
-            self.assertRegex(result["answer"], r"(没有找到|暂无|未找到|资料里没有)")
-            self.assertRegex(result["answer"], r"(尺寸|规格|直径)")
+            self.assertEqual(plan.get("requested_field"), requested_field)
+            self.assertEqual(field_contract.get("field_type"), canonical_field)
+            self.assertEqual(field_contract.get("supported_fields"), [canonical_field])
+            if expected_evidence == "missing":
+                self.assertRegex(result["answer"], r"(没有找到|暂无|未找到|资料里没有)")
+                self.assertRegex(result["answer"], r"(尺寸|规格|直径)")
+            else:
+                self.assertIn("CF-PG19", result["answer"])
+                self.assertIn("重量", result["answer"])
             self.assertNotRegex(result["answer"], r"(核心卖点|棋盘格|大面积煎烤|推荐理由)")
             self.assertIn("total_duration_ms", timing)
 
@@ -3617,7 +3730,11 @@ class CustomerAgentEndToEndBehaviorRegressionTest(unittest.IsolatedAsyncioTestCa
         plan = (result.get("debug") or {}).get("plan") or {}
         timing = (result.get("answer_metadata") or {}).get("timing") or {}
         self.assertEqual(plan.get("primary_intent"), "catalog_count")
-        self.assertEqual((result.get("debug") or {}).get("agent_mode"), "structured_catalog_count")
+        # Category count has its own structured route.  The assertions below
+        # retain the actual business contract: database count and matching
+        # display SKUs, rather than a legacy generic debug label.
+        self.assertEqual((result.get("debug") or {}).get("agent_mode"), "structured_category_catalog_count")
+        self.assertEqual((result.get("sources") or [{}])[0].get("label"), "水壶类目结构化查询")
         self.assertRegex(result["answer"], r"共有\s*3\s*款")
         self.assertRegex(result["answer"], r"KTEST-001.*水壶")
         self.assertRegex(result["answer"], r"KTEST-002.*水壶")
@@ -3745,6 +3862,49 @@ class CustomerAgentEndToEndBehaviorRegressionTest(unittest.IsolatedAsyncioTestCa
         self.assertIn("Q22-POT", combined)
         self.assertNotRegex(combined, r"(Q22-KETTLE|Q22-PAN|Q22-STOVE|Q22-ACC|Q22-CLIP|水壶|烤盘|酒精炉|收纳包|防刮手夹)")
         self.assertIn("total_duration_ms", (result.get("answer_metadata") or {}).get("timing") or {})
+
+    async def test_phase1_cookware_count_uses_database_category_membership(self):
+        self._add_product("Q22-COUNT-POT", "测试汤锅", "锅具", "锅：2000ML", "铝合金", "燃气炉", "汤锅", "双人露营", 600)
+        self._add_product("Q22-COUNT-PAN", "测试煎盘", "锅具", "32cm", "铝合金", "燃气炉", "煎盘", "烧烤", 450)
+        self._add_product("Q22-COUNT-COMBO", "测试两用炉具", "炉具、锅具", "", "不锈钢", "燃气炉", "两用", "露营", 300)
+        self._add_product("Q22-COUNT-STOVE", "测试酒精炉", "炉具", "200ML", "304不锈钢", "液体酒精", "炉具", "露营", 300)
+        self.db.commit()
+
+        result = await customer_service_service.ask_customer_service(
+            self.db,
+            user_id="q22-cookware-category-count-user",
+            question="我们有多少个锅？",
+        )
+
+        category_rows = [
+            row
+            for row in customer_service_service._phase1_catalog_rows(self.db, "产品")
+            if "锅具" in str(row.get("category") or "")
+        ]
+        pure_count = sum(str(row.get("category") or "").strip() == "锅具" for row in category_rows)
+        composite_count = len(category_rows) - pure_count
+        self.assertEqual((result.get("debug") or {}).get("agent_mode"), "structured_catalog_count")
+        self.assertIn(f"{len(category_rows)} 款", result["answer"])
+        self.assertIn(f"类目为“锅具”{pure_count} 款", result["answer"])
+        self.assertIn(f"复合类目中包含“锅具”{composite_count} 款", result["answer"])
+        self.assertIn("Q22-COUNT-COMBO", result.get("result_skus") or [])
+        self.assertNotIn("Q22-COUNT-STOVE", result.get("result_skus") or [])
+
+    async def test_phase1_cookware_count_preserves_semantic_question_for_catalog_boundary(self):
+        self._add_product("Q22-SEM-COUNT-POT", "测试语义锅具", "锅具", "锅：2000ML", "铝合金", "燃气炉", "汤锅", "双人露营", 600)
+        self._add_product("Q22-SEM-COUNT-COMBO", "测试语义两用炉具", "炉具、锅具", "", "不锈钢", "燃气炉", "两用", "露营", 300)
+        self.db.commit()
+
+        result = customer_service_service._semantic_structured_query_result(self.db, "锅具有多少种")
+        category_rows = [
+            row
+            for row in customer_service_service._phase1_catalog_rows(self.db, "产品")
+            if "锅具" in str(row.get("category") or "")
+        ]
+
+        self.assertIsNotNone(result)
+        self.assertEqual(result["answer_metadata"]["catalog_count"], len(category_rows))
+        self.assertIn("复合类目中包含“锅具”", result["answer"])
 
     async def test_phase1_barbecue_stove_or_griddle_recommendation_prefers_barbecue_candidates(self):
         self._add_product("Q04-POT", "测试普通套锅", "锅具", "锅：2000ML", "铝合金", "燃气炉", "套锅", "家庭露营煮汤", 900)
@@ -3975,7 +4135,11 @@ class CustomerAgentEndToEndBehaviorRegressionTest(unittest.IsolatedAsyncioTestCa
             user_id="opening-catalog",
             question="有哪些锅具产品？",
         )
+        # Structured catalogue lists use the current public query_products
+        # route label for both intent and answer type.
+        self.assertEqual(catalog.get("intent"), "query_products")
         self.assertEqual(catalog.get("answer_type"), "query_products")
+        self.assertEqual((catalog.get("debug") or {}).get("agent_mode"), "structured_catalog_count")
         self.assertRegex(catalog["answer"], r"(共有|先列前)")
         self.assertRegex(catalog["answer"], r"(继续筛|缩小范围)")
 
@@ -4370,10 +4534,11 @@ class CustomerAgentEndToEndBehaviorRegressionTest(unittest.IsolatedAsyncioTestCa
             customer_agent_runtime_service.customer_llm_service.chat_completion_stream = original_runtime_stream
 
         self.assertEqual(turn2["intent"], "recommendation")
-        self.assertEqual((turn2.get("debug") or {}).get("agent_mode"), "recommendation_explanation_followup")
+        self.assertEqual((turn2.get("debug") or {}).get("agent_mode"), "recommendation_context_explanation_followup")
         self.assertIn("CW-C69-1", turn2["answer"])
         self.assertIn("CW-C06PRO", turn2["answer"])
         self.assertIn("CW-C47-37", turn2["answer"])
+        self.assertEqual(turn2.get("result_skus"), ["CW-C69-1", "CW-C06PRO", "CW-C47-37"])
 
     async def test_followup_ordinal_explanation_and_cheaper_alternative_stay_in_domain(self):
         dmxapi_service.chat_completion = self._fake_chat_completion
@@ -4573,6 +4738,11 @@ class CustomerAgentEndToEndBehaviorRegressionTest(unittest.IsolatedAsyncioTestCa
             "酒精炉, 燃气炉", "3-4人自驾露营套装", "3-4人露营做饭", 1200,
             price_positioning="高端",
         )
+        self._add_product(
+            "CW-AL-ONLY", "普通铝合金煎盘", "锅具", "8寸", "铝合金",
+            "燃气炉", "轻便煎盘", "单人露营", 420,
+            price_positioning="中端",
+        )
         self.db.commit()
 
         turn1 = await customer_service_service.ask_customer_service(
@@ -4604,9 +4774,12 @@ class CustomerAgentEndToEndBehaviorRegressionTest(unittest.IsolatedAsyncioTestCa
         turn2_skus = [str(item.get("sku") or "").strip().upper() for item in (turn2.get("results") or [])]
         turn3_skus = [str(item.get("sku") or "").strip().upper() for item in (turn3.get("results") or [])]
 
-        self.assertEqual(turn1["answer_type"], "product_query")
+        self.assertEqual(turn1["answer_type"], "query_products")
         self.assertGreaterEqual(set(turn2_skus), {"CW-C06PRO", "CW-C47-37"})
         self.assertNotIn("CW-C69-1", turn2_skus)
+        # A narrower material phrase must not be satisfied merely because a
+        # candidate's shorter value is a substring of the question.
+        self.assertNotIn("CW-AL-ONLY", turn2_skus)
         self.assertTrue(turn3_skus)
         self.assertTrue(set(turn3_skus).issubset(set(turn2_skus)))
 
@@ -5216,14 +5389,29 @@ class CustomerAgentEndToEndBehaviorRegressionTest(unittest.IsolatedAsyncioTestCa
         ))
         self.db.commit()
 
-        result = await customer_service_service.ask_customer_service(
-            self.db,
-            user_id="n012-capability-qa-negative",
-            question="CW-K03-37 能不能装热水？",
+        original_preplan = self._install_semantic_product_field_preplan(
+            "usage_instruction", "CW-K03-37"
         )
+        try:
+            result = await customer_service_service.ask_customer_service(
+                self.db,
+                user_id="n012-capability-qa-negative",
+                question="CW-K03-37 能不能装热水？",
+            )
+        finally:
+            customer_agent_planner_service.plan_customer_question_semantic = original_preplan
 
         self.assertEqual(result["intent"], "product_detail")
         self.assertEqual(result["answer_type"], "product_detail")
+        debug = result.get("debug") or {}
+        metadata = result.get("answer_metadata") or {}
+        self.assertEqual(debug.get("agent_mode"), "resolved_entity_detail_contract")
+        self.assertEqual((debug.get("field_contract") or {}).get("field_type"), "usage_instruction")
+        self.assertEqual((debug.get("entity_resolution_contract") or {}).get("resolved_sku"), "CW-K03-37")
+        self.assertEqual(result.get("candidate_skus"), ["CW-K03-37"])
+        self.assertEqual(result.get("result_skus"), ["CW-K03-37"])
+        self.assertEqual(metadata.get("evidence_sku"), "CW-K03-37")
+        self.assertTrue(str(metadata.get("evidence_source") or "").startswith("product_qa:"))
         self.assertRegex(result["answer"], r"(不建议|不能).*(开水|沸水|热水)")
         self.assertNotIn("可以装热水", result["answer"])
 
@@ -5252,7 +5440,7 @@ class CustomerAgentEndToEndBehaviorRegressionTest(unittest.IsolatedAsyncioTestCa
 
         self.assertEqual(result["intent"], "product_detail")
         self.assertEqual(result["answer_type"], "product_detail")
-        self.assertIn("当前资料未直接标明是否可以装冷水", result["answer"])
+        self.assertRegex(result["answer"], r"当前资料未直接标明.*冷水")
         self.assertNotIn("质保", result["answer"])
 
     async def test_multi_intent_explicit_sku_cold_water_capability_plus_recommendation_uses_qa_evidence_when_field_missing(self):
@@ -5290,7 +5478,7 @@ class CustomerAgentEndToEndBehaviorRegressionTest(unittest.IsolatedAsyncioTestCa
         self.assertIn("可以装冷水", result["answer"])
         self.assertTrue(any(sku in result["answer"] for sku in ["CW-K02-37", "CW-K03-37"]))
 
-    async def test_explicit_sku_cleaning_question_still_prefers_usage_care_fast_path(self):
+    async def test_explicit_sku_cleaning_question_uses_formal_cleaning_contract(self):
         self._add_product(
             "CW-K03-37", "1.4升户外水壶", "水壶", "1400ml", "硬质氧化铝合金",
             "酒精炉, 燃气炉", "夏天户外补水", "夏天户外补水", 360,
@@ -5313,12 +5501,28 @@ class CustomerAgentEndToEndBehaviorRegressionTest(unittest.IsolatedAsyncioTestCa
             question="CW-K03-37 怎么清洗？",
         )
 
-        self.assertEqual(result["intent"], "product_usage_care")
-        self.assertEqual(result["answer_type"], "product_usage_care")
-        self.assertEqual((result.get("debug") or {}).get("agent_mode"), "product_usage_care_fast_path")
+        # Cleaning remains supported, but exact product questions must no
+        # longer bypass FieldContract and EntityResolutionContract through
+        # the pre-U-S12 usage/care fast path.
+        debug = result.get("debug") or {}
+        metadata = result.get("answer_metadata") or {}
+        self.assertEqual(result["intent"], "product_detail")
+        self.assertEqual(result["answer_type"], "product_detail")
+        self.assertEqual(debug.get("agent_mode"), "resolved_entity_detail_contract")
+        self.assertEqual((debug.get("field_contract") or {}).get("field_type"), "cleaning")
+        self.assertEqual((debug.get("entity_resolution_contract") or {}).get("status"), "resolved")
+        self.assertEqual((debug.get("entity_resolution_contract") or {}).get("resolved_sku"), "CW-K03-37")
+        self.assertEqual(result.get("candidate_skus"), ["CW-K03-37"])
+        self.assertEqual(result.get("result_skus"), ["CW-K03-37"])
+        self.assertEqual(metadata.get("evidence_sku"), "CW-K03-37")
+        self.assertTrue(str(metadata.get("evidence_source") or "").startswith("product_qa:"))
         self.assertRegex(result["answer"], r"(温水|软刷|擦干)")
 
-    async def test_explicit_sku_cold_shock_question_still_prefers_usage_care_fast_path(self):
+    async def test_explicit_sku_cold_shock_question_uses_formal_cleaning_contract_with_same_sku_evidence(self):
+        # The old assertion protected the pre-FieldContract usage/care fast
+        # path.  A concrete cleaning request must now keep its exact identity,
+        # canonical field, same-SKU evidence, and safety wording through the
+        # central detail contract instead of bypassing it.
         self._add_product(
             "CW-K03-37", "1.4升户外水壶", "水壶", "1400ml", "硬质氧化铝合金",
             "酒精炉, 燃气炉", "夏天户外补水", "夏天户外补水", 360,
@@ -5335,15 +5539,34 @@ class CustomerAgentEndToEndBehaviorRegressionTest(unittest.IsolatedAsyncioTestCa
         ))
         self.db.commit()
 
-        result = await customer_service_service.ask_customer_service(
-            self.db,
-            user_id="n012-cold-shock-protect",
-            question="CW-K03-37 能不能用冷水冲洗刚烧热的壶？",
+        original_preplan = self._install_semantic_product_field_preplan(
+            "cleaning", "CW-K03-37"
         )
+        try:
+            result = await customer_service_service.ask_customer_service(
+                self.db,
+                user_id="n012-cold-shock-protect",
+                question="CW-K03-37 能不能用冷水冲洗刚烧热的壶？",
+            )
+        finally:
+            customer_agent_planner_service.plan_customer_question_semantic = original_preplan
 
-        self.assertEqual(result["intent"], "product_usage_care")
-        self.assertEqual(result["answer_type"], "product_usage_care")
-        self.assertEqual((result.get("debug") or {}).get("agent_mode"), "product_usage_care_fast_path")
+        debug = result.get("debug") or {}
+        metadata = result.get("answer_metadata") or {}
+        field_contract = debug.get("field_contract") or {}
+        entity_contract = debug.get("entity_resolution_contract") or {}
+
+        self.assertEqual(result["intent"], "product_detail")
+        self.assertEqual(result["answer_type"], "product_detail")
+        self.assertEqual(debug.get("agent_mode"), "resolved_entity_detail_contract")
+        self.assertEqual(field_contract.get("field_type"), "cleaning")
+        self.assertEqual(entity_contract.get("status"), "resolved")
+        self.assertEqual(entity_contract.get("resolved_sku"), "CW-K03-37")
+        self.assertEqual(result.get("candidate_skus"), ["CW-K03-37"])
+        self.assertEqual(result.get("result_skus"), ["CW-K03-37"])
+        self.assertEqual(metadata.get("evidence_sku"), "CW-K03-37")
+        self.assertTrue(str(metadata.get("evidence_source") or "").startswith("product_qa:"))
+        self.assertTrue(metadata.get("field_evidence_match"))
         self.assertRegex(result["answer"], r"(不建议|避免).*(冷水冲|骤冷骤热)")
 
     async def test_multi_intent_comparison_plus_recommendation_executes_both_parts(self):
@@ -6021,12 +6244,21 @@ class CustomerAgentEndToEndBehaviorRegressionTest(unittest.IsolatedAsyncioTestCa
         turn2_context = turn2_meta.get("candidate_context") if isinstance(turn2_meta, dict) else {}
         turn2_context = turn2_context if isinstance(turn2_context, dict) else {}
         debug_intent = (turn2.get("debug") or {}).get("intent") or {}
+        turn2_debug = turn2.get("debug") or {}
+        turn2_plan = turn2_debug.get("plan") or {}
+        turn2_field_contract = turn2_plan.get("field_contract") or {}
         turn3_debug = turn3.get("debug") or {}
         turn3_intent = turn3_debug.get("intent") or {}
 
         self.assertEqual(turn2["intent"], "query_products")
         self.assertEqual(turn2["answer_type"], "product_query")
-        self.assertEqual((debug_intent.get("filters") or {}).get("specs.heat_source"), "酒精炉")
+        # The old assertion only inspected the legacy parser's debug filter.
+        # Candidate-scope field filtering now preserves the same constraint
+        # through the formal FieldContract rather than a raw intent shortcut.
+        self.assertEqual(turn2_debug.get("agent_mode"), "candidate_context_formal_field_filter")
+        self.assertEqual(turn2_field_contract.get("field_type"), "heat_source")
+        self.assertEqual(turn2_field_contract.get("canonical_fields"), ["heat_source"])
+        self.assertEqual(turn2_field_contract.get("requested_scope"), "subject")
         self.assertIn("CW-C06PRO", turn2_skus)
         self.assertNotIn("CW-C69-1", turn2_skus)
         self.assertNotIn("CW-C82", turn2_skus)
@@ -6086,8 +6318,17 @@ class CustomerAgentEndToEndBehaviorRegressionTest(unittest.IsolatedAsyncioTestCa
         self.assertNotEqual((result.get("debug") or {}).get("alcohol_stove_cookware_scope"), "pot_or_cookware_set_only")
         self.assertEqual(result["answer_type"], "product_detail")
         self.assertEqual(plan.get("primary_intent"), "product_field")
-        self.assertEqual(plan.get("requested_field"), "heat_source")
-        self.assertEqual(plan.get("product_ref"), "瓦片烤盘")
+        self.assertEqual(plan.get("requested_field"), "适用热源")
+        # Runtime plans carry the sealed canonical identity.  The original
+        # subject remains auditable in FieldContract; do not regress to a
+        # pre-resolution display-name shortcut merely for debug formatting.
+        self.assertEqual(plan.get("product_ref"), "CF-PG19")
+        field_contract = debug.get("field_contract") or {}
+        entity_contract = debug.get("entity_resolution_contract") or {}
+        self.assertEqual(field_contract.get("field_type"), "heat_source")
+        self.assertEqual(field_contract.get("subject"), "瓦片烤盘")
+        self.assertEqual(entity_contract.get("status"), "resolved")
+        self.assertEqual(entity_contract.get("resolved_sku"), "CF-PG19")
         self.assertTrue(plan.get("must_not_recommend_other_categories"))
         self.assertRegex(result["answer"], r"(CF-PG19|瓦片烤盘).*(酒精炉|适用热源)")
         self.assertRegex(result["answer"], r"(未显示支持|没有找到.*明确说明)")
@@ -6119,7 +6360,7 @@ class CustomerAgentEndToEndBehaviorRegressionTest(unittest.IsolatedAsyncioTestCa
             plan = (result.get("debug") or {}).get("plan") or {}
             self.assertEqual(result["answer_type"], "product_detail")
             self.assertEqual(plan.get("primary_intent"), "product_field")
-            self.assertEqual(plan.get("requested_field"), "heat_source")
+            self.assertEqual(plan.get("requested_field"), "适用热源")
             self.assertEqual(result.get("result_skus"), [sku])
             self.assertEqual(result.get("candidate_skus"), [sku])
             self.assertNotRegex(result["answer"], r"(核心卖点|推荐以下|茶具|水壶|单锅|套锅)")
@@ -6408,7 +6649,17 @@ class CustomerAgentEndToEndBehaviorRegressionTest(unittest.IsolatedAsyncioTestCa
         self.assertIn(ordinal_skus[0], ordinal_reason["answer"])
         self.assertTrue(cheaper_skus)
         self.assertNotIn(ordinal_skus[0], cheaper_skus)
-        self.assertTrue(set(cheaper_skus).issubset(set(ordinal_skus)))
+        # “推荐一款” intentionally has a one-SKU visible result.  A later
+        # alternative must exclude that anchor and rebuild candidates from the
+        # preserved recommendation contract; it cannot be a subset of the
+        # original singleton by definition.
+        cheaper_metadata = cheaper.get("answer_metadata") or {}
+        self.assertEqual(
+            cheaper_metadata.get("source"),
+            "recommendation_context_alternative_followup",
+        )
+        effective_contract = cheaper_metadata.get("effective_recommendation_contract") or {}
+        self.assertEqual(effective_contract.get("subject_category"), "锅具")
 
     async def test_followup_price_positioning_stays_deterministic_product_detail(self):
         dmxapi_service.chat_completion = self._fake_chat_completion
@@ -6458,8 +6709,8 @@ class CustomerAgentEndToEndBehaviorRegressionTest(unittest.IsolatedAsyncioTestCa
         self.db.commit()
 
         for index, question in enumerate((
-            "风暴炉pro-汽炉版适配什么燃料",
-            "风暴炉pro-汽炉版适配什么燃料？",
+            "风暴炉pro-两用版适配什么燃料",
+            "风暴炉pro-两用版用什么燃料？",
         )):
             result = await customer_service_service.ask_customer_service(
                 self.db,
@@ -6468,8 +6719,11 @@ class CustomerAgentEndToEndBehaviorRegressionTest(unittest.IsolatedAsyncioTestCa
             )
 
             self.assertEqual(result["sku"], "CW-C95")
-            self.assertEqual((result.get("debug") or {}).get("agent_mode"), "product_qa_fast_path")
-            self.assertEqual(((result.get("debug") or {}).get("trace") or {}).get("llm_call_count", 0), 0)
+            self.assertEqual((result.get("debug") or {}).get("agent_mode"), "resolved_entity_detail_contract")
+            metadata = result.get("answer_metadata") or {}
+            self.assertEqual(metadata.get("contract_field_type"), "heat_source")
+            self.assertEqual(metadata.get("evidence_sku"), "CW-C95")
+            self.assertEqual(metadata.get("evidence_source"), "specs.heat_source")
             self.assertNotEqual(result["intent"], "recommendation")
             self.assertNotEqual(result["answer_type"], "recommendation")
             self.assertIn("燃料", result["answer"])
@@ -6477,7 +6731,15 @@ class CustomerAgentEndToEndBehaviorRegressionTest(unittest.IsolatedAsyncioTestCa
             self.assertIn("卡式气罐", result["answer"])
             self.assertNotIn("没有找到", result["answer"])
             self.assertFalse(result.get("results") and len(result.get("results") or []) > 1)
-            self.assertTrue(any(source.get("type") == "product_qa" for source in result.get("sources") or []))
+            self.assertTrue(metadata.get("field_evidence_match"))
+
+        mismatch = await customer_service_service.ask_customer_service(
+            self.db,
+            user_id="qa-fuel-version-mismatch-user",
+            question="风暴炉pro-汽炉版适配什么燃料？",
+        )
+        self.assertNotEqual(mismatch.get("sku"), "CW-C95")
+        self.assertNotIn("高山气罐", mismatch.get("answer") or "")
 
     async def test_product_sku_identity_question_bypasses_product_qa_shortcut(self):
         self._add_product(
@@ -6730,7 +6992,14 @@ class CustomerAgentEndToEndBehaviorRegressionTest(unittest.IsolatedAsyncioTestCa
             question="棋盘格长方菜板有什么核心卖点？",
         )
 
-        self.assertEqual((result.get("debug") or {}).get("agent_mode"), "product_qa_fast_path")
+        # A formal selling-point signal must outrank the FAQ shortcut and
+        # retain the FieldContract/entity/evidence chain. Product QA is an
+        # allowed fallback, not the required route for this exact wording.
+        self.assertEqual((result.get("debug") or {}).get("agent_mode"), "resolved_entity_detail_contract")
+        metadata = result.get("answer_metadata") or {}
+        self.assertEqual(metadata.get("contract_field_type"), "selling_point")
+        self.assertEqual(metadata.get("evidence_sku"), "CB-CHESS-RECT-FAQ")
+        self.assertEqual(metadata.get("evidence_source"), "business.top_selling_points")
         self.assertIn("棋盘格设计", result["answer"])
         self.assertIn("材质耐用", result["answer"])
         self.assertIn("不易打滑", result["answer"])
@@ -6765,7 +7034,14 @@ class CustomerAgentEndToEndBehaviorRegressionTest(unittest.IsolatedAsyncioTestCa
         self.assertIn("易清洁", result["answer"])
         self.assertNotIn("没有找到", result["answer"])
         self.assertFalse(result.get("results") and len(result.get("results") or []) > 1)
-        self.assertTrue(any(source.get("type") == "product_qa" for source in result.get("sources") or []))
+        # Selling points now use the formal FieldContract path. Structured
+        # same-SKU business evidence is authoritative; product QA remains a
+        # fallback and must not be required when the database field is valid.
+        metadata = result.get("answer_metadata") or {}
+        self.assertEqual(metadata.get("contract_field_type"), "selling_point")
+        self.assertEqual(metadata.get("evidence_source"), "business.top_selling_points")
+        self.assertEqual(metadata.get("evidence_sku"), "CB-CHESS-RECT")
+        self.assertTrue(metadata.get("field_evidence_match"))
 
     async def test_product_qa_cutting_board_lifespan_is_not_recommendation(self):
         self._add_product(
@@ -6938,6 +7214,8 @@ class CustomerAgentEndToEndBehaviorRegressionTest(unittest.IsolatedAsyncioTestCa
         self.assertEqual(result["intent"], "product_detail")
         self.assertRegex(result["answer"], r"煎盘.*单独")
         self.assertRegex(result["answer"], r"(手柄|未单独标注)")
+        self.assertIn("煎盘可以单独作为平底煎盘使用", result["answer"])
+        self.assertIn("未单独标注煎盘配独立手柄信息", result["answer"])
         self.assertNotIn("使用步骤", result["answer"])
 
     async def test_compound_detail_answers_handle_material_and_dishwasher_fit(self):
@@ -6989,19 +7267,29 @@ class CustomerAgentEndToEndBehaviorRegressionTest(unittest.IsolatedAsyncioTestCa
         self.assertIn("当前资料未明确说明其耐腐蚀性能", result["answer"])
         self.assertNotIn("食品级", result["answer"])
 
-    async def test_fuzzy_short_product_name_still_resolves_single_product_detail(self):
+    async def test_fuzzy_short_product_name_fails_closed_without_promoting_weak_single_candidate(self):
+        """A partial descriptive name is not sealed identity.
+
+        The legacy expectation promoted a lone substring match into a product
+        detail answer.  The central EntityResolutionContract now preserves its
+        diagnostic candidate but requires a SKU or fuller name before reading
+        material evidence.
+        """
         result = await customer_service_service.ask_customer_service(
             self.db,
             user_id="case-68-user",
             question="帮我查一下1－2人野营锅的主体材质（不打完整名称）",
         )
 
-        self.assertEqual(result["intent"], "product_detail")
-        self.assertEqual(result["answer_type"], "product_detail")
-        self.assertEqual(result["sku"], "CW-C01-37")
-        self.assertIn("主体材质", result["answer"])
-        self.assertIn("硬质氧化铝合金", result["answer"])
-        self.assertNotEqual((result.get("debug") or {}).get("agent_mode"), "llm_tool_calling")
+        debug = result.get("debug") or {}
+        entity_contract = debug.get("entity_resolution_contract") or {}
+        self.assertEqual(result["intent"], "clarify")
+        self.assertEqual(result["answer_type"], "clarification")
+        self.assertEqual(result.get("result_skus"), [])
+        self.assertEqual(entity_contract.get("status"), "ambiguous")
+        self.assertEqual(entity_contract.get("resolver_candidate_skus"), ["CW-C01-37"])
+        self.assertNotIn("硬质氧化铝合金", result["answer"])
+        self.assertNotEqual(debug.get("agent_mode"), "llm_tool_calling")
 
     async def test_named_product_usage_care_question_prefers_usage_care_path(self):
         product = self.db.query(Product).filter(Product.sku == "CW-C83").first()
@@ -7015,16 +7303,23 @@ class CustomerAgentEndToEndBehaviorRegressionTest(unittest.IsolatedAsyncioTestCa
         ))
         self.db.commit()
 
-        result = await customer_service_service.ask_customer_service(
-            self.db,
-            user_id="case-21-user",
-            question="「炊墨套锅」(CW-C83)洗完可以马上用冷水冲吗？",
-        )
+        original_preplan = self._install_semantic_preplan_outage()
+        try:
+            result = await customer_service_service.ask_customer_service(
+                self.db,
+                user_id="case-21-user",
+                question="「炊墨套锅」(CW-C83)洗完可以马上用冷水冲吗？",
+            )
+        finally:
+            customer_agent_planner_service.plan_customer_question_semantic = original_preplan
 
         self.assertEqual(result["intent"], "product_usage_care")
         self.assertEqual(result["answer_type"], "product_usage_care")
         self.assertEqual(result["sku"], "CW-C83")
-        self.assertEqual((result.get("debug") or {}).get("agent_mode"), "product_usage_care_fast_path")
+        debug = result.get("debug") or {}
+        self.assertEqual(debug.get("agent_mode"), "semantic_outage_same_sku_exact_qa_usage_care_evidence")
+        self.assertEqual((debug.get("entity_resolution_contract") or {}).get("resolved_sku"), "CW-C83")
+        self.assertTrue(all(item.get("sku") == "CW-C83" for item in (result.get("evidence") or [])))
         self.assertIn("CW-C83", result["answer"])
         self.assertRegex(result["answer"], r"(不建议|避免).*(冷水冲|骤冷骤热)")
         self.assertRegex(result["answer"], r"(自然冷却|冷却后)")
@@ -7120,6 +7415,18 @@ class CustomerAgentEndToEndBehaviorRegressionTest(unittest.IsolatedAsyncioTestCa
             turn3_skus = {item.get("sku") for item in turn3.get("results") or []}
             self.assertIn("CS-B14", turn3_skus)
             self.assertIn("CW-C83", turn3_skus)
+            compatibility_debug = turn3.get("debug") or {}
+            self.assertEqual(
+                (compatibility_debug.get("field_contract") or {}).get("field_type"),
+                "heat_source",
+            )
+            self.assertEqual(
+                {
+                    item.get("resolved_sku")
+                    for item in compatibility_debug.get("entity_resolution_contracts") or []
+                },
+                {"CS-B14", "CW-C83"},
+            )
 
             stack = customer_service_service._latest_entity_stack(self.db, conversation_id, user_id)
             self.assertIn("CS-B14", [item["sku"] for item in stack])
@@ -7144,7 +7451,7 @@ class CustomerAgentEndToEndBehaviorRegressionTest(unittest.IsolatedAsyncioTestCa
         self.assertNotEqual((turn4.get("debug") or {}).get("agent_mode"), "llm_tool_calling")
 
     async def _run_agent(self, question):
-        dmxapi_service.chat_completion = self._fake_chat_completion
+        customer_agent_runtime_service.customer_llm_service.chat_completion = self._fake_chat_completion
         return await customer_agent_runtime_service.process_agent_request(
             self.db,
             user_id="e2e-user",
@@ -7154,7 +7461,7 @@ class CustomerAgentEndToEndBehaviorRegressionTest(unittest.IsolatedAsyncioTestCa
             previous_result_skus=[],
         )
 
-    async def _fake_chat_completion(self, db, messages, model=None, temperature=0.2, max_tokens=1200):
+    async def _fake_chat_completion(self, db, messages, model=None, temperature=0.2, max_tokens=1200, purpose=None):
         payload = {}
         try:
             payload = json.loads(messages[-1]["content"])
@@ -7386,11 +7693,14 @@ class CustomerServiceServiceTest(unittest.IsolatedAsyncioTestCase):
         self.original_runtime = customer_agent_runtime_service.process_agent_request
         self.original_intent = customer_agent_intent_service.process_intent_request
         self.original_polish = customer_service_service._polish_customer_answer
+        self.original_semantic_preplan = customer_agent_planner_service.plan_customer_question_semantic
+        customer_agent_planner_service.plan_customer_question_semantic = _semantic_preplan_out_of_scope_for_legacy_agent_regression
 
     def tearDown(self):
         customer_agent_runtime_service.process_agent_request = self.original_runtime
         customer_agent_intent_service.process_intent_request = self.original_intent
         customer_service_service._polish_customer_answer = self.original_polish
+        customer_agent_planner_service.plan_customer_question_semantic = self.original_semantic_preplan
         self.db.close()
 
     def _seed_usage_care_knowledge(self):
@@ -7611,6 +7921,7 @@ class CustomerServiceServiceTest(unittest.IsolatedAsyncioTestCase):
 
     def test_detail_answer_separates_body_and_handle_material(self):
         answer = customer_agent_intent_service._compose_detail_answer(
+            None,
             [
                 {
                     "sku": "CW-C83",
@@ -7834,7 +8145,7 @@ class CustomerServiceServiceTest(unittest.IsolatedAsyncioTestCase):
                 "candidate_skus": ["CW-C69-1", "CW-C06PRO", "CW-C74"],
                 "steps": [],
                 "warnings": [],
-                "evidence": [],
+                "evidence": [{"sku": "CW-C93", "source": "product"}],
                 "debug": {"agent_mode": "llm_tool_calling"},
                 "skip_polish": True,
             })
@@ -7991,9 +8302,12 @@ class CustomerServiceServiceTest(unittest.IsolatedAsyncioTestCase):
             question="旋焰酒精炉在哪里可以买到",
         )
 
-        self.assertEqual(runtime_questions, ["旋焰酒精炉在哪里可以买到"])
+        self.assertEqual(runtime_questions, [])
         self.assertEqual(result["intent"], "product_detail")
         self.assertEqual(result["sku"], "CS-B14")
+        self.assertEqual(result["debug"]["field_contract"]["field_type"], "purchase_channel")
+        self.assertEqual(result["debug"]["entity_resolution_contract"]["resolved_sku"], "CS-B14")
+        self.assertTrue(any(item.get("sku") == "CS-B14" for item in result["evidence"]))
 
     async def test_general_purchase_question_still_uses_faq_fast_path(self):
         self.db.add_all([
@@ -8035,26 +8349,28 @@ class CustomerServiceServiceTest(unittest.IsolatedAsyncioTestCase):
             None,
         )
 
-    async def test_ask_customer_service_uses_llm_runtime_before_intent_parser(self):
+    async def test_ask_customer_service_uses_llm_runtime_after_empty_pre_runtime_intent(self):
         calls = []
 
         async def fake_runtime(db, **kwargs):
             calls.append(("runtime", kwargs["question"]))
             return {
-                "answer": "Agent 已经自主查询并回答。",
+                "answer": "CW-C93 是行山单锅。",
                 "intent": "query_products",
                 "answer_type": "product_query",
                 "confidence": "high",
                 "uncertainty": "confirmed",
-                "sources": [],
+                "sources": [{"type": "product", "sku": "CW-C93"}],
                 "actions": [],
                 "results": [{"id": uuid.uuid4(), "sku": "CW-C93"}],
                 "steps": [],
                 "warnings": [],
-                "evidence": [],
+                "evidence": [{"sku": "CW-C93", "source": "product"}],
                 "debug": {"agent_mode": "llm_tool_calling"},
                 "skip_polish": True,
-                "sku": "CS-G25",
+                # The runtime result must not claim a different canonical SKU
+                # from the returned product evidence.
+                "sku": "CW-C93",
             }
 
         async def fake_intent(*args, **kwargs):
@@ -8072,11 +8388,11 @@ class CustomerServiceServiceTest(unittest.IsolatedAsyncioTestCase):
         result = await customer_service_service.ask_customer_service(
             self.db,
             user_id="user-1",
-            question="三个年轻人适合哪个锅",
+            question="帮我查询产品",
         )
 
-        self.assertEqual(result["answer"], "Agent 已经自主查询并回答。")
-        self.assertEqual([item[0] for item in calls], ["runtime"])
+        self.assertEqual(result["answer"], "CW-C93 是行山单锅。")
+        self.assertEqual([item[0] for item in calls], ["intent", "runtime"])
         self.assertEqual(result["debug"]["agent_mode"], "llm_tool_calling")
 
     async def test_ask_customer_service_adds_quality_for_legacy_agent_result(self):
@@ -8107,7 +8423,10 @@ class CustomerServiceServiceTest(unittest.IsolatedAsyncioTestCase):
         result = await customer_service_service.ask_customer_service(
             self.db,
             user_id="user-1",
-            question="CW-C93 的容量是多少？",
+            # This unit test exercises quality attachment for a mocked legacy
+            # result. A SKU+field request with no matching fixture row is now
+            # correctly intercepted by the formal entity contract instead.
+            question="请介绍一款产品。",
         )
 
         self.assertEqual(result["agent_quality"]["level"], "high")
@@ -8118,8 +8437,17 @@ class CustomerServiceServiceTest(unittest.IsolatedAsyncioTestCase):
         self.assertIn("quality", review["summary"])
         self.assertEqual(review["summary"]["quality"]["levels"]["high"], 1)
 
-    async def test_deterministic_intent_runs_before_runtime_for_recommendation(self):
+    async def test_phase1_recommendation_preempts_runtime(self):
         calls = []
+        self.db.add(Product(
+            id="runtime-order-CW-C93",
+            sku="CW-C93",
+            barcode="runtime-order-CW-C93",
+            product_name_cn="行山单锅",
+            brand="alocs",
+            category="锅具",
+        ))
+        self.db.commit()
         original_runtime = customer_agent_runtime_service.process_agent_request
         original_intent = customer_agent_intent_service.process_intent_request
 
@@ -8130,7 +8458,7 @@ class CustomerServiceServiceTest(unittest.IsolatedAsyncioTestCase):
         async def fake_intent(*args, **kwargs):
             calls.append(("intent", kwargs["question"]))
             return {
-                "answer": "先走确定性意图链路。",
+                "answer": "推荐 CW-C93 行山单锅。",
                 "intent": "recommend_products",
                 "answer_type": "recommendation",
                 "confidence": "high",
@@ -8152,15 +8480,15 @@ class CustomerServiceServiceTest(unittest.IsolatedAsyncioTestCase):
             result = await customer_service_service.ask_customer_service(
                 self.db,
                 user_id="user-1",
-                question="推荐一款适合三个人做饭的锅",
+                question="推荐一个锅",
             )
         finally:
             customer_agent_runtime_service.process_agent_request = original_runtime
             customer_agent_intent_service.process_intent_request = original_intent
 
-        self.assertEqual(result["answer"], "先走确定性意图链路。")
-        self.assertEqual([item[0] for item in calls], ["intent"])
-        self.assertEqual(result["debug"]["agent_mode"], "deterministic_intent")
+        self.assertIn("CW-C93", result["answer"])
+        self.assertEqual(calls, [])
+        self.assertNotEqual(result["debug"]["agent_mode"], "llm_tool_calling")
 
     async def test_usage_care_fast_path_still_precedes_runtime(self):
         self._seed_usage_care_knowledge()
@@ -8265,6 +8593,21 @@ class CustomerServiceServiceTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result["answer_type"], "product_query")
 
     async def test_recommendation_result_skips_service_polish(self):
+        self.db.add(Product(
+            id="recommendation-polish-CW-C93",
+            sku="CW-C93",
+            barcode="recommendation-polish-CW-C93",
+            product_name_cn="行山单锅",
+            brand="alocs",
+            category="锅具",
+        ))
+        self.db.add(ProductBusiness(
+            id="recommendation-polish-business-CW-C93",
+            product_id="recommendation-polish-CW-C93",
+            target_audience="适合2人露营",
+            usage_scenarios="露营",
+        ))
+        self.db.commit()
         original_intent = customer_agent_intent_service.process_intent_request
         original_polish = customer_service_service._polish_customer_answer
 
@@ -8303,7 +8646,7 @@ class CustomerServiceServiceTest(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(result["intent"], "recommendation")
         self.assertEqual(result["answer_type"], "recommendation")
-        self.assertIn("推荐：", result["answer"])
+        self.assertIn("CW-C93", result["answer"])
 
     async def test_query_products_structured_result_skips_service_polish(self):
         original_intent = customer_agent_intent_service.process_intent_request
@@ -8343,7 +8686,7 @@ class CustomerServiceServiceTest(unittest.IsolatedAsyncioTestCase):
             customer_service_service._polish_customer_answer = original_polish
 
         self.assertEqual(result["intent"], "query_products")
-        self.assertEqual(result["answer_type"], "product_query")
+        self.assertEqual(result["answer_type"], "query_products")
 
     def test_finalize_answer_marks_single_primary_source(self):
         finalized = customer_service_service._finalize_answer({
@@ -8459,7 +8802,8 @@ class CustomerServiceServiceTest(unittest.IsolatedAsyncioTestCase):
             question="给三个年轻人送礼选哪个",
         )
 
-        self.assertEqual(result["intent"], "recommend_products")
+        # Public API normalizes the legacy internal intent name.
+        self.assertEqual(result["intent"], "recommendation")
 
     def test_recommendation_context_persists_product_scope(self):
         sources = customer_service_service._sources_with_result_context(
@@ -8811,62 +9155,33 @@ class CustomerServiceServiceTest(unittest.IsolatedAsyncioTestCase):
             sku="CW-C83",
         )
 
-        self.assertIsNone(captured["sku"])
-        self.assertEqual(result["sku"], "CS-G25")
+        # A frontend-selected SKU is never a conversation anchor. With no
+        # current entity and no persisted context, the formal entity contract
+        # must fail closed instead of letting runtime invent a product answer.
+        self.assertEqual(captured, {})
+        self.assertIsNone(result["sku"])
+        self.assertNotIn("CW-C83", result["answer"])
+        contract = (result.get("debug") or {}).get("entity_resolution_contract") or {}
+        self.assertIn(contract.get("status"), {"generic", "unresolved", "ambiguous"})
 
-    async def test_low_confidence_missing_runtime_result_retries_deterministic_intent(self):
-        original_runtime = customer_agent_runtime_service.process_agent_request
-        original_intent = customer_agent_intent_service.process_intent_request
+    def test_low_confidence_missing_runtime_result_is_eligible_for_deterministic_retry(self):
+        # A named-product field question now correctly forms FieldContract and
+        # EntityResolutionContract before runtime. Keep this unit focused on
+        # the retry gate itself, whose input is a low-confidence empty runtime
+        # result rather than an entity-routing scenario.
+        agent_result = {
+            "answer": "没有找到足够匹配的产品资料。",
+            "intent": "recommend_products",
+            "answer_type": "recommendation",
+            "confidence": "low",
+            "needs_clarification": True,
+            "warnings": ["missing_product_results"],
+            "results": [],
+        }
 
-        async def fake_runtime(db, **kwargs):
-            return {
-                "answer": "没有找到足够匹配的产品资料。",
-                "intent": "recommend_products",
-                "answer_type": "recommendation",
-                "confidence": "low",
-                "needs_clarification": True,
-                "warnings": ["missing_product_results"],
-                "sources": [],
-                "actions": [],
-                "results": [],
-                "steps": [],
-                "debug": {"agent_mode": "llm_tool_calling"},
-                "skip_polish": True,
-            }
+        self.assertTrue(customer_service_service._should_retry_with_deterministic_agent(agent_result))
 
-        async def fake_intent(db, **kwargs):
-            return {
-                "answer": "悦行包适合公园野餐携带中小件餐具和水壶。",
-                "intent": "query_products",
-                "answer_type": "product_query",
-                "confidence": "high",
-                "needs_clarification": False,
-                "warnings": [],
-                "sources": [{"type": "product_search", "label": "产品检索", "count": 1}],
-                "actions": [],
-                "results": [{"sku": "CB-003", "product_name_cn": "悦行包", "category": "收纳包具"}],
-                "steps": [],
-                "debug": {"agent_mode": "deterministic_intent"},
-                "skip_polish": True,
-            }
-
-        customer_agent_runtime_service.process_agent_request = fake_runtime
-        customer_agent_intent_service.process_intent_request = fake_intent
-        try:
-            result = await customer_service_service.ask_customer_service(
-                self.db,
-                user_id="user-1",
-                question="悦行包适合公园野餐带餐具和水壶吗？",
-            )
-        finally:
-            customer_agent_runtime_service.process_agent_request = original_runtime
-            customer_agent_intent_service.process_intent_request = original_intent
-
-        self.assertEqual(result["intent"], "query_products")
-        self.assertEqual(result["results"][0]["sku"], "CB-003")
-        self.assertFalse(result["needs_clarification"])
-
-    async def test_service_passes_previous_results_to_agent_for_context_routing(self):
+    async def test_phase1_recommendation_does_not_force_runtime_context_read(self):
         conversation = CustomerServiceConversation(id="conv-context", user_id="user-1", title="旧会话")
         self.db.add(conversation)
         self.db.add(CustomerServiceMessage(
@@ -8908,11 +9223,7 @@ class CustomerServiceServiceTest(unittest.IsolatedAsyncioTestCase):
             conversation_id="conv-context",
         )
 
-        self.assertEqual(captured["previous_result_skus"], [])
-        self.assertIn("CW-C93", [item["sku"] for item in captured["entity_stack"]])
-        self.assertEqual(len(captured["conversation_history"]), 1)
-        self.assertEqual(captured["conversation_history"][0]["role"], "assistant")
-        self.assertIn("CW-C93", captured["conversation_history"][0]["content"])
+        self.assertEqual(captured, {})
 
     def test_latest_result_skus_prefers_primary_recommendation_sku(self):
         conversation = CustomerServiceConversation(id="conv-primary-sku", user_id="user-1", title="推荐会话")
@@ -9200,6 +9511,15 @@ class CustomerServiceServiceTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(calls, ["runtime"])
 
     async def test_explicit_sku_requested_field_question_stays_product_detail(self):
+        self.db.add(Product(
+            id="explicit-contents-CW-C05-37",
+            sku="CW-C05-37",
+            barcode="explicit-contents-CW-C05-37",
+            product_name_cn="2-4人野炊锅10件套",
+            brand="alocs",
+            category="锅具",
+        ))
+        self.db.commit()
         result = await customer_service_service.ask_customer_service(
             self.db,
             user_id="user-1",
@@ -9210,6 +9530,9 @@ class CustomerServiceServiceTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result["answer_type"], "product_detail")
         self.assertEqual(result["sku"], "CW-C05-37")
         self.assertIn("CW-C05-37", result["answer"])
+        self.assertEqual(result["debug"]["field_contract"]["field_type"], "accessories")
+        self.assertEqual(result["debug"]["entity_resolution_contract"]["resolved_sku"], "CW-C05-37")
+        self.assertEqual(result["result_skus"], ["CW-C05-37"])
 
     async def test_ordinal_compare_without_context_requires_product_names(self):
         result = await customer_service_service.ask_customer_service(
@@ -9418,7 +9741,7 @@ class CustomerServiceServiceTest(unittest.IsolatedAsyncioTestCase):
         self.assertRegex(turn3["answer"], r"(CW-C06PRO|轻途套锅).*(酒精炉)")
         self.assertRegex(turn3["answer"], r"(CW-C19T-37|享野套锅).*(酒精炉)")
 
-    async def test_pronoun_update_uses_previous_result_sku(self):
+    async def test_pronoun_internal_update_is_refused_before_runtime(self):
         product = Product(
             id="product-cs-g25",
             sku="CS-G25",
@@ -9479,12 +9802,9 @@ class CustomerServiceServiceTest(unittest.IsolatedAsyncioTestCase):
             conversation_id="conv-pronoun",
         )
 
-        self.assertEqual(result["intent"], "propose_update")
-        self.assertEqual(result["actions"][0]["sku"], "CS-G25")
-        self.assertEqual(result["actions"][0]["field_path"], "product.person_in_charge")
-        self.assertEqual(result["actions"][0]["proposed_value"], "kang")
-        self.assertEqual(captured["previous_result_skus"], [])
-        self.assertIn("CS-G25", [item["sku"] for item in captured["entity_stack"]])
+        self.assertEqual(result["intent"], "safety_refusal")
+        self.assertEqual(captured, {})
+        self.assertFalse(result["actions"])
 
     def test_recommendation_answer_filters_oversized_pans_for_coffee(self):
         tool_results = [{

@@ -12,6 +12,7 @@ from . import (
     customer_agent_quality_service,
     customer_agent_tool_service,
     customer_dialogue_state,
+    customer_enterprise_guardrail_service,
     knowledge_service,
     customer_price_signal,
     customer_recommendation_ranker,
@@ -54,6 +55,9 @@ async def process_agent_request(
     previous_result_skus = previous_result_skus or []
     entity_stack = entity_stack or []
     conversation_history = conversation_history or []
+    guardrail_result = customer_enterprise_guardrail_service.evaluate_question(question)
+    if guardrail_result:
+        return guardrail_result
     last_turn_summary = _last_turn_summary(db, conversation_id, user_id)
     recommendation_context = _latest_recommendation_context(db, conversation_id, user_id)
     candidate_context = _latest_candidate_context(db, conversation_id, user_id)
@@ -93,6 +97,17 @@ async def process_agent_request(
             empty_subset_context,
             conversation_history=conversation_history,
         )
+    explicit_product_detection = _detect_explicit_product_mention(db, question, entity_stack)
+    if not explicit_product_detection.get("has_new_product"):
+        contextual_detail = await _sealed_context_detail_result(
+            db,
+            user_id=user_id,
+            question=question,
+            entity_stack=entity_stack,
+            conversation_history=conversation_history,
+        )
+        if contextual_detail:
+            return contextual_detail
     scoped_candidate_result = await _handle_scoped_candidate_followup(
         db,
         user_id=user_id,
@@ -163,7 +178,6 @@ async def process_agent_request(
         )
         if deterministic_followup and deterministic_followup.get("intent") in {"recommend_products", "query_products"}:
             return deterministic_followup
-    explicit_product_detection = _detect_explicit_product_mention(db, question, entity_stack)
     route_hints = _build_route_hints(question, explicit_product_detection, entity_stack)
     dialogue_state = customer_dialogue_state.build_dialogue_state(question, conversation_history)
     local_resolved_skus: list[str] = []
@@ -302,6 +316,8 @@ async def process_agent_request(
                 )
                 result["intent"] = "recommendation"
                 result["answer_type"] = "recommendation"
+                result["result_skus"] = list(explanation_skus[:5])
+                result["candidate_skus"] = list(explanation_skus[:5])
                 result["skip_polish"] = True
                 debug = dict(result.get("debug") or {})
                 debug["agent_mode"] = "recommendation_explanation_followup"
@@ -325,7 +341,18 @@ async def process_agent_request(
             if str(item or "").strip()
         ]
         if _should_defer_explicit_product_to_intent_pipeline(question, detected_skus):
-            return None
+            # “Defer” means hand the complete request to the deterministic
+            # intent executor (for example a comparison), not return from the
+            # request handler.  Returning here discarded valid explicit SKU
+            # requests before any answer could be formed.
+            return await customer_agent_intent_service.process_intent_request(
+                db,
+                user_id=user_id,
+                question=question,
+                sku=sku,
+                previous_result_skus=previous_result_skus,
+                allow_llm_fallback=False,
+            )
         if detected_skus:
             arguments = {"skus": detected_skus[:5], "fields": []}
             result = await customer_agent_tool_service.execute_tool_async(
@@ -367,7 +394,14 @@ async def process_agent_request(
             if isinstance(item, dict) and str(item.get("sku") or "").strip()
         ]
         if _should_defer_explicit_product_to_intent_pipeline(question, candidate_skus):
-            return None
+            return await customer_agent_intent_service.process_intent_request(
+                db,
+                user_id=user_id,
+                question=question,
+                sku=sku,
+                previous_result_skus=previous_result_skus,
+                allow_llm_fallback=False,
+            )
         if _is_compare_like_question(question, candidate_skus=candidate_skus) and 2 <= len(candidate_skus) <= 5:
             arguments = {"skus": candidate_skus[:5], "fields": []}
             result = await customer_agent_tool_service.execute_tool_async(
@@ -1995,6 +2029,41 @@ def _context_detail_fields(question: str, conversation_history: list[dict]) -> l
         if fields:
             return fields
     return []
+
+
+async def _sealed_context_detail_result(
+    db: Session,
+    *,
+    user_id: str,
+    question: str,
+    entity_stack: list[dict],
+    conversation_history: list[dict],
+) -> dict | None:
+    """Execute a contextual field request only when both field and entity are sealed."""
+    fields = _context_detail_fields(question, conversation_history)
+    anchored_skus = _unique_skus([
+        str(item.get("sku") or "").strip().upper()
+        for item in entity_stack
+        if isinstance(item, dict) and str(item.get("sku") or "").strip()
+    ])
+    if not fields or len(anchored_skus) != 1:
+        return None
+    sku = anchored_skus[0]
+    result = await customer_agent_tool_service.execute_tool_async(
+        db,
+        user_id=user_id,
+        name="get_product_detail",
+        arguments={"skus": [sku], "fields": fields},
+    )
+    return _build_result(
+        question,
+        sku,
+        [result],
+        None,
+        [_step_from_tool_result("get_product_detail", {"skus": [sku], "fields": fields}, result)],
+        conversation_history=conversation_history,
+        intent_override="product_detail",
+    )
 
 
 def _context_requested_fields_from_intent(question: str, previous_result_skus: list[str]) -> list[str]:
@@ -3662,10 +3731,17 @@ def _requested_display_fields(question: str) -> list[tuple[str, str]]:
             field_path = "certifications"
         if field_path and (label, field_path) not in fields:
             fields.append((label, field_path))
-    for field_path in customer_agent_tool_service.query_fields_from_text(question):
-        label = customer_agent_tool_service._label_for_query_field(field_path)
-        if not any(existing_path == field_path for _, existing_path in fields):
-            fields.append((label, field_path))
+    # The parsed intent has already isolated field text from the resolved
+    # product subject.  Do not merge a second lexical scan into that result:
+    # a product name may itself contain a field alias (for example a stove
+    # name containing a fuel word), which would fabricate an extra requested
+    # display field.  The FieldContract-backed extractor remains the fallback
+    # when the intent parser has no structured field at all.
+    if not fields:
+        for field_path in customer_agent_tool_service.query_fields_from_text(question):
+            label = customer_agent_tool_service._label_for_query_field(field_path)
+            if not any(existing_path == field_path for _, existing_path in fields):
+                fields.append((label, field_path))
     return fields
 
 

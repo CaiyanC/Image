@@ -1,6 +1,8 @@
 import asyncio
 import unittest
 
+import httpx
+
 from app.services import dmxapi_service
 
 
@@ -84,6 +86,62 @@ class ActualEmbeddingConfigTest(unittest.TestCase):
         self.assertEqual(cfg["api_key"], "sk-test-dashscope")
         self.assertTrue(cfg["actual"])
         self.assertEqual(cfg["managed_by"], "DASHSCOPE_API_KEY")
+
+
+class ChatTransportRecoveryTest(unittest.IsolatedAsyncioTestCase):
+    async def test_connect_error_recreates_client_and_retries_once(self):
+        original_resolve = dmxapi_service._resolve_model_config
+        original_get_client = dmxapi_service._get_http_client
+        original_release = dmxapi_service.release_session_connection
+        original_trace = dmxapi_service.agent_trace_service.trace
+        calls = []
+
+        class FakeResponse:
+            status_code = 200
+
+            def json(self):
+                return {"choices": [{"message": {"content": "ok"}}]}
+
+        class FailingClient:
+            async def post(self, *args, **kwargs):
+                calls.append("first")
+                raise httpx.ConnectError("transient connect failure")
+
+        class WorkingClient:
+            async def post(self, *args, **kwargs):
+                calls.append("second")
+                return FakeResponse()
+
+        clients = iter([FailingClient(), WorkingClient()])
+
+        async def fake_get_client(*args, **kwargs):
+            return next(clients)
+
+        try:
+            dmxapi_service._resolve_model_config = lambda db, model: {
+                "id": "test-chat",
+                "api_key": "test-key",
+                "api_format": "openai",
+                "api_model": "test-model",
+                "chat_url": "https://example.invalid/v1/chat/completions",
+            }
+            dmxapi_service._get_http_client = fake_get_client
+            dmxapi_service.release_session_connection = lambda db: None
+            dmxapi_service.agent_trace_service.trace = lambda *args, **kwargs: None
+
+            answer = await dmxapi_service.chat_completion(
+                object(),
+                [{"role": "user", "content": "ping"}],
+                model="test-chat",
+            )
+        finally:
+            dmxapi_service._resolve_model_config = original_resolve
+            dmxapi_service._get_http_client = original_get_client
+            dmxapi_service.release_session_connection = original_release
+            dmxapi_service.agent_trace_service.trace = original_trace
+
+        self.assertEqual(answer, "ok")
+        self.assertEqual(calls, ["first", "second"])
 
 
 if __name__ == "__main__":

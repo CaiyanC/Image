@@ -1,9 +1,10 @@
 import pytest
 from types import SimpleNamespace
 
-from app.services import customer_service_service
+from app.services import customer_agent_planner_service, customer_service_service
 from app.services.customer_structured_query_contract import (
     StructuredQueryContract,
+    adapt_semantic_structured_query_contract,
     classify_heat_source_value,
     build_structured_query_contract,
     evaluate_structured_row,
@@ -15,6 +16,24 @@ from app.services.customer_structured_query_contract import (
     validate_structured_evidence,
 )
 from test_customer_service_route_level_regression import _add_product, route_client_and_db
+
+
+@pytest.fixture(autouse=True)
+def _semantic_preplan_out_of_scope_for_structured_executor_regressions(monkeypatch):
+    """Keep executor tests independent of provider configuration.
+
+    These tests validate the deterministic structured-query contract after a
+    route has been selected. Tests that validate semantic adaptation install
+    their own explicit preplan response, which overrides this isolation stub.
+    """
+    async def no_semantic_preplan(*_args, **_kwargs):
+        return {"called": False}
+
+    monkeypatch.setattr(
+        customer_agent_planner_service,
+        "plan_customer_question_semantic",
+        no_semantic_preplan,
+    )
 
 
 @pytest.mark.parametrize(
@@ -71,6 +90,130 @@ def test_generic_category_field_has_no_filter_condition(question):
 def test_recommendation_does_not_become_structured_filter():
     contract = build_structured_query_contract("推荐适合燃气炉的轻量锅具")
     assert contract.status == "not_applicable"
+
+
+def test_semantic_structured_multi_condition_contract_requires_each_literal_condition():
+    """Semantic fields may add an allowlisted literal predicate, never a product fact."""
+    question = "列出锅具中支持明火并适合露营使用的款式"
+    base = build_structured_query_contract(question)
+    preplan = {
+        "called": True,
+        "route_family": "structured_query",
+        "route_hint": "query_products",
+        "question_type": "filter",
+        "subtype": "structured_query",
+        "confidence": 0.9,
+        "canonical_fields": ["heat_source", "usage_scene"],
+        "structured_query_constraints": [
+            {"field": "heat_source", "operator": "supports", "value": "明火", "evidence_span": "明火"},
+            {"field": "usage_scene", "operator": "contains", "value": "露营", "evidence_span": "露营"},
+        ],
+    }
+
+    contract = adapt_semantic_structured_query_contract(
+        question=question,
+        base_contract=base,
+        semantic_preplan=preplan,
+    )
+
+    assert contract.status == "resolved"
+    assert contract.subject_category == "锅具"
+    assert [item["field"] for item in contract.conditions] == ["heat_source", "usage_scene"]
+    assert evaluate_structured_row(
+        {"sku": "MATCH", "category": "锅具", "heat_source": "明火直烧", "usage_scenarios": "露营"},
+        contract,
+    )["matched"] is True
+    assert evaluate_structured_row(
+        {"sku": "HEAT-ONLY", "category": "锅具", "heat_source": "明火直烧", "usage_scenarios": "家庭厨房"},
+        contract,
+    )["matched"] is False
+
+
+def test_semantic_structured_contract_validates_subject_span_when_legacy_parser_cannot_order_it():
+    """Semantic subject meaning may be validated against the category taxonomy, not guessed from rows."""
+    question = "筛出支持明火并且使用场景写有露营的锅具"
+    base = build_structured_query_contract(question)
+    preplan = {
+        "called": True,
+        "route_family": "structured_query",
+        "route_hint": "query_products",
+        "question_type": "filter",
+        "subtype": "structured_query",
+        "subject_text": "锅具",
+        "confidence": 0.9,
+        "canonical_fields": ["heat_source", "usage_scene"],
+        "structured_query_constraints": [
+            {"field": "heat_source", "operator": "supports", "value": "明火", "evidence_span": "支持明火"},
+            {"field": "usage_scene", "operator": "contains", "value": "露营", "evidence_span": "使用场景写有露营"},
+        ],
+    }
+
+    assert base.subject_category is None
+    contract = adapt_semantic_structured_query_contract(
+        question=question,
+        base_contract=base,
+        semantic_preplan=preplan,
+    )
+
+    assert contract is not None
+    assert contract.subject_category == "锅具"
+    assert contract.source_spans["subject"] == (len(question) - 2, len(question))
+    assert [item["field"] for item in contract.conditions] == ["heat_source", "usage_scene"]
+
+
+def test_route_uses_validated_semantic_multi_condition_contract_before_legacy_single_filter(
+    structured_client,
+    monkeypatch,
+):
+    async def fake_preplan(db, question, deterministic_plan, context):
+        return {
+            "called": True,
+            "route_family": "structured_query",
+            "route_hint": "query_products",
+            "question_type": "filter",
+            "subtype": "structured_query",
+            "subject_text": "锅具",
+            "canonical_fields": ["heat_source", "usage_scene"],
+            "confidence": 0.9,
+            "confidence_label": "high",
+            "ambiguity": False,
+            "structured_query_constraints": [
+                {"field": "heat_source", "operator": "supports", "value": "明火", "evidence_span": "明火", "unit": None},
+                {"field": "usage_scene", "operator": "contains", "value": "露营", "evidence_span": "露营", "unit": None},
+            ],
+        }
+
+    monkeypatch.setattr(customer_agent_planner_service, "plan_customer_question_semantic", fake_preplan)
+    monkeypatch.setattr(
+        customer_service_service,
+        "_phase1_catalog_rows",
+        lambda db, ref: [
+            {"sku": "SQ-MATCH", "product_name_cn": "露营锅", "category": "锅具", "heat_source": "明火直烧", "usage_scenarios": "露营"},
+            {"sku": "SQ-HEAT-ONLY", "product_name_cn": "家庭锅", "category": "锅具", "heat_source": "明火直烧", "usage_scenarios": "家庭厨房"},
+        ],
+    )
+    payload = _ask(structured_client, "哪些锅具能用明火并适合露营？")
+
+    contract = payload["answer_metadata"]["structured_query_contract"]
+    assert payload["debug"]["agent_mode"] == "structured_query_contract", payload
+    assert [item["field"] for item in contract["conditions"]] == ["heat_source", "usage_scene"]
+    assert payload["result_skus"] == ["SQ-MATCH"], payload
+    assert all(
+        all(proof["matched"] for proof in evidence["condition_proofs"])
+        for evidence in payload["answer_metadata"]["structured_match_evidence"]
+    )
+
+
+@pytest.mark.parametrize("question", [
+    "这个锅能不能用酒精炉？",
+    "那款水壶容量有多大？",
+    "该产品材质是什么？",
+])
+def test_deictic_subject_does_not_become_catalog_category_filter(question):
+    contract = build_structured_query_contract(question)
+
+    assert contract.status != "resolved"
+    assert contract.subject_category is None
 
 
 @pytest.mark.parametrize(
@@ -1047,6 +1190,21 @@ def test_category_general_eligibility_consumes_entity_and_existing_route_signals
         structured_contract=contract,
         exclusions=exclusions,
     ) is expected
+
+
+def test_category_general_precedes_single_product_generic_clarification():
+    decision = customer_service_service._classify_phase2_entity_state_action(
+        "杯子的容量是多少",
+        {"primary_intent": "product_field"},
+        signals={"category_general": True},
+        entity_resolution_context={
+            "entity_subject_selection": SimpleNamespace(entity_subject="杯子"),
+            "contract": _entity_state(),
+            "products_snapshot": [],
+        },
+    )
+
+    assert decision == {"action": "pass_through", "reason": "category_field_general"}
 
 
 def test_resolved_structured_filter_never_uses_category_general_aggregation():

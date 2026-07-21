@@ -1,15 +1,21 @@
+import asyncio
 import inspect
 
 import pytest
 
 from app.models.product import Product
-from app.services import customer_entity_resolution_contract, customer_service_service
+from app.services import customer_agent_planner_service, customer_entity_resolution_contract, customer_field_contract, customer_service_service
 from app.services.customer_entity_resolution_contract import build_entity_resolution_contract, build_entity_resolution_contract_observation
 from app.services.customer_field_contract import (
+    classify_product_qa_evidence_type,
     detect_field_contract,
     field_contract_metadata,
     is_supported_detail_field,
+    product_detail_field_label,
+    qa_evidence_matches_field,
+    resolve_requested_field_contract,
     semantic_preplan_field_type,
+    strip_leading_entity_reference_modifier,
 )
 
 
@@ -20,8 +26,9 @@ def _product(sku: str, name: str, category: str = "锅具") -> Product:
 @pytest.mark.parametrize(
     ("question", "field_type"),
     [
-        ("某商品的货号是多少", "model"),
-        ("某商品的SKU是什么", "model"),
+        ("某商品的货号是多少", "sku"),
+        ("某商品的SKU是什么", "sku"),
+        ("某商品的型号是多少", "model"),
         ("某商品大小是多少", "dimensions"),
         ("某商品收纳尺寸是多少", "dimensions"),
         ("某商品规格是什么", "specification"),
@@ -41,13 +48,650 @@ def test_field_contract_classifies_shared_aliases(question, field_type):
     assert detect_field_contract(question).field_type == field_type
 
 
-def test_field_contract_maps_only_existing_planner_enum_values():
-    assert semantic_preplan_field_type("model") == "unknown"
+@pytest.mark.parametrize("product_code", ["ZX-NO-SKU", "AB_SKU_2026"])
+def test_field_alias_inside_product_code_is_not_a_field_contract(product_code):
+    assert detect_field_contract(f"{product_code} 到手价多少？") is None
+
+
+def test_field_contract_maps_supported_canonical_fields_into_semantic_allowlist():
+    assert semantic_preplan_field_type("sku") == "sku"
+    assert semantic_preplan_field_type("model") == "model"
     assert semantic_preplan_field_type("capacity") == "capacity"
+
+
+def test_customer_visible_heat_source_label_never_leaks_canonical_field_name():
+    assert product_detail_field_label("heat_source") == "适用热源"
+
+
+def test_sku_and_model_number_are_distinct_customer_contracts():
+    """A record key is not evidence of a manufacturer model number.
+
+    The catalogue has ``products.sku`` but no ``products.model`` column.  SKU
+    questions may therefore answer from that column; model-number questions
+    must remain a distinct, safely-missing formal field.
+    """
+    assert detect_field_contract("某商品的SKU是什么").field_type == "sku"
+    assert detect_field_contract("某商品的货号是多少").field_type == "sku"
+    assert detect_field_contract("某商品的型号是多少").field_type == "model"
+    assert is_supported_detail_field("sku") is True
+    assert is_supported_detail_field("model") is False
+
+
+def test_semantic_preplan_uses_the_formal_canonical_taxonomy_for_safe_fields():
+    assert semantic_preplan_field_type("manual") == "manual"
+    assert semantic_preplan_field_type("after_sales_contact") == "after_sales_contact"
+    assert semantic_preplan_field_type("shipping") == "shipping"
+    assert semantic_preplan_field_type("stock") == "inventory"
+    assert semantic_preplan_field_type("contents") == "accessories"
+
+
+def test_named_product_fact_always_reaches_semantic_preplan_before_legacy_recommendation_words():
+    assert customer_service_service._should_call_semantic_preplan(
+        "示例露营壶适合露营吗？",
+        {"primary_intent": "recommend_products"},
+        conversation_id=None,
+        has_named_product=True,
+    ) is True
+
+
+def test_declarative_unrouted_turn_reaches_semantic_preplan_for_navigation_interpretation():
+    assert customer_service_service._should_call_semantic_preplan(
+        "示例露营壶",
+        {"primary_intent": "query_products"},
+        conversation_id=None,
+        has_named_product=False,
+    ) is True
+
+
+def test_semantic_navigation_identity_confirmation_cannot_be_repaired_into_a_name_token_field():
+    result = {
+        "answer_type": "product_detail",
+        "result_skus": ["CS-EXAMPLE"],
+        "answer_metadata": {"source": "semantic_product_navigation_contract"},
+        "debug": {"agent_mode": "semantic_product_navigation_contract"},
+    }
+
+    assert customer_service_service._enforce_field_evidence_policy(
+        None,
+        "先查看含炉字的示例商品。",
+        result,
+    ) is result
+
+
+def test_explicit_price_positioning_contract_rejects_conflicting_semantic_price():
+    """A displayed canonical label is a deterministic contract boundary.
+
+    Semantic planning remains the primary interpreter for natural wording, but
+    it cannot turn the formal field label ``价格定位`` into realtime ``价格``.
+    """
+    result = resolve_requested_field_contract(
+        "它的价格定位",
+        planner_plan={
+            "semantic_preplan": {
+                "called": True,
+                "canonical_fields": ["price"],
+                "field_type": "price",
+                "confidence": 0.95,
+            },
+        },
+        subject="它",
+        subject_is_catalog_exact=True,
+    )
+
+    assert result["field_type"] == "price_positioning"
+    assert result["canonical_fields"] == ["price_positioning"]
+
+
+def test_legacy_unknown_fact_guard_yields_to_formal_price_positioning_contract():
+    """A legacy realtime-fact guard cannot preempt a formal product field."""
+    assert customer_service_service._unknown_product_fact_result("它的价格定位") is None
+
+
+def test_entity_subject_normalization_removes_generic_lookup_preamble():
+    assert strip_leading_entity_reference_modifier("帮我查一下1-2人野营锅") == "1-2人野营锅"
+
+
+def test_comparison_plan_precedes_single_product_heat_source_shortcut():
+    plan = customer_agent_planner_service.plan_customer_question(
+        "旋焰酒精炉(CS-B14)和小圆炉(CS-G35)适用热源有什么不同？"
+    )
+
+    assert plan["primary_intent"] == "comparison"
+    assert plan["must_compare_both_products"] is True
+    assert plan["product_refs"] == ["CS-B14", "CS-G35"]
+
+
+def test_semantic_comparison_preplan_preserves_verbatim_participants_and_field_contract():
+    """Comparison meaning and its participants come from semantic planning, not aliases."""
+    preplan = customer_agent_planner_service._validate_semantic_preplan(
+        {
+            "route_family": "comparison",
+            "entities": ["示例甲", "示例乙"],
+            "subject_text": "示例甲和示例乙",
+            "canonical_fields": ["people"],
+            "confidence": "high",
+            "ambiguity": False,
+            "evidence_required": True,
+            "context_usage": "none",
+            "reasoning_summary": "Two product participants are compared on a person-count field.",
+        }
+    )
+
+    assert preplan["route_family"] == "comparison"
+    assert preplan["route_hint"] == "comparison"
+    assert preplan["question_type"] == "comparison"
+    assert preplan["entities"] == ["示例甲", "示例乙"]
+    assert preplan["canonical_fields"] == ["people"]
+
+
+def test_semantic_comparison_preplan_rejects_missing_participants():
+    preplan = customer_agent_planner_service._validate_semantic_preplan(
+        {
+            "route_family": "comparison",
+            "entities": [],
+            "subject_text": "示例甲和示例乙",
+            "canonical_fields": ["people"],
+            "confidence": "high",
+            "ambiguity": False,
+            "evidence_required": True,
+            "context_usage": "none",
+            "reasoning_summary": "A comparison must expose each participant.",
+        }
+    )
+
+    assert preplan["route_hint"] == ""
+    assert preplan["fallback_reason"] == "invalid_comparison_participants"
+
+
+def test_semantic_comparison_field_forms_the_same_formal_field_contract():
+    field_contract = resolve_requested_field_contract(
+        "示例甲和示例乙，哪个更适合多人使用？",
+        {
+            "semantic_preplan": {
+                "called": True,
+                "route_family": "comparison",
+                "route_hint": "comparison",
+                "question_type": "comparison",
+                "subtype": "relation_comparison",
+                "entities": ["示例甲", "示例乙"],
+                "field_type": "people",
+                "field_hint": "people",
+                "canonical_fields": ["people"],
+                "confidence": 0.9,
+            }
+        },
+    )
+
+    assert field_contract["canonical_fields"] == ["people"]
+    assert field_contract["source"] == "validated_semantic_preplan"
+
+
+def test_semantic_comparison_builds_an_entity_contract_for_each_verbatim_participant():
+    products = [
+        _product("SKU-A", "示例甲"),
+        _product("SKU-B", "示例乙"),
+    ]
+    preplan = {
+        "called": True,
+        "route_family": "comparison",
+        "entities": ["示例甲", "示例乙"],
+        "canonical_fields": ["people"],
+        "confidence": 0.9,
+        "ambiguity": False,
+    }
+
+    contracts = customer_service_service._semantic_comparison_entity_contracts(
+        "示例甲和示例乙，哪个更适合多人使用？",
+        preplan,
+        products,
+    )
+
+    assert [contract.resolved_sku for contract in contracts] == ["SKU-A", "SKU-B"]
+    assert all(contract.status == "resolved" for contract in contracts)
+    assert [contract.field_type for contract in contracts] == ["people", "people"]
+
+
+def test_high_confidence_semantic_comparison_replaces_legacy_participant_extraction_with_sealed_contracts():
+    products = [
+        _product("SKU-A", "示例甲"),
+        _product("SKU-B", "示例乙"),
+    ]
+    plan = {"primary_intent": "product_detail", "answer_type": "product_detail", "product_refs": []}
+    preplan = {
+        "called": True,
+        "route_family": "comparison",
+        "entities": ["示例甲", "示例乙"],
+        "canonical_fields": ["people"],
+        "confidence": 0.9,
+        "ambiguity": False,
+    }
+
+    contracts = customer_service_service._apply_semantic_comparison_plan(
+        "示例甲和示例乙，哪个更适合多人使用？",
+        plan,
+        preplan,
+        products,
+    )
+
+    assert plan["primary_intent"] == "comparison"
+    assert plan["answer_type"] == "comparison"
+    assert plan["product_refs"] == ["SKU-A", "SKU-B"]
+    assert [contract.resolved_sku for contract in contracts] == ["SKU-A", "SKU-B"]
+    assert plan["semantic_comparison_entity_contracts"] == [contract.to_dict() for contract in contracts]
+
+
+def test_semantic_pairwise_recommendation_uses_the_same_sealed_entity_contracts_as_comparison():
+    products = [
+        _product("SKU-A", "示例甲"),
+        _product("SKU-B", "示例乙"),
+    ]
+    plan = {"primary_intent": "recommendation", "answer_type": "recommendation", "product_refs": []}
+    preplan = {
+        "called": True,
+        "route_family": "recommendation",
+        "entities": ["示例甲", "示例乙"],
+        "canonical_fields": [],
+        "decision_requested": True,
+        "confidence": 0.9,
+        "ambiguity": False,
+    }
+
+    contracts = customer_service_service._apply_semantic_comparison_plan(
+        "示例甲和示例乙，我该买哪个？",
+        plan,
+        preplan,
+        products,
+    )
+
+    assert [contract.resolved_sku for contract in contracts] == ["SKU-A", "SKU-B"]
+    assert all(contract.status == "resolved" for contract in contracts)
+    assert plan["primary_intent"] == "comparison"
+    assert plan["must_make_choice"] is True
+    assert plan["semantic_comparison_entity_contracts"] == [contract.to_dict() for contract in contracts]
+
+
+def test_semantic_pairwise_choice_without_a_requested_field_clarifies_instead_of_legacy_default_selection():
+    result = customer_service_service._semantic_pairwise_missing_criterion_result(
+        [
+            {"sku": "SKU-A", "product_name_cn": "示例甲"},
+            {"sku": "SKU-B", "product_name_cn": "示例乙"},
+        ],
+        [
+            {"status": "resolved", "resolved_sku": "SKU-A"},
+            {"status": "resolved", "resolved_sku": "SKU-B"},
+        ],
+    )
+
+    assert result["answer_type"] == "clarification"
+    assert result["candidate_skus"] == ["SKU-A", "SKU-B"]
+    assert result["result_skus"] == []
+    assert result["answer_metadata"]["final_choice_sku"] is None
+    assert result["debug"]["agent_mode"] == "semantic_pairwise_missing_criterion_clarification"
+    assert "容量、重量、使用场景或预算" in result["answer"]
+
+
+def test_invalid_semantic_pairwise_preplan_with_two_sealed_products_clarifies_before_legacy_compare_text():
+    products = [_product("SKU-A", "示例甲"), _product("SKU-B", "示例乙")]
+    result = customer_service_service._invalid_semantic_pairwise_preplan_clarification_result(
+        "示例甲和示例乙，哪个更适合露营？",
+        {"primary_intent": "comparison"},
+        {"called": True, "fallback_reason": "invalid_json"},
+        products,
+    )
+
+    assert result is not None
+    assert result["answer_type"] == "clarification"
+    assert result["result_skus"] == []
+    assert result["candidate_skus"] == ["SKU-A", "SKU-B"]
+    assert result["debug"]["agent_mode"] == "semantic_pairwise_invalid_preplan_clarification"
+    assert len(result["debug"]["entity_resolution_contracts"]) == 2
+
+
+def test_semantic_comparison_owns_the_decision_request_not_the_legacy_question_parser():
+    products = [_product("SKU-A", "示例甲"), _product("SKU-B", "示例乙")]
+    plan = {"primary_intent": "comparison", "answer_type": "comparison", "must_make_choice": True}
+    preplan = {
+        "called": True,
+        "route_family": "comparison",
+        "entities": ["示例甲", "示例乙"],
+        "canonical_fields": ["people"],
+        "decision_requested": False,
+        "confidence": 0.9,
+        "ambiguity": False,
+    }
+
+    customer_service_service._apply_semantic_comparison_plan(
+        "示例甲和示例乙的适用人数有什么不同？",
+        plan,
+        preplan,
+        products,
+    )
+
+    assert plan["must_make_choice"] is False
+
+
+def test_semantic_comparison_adjudication_accepts_only_a_sealed_participant_index_and_evidence_fields():
+    decision = customer_service_service._validate_semantic_comparison_adjudication(
+        {
+            "selected_index": 1,
+            "evidence_fields": ["usage_scene", "selling_point"],
+            "reasoning_summary": "The sealed evidence for participant 2 better matches the stated scenario.",
+        },
+        participant_count=2,
+        allowed_evidence_fields={"usage_scene", "selling_point"},
+    )
+
+    assert decision == {
+        "selected_index": 1,
+        "evidence_fields": ["usage_scene", "selling_point"],
+        "reasoning_summary": "The sealed evidence for participant 2 better matches the stated scenario.",
+    }
+
+
+def test_semantic_comparison_adjudication_rejects_identity_or_unsealed_evidence_claims():
+    assert customer_service_service._validate_semantic_comparison_adjudication(
+        {
+            "selected_index": 1,
+            "selected_sku": "SKU-B",
+            "evidence_fields": ["usage_scene"],
+        },
+        participant_count=2,
+        allowed_evidence_fields={"usage_scene"},
+    ) is None
+
+
+def test_semantic_comparison_adjudication_accepts_a_safe_no_choice_without_evidence_claims():
+    assert customer_service_service._validate_semantic_comparison_adjudication(
+        {
+            "selected_index": None,
+            "evidence_fields": [],
+            "reasoning_summary": "The sealed evidence does not support preferring either participant.",
+        },
+        participant_count=2,
+        allowed_evidence_fields={"usage_scene"},
+    ) == {
+        "selected_index": None,
+        "evidence_fields": [],
+        "reasoning_summary": "The sealed evidence does not support preferring either participant.",
+    }
+
+
+def test_semantic_comparison_adjudication_uses_the_same_constrained_semantic_model_runtime(monkeypatch):
+    captured = {}
+
+    async def fake_chat_completion(db, messages, **kwargs):
+        captured.update(kwargs, messages=messages)
+        return '{"selected_index":1,"evidence_fields":["usage_scene"],"reasoning_summary":"sealed evidence supports participant 2"}'
+
+    monkeypatch.setattr(customer_service_service.customer_llm_service, "chat_completion", fake_chat_completion)
+    decision = asyncio.run(
+        customer_service_service._semantic_comparison_adjudication(
+            None,
+            question="示例甲和示例乙，哪一个更适合家庭使用？",
+            participant_count=2,
+            evidence_packet={
+                "usage_scene": [
+                    {"participant_index": 0, "value": "单人露营"},
+                    {"participant_index": 1, "value": "家庭野餐"},
+                ]
+            },
+        )
+    )
+
+    assert decision and decision["selected_index"] == 1
+    assert captured["api_model_override"] == "deepseek-v4-flash"
+    assert captured["response_format"] == {"type": "json_object"}
+    assert captured["thinking"] == {"type": "disabled"}
+    assert "minimal, directly sufficient evidence fields" in captured["messages"][0]["content"]
+
+
+def test_semantic_comparison_without_sealed_participants_fails_closed_before_legacy_compare_paths():
+    result = customer_service_service._semantic_comparison_fail_closed_result(
+        {
+            "called": True,
+            "route_family": "comparison",
+            "entities": ["示例甲", "示例乙"],
+            "confidence": 0.9,
+        }
+    )
+
+    assert result is not None
+    assert result["answer_type"] == "clarification"
+    assert result["result_skus"] == []
+    assert result["candidate_skus"] == []
+    assert result["needs_clarification"] is True
+    assert result["debug"]["agent_mode"] == "semantic_comparison_unsealed_clarification"
+    assert "示例甲" not in result["answer"]
+    assert customer_service_service._semantic_comparison_fail_closed_result(
+        {"called": True, "route_family": "product_bound_qa"}
+    ) is None
+    assert customer_service_service._validate_semantic_comparison_adjudication(
+        {
+            "selected_index": 1,
+            "evidence_fields": ["unsealed_field"],
+        },
+        participant_count=2,
+        allowed_evidence_fields={"usage_scene"},
+    ) is None
+
+
+def test_single_catalog_recommendation_is_not_misclassified_as_an_unsealed_comparison():
+    assert customer_service_service._semantic_comparison_fail_closed_result(
+        {
+            "called": True,
+            "route_family": "recommendation",
+            "entities": [],
+            "decision_requested": True,
+            "confidence": 0.9,
+        }
+    ) is None
+
+
+def test_people_evidence_policy_accepts_explicit_headcount_from_same_sku_selling_points():
+    policy = customer_field_contract.field_evidence_policy("people")
+
+    assert policy is not None
+    assert policy.structured_fields == ("business.target_audience", "business.top_selling_points")
+
+
+def test_semantic_preplan_prompt_distinguishes_category_from_series():
+    messages = customer_agent_planner_service._semantic_preplan_messages(
+        question="示例商品算哪类产品？",
+        deterministic_plan={},
+        context={},
+    )
+    system = messages[0]["content"]
+    assert "category=the product kind, class, merchandise type, or taxonomy bucket" in system
+    assert "series=a named product family, collection, or product line" in system
+    assert "do not reinterpret a generic classification request as series" in system
+    assert "sku=the SKU, item number, product code" in system
+    assert "never substitute SKU, item number, product code" in system
+    assert "barcode=an EAN, UPC, GTIN, scannable barcode" in system
+    assert "never map a SKU, model, item number, product code, or catalogue code to barcode" in system
+    assert "rated output or power must use power, not specification" in system
+    assert "people=a numeric or bounded group-size fact" in system
+    assert "target_audience=the user personas, customer types, or groups" in system
+    assert "heat_source=compatible stove types, heating methods, fuel sources" in system
+    assert "usage_instruction=operating or usage steps for the product" in system
+    assert "dishwasher=only whether the product is explicitly dishwasher-safe" in system
+    assert "generic machine-wash or washing-machine compatibility belongs to cleaning" in system
+    assert "never translate generic machine-wash wording into dishwasher" in system
+    assert "care=maintenance, upkeep, drying before storage" in system
+    assert "product_level=the catalogue's grade or tier label" in system
+    assert "selling_point=the named product's benefits, highlights, advantages" in system
+    assert "emotional_value=the intended feeling, emotional experience, or felt outcome" in system
+    assert "do not use selling_point merely because an experience can also be described as a benefit" in system
+    assert "technical_advantages=concrete product technologies" in system
+    assert "competitor_benchmark=the named product's recorded comparison set" in system
+    assert "sales_region=geographic markets, countries, areas, territories, or launch regions" in system
+    assert "Asking why one already named product is worth choosing is a product_bound_qa" in system
+    assert 'canonical_fields":["series"]' not in messages[1]["content"]
+
+
     assert field_contract_metadata("某商品型号是什么") == {
         "contract_field_type": "model",
-        "planner_compatible_field_type": "unknown",
+        "planner_compatible_field_type": "model",
     }
+
+
+def test_deterministic_semantic_fallback_does_not_conflate_laundry_machine_wash_with_dishwasher():
+    semantic = customer_agent_planner_service._deterministic_semantic_field_fallback(
+        "示例收纳包能否放洗衣机机洗？"
+    )
+
+    assert semantic is not None
+    assert semantic["field_type"] == "cleaning"
+    assert semantic["field_type"] != "dishwasher"
+
+
+def test_deterministic_semantic_fallback_recognizes_rinsing_as_cleaning_action():
+    """Semantic outages must not reinterpret a concrete cleaning action as heat compatibility."""
+    semantic = customer_agent_planner_service._deterministic_semantic_field_fallback(
+        "刚加热的容器能否立即用冷水冲洗？"
+    )
+
+    assert semantic is not None
+    assert semantic["field_type"] == "cleaning"
+    assert semantic["route_hint"] == "product_detail"
+
+
+def test_cleaning_qa_evidence_uses_the_same_rinsing_concept_as_the_fallback():
+    question = "容器加热后能否用冷水冲洗？"
+
+    assert classify_product_qa_evidence_type(question, '["清洗", "保养"]') == "cleaning"
+    assert qa_evidence_matches_field(question, '["清洗", "保养"]', "cleaning")
+
+
+def test_validated_semantic_cleaning_with_a_concrete_subject_enters_entity_arbitration():
+    """A sealed field request must not fall back to generic usage/care routing.
+
+    The semantic layer names only the field and current-turn subject.  Phase 2
+    still resolves that subject against the catalogue, so accepting a concrete
+    subject here cannot manufacture an SKU or weaken fail-closed identity.
+    """
+    field_request = {
+        "field_type": "cleaning",
+        "requested_fields": ["清洁"],
+        "canonical_fields": ["cleaning"],
+        "subject": "示例收纳箱",
+        "source": "validated_semantic_preplan",
+    }
+
+    assert customer_service_service._phase2_single_field_arbitration_eligible(
+        "示例收纳箱用完如何洗？",
+        {"primary_intent": "product_detail"},
+        conversation_id=None,
+        field_request_override=field_request,
+    ) is True
+    assert customer_service_service._phase2_single_field_arbitration_eligible(
+        "用完如何洗？",
+        {"primary_intent": "product_detail"},
+        conversation_id=None,
+        field_request_override={**field_request, "subject": ""},
+    ) is False
+
+
+def test_high_confidence_semantic_power_outranks_ambiguous_bare_size_fallback():
+    question = "示例炉具工作时的额定输出有多大？"
+    field_request = resolve_requested_field_contract(
+        question,
+        {
+            "semantic_preplan": {
+                "called": True,
+                "route_family": "product_bound_qa",
+                "route_hint": "product_detail",
+                "question_type": "field",
+                "subtype": "known_detail",
+                "field_type": "power",
+                "field_hint": "power",
+                "canonical_fields": ["power"],
+                "subject_text": "示例炉具",
+                "confidence": 0.95,
+                "ambiguity": False,
+                "evidence_required": True,
+                "fallback_reason": "",
+            }
+        },
+    )
+
+    assert field_request["field_type"] == "power"
+    assert field_request["canonical_fields"] == ["power"]
+    assert field_request["source"] == "validated_semantic_preplan"
+
+
+def test_high_confidence_semantic_technical_advantages_outranks_overlapping_selling_point_alias():
+    """A lexical """ + '"' + "what advantages""" + '"' + " predicate cannot relabel a valid semantic field."""
+    question = "它有什么技术优势？"
+    field_request = resolve_requested_field_contract(
+        question,
+        {
+            "semantic_preplan": {
+                "called": True,
+                "route_family": "product_bound_qa",
+                "route_hint": "product_detail",
+                "question_type": "field",
+                "subtype": "known_detail",
+                "field_type": "technical_advantages",
+                "field_hint": "technical_advantages",
+                "canonical_fields": ["technical_advantages"],
+                "subject_text": "它",
+                "confidence": 0.9,
+                "ambiguity": False,
+                "evidence_required": True,
+                "fallback_reason": "",
+            }
+        },
+    )
+
+    assert field_request["field_type"] == "technical_advantages"
+    assert field_request["canonical_fields"] == ["technical_advantages"]
+    assert field_request["source"] == "validated_semantic_preplan"
+
+
+def test_high_confidence_semantic_multi_field_plan_forms_one_compound_contract():
+    field_request = resolve_requested_field_contract(
+        "SKU-EXAMPLE面向哪些市场，我可以从什么平台购买？",
+        {
+            "semantic_preplan": {
+                "called": True,
+                "route_family": "product_bound_qa",
+                "route_hint": "product_detail",
+                "question_type": "field",
+                "subtype": "known_detail",
+                "field_type": "",
+                "field_hint": None,
+                "canonical_fields": ["sales_region", "purchase_channel"],
+                "subject_text": "SKU-EXAMPLE",
+                "confidence": 0.95,
+                "ambiguity": False,
+                "evidence_required": True,
+                "fallback_reason": "",
+            }
+        },
+    )
+
+    assert field_request["field_type"] is None
+    assert field_request["canonical_fields"] == ["sales_region", "purchase_channel"]
+    assert field_request["requested_fields"] == ["销售区域", "购买渠道"]
+    assert field_request["source"] == "validated_semantic_preplan"
+    assert field_request["compound"] is True
+
+
+def test_deterministic_semantic_fallback_classifies_liquid_temperature_capability_as_usage_instruction():
+    semantic = customer_agent_planner_service._deterministic_semantic_field_fallback(
+        "这个容器是否能装沸水？"
+    )
+
+    assert semantic is not None
+    assert semantic["field_type"] == "usage_instruction"
+    assert semantic["route_hint"] == "product_detail"
+
+
+def test_usage_instruction_qa_evidence_accepts_liquid_temperature_capability():
+    question = "这个容器能不能装热水？"
+
+    assert classify_product_qa_evidence_type(question, '["装热水", "开水"]') == "usage_instruction"
+    assert qa_evidence_matches_field(question, '["装热水", "开水"]', "usage_instruction")
 
 
 def test_field_contract_separates_recognized_from_supported_detail_fields():
@@ -55,16 +699,38 @@ def test_field_contract_separates_recognized_from_supported_detail_fields():
     assert is_supported_detail_field("price") is False
     assert is_supported_detail_field("gift") is False
     assert is_supported_detail_field("dimensions") is True
-    assert is_supported_detail_field("model") is True
+    assert is_supported_detail_field("sku") is True
+    assert is_supported_detail_field("model") is False
 
 
-def test_entity_contract_resolves_unique_canonical_name_with_model_field():
+def test_material_component_scopes_remain_distinct_formal_requests():
+    contract = resolve_requested_field_contract(
+        "炊墨炒锅锅体和锅盖分别是什么材质？",
+        subject="炊墨炒锅",
+    )
+
+    assert contract["canonical_fields"] == ["material"]
+    assert contract["requested_fields"] == ["主体材质", "锅盖材质"]
+    assert contract["compound"] is True
+
+
+def test_component_capability_question_does_not_fabricate_material_or_accessories_contract():
+    contract = customer_service_service.resolve_requested_field_contract(
+        "2-4人野餐锅10件套的煎盘可以单独用吗，有没有手柄？",
+        {},
+    )
+
+    assert contract["canonical_fields"] == []
+    assert contract["requested_fields"] == []
+
+
+def test_entity_contract_resolves_unique_canonical_name_with_sku_field():
     product = _product("AA-100", "晨曦Pro水壶")
     result = build_entity_resolution_contract("晨曦Pro水壶的商品编码是什么", [product])
     assert result.status == "resolved"
     assert result.resolved_sku == "AA-100"
     assert result.matched_by == "canonical_name_exact"
-    assert result.field_type == "model"
+    assert result.field_type == "sku"
 
 
 def test_entity_contract_keeps_version_tokens_distinct_for_exact_variants():

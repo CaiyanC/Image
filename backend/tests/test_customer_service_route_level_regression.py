@@ -40,7 +40,28 @@ from app.models import (
     User,
     UserGroup,
 )
-from app.services import customer_entity_resolution_contract, customer_service_service
+from app.services import customer_agent_planner_service, customer_entity_resolution_contract, customer_service_service
+
+
+@pytest.fixture(autouse=True)
+def _semantic_preplan_out_of_scope_for_legacy_route_regressions(monkeypatch):
+    """Isolate legacy HTTP route assertions from an external model provider.
+
+    This module exercises verified catalogue/query/context executors using an
+    in-memory database. Semantic-preplan schema behavior has dedicated tests
+    with explicit model responses and real dev HTTP acceptance. The SQLite
+    fixture deliberately has no DeepSeek credentials, so treating that as a
+    customer-service outage would replace every downstream regression with an
+    unrelated outage-path assertion.
+    """
+    async def no_semantic_preplan(*_args, **_kwargs):
+        return {"called": False}
+
+    monkeypatch.setattr(
+        customer_agent_planner_service,
+        "plan_customer_question_semantic",
+        no_semantic_preplan,
+    )
 
 
 def _parse_sse_payload(payload: str) -> dict:
@@ -123,7 +144,10 @@ def _add_product(
     if product is None:
         product = Product(id=f"route-{sku}", sku=sku)
         db.add(product)
-    product.barcode = f"barcode-{sku}"
+    # Fixture data must satisfy the same barcode contract as production data;
+    # a decorative ``barcode-<SKU>`` placeholder would make a valid
+    # structured-evidence test exercise the safe-missing branch instead.
+    product.barcode = f"{sum((index + 1) * ord(char) for index, char in enumerate(str(sku))):012d}"
     product.product_name_cn = name
     product.product_name_en = name
     product.brand = "alocs爱路客"
@@ -431,6 +455,50 @@ def test_customer_service_ask_route_level_explicit_sku_compound_query_keeps_exac
         assert re.search(r"(不是炉具|不是炊具|未标注|不建议按酒精炉适配产品理解)", payload["answer"]), payload["answer"]
 
 
+def test_explicit_full_name_with_category_word_prevents_structured_query_preemption(
+    route_client_and_db,
+):
+    client, headers, Session = route_client_and_db
+    with Session() as db:
+        _add_product(
+            db,
+            "ROUTE-NAMED-1",
+            "酒精炉套装",
+            "炉具",
+            "/",
+            "不锈钢",
+            "酒精炉",
+            "完整名称含类目词的单品",
+            "露营烹饪",
+            600,
+        )
+        product = db.query(Product).filter(Product.sku == "ROUTE-NAMED-1").one()
+        db.query(ProductSpecs).filter(ProductSpecs.product_id == product.id).update({"color": "黑色"})
+        db.commit()
+
+    response = client.post(
+        "/api/customer-service/ask?debug=true",
+        json={"question": "酒精炉套装有哪些颜色？"},
+        headers=headers,
+    )
+
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    debug = payload.get("debug") or {}
+    field_contract = debug.get("field_contract") or debug.get("requested_field_contract") or {}
+    entity = debug.get("entity_resolution_contract") or {}
+    assert payload["answer_type"] == "product_detail", payload
+    assert debug.get("agent_mode") != "structured_category_field_filter_query"
+    assert field_contract.get("field_type") == "color"
+    assert entity.get("status") == "resolved"
+    assert entity.get("resolved_sku") == "ROUTE-NAMED-1"
+    assert payload["result_skus"] == ["ROUTE-NAMED-1"]
+    metadata = payload.get("answer_metadata") or {}
+    assert metadata.get("evidence_field") == "color"
+    assert metadata.get("evidence_sku") == "ROUTE-NAMED-1"
+    assert "黑色" in payload["answer"]
+
+
 @pytest.mark.parametrize(
     ("question", "allowed_categories", "forbidden_top_skus", "required_terms"),
     [
@@ -491,7 +559,6 @@ def test_customer_service_ask_route_level_new_domain_targeted_scenarios_keep_cor
     [
         ("CT-T04(BM)适合什么场景？能不能用酒精炉？", "CT-T04(BM)", "heat_source"),
         ("CT-T04-BM适合什么场景？能不能用酒精炉？", "CT-T04(BM)", "heat_source"),
-        ("KD04SS适合露营用吗？", "KD04SS", ""),
         ("KD04SS适合什么场景？能不能用酒精炉？", "KD04SS", "heat_source"),
         ("KD20HM适合什么场景？能不能用酒精炉？", "KD20HM", "heat_source"),
         ("DV01适合什么场景？", "DV01", ""),
@@ -532,6 +599,45 @@ def test_customer_service_ask_route_level_explicit_sku_generalization_keeps_exac
     assert debug_plan.get("product_ref") == expected_sku, debug_plan
     if requested_field:
         assert debug_plan.get("requested_field") in {requested_field, ""}, debug_plan
+
+
+def test_semantic_outage_unclassified_named_product_fails_closed(route_client_and_db, monkeypatch):
+    """No-key test runtime must clarify instead of inventing a scenario rule.
+
+    This case formerly expected the old ``适合 + 任意词 + 用`` fast-path.
+    The live semantic preplan classifies the request as ``usage_scene``; the
+    isolated test configuration deliberately cannot call that model.  Its
+    safe contract is therefore clarification with no product fact, rather
+    than reintroducing a catch-all phrase matcher that also relabels audience
+    requests such as ``更适合谁用``.
+    """
+    async def semantic_outage(*_args, **_kwargs):
+        return {
+            "called": True,
+            "fallback_reason": "llm_error:RuntimeError",
+            "canonical_fields": [],
+            "field_type": "",
+        }
+
+    monkeypatch.setattr(
+        customer_agent_planner_service,
+        "plan_customer_question_semantic",
+        semantic_outage,
+    )
+    client, headers, _ = route_client_and_db
+    response = client.post(
+        "/api/customer-service/ask?debug=true",
+        json={"question": "KD04SS适合露营用吗？"},
+        headers=headers,
+    )
+
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    debug = payload.get("debug") or {}
+    assert payload["answer_type"] == "clarification", payload
+    assert payload.get("result_skus") == [], payload
+    assert debug.get("agent_mode") == "semantic_outage_named_product_field_clarification", payload
+    assert "无法稳定识别" in str(payload.get("answer") or ""), payload
 
 
 def test_customer_service_ask_route_level_scene_x050_compares_griddle_and_cookware_tradeoffs(
@@ -802,6 +908,294 @@ def test_customer_service_ask_route_level_multiturn_recommendation_context_survi
     assert turn3_contract.get("relative_price_preference") == "cheaper_than_anchor"
     assert turn3_contract.get("price_anchor_sku") == payload1["result_skus"][0]
     assert payload1["result_skus"][0] in turn3_contract.get("exclusions", [])
+
+
+def test_recommendation_explanation_survives_intervening_product_field_followup(route_client_and_db):
+    client, headers, _ = route_client_and_db
+
+    first = client.post(
+        "/api/customer-service/ask?debug=true",
+        json={"question": "推荐一款适合露营的烤盘。"},
+        headers=headers,
+    ).json()
+    anchor = first["result_skus"][0]
+    conversation_id = first["conversation_id"]
+
+    detail = client.post(
+        "/api/customer-service/ask?debug=true",
+        json={"question": "第一个是什么材质？", "conversation_id": conversation_id},
+        headers=headers,
+    ).json()
+    assert detail["result_skus"] == [anchor]
+
+    explanation = client.post(
+        "/api/customer-service/ask?debug=true",
+        json={"question": "为什么推荐它？", "conversation_id": conversation_id},
+        headers=headers,
+    ).json()
+    assert explanation["answer_type"] == "recommendation", explanation
+    assert explanation["result_skus"][0] == anchor, explanation
+    assert anchor in explanation["answer"], explanation["answer"]
+    assert [str(row.get("sku") or "").upper() for row in explanation.get("results") or []] == [anchor]
+
+    alternative = client.post(
+        "/api/customer-service/ask?debug=true",
+        json={"question": "换一个。", "conversation_id": conversation_id},
+        headers=headers,
+    ).json()
+    assert alternative["answer_type"] == "recommendation", alternative
+    assert alternative["result_skus"], alternative
+    assert anchor not in alternative["result_skus"], alternative
+
+    replacement_anchor = alternative["result_skus"][0]
+    alternative_meta = next((item for item in alternative.get("sources") or [] if item.get("type") == "agent_meta"), {})
+    alternative_context = alternative_meta.get("recommendation_context") or {}
+    assert alternative_context.get("active_single_product_anchor") == anchor, alternative
+    assert alternative_context.get("replacement_top_sku") == replacement_anchor, alternative
+    replacement_weight = client.post(
+        "/api/customer-service/ask?debug=true",
+        json={"question": "新的这个多重？", "conversation_id": conversation_id},
+        headers=headers,
+    ).json()
+    replacement_debug = replacement_weight.get("debug") or {}
+    replacement_entity = replacement_debug.get("entity_resolution_contract") or {}
+    replacement_metadata = replacement_weight.get("answer_metadata") or {}
+    assert replacement_weight["answer_type"] == "product_detail", replacement_weight
+    assert replacement_weight["result_skus"] == [replacement_anchor], replacement_weight
+    assert (replacement_debug.get("field_contract") or {}).get("field_type") == "weight", replacement_weight
+    assert replacement_entity.get("status") == "resolved", replacement_weight
+    assert replacement_entity.get("resolved_sku") == replacement_anchor, replacement_weight
+    assert replacement_metadata.get("contract_field_type") == "weight", replacement_weight
+    assert replacement_metadata.get("evidence_sku") == replacement_anchor, replacement_weight
+
+
+def test_replacement_recommendation_with_multiple_results_preserves_active_product_anchor():
+    anchor, reason = customer_service_service.update_active_product_anchor(
+        previous_anchor="CF-PG19",
+        current_result_skus=["CW-PF05", "CW-C74"],
+        answer_type="recommendation",
+        user_question="换一个。",
+        replacement_recommendation=True,
+    )
+
+    assert anchor == "CF-PG19"
+    assert reason == "preserved_without_new_single_product"
+
+
+def test_recommendation_formatter_does_not_duplicate_existing_priority_lead():
+    answer = "根据当前资料，优先推荐 瓦片烤盘（CF-PG19），因为它适合露营。"
+    result = customer_service_service._shape_recommendation_output(
+        answer,
+        [{"sku": "CF-PG19", "product_name_cn": "瓦片烤盘"}],
+        [],
+    )
+
+    assert result.count("优先推荐 瓦片烤盘（CF-PG19）") == 1
+
+
+def test_recommendation_formatter_removes_short_duplicate_lead_for_same_top_sku():
+    answer = "优先推荐 瓦片烤盘（CF-PG19）。\n优先推荐 瓦片烤盘（CF-PG19），因为它适合露营。"
+    result = customer_service_service._shape_recommendation_output(
+        answer,
+        [{"sku": "CF-PG19", "product_name_cn": "瓦片烤盘"}],
+        [],
+    )
+
+    assert result == "优先推荐 瓦片烤盘（CF-PG19），因为它适合露营。"
+
+
+def test_recommendation_explanation_formats_json_backed_business_values(route_client_and_db):
+    _, _, Session = route_client_and_db
+    with Session() as db:
+        _add_product(
+            db,
+            "REC-J01",
+            "轻行煎盘",
+            "锅具",
+            "1L",
+            "铝合金",
+            "卡式炉",
+            '["轻量设计", "易收纳"]',
+            '["单人露营", "早餐煎烤"]',
+            300,
+        )
+        db.commit()
+        result = customer_service_service._recommendation_explanation_followup_result(
+            db,
+            "为什么推荐它？",
+            {
+                "ordered_result_skus": ["REC-J01"],
+                "top_recommended_sku": "REC-J01",
+                "last_referenced_sku": "REC-J01",
+            },
+        )
+
+    assert result is not None
+    assert "[\"" not in result["answer"]
+    assert "单人露营，早餐煎烤；轻量设计，易收纳" in result["answer"]
+
+
+def test_ask_stream_pronoun_manual_followup_keeps_exact_color_anchor(route_client_and_db):
+    client, headers, Session = route_client_and_db
+    with Session() as db:
+        _add_product(db, "KW-K31-白", "天鹅壶4杯白", "咖啡器具", "200ml", "304不锈钢", "卡式炉", "白色天鹅设计", "露营咖啡", 601)
+        _add_product(db, "KW-K31-黑", "天鹅壶4杯-黑色", "咖啡器具", "200ml", "304不锈钢", "卡式炉", "黑色天鹅设计", "露营咖啡", 601)
+        db.commit()
+
+    first_response = client.post(
+        "/api/customer-service/ask-stream",
+        json={"question": "天鹅壶4杯黑能用卡式炉吗？"},
+        headers=headers,
+    )
+    first = _parse_sse_payload(first_response.text)
+    assert first["result_skus"] == ["KW-K31-黑"]
+
+    second_response = client.post(
+        "/api/customer-service/ask-stream",
+        json={"question": "它多重？", "conversation_id": first["conversation_id"]},
+        headers=headers,
+    )
+    second = _parse_sse_payload(second_response.text)
+    assert second["result_skus"] == ["KW-K31-黑"]
+
+    third_response = client.post(
+        "/api/customer-service/ask-stream",
+        json={"question": "它有用户手册吗？", "conversation_id": first["conversation_id"]},
+        headers=headers,
+    )
+    third = _parse_sse_payload(third_response.text)
+    assert third["result_skus"] == ["KW-K31-黑"], third
+    assert "KW-K31-白" not in third["answer"]
+    third_debug = third.get("debug") or {}
+    assert third_debug.get("agent_mode") == "recommendation_context_product_field"
+    assert (third_debug.get("field_contract") or {}).get("field_type") == "manual", third
+    third_entity = third_debug.get("entity_resolution_contract") or {}
+    assert third_entity.get("status") == "resolved", third
+    assert third_entity.get("resolved_sku") == "KW-K31-黑", third
+    assert third_entity.get("field_type") == "manual", third
+    assert third_debug.get("binding_provenance") == "resolved_entity_contract", third
+    assert (third.get("answer_metadata") or {}).get("contract_field_type") == "manual", third
+
+    fourth_response = client.post(
+        "/api/customer-service/ask-stream",
+        json={"question": "它适合露营吗？", "conversation_id": first["conversation_id"]},
+        headers=headers,
+    )
+    fourth = _parse_sse_payload(fourth_response.text)
+    metadata = fourth.get("answer_metadata") or {}
+    assert fourth["result_skus"] == ["KW-K31-黑"], fourth
+    assert metadata.get("evidence_sku") == "KW-K31-黑", fourth
+    assert metadata.get("evidence_field") == "usage_scene", fourth
+
+
+@pytest.mark.parametrize(
+    ("question", "field_type"),
+    [
+        ("瓦片烤盘Pro包含哪些配件？", "accessories"),
+        ("瓦片烤盘Pro包装里有什么？", "accessories"),
+        ("瓦片烤盘Pro有没有赠品？", "gift"),
+        ("瓦片烤盘Pro有没有用户手册？", "manual"),
+    ],
+)
+def test_named_non_usage_fields_bypass_usage_care_fast_path(route_client_and_db, question, field_type):
+    client, headers, Session = route_client_and_db
+    with Session() as db:
+        _add_product(db, "CF-PG19", "瓦片烤盘", "锅具", "/", "铝合金", "明火", "基础烤盘", "露营煎烤", 1000)
+        _add_product(db, "CF-PG19PRO", "瓦片烤盘Pro", "锅具", "/", "铝合金", "明火", "升级烤盘", "露营煎烤", 1100)
+        db.commit()
+    response = client.post(
+        "/api/customer-service/ask?debug=true",
+        json={"question": question},
+        headers=headers,
+    )
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    debug = payload.get("debug") or {}
+    contract = debug.get("entity_resolution_contract") or {}
+    metadata = payload.get("answer_metadata") or {}
+
+    assert debug.get("agent_mode") != "product_usage_care_fast_path", payload
+    assert contract.get("status") == "resolved", payload
+    assert contract.get("resolved_sku") == "CF-PG19PRO", payload
+    assert contract.get("field_type") == field_type, payload
+    assert payload.get("candidate_skus") == ["CF-PG19PRO"], payload
+    assert payload.get("result_skus") == ["CF-PG19PRO"], payload
+    assert metadata.get("field_evidence_missing") is True, payload
+    assert metadata.get("evidence_sku") is None, payload
+
+
+def test_family_accessories_request_stays_ambiguous(route_client_and_db):
+    client, headers, Session = route_client_and_db
+    with Session() as db:
+        _add_product(db, "CF-PG19", "瓦片盘基础款", "锅具", "/", "铝合金", "明火", "基础烤盘", "露营煎烤", 1000)
+        _add_product(db, "CF-PG19PRO", "瓦片盘Pro", "锅具", "/", "铝合金", "明火", "升级烤盘", "露营煎烤", 1100)
+        db.commit()
+    response = client.post(
+        "/api/customer-service/ask?debug=true",
+        json={"question": "瓦片盘包含哪些配件？"},
+        headers=headers,
+    )
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    contract = (payload.get("debug") or {}).get("entity_resolution_contract") or {}
+
+    assert contract.get("status") == "ambiguous", payload
+    assert set(payload.get("candidate_skus") or []) == {"CF-PG19", "CF-PG19PRO"}, payload
+    assert payload.get("result_skus") == [], payload
+
+
+@pytest.mark.parametrize("question", ["瓦片烤盘Pro怎么清洁？", "瓦片烤盘Pro怎么使用？"])
+def test_named_usage_questions_use_resolved_detail_contract(route_client_and_db, question):
+    client, headers, Session = route_client_and_db
+    with Session() as db:
+        _add_product(db, "CF-PG19PRO", "瓦片烤盘Pro", "锅具", "/", "铝合金", "明火", "升级烤盘", "露营煎烤", 1100)
+        _add_product_qa(db, "CF-PG19PRO", "瓦片烤盘Pro怎么清洁？", "使用后用温水和软布清洁并擦干。", tags="清洁,使用")
+        _add_product_qa(db, "CF-PG19PRO", "瓦片烤盘Pro怎么使用？", "使用前先清洁并擦干烤盘。", tags="使用,保养")
+        db.commit()
+    response = client.post(
+        "/api/customer-service/ask?debug=true",
+        json={"question": question},
+        headers=headers,
+    )
+    assert response.status_code == 200, response.text
+    payload = response.json()
+
+    debug = payload.get("debug") or {}
+    contract = debug.get("entity_resolution_contract") or {}
+    expected_field = "cleaning" if "清洁" in question else "usage_instruction"
+    assert debug.get("agent_mode") == "resolved_entity_detail_contract", payload
+    assert contract.get("status") == "resolved", payload
+    assert contract.get("resolved_sku") == "CF-PG19PRO", payload
+    assert contract.get("field_type") == expected_field, payload
+    assert payload.get("result_skus") == ["CF-PG19PRO"], payload
+
+
+def test_product_switch_prefix_keeps_exact_variant_identity(route_client_and_db):
+    client, headers, Session = route_client_and_db
+    with Session() as db:
+        _add_product(db, "KW-K31-白", "天鹅壶4杯白", "咖啡器具", "200ml", "304不锈钢", "卡式炉", "白色天鹅设计", "露营咖啡", 601)
+        _add_product(db, "KW-K31-黑", "天鹅壶4杯-黑色", "咖啡器具", "200ml", "304不锈钢", "卡式炉", "黑色天鹅设计", "露营咖啡", 601)
+        db.commit()
+
+    first = client.post(
+        "/api/customer-service/ask?debug=true",
+        json={"question": "瓦片烤盘是什么材质？"},
+        headers=headers,
+    )
+    assert first.status_code == 200, first.text
+    conversation_id = first.json()["conversation_id"]
+
+    response = client.post(
+        "/api/customer-service/ask?debug=true",
+        json={"question": "再看天鹅壶4杯黑。", "conversation_id": conversation_id},
+        headers=headers,
+    )
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    contract = ((payload.get("debug") or {}).get("entity_resolution_contract") or {})
+    assert payload.get("result_skus") == ["KW-K31-黑"], payload
+    assert contract.get("status") == "resolved", payload
+    assert contract.get("resolved_sku") == "KW-K31-黑", payload
 
 
 def test_customer_service_ask_route_level_shelter_count_keeps_count_and_display_label(
@@ -1217,6 +1611,697 @@ def test_natural_field_phrase_routes_keep_exact_product_identity(
         assert (payload.get("debug") or {}).get("agent_mode") != forbidden_mode, payload
 
 
+def test_people_field_missing_evidence_does_not_infer_count_from_variant_or_features(
+    route_client_and_db,
+):
+    client, headers, Session = route_client_and_db
+    with Session() as db:
+        product = db.query(Product).filter(Product.sku == "KW-K32-白").one()
+        product.product_name_cn = "天鹅壶9杯白"
+        specs = db.query(ProductSpecs).filter(ProductSpecs.product_id == product.id).one()
+        specs.capacity = "450ML"
+        specs.technical_advantages = "满足 9 人咖啡需求"
+        business = db.query(ProductBusiness).filter(ProductBusiness.product_id == product.id).one()
+        business.target_audience = "户外用户"
+        business.positioning = "9杯手冲咖啡壶"
+        db.commit()
+
+    payload = client.post(
+        "/api/customer-service/ask?debug=true",
+        json={"question": "天鹅壶9杯白适合几个人？"},
+        headers=headers,
+    ).json()
+
+    metadata = payload.get("answer_metadata") or {}
+    answer = str(payload.get("answer") or "")
+    assert payload.get("result_skus") == ["KW-K32-白"], payload
+    assert metadata.get("field_evidence_missing") is True, metadata
+    assert metadata.get("field_evidence_match") is False, metadata
+    assert metadata.get("evidence_sku") is None, metadata
+    assert "无法确认" in answer or "未显示" in answer or "未标注" in answer, payload
+    assert "9 人" not in answer and "9人" not in answer, payload
+
+
+def test_people_field_uses_explicit_same_sku_target_audience_evidence(
+    route_client_and_db,
+):
+    client, headers, Session = route_client_and_db
+    with Session() as db:
+        product = db.query(Product).filter(Product.sku == "KW-K31-白").one()
+        product.product_name_cn = "天鹅壶4杯白"
+        business = db.query(ProductBusiness).filter(ProductBusiness.product_id == product.id).one()
+        business.target_audience = "适合2-3人使用"
+        db.commit()
+
+    payload = client.post(
+        "/api/customer-service/ask?debug=true",
+        json={"question": "天鹅壶4杯白适合几个人？"},
+        headers=headers,
+    ).json()
+
+    metadata = payload.get("answer_metadata") or {}
+    assert payload.get("result_skus") == ["KW-K31-白"], payload
+    assert metadata.get("field_evidence_match") is True, metadata
+    assert metadata.get("field_evidence_missing") is False, metadata
+    assert metadata.get("evidence_source") == "business.target_audience", metadata
+    assert metadata.get("evidence_sku") == "KW-K31-白", metadata
+    assert "2-3人" in str(payload.get("answer") or "").replace(" ", ""), payload
+
+
+def test_explicit_cup_and_color_variant_uses_same_sku_material_evidence(
+    route_client_and_db,
+):
+    client, headers, Session = route_client_and_db
+    variants = (
+        ("KW-K31-白", "天鹅壶4杯-白色", "白色"),
+        ("KW-K32-白", "天鹅壶9杯-白色", "白色"),
+        ("KW-K31-黑", "天鹅壶4杯-黑色", "黑色"),
+        ("KW-K32-黑", "天鹅壶9杯-黑色", "黑色"),
+    )
+    with Session() as db:
+        for sku, name, color in variants:
+            product = db.query(Product).filter(Product.sku == sku).one()
+            product.product_name_cn = name
+            specs = db.query(ProductSpecs).filter(ProductSpecs.product_id == product.id).one()
+            specs.color = color
+            specs.body_material = "304不锈钢"
+        db.commit()
+
+    payload = client.post(
+        "/api/customer-service/ask?debug=true",
+        json={"question": "天鹅壶4杯黑是什么材质？"},
+        headers=headers,
+    ).json()
+
+    metadata = payload.get("answer_metadata") or {}
+    contract = (payload.get("debug") or {}).get("entity_resolution_contract") or {}
+    assert payload.get("answer_type") == "product_detail", payload
+    assert contract.get("status") == "resolved", contract
+    assert contract.get("resolved_sku") == "KW-K31-黑", contract
+    assert contract.get("matched_by") == "normalized_alias_exact", contract
+    assert contract.get("resolver_candidate_skus") == ["KW-K31-黑"], contract
+    assert metadata.get("evidence_source") == "specs.body_material", metadata
+    assert metadata.get("evidence_sku") == "KW-K31-黑", metadata
+    assert metadata.get("field_evidence_match") is True, metadata
+    assert payload.get("candidate_skus") == ["KW-K31-黑"], payload
+    assert payload.get("result_skus") == ["KW-K31-黑"], payload
+    assert "304不锈钢" in str(payload.get("answer") or ""), payload
+
+
+def test_variant_resolution_keeps_missing_or_nonexistent_cup_unresolved(
+    route_client_and_db,
+):
+    client, headers, Session = route_client_and_db
+    with Session() as db:
+        for sku, name in (
+            ("KW-K31-黑", "天鹅壶4杯-黑色"),
+            ("KW-K32-黑", "天鹅壶9杯-黑色"),
+        ):
+            db.query(Product).filter(Product.sku == sku).one().product_name_cn = name
+        db.commit()
+
+    ambiguous = client.post(
+        "/api/customer-service/ask?debug=true",
+        json={"question": "天鹅壶黑色是什么材质？"},
+        headers=headers,
+    ).json()
+    nonexistent = client.post(
+        "/api/customer-service/ask?debug=true",
+        json={"question": "天鹅壶6杯黑是什么材质？"},
+        headers=headers,
+    ).json()
+
+    assert ambiguous.get("result_skus") == [], ambiguous
+    assert ambiguous.get("candidate_skus") == ["KW-K31-黑", "KW-K32-黑"], ambiguous
+    assert nonexistent.get("result_skus") == [], nonexistent
+    assert nonexistent.get("candidate_skus") == [], nonexistent
+
+
+def test_family_shorthand_with_cup_but_no_color_stays_in_entity_detail_clarification(
+    route_client_and_db,
+):
+    client, headers, Session = route_client_and_db
+    with Session() as db:
+        for sku, name, color in (
+            ("KW-K31-白", "天鹅壶4杯-白色", "白色"),
+            ("KW-K32-白", "天鹅壶9杯-白色", "白色"),
+            ("KW-K31-黑", "天鹅壶4杯-黑色", "黑色"),
+            ("KW-K32-黑", "天鹅壶9杯-黑色", "黑色"),
+        ):
+            product = db.query(Product).filter(Product.sku == sku).one()
+            product.product_name_cn = name
+            specs = db.query(ProductSpecs).filter(ProductSpecs.product_id == product.id).one()
+            specs.color = color
+            specs.heat_source = "明火直烧、卡式炉"
+        db.commit()
+
+    payload = client.post(
+        "/api/customer-service/ask?debug=true",
+        json={"question": "天鹅9杯能明火吗？"},
+        headers=headers,
+    ).json()
+
+    contract = (payload.get("debug") or {}).get("entity_resolution_contract") or {}
+    assert payload.get("intent") == "clarify", payload
+    assert payload.get("answer_type") == "clarification", payload
+    assert (payload.get("debug") or {}).get("agent_mode") == "entity_state_detail_ambiguous", payload
+    assert contract.get("field_type") == "heat_source", contract
+    assert contract.get("status") == "ambiguous", contract
+    assert contract.get("resolver_candidate_skus") == ["KW-K32-白", "KW-K32-黑"], contract
+    assert payload.get("candidate_skus") == ["KW-K32-白", "KW-K32-黑"], payload
+    assert payload.get("result_skus") == [], payload
+    assert "KW-K31" not in str(payload.get("answer") or ""), payload
+
+
+@pytest.mark.parametrize(
+    ("question", "expected_sku"),
+    [
+        ("天鹅9杯白能明火吗？", "KW-K32-白"),
+        ("天鹅9杯黑能明火吗？", "KW-K32-黑"),
+    ],
+)
+def test_family_shorthand_complete_variant_uses_same_sku_heat_source(
+    route_client_and_db,
+    question,
+    expected_sku,
+):
+    client, headers, Session = route_client_and_db
+    with Session() as db:
+        for sku, name, color in (
+            ("KW-K32-白", "天鹅壶9杯-白色", "白色"),
+            ("KW-K32-黑", "天鹅壶9杯-黑色", "黑色"),
+        ):
+            product = db.query(Product).filter(Product.sku == sku).one()
+            product.product_name_cn = name
+            specs = db.query(ProductSpecs).filter(ProductSpecs.product_id == product.id).one()
+            specs.color = color
+            specs.heat_source = "明火直烧、卡式炉"
+        db.commit()
+
+    payload = client.post(
+        "/api/customer-service/ask?debug=true",
+        json={"question": question},
+        headers=headers,
+    ).json()
+
+    metadata = payload.get("answer_metadata") or {}
+    contract = (payload.get("debug") or {}).get("entity_resolution_contract") or {}
+    assert payload.get("answer_type") == "product_detail", payload
+    assert contract.get("status") == "resolved", contract
+    assert contract.get("resolved_sku") == expected_sku, contract
+    assert contract.get("matched_by") == "normalized_alias_exact", contract
+    assert metadata.get("evidence_source") == "specs.heat_source", metadata
+    assert metadata.get("evidence_sku") == expected_sku, metadata
+    assert payload.get("candidate_skus") == [expected_sku], payload
+    assert payload.get("result_skus") == [expected_sku], payload
+
+
+def test_family_shorthand_nonexistent_spec_never_falls_back_to_catalog_results(
+    route_client_and_db,
+):
+    client, headers, Session = route_client_and_db
+    with Session() as db:
+        for sku, name in (
+            ("KW-K31-白", "天鹅壶4杯-白色"),
+            ("KW-K32-白", "天鹅壶9杯-白色"),
+        ):
+            db.query(Product).filter(Product.sku == sku).one().product_name_cn = name
+        db.commit()
+
+    payload = client.post(
+        "/api/customer-service/ask?debug=true",
+        json={"question": "天鹅6杯能明火吗？"},
+        headers=headers,
+    ).json()
+
+    contract = (payload.get("debug") or {}).get("entity_resolution_contract") or {}
+    assert payload.get("intent") == "clarify", payload
+    assert contract.get("status") == "unresolved", contract
+    assert contract.get("status_reason") == "explicit_attribute_conflict", contract
+    assert payload.get("candidate_skus") == [], payload
+    assert payload.get("result_skus") == [], payload
+    assert (payload.get("debug") or {}).get("primary_source") != "query_products", payload
+
+
+def test_explicit_variant_conflict_blocks_product_qa_identity_and_result_skus(
+    route_client_and_db,
+):
+    client, headers, _ = route_client_and_db
+
+    conflict = client.post(
+        "/api/customer-service/ask?debug=true",
+        json={"question": "瓦片烤盘9杯白多重？"},
+        headers=headers,
+    ).json()
+    normal = client.post(
+        "/api/customer-service/ask?debug=true",
+        json={"question": "瓦片烤盘多重？"},
+        headers=headers,
+    ).json()
+
+    conflict_contract = (conflict.get("debug") or {}).get("entity_resolution_contract") or {}
+    assert conflict_contract.get("status") == "unresolved", conflict
+    assert conflict_contract.get("status_reason") == "explicit_attribute_conflict", conflict_contract
+    assert conflict.get("candidate_skus") == [], conflict
+    assert conflict.get("result_skus") == [], conflict
+    assert (conflict.get("debug") or {}).get("agent_mode") != "product_qa_fast_path", conflict
+    assert "1.00kg" not in str(conflict.get("answer") or ""), conflict
+
+    assert normal.get("result_skus") == ["CF-PG19"], normal
+    assert str(normal.get("answer") or ""), normal
+
+
+@pytest.mark.parametrize(
+    "question",
+    [
+        "瓦片烤盘是用什么做的？",
+        "瓦片烤盘由什么做成？",
+        "瓦片烤盘是什么做的？",
+        "瓦片烤盘用什么制成？",
+    ],
+)
+def test_material_predicate_route_uses_structured_material_evidence(route_client_and_db, question):
+    client, headers, _ = route_client_and_db
+    response = client.post(
+        "/api/customer-service/ask?debug=true",
+        json={"question": question},
+        headers=headers,
+    )
+
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    contract = (payload.get("debug") or {}).get("entity_resolution_contract") or {}
+    evidence = payload.get("evidence") or []
+    assert payload.get("result_skus") == ["CF-PG19"], payload
+    assert contract.get("field_type") == "material", contract
+    assert contract.get("matched_by") == "canonical_name_exact", contract
+    assert "铝合金" in str(payload.get("answer") or ""), payload
+    assert (payload.get("debug") or {}).get("agent_mode") != "product_qa_fast_path", payload
+    assert any(item.get("sku") == "CF-PG19" and item.get("field_label") == "材质" for item in evidence), evidence
+    assert "核心卖点" not in str(payload.get("answer") or ""), payload
+
+
+@pytest.mark.parametrize(
+    "question",
+    [
+        "瓦片盘是用什么做的？",
+        "烤盘是用什么做的？",
+        "不存在的烤盘是用什么做的？",
+    ],
+)
+def test_material_predicate_unresolved_entities_do_not_fall_back_to_recommendations(
+    route_client_and_db,
+    question,
+):
+    client, headers, _ = route_client_and_db
+    response = client.post(
+        "/api/customer-service/ask?debug=true",
+        json={"question": question},
+        headers=headers,
+    )
+
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    assert payload.get("result_skus") == [], payload
+    assert payload.get("answer_type") != "product_query", payload
+    assert payload.get("intent") != "query_products", payload
+
+
+@pytest.mark.parametrize(
+    ("resolver_candidate_skus", "expected"),
+    [
+        (["SKU-A"], []),
+        (["SKU-A", "sku-a", "SKU-A"], []),
+        (["SKU-A", "SKU-B", "sku-a"], ["SKU-A", "SKU-B"]),
+    ],
+)
+def test_phase2_displayable_clarification_candidates_require_distinct_multiple_skus(
+    resolver_candidate_skus,
+    expected,
+):
+    class Contract:
+        status = "ambiguous"
+
+    contract = Contract()
+    contract.resolver_candidate_skus = resolver_candidate_skus
+
+    assert customer_service_service._displayable_phase2_clarification_candidate_skus(contract) == expected
+
+
+def test_heat_source_predicate_exact_product_precedes_griddle_catalog_route(route_client_and_db):
+    client, headers, _ = route_client_and_db
+    payload = client.post(
+        "/api/customer-service/ask?debug=true",
+        json={"question": "瓦片烤盘支持哪些炉子？"},
+        headers=headers,
+    ).json()
+
+    metadata = payload.get("answer_metadata") or {}
+    contract = (payload.get("debug") or {}).get("entity_resolution_contract") or {}
+    assert payload.get("answer_type") == "product_detail", payload
+    assert payload.get("result_skus") == ["CF-PG19"], payload
+    assert contract.get("matched_by") == "canonical_name_exact", contract
+    assert contract.get("field_type") == "heat_source", contract
+    assert metadata.get("evidence_source") == "specs.heat_source", metadata
+    assert metadata.get("evidence_sku") == "CF-PG19", metadata
+    assert "燃气炉" in str(payload.get("answer") or ""), payload
+    assert (payload.get("debug") or {}).get("agent_mode") != "structured_griddle_stove_query", payload
+
+
+def test_heat_source_yes_no_exact_product_uses_same_sku_evidence(route_client_and_db):
+    client, headers, Session = route_client_and_db
+    with Session() as db:
+        product = db.query(Product).filter(Product.sku == "CF-PG19").one()
+        specs = db.query(ProductSpecs).filter(ProductSpecs.product_id == product.id).one()
+        specs.heat_source = "燃气炉、卡式炉、电磁炉"
+        db.commit()
+
+    payload = client.post(
+        "/api/customer-service/ask?debug=true",
+        json={"question": "瓦片烤盘可以放电磁炉上吗？"},
+        headers=headers,
+    ).json()
+
+    metadata = payload.get("answer_metadata") or {}
+    contract = (payload.get("debug") or {}).get("entity_resolution_contract") or {}
+    assert payload.get("answer_type") == "product_detail", payload
+    assert payload.get("result_skus") == ["CF-PG19"], payload
+    assert contract.get("matched_by") == "canonical_name_exact", contract
+    assert contract.get("field_type") == "heat_source", contract
+    assert metadata.get("evidence_source") == "specs.heat_source", metadata
+    assert metadata.get("evidence_sku") == "CF-PG19", metadata
+    assert "电磁炉" in str(payload.get("answer") or ""), payload
+    assert (payload.get("debug") or {}).get("agent_mode") == "resolved_entity_detail_contract", payload
+
+
+@pytest.mark.parametrize(
+    ("question", "expected_sku", "forbidden_sku"),
+    [
+        ("瓦片烤盘下单后几天发出？", "CF-PG19", "CF-PG19PRO"),
+        ("瓦片烤盘Pro什么时候发货？", "CF-PG19PRO", "CF-PG19"),
+    ],
+)
+def test_shipping_exact_missing_field_keeps_single_product_identity(
+    route_client_and_db,
+    question,
+    expected_sku,
+    forbidden_sku,
+):
+    client, headers, Session = route_client_and_db
+    with Session() as db:
+        if db.query(Product).filter(Product.sku == "CF-PG19PRO").first() is None:
+            _add_product(
+                db,
+                "CF-PG19PRO",
+                "瓦片烤盘Pro",
+                "锅具",
+                "9英寸",
+                "铝合金",
+                "燃气炉",
+                "Pro烤盘",
+                "露营煎烤",
+                820,
+            )
+            db.commit()
+
+    payload = client.post(
+        "/api/customer-service/ask?debug=true",
+        json={"question": question},
+        headers=headers,
+    ).json()
+
+    metadata = payload.get("answer_metadata") or {}
+    contract = (payload.get("debug") or {}).get("entity_resolution_contract") or {}
+    assert payload.get("answer_type") == "product_detail", payload
+    assert contract.get("matched_by") == "canonical_name_exact", contract
+    assert contract.get("resolved_sku") == expected_sku, contract
+    assert contract.get("field_type") == "shipping", contract
+    assert payload.get("candidate_skus") == [expected_sku], payload
+    assert payload.get("result_skus") == [expected_sku], payload
+    assert forbidden_sku not in payload.get("candidate_skus", []), payload
+    assert forbidden_sku not in payload.get("result_skus", []), payload
+    assert metadata.get("evidence_status") == "missing", metadata
+    assert any(term in str(payload.get("answer") or "") for term in ("未标注", "未维护", "无法确认")), payload
+
+
+@pytest.mark.parametrize(
+    "question",
+    [
+        "不存在的烤盘什么时候发货？",
+        "烤盘一般多久发货？",
+    ],
+)
+def test_shipping_unresolved_or_generic_subject_does_not_bind_product(route_client_and_db, question):
+    client, headers, _ = route_client_and_db
+    payload = client.post(
+        "/api/customer-service/ask?debug=true",
+        json={"question": question},
+        headers=headers,
+    ).json()
+
+    assert payload.get("candidate_skus") == [], payload
+    assert payload.get("result_skus") == [], payload
+    assert payload.get("answer_type") in {"clarification", "product_detail"}, payload
+
+
+def test_dimensions_predicate_exact_product_uses_body_dimensions_only(route_client_and_db):
+    client, headers, Session = route_client_and_db
+    with Session() as db:
+        product = db.query(Product).filter(Product.sku == "CF-PG19").one()
+        specs = db.query(ProductSpecs).filter(ProductSpecs.product_id == product.id).one()
+        specs.size_info = json.dumps(
+            [
+                {"label": "展开尺寸", "value": "32 x 32 x 3.9", "unit": "cm"},
+                {"label": "包装尺寸", "value": "35 x 35 x 6", "unit": "cm"},
+            ],
+            ensure_ascii=False,
+        )
+        db.commit()
+
+    payload = client.post(
+        "/api/customer-service/ask?debug=true",
+        json={"question": "瓦片烤盘多大尺寸？"},
+        headers=headers,
+    ).json()
+
+    metadata = payload.get("answer_metadata") or {}
+    contract = (payload.get("debug") or {}).get("entity_resolution_contract") or {}
+    assert payload.get("answer_type") == "product_detail", payload
+    assert contract.get("matched_by") == "canonical_name_exact", contract
+    assert contract.get("resolved_sku") == "CF-PG19", contract
+    assert contract.get("field_type") == "dimensions", contract
+    assert payload.get("candidate_skus") == ["CF-PG19"], payload
+    assert payload.get("result_skus") == ["CF-PG19"], payload
+    assert metadata.get("evidence_source") == "specs.size_info", metadata
+    assert metadata.get("evidence_scope") == "subject", metadata
+    assert metadata.get("evidence_sku") == "CF-PG19", metadata
+    assert metadata.get("evidence_label") == "展开尺寸", metadata
+    assert metadata.get("evidence_unit") == "cm", metadata
+    assert metadata.get("evidence_subtype") == "expanded", metadata
+    assert metadata.get("dimension_generic_fallback") is True, metadata
+    assert "32 x 32 x 3.9" in str(payload.get("answer") or ""), payload
+    assert "展开尺寸" in str(payload.get("answer") or ""), payload
+    assert "cm" in str(payload.get("answer") or ""), payload
+    assert "未单独" in str(payload.get("answer") or ""), payload
+    assert "35 x 35 x 6" not in str(payload.get("answer") or ""), payload
+
+
+def test_dimensions_predicate_keeps_pro_identity_and_evidence_isolated(route_client_and_db):
+    client, headers, Session = route_client_and_db
+    with Session() as db:
+        product = db.query(Product).filter(Product.sku == "CF-PG19PRO").first()
+        if product is None:
+            _add_product(
+                db,
+                "CF-PG19PRO",
+                "瓦片烤盘Pro",
+                "锅具",
+                "9英寸",
+                "铝合金",
+                "燃气炉",
+                "Pro烤盘",
+                "露营煎烤",
+                820,
+            )
+            db.flush()
+            product = db.query(Product).filter(Product.sku == "CF-PG19PRO").one()
+        specs = db.query(ProductSpecs).filter(ProductSpecs.product_id == product.id).one()
+        specs.size_info = json.dumps(
+            [{"label": "展开尺寸", "value": "36 x 36 x 4.2", "unit": "cm"}],
+            ensure_ascii=False,
+        )
+        db.commit()
+
+    payload = client.post(
+        "/api/customer-service/ask?debug=true",
+        json={"question": "瓦片烤盘Pro多大尺寸？"},
+        headers=headers,
+    ).json()
+
+    metadata = payload.get("answer_metadata") or {}
+    contract = (payload.get("debug") or {}).get("entity_resolution_contract") or {}
+    assert contract.get("matched_by") == "canonical_name_exact", contract
+    assert contract.get("resolved_sku") == "CF-PG19PRO", contract
+    assert payload.get("candidate_skus") == ["CF-PG19PRO"], payload
+    assert payload.get("result_skus") == ["CF-PG19PRO"], payload
+    assert metadata.get("evidence_sku") == "CF-PG19PRO", metadata
+    assert "36 x 36 x 4.2" in str(payload.get("answer") or ""), payload
+    assert "CF-PG19" not in payload.get("result_skus", []), payload
+
+
+@pytest.mark.parametrize(
+    "question",
+    [
+        "瓦片盘多大尺寸？",
+        "不存在的烤盘多大尺寸？",
+        "烤盘一般多大尺寸？",
+    ],
+)
+def test_dimensions_predicate_weak_unresolved_or_generic_subject_stays_safe(
+    route_client_and_db,
+    question,
+):
+    client, headers, _ = route_client_and_db
+    payload = client.post(
+        "/api/customer-service/ask?debug=true",
+        json={"question": question},
+        headers=headers,
+    ).json()
+
+    assert payload.get("candidate_skus") == [], payload
+    assert payload.get("result_skus") == [], payload
+    assert payload.get("answer_type") in {"clarification", "product_detail"}, payload
+
+
+@pytest.mark.parametrize(
+    "question",
+    [
+        "瓦片盘支持哪些炉子？",
+        "不存在的烤盘支持哪些炉子？",
+        "瓦片盘可以放电磁炉上吗？",
+        "不存在的烤盘可以放电磁炉上吗？",
+    ],
+)
+def test_heat_source_predicate_unresolved_entities_do_not_become_catalog_results(
+    route_client_and_db,
+    question,
+):
+    client, headers, _ = route_client_and_db
+    payload = client.post(
+        "/api/customer-service/ask?debug=true",
+        json={"question": question},
+        headers=headers,
+    ).json()
+
+    assert payload.get("answer_type") == "clarification", payload
+    assert payload.get("result_skus") == [], payload
+    assert (payload.get("debug") or {}).get("agent_mode") != "structured_griddle_stove_query", payload
+
+
+@pytest.mark.parametrize(
+    "question",
+    [
+        "哪些烤盘支持卡式炉？",
+        "有哪些适合卡式炉的烤盘？",
+        "哪些烤盘可以放电磁炉上？",
+        "有哪些烤盘能用卡式炉？",
+    ],
+)
+def test_heat_source_category_filter_preserves_product_category_role(route_client_and_db, question):
+    client, headers, Session = route_client_and_db
+    with Session() as db:
+        _add_product(
+            db,
+            "GRIDDLE-CANISTER-1",
+            "多热源适配测试烤盘",
+            "锅具",
+            "9英寸",
+            "铝合金",
+            "卡式炉、电磁炉、明火",
+            "烤盘 煎烤盘",
+            "露营煎烤",
+            680,
+        )
+        db.commit()
+
+    payload = client.post(
+        "/api/customer-service/ask?debug=true",
+        json={"question": question},
+        headers=headers,
+    ).json()
+
+    metadata = payload.get("answer_metadata") or {}
+    rows = payload.get("results") or []
+    assert payload.get("answer_type") == "product_query", payload
+    assert metadata.get("product_ref") == "烤盘", payload
+    assert rows, payload
+    assert all(str(row.get("category") or "") != "炉具" for row in rows), rows
+    assert all("烤盘" in " ".join(str(row.get(key) or "") for key in ("product_name_cn", "sub_category", "features")) for row in rows), rows
+    assert "GRIDDLE-CANISTER-1" in payload.get("result_skus", []), payload
+    assert "STV-001" not in payload.get("result_skus", []), payload
+
+
+def test_structured_target_category_distinguishes_product_category_from_heat_source_value():
+    assert customer_service_service._structured_target_category_from_question("哪些烤盘支持卡式炉？") == "烤盘"
+    assert customer_service_service._structured_target_category_from_question("有哪些适合卡式炉的烤盘？") == "烤盘"
+    assert customer_service_service._structured_target_category_from_question("推荐几款能用电磁炉的烤盘") == "烤盘"
+    assert customer_service_service._structured_target_category_from_question("哪些炉具适合烤盘？") == "炉具"
+
+    recommendation_contract = customer_service_service._structured_hard_filter_contract("推荐几款能用电磁炉的烤盘")
+    assert recommendation_contract.get("product_ref") == "烤盘", recommendation_contract
+    assert recommendation_contract.get("filters", {}).get("product.category") == "烤盘", recommendation_contract
+    assert recommendation_contract.get("filters", {}).get("specs.heat_source") == "电磁炉", recommendation_contract
+
+
+def test_structured_evidence_precedes_qa_for_selling_point_and_preserves_usage_route(route_client_and_db):
+    client, headers, Session = route_client_and_db
+    with Session() as db:
+        _add_product_qa(
+            db,
+            "CF-PG19",
+            "瓦片烤盘有什么核心卖点？",
+            "瓦片烤盘的核心卖点是轻便易携带。",
+            tags="卖点",
+            priority=300,
+        )
+        _add_product_qa(
+            db,
+            "CF-PG19",
+            "瓦片烤盘怎么使用？",
+            "使用前先清洁并擦干烤盘。",
+            tags="使用,保养",
+            priority=300,
+        )
+        db.commit()
+
+    selling_point = client.post(
+        "/api/customer-service/ask?debug=true",
+        json={"question": "瓦片烤盘有什么特点？"},
+        headers=headers,
+    ).json()
+    usage = client.post(
+        "/api/customer-service/ask?debug=true",
+        json={"question": "瓦片烤盘怎么使用？"},
+        headers=headers,
+    ).json()
+
+    assert "核心卖点" in str(selling_point.get("answer") or ""), selling_point
+    selling_debug = selling_point.get("debug") or {}
+    selling_contract = selling_debug.get("entity_resolution_contract") or {}
+    selling_metadata = selling_point.get("answer_metadata") or {}
+    assert selling_debug.get("agent_mode") == "resolved_entity_detail_contract", selling_point
+    assert selling_contract.get("resolved_sku") == "CF-PG19", selling_point
+    assert selling_contract.get("field_type") == "selling_point", selling_point
+    assert selling_point.get("result_skus") == ["CF-PG19"], selling_point
+    assert selling_metadata.get("contract_field_type") == "selling_point", selling_point
+    # Field-stage evidence policy is structured-column first. Same-SKU QA
+    # remains a fallback only when the formal business column is absent or
+    # invalid, so it cannot displace product_business.top_selling_points.
+    assert selling_metadata.get("evidence_source") == "business.top_selling_points", selling_point
+    assert "清洁" in str(usage.get("answer") or ""), usage
+    assert "核心卖点" not in str(usage.get("answer") or ""), usage
+
+
 def test_shipping_signal_does_not_disable_real_weather_or_selling_point_routes(route_client_and_db):
     client, headers, Session = route_client_and_db
     with Session() as db:
@@ -1242,7 +2327,15 @@ def test_shipping_signal_does_not_disable_real_weather_or_selling_point_routes(r
 
     assert "天气" in str(weather.get("answer") or ""), weather
     assert weather.get("result_skus") in ([], None), weather
-    assert (selling_point.get("debug") or {}).get("agent_mode") == "product_qa_fast_path", selling_point
+    selling_debug = selling_point.get("debug") or {}
+    selling_contract = selling_debug.get("entity_resolution_contract") or {}
+    selling_metadata = selling_point.get("answer_metadata") or {}
+    assert selling_debug.get("agent_mode") == "resolved_entity_detail_contract", selling_point
+    assert selling_contract.get("resolved_sku") == "CF-PG19", selling_point
+    assert selling_contract.get("field_type") == "selling_point", selling_point
+    assert selling_point.get("result_skus") == ["CF-PG19"], selling_point
+    assert selling_metadata.get("contract_field_type") == "selling_point", selling_point
+    assert selling_metadata.get("evidence_source") == "business.top_selling_points", selling_point
 
 
 def test_clarification_result_isolation_keeps_resolver_candidates_out_of_confirmed_results(
@@ -1261,6 +2354,361 @@ def test_clarification_result_isolation_keeps_resolver_candidates_out_of_confirm
     assert payload.get("result_skus") in ([], None), payload
     assert not any(str(sku).endswith("-黑") for sku in (payload.get("result_skus") or [])), payload
     assert "黑色" not in str(payload.get("answer") or ""), payload
+
+
+def test_temporal_modifier_does_not_pollute_exact_product_scene_subject(route_client_and_db):
+    client, headers, Session = route_client_and_db
+    with Session() as db:
+        kettle = db.query(Product).filter(Product.sku == "KW-K32-白").one()
+        kettle.product_name_cn = "天鹅壶9杯白"
+        db.commit()
+
+    payload = client.post(
+        "/api/customer-service/ask?debug=true",
+        json={"question": "天鹅壶9杯白今天适合露营吗？"},
+        headers=headers,
+    ).json()
+
+    assert payload.get("answer_type") == "product_detail", payload
+    assert payload.get("result_skus") == ["KW-K32-白"], payload
+    assert (payload.get("debug") or {}).get("agent_mode") != "entity_scope_product_not_found", payload
+    assert "没有找到“天鹅壶9杯白今天”" not in str(payload.get("answer") or ""), payload
+    assert "露营" in str(payload.get("answer") or ""), payload
+    metadata = payload.get("answer_metadata") or {}
+    assert metadata.get("evidence_field") == "usage_scene", payload
+    assert metadata.get("evidence_source") == "business.usage_scenarios", payload
+    assert metadata.get("evidence_sku") == "KW-K32-白", payload
+    entity_contract = (payload.get("debug") or {}).get("entity_resolution_contract") or {}
+    assert entity_contract.get("status") == "resolved", payload
+    assert entity_contract.get("resolved_sku") == "KW-K32-白", payload
+    assert entity_contract.get("matched_by") == "canonical_name_exact", payload
+    assert entity_contract.get("field_type") == "usage_scene", payload
+
+
+def test_exact_product_manual_missing_keeps_identity_before_unknown_field_guard(route_client_and_db):
+    client, headers, _ = route_client_and_db
+    payload = client.post(
+        "/api/customer-service/ask?debug=true",
+        json={"question": "瓦片烤盘有没有说明书？"},
+        headers=headers,
+    ).json()
+
+    metadata = payload.get("answer_metadata") or {}
+    entity_contract = (payload.get("debug") or {}).get("entity_resolution_contract") or {}
+    assert payload.get("result_skus") == ["CF-PG19"], payload
+    assert payload.get("candidate_skus") == ["CF-PG19"], payload
+    assert entity_contract.get("status") == "resolved", payload
+    assert entity_contract.get("resolved_sku") == "CF-PG19", payload
+    assert entity_contract.get("matched_by") == "canonical_name_exact", payload
+    assert metadata.get("field_evidence_missing") is True, payload
+    assert metadata.get("evidence_sku") is None, payload
+    assert "瓦片烤盘（CF-PG19）" in str(payload.get("answer") or ""), payload
+    assert "说明书" in str(payload.get("answer") or ""), payload
+    assert "【烤盘】" not in str(payload.get("answer") or ""), payload
+    assert "http" not in str(payload.get("answer") or "").lower(), payload
+
+
+def test_exact_product_manual_uses_only_same_sku_official_document(route_client_and_db):
+    client, headers, Session = route_client_and_db
+    with Session() as db:
+        _add_knowledge_chunk(
+            db,
+            chunk_id="cf-pg19-official-manual",
+            sku="CF-PG19",
+            title="瓦片烤盘官方说明书",
+            content="官方说明书正文",
+            source_type="manual",
+        )
+        db.commit()
+
+    payload = client.post(
+        "/api/customer-service/ask?debug=true",
+        json={"question": "瓦片烤盘有没有说明书？"},
+        headers=headers,
+    ).json()
+
+    metadata = payload.get("answer_metadata") or {}
+    assert payload.get("result_skus") == ["CF-PG19"], payload
+    assert metadata.get("evidence_field") == "manual", payload
+    assert metadata.get("evidence_source") == "knowledge_documents.manual", payload
+    assert metadata.get("evidence_sku") == "CF-PG19", payload
+    assert metadata.get("field_evidence_match") is True, payload
+    assert "cf-pg19-official-manual.md" in str(payload.get("answer") or ""), payload
+
+
+def test_exact_product_after_sales_phone_missing_keeps_identity_and_never_invents_number(route_client_and_db):
+    client, headers, _ = route_client_and_db
+    payload = client.post(
+        "/api/customer-service/ask?debug=true",
+        json={"question": "瓦片烤盘售后电话是多少？"},
+        headers=headers,
+    ).json()
+    entity = (payload.get("debug") or {}).get("entity_resolution_contract") or {}
+    assert entity.get("resolved_sku") == "CF-PG19", payload
+    assert payload.get("result_skus") == ["CF-PG19"], payload
+    assert (payload.get("answer_metadata") or {}).get("field_evidence_missing") is True, payload
+    assert "未维护" in str(payload.get("answer") or ""), payload
+    assert not re.search(r"(?<![A-Z0-9-])(?:400|800|1\d{10}|0\d{2,3}[- ]?\d{7,8})(?![A-Z0-9-])", str(payload.get("answer") or "")), payload
+
+
+def test_realtime_price_temporal_modifier_keeps_exact_variant_identity(route_client_and_db):
+    client, headers, Session = route_client_and_db
+    with Session() as db:
+        product = db.query(Product).filter(Product.sku == "KW-K32-白").one()
+        product.product_name_cn = "天鹅壶9杯白"
+        db.commit()
+    payload = client.post(
+        "/api/customer-service/ask?debug=true",
+        json={"question": "天鹅壶9杯白现在多少钱？"},
+        headers=headers,
+    ).json()
+    entity = (payload.get("debug") or {}).get("entity_resolution_contract") or {}
+    assert entity.get("resolved_sku") == "KW-K32-白", payload
+    assert payload.get("result_skus") == ["KW-K32-白"], payload
+    # Price is a safely unsupported realtime field.  Keep the exact-variant
+    # binding and no-fabrication boundary without freezing one missing-value
+    # formatter wording.
+    answer = str(payload.get("answer") or "")
+    assert "价格" in answer, payload
+    assert any(term in answer for term in ("实时价格", "未标注", "暂未找到")), payload
+    assert "当前售价：" not in answer, payload
+    assert "KW-K32-黑" not in answer, payload
+
+
+def test_realtime_inventory_predicate_keeps_exact_identity_without_inventing_stock(route_client_and_db):
+    client, headers, _ = route_client_and_db
+    payload = client.post(
+        "/api/customer-service/ask?debug=true",
+        json={"question": "瓦片烤盘当前有现货吗？"},
+        headers=headers,
+    ).json()
+    entity = (payload.get("debug") or {}).get("entity_resolution_contract") or {}
+    assert entity.get("resolved_sku") == "CF-PG19", payload
+    assert payload.get("result_skus") == ["CF-PG19"], payload
+    assert (payload.get("answer_metadata") or {}).get("field_evidence_missing") is True, payload
+    answer = str(payload.get("answer") or "")
+    assert "不能" in answer and "实时库存" in answer, payload
+    assert not re.search(r"(?:现货充足|库存充足|剩余\s*\d+|还有\s*\d+\s*件)", answer), payload
+
+
+def test_delivery_temporal_predicate_keeps_exact_variant_identity(route_client_and_db):
+    client, headers, Session = route_client_and_db
+    with Session() as db:
+        product = db.query(Product).filter(Product.sku == "KW-K31-白").one()
+        product.product_name_cn = "天鹅壶4杯白"
+        db.commit()
+    payload = client.post(
+        "/api/customer-service/ask?debug=true",
+        json={"question": "天鹅壶4杯白本周能送到吗？"},
+        headers=headers,
+    ).json()
+    entity = (payload.get("debug") or {}).get("entity_resolution_contract") or {}
+    assert entity.get("status") == "resolved", payload
+    assert entity.get("resolved_sku") == "KW-K31-白", payload
+    assert payload.get("result_skus") == ["KW-K31-白"], payload
+    assert "KW-K31-黑" not in (payload.get("candidate_skus") or []), payload
+    answer = str(payload.get("answer") or "")
+    assert not any(token in answer for token in ("明天送到", "三天内送到", "本周一定能到")), answer
+
+
+def test_weight_self_modifier_keeps_exact_variant_identity(route_client_and_db):
+    client, headers, Session = route_client_and_db
+    with Session() as db:
+        product = db.query(Product).filter(Product.sku == "KW-K31-白").one()
+        product.product_name_cn = "天鹅壶4杯白"
+        db.commit()
+    payload = client.post(
+        "/api/customer-service/ask?debug=true",
+        json={"question": "天鹅壶4杯白自身有多重？"},
+        headers=headers,
+    ).json()
+    entity = (payload.get("debug") or {}).get("entity_resolution_contract") or {}
+    assert entity.get("resolved_sku") == "KW-K31-白", payload
+    assert entity.get("field_type") == "weight", payload
+    assert payload.get("result_skus") == ["KW-K31-白"], payload
+
+
+def test_manual_view_phrase_keeps_exact_product_identity(route_client_and_db):
+    client, headers, _ = route_client_and_db
+    payload = client.post(
+        "/api/customer-service/ask?debug=true",
+        json={"question": "瓦片烤盘怎么查看产品手册？"},
+        headers=headers,
+    ).json()
+    entity = (payload.get("debug") or {}).get("entity_resolution_contract") or {}
+    assert entity.get("resolved_sku") == "CF-PG19", payload
+    assert entity.get("field_type") == "manual", payload
+    assert payload.get("result_skus") == ["CF-PG19"], payload
+    assert (payload.get("answer_metadata") or {}).get("field_evidence_missing") is True, payload
+
+
+def test_after_sales_contact_phrase_keeps_exact_product_identity(route_client_and_db):
+    client, headers, _ = route_client_and_db
+    payload = client.post(
+        "/api/customer-service/ask?debug=true",
+        json={"question": "瓦片烤盘的客服联系方式是什么？"},
+        headers=headers,
+    ).json()
+    entity = (payload.get("debug") or {}).get("entity_resolution_contract") or {}
+    assert entity.get("resolved_sku") == "CF-PG19", payload
+    assert entity.get("field_type") == "after_sales_contact", payload
+    assert payload.get("result_skus") == ["CF-PG19"], payload
+    assert (payload.get("answer_metadata") or {}).get("field_evidence_missing") is True, payload
+
+
+def test_current_price_phrase_keeps_exact_variant_identity(route_client_and_db):
+    client, headers, Session = route_client_and_db
+    with Session() as db:
+        product = db.query(Product).filter(Product.sku == "KW-K32-黑").one()
+        product.product_name_cn = "天鹅壶9杯黑"
+        db.commit()
+    payload = client.post(
+        "/api/customer-service/ask?debug=true",
+        json={"question": "天鹅壶9杯黑当前售价是多少？"},
+        headers=headers,
+    ).json()
+    entity = (payload.get("debug") or {}).get("entity_resolution_contract") or {}
+    assert entity.get("resolved_sku") == "KW-K32-黑", payload
+    assert entity.get("field_type") == "price", payload
+    assert payload.get("result_skus") == ["KW-K32-黑"], payload
+    assert (payload.get("answer_metadata") or {}).get("field_evidence_missing") is True, payload
+
+
+def test_current_inventory_phrase_keeps_exact_pro_identity(route_client_and_db):
+    client, headers, Session = route_client_and_db
+    with Session() as db:
+        if db.query(Product).filter(Product.sku == "CF-PG19PRO").first() is None:
+            _add_product(
+                db,
+                "CF-PG19PRO",
+                "瓦片烤盘Pro",
+                "锅具",
+                "9英寸",
+                "铝合金",
+                "燃气炉",
+                "Pro烤盘",
+                "露营煎烤",
+                820,
+            )
+            db.commit()
+    payload = client.post(
+        "/api/customer-service/ask?debug=true",
+        json={"question": "瓦片烤盘Pro当前还有库存吗？"},
+        headers=headers,
+    ).json()
+    entity = (payload.get("debug") or {}).get("entity_resolution_contract") or {}
+    assert entity.get("resolved_sku") == "CF-PG19PRO", payload
+    assert entity.get("field_type") == "inventory", payload
+    assert payload.get("result_skus") == ["CF-PG19PRO"], payload
+    assert (payload.get("answer_metadata") or {}).get("field_evidence_missing") is True, payload
+
+
+def test_manual_yes_no_phrase_keeps_exact_variant_identity(route_client_and_db):
+    client, headers, Session = route_client_and_db
+    with Session() as db:
+        product = db.query(Product).filter(Product.sku == "KW-K32-黑").one()
+        product.product_name_cn = "天鹅壶9杯黑"
+        db.commit()
+    payload = client.post(
+        "/api/customer-service/ask?debug=true",
+        json={"question": "天鹅壶9杯黑有没有用户手册？"},
+        headers=headers,
+    ).json()
+    entity = (payload.get("debug") or {}).get("entity_resolution_contract") or {}
+    assert entity.get("resolved_sku") == "KW-K32-黑", payload
+    assert entity.get("field_type") == "manual", payload
+    assert payload.get("result_skus") == ["KW-K32-黑"], payload
+    assert (payload.get("answer_metadata") or {}).get("field_evidence_missing") is True, payload
+
+
+def test_manual_shorthand_variant_ambiguity_precedes_unknown_field_guard(route_client_and_db):
+    client, headers, Session = route_client_and_db
+    with Session() as db:
+        for sku, name in (("KW-K32-白", "天鹅壶9杯白"), ("KW-K32-黑", "天鹅壶9杯黑")):
+            product = db.query(Product).filter(Product.sku == sku).one()
+            product.product_name_cn = name
+        db.commit()
+    payload = client.post(
+        "/api/customer-service/ask?debug=true",
+        json={"question": "天鹅9杯有说明书吗？"},
+        headers=headers,
+    ).json()
+    entity = (payload.get("debug") or {}).get("entity_resolution_contract") or {}
+    assert entity.get("status") == "ambiguous", payload
+    assert set(payload.get("candidate_skus") or []) == {"KW-K32-白", "KW-K32-黑"}, payload
+    assert payload.get("result_skus") == [], payload
+    assert (payload.get("debug") or {}).get("agent_mode") == "named_product_unknown_field_clarification", payload
+
+
+def test_exact_product_pronoun_dimension_followup_uses_active_anchor(route_client_and_db):
+    client, headers, _ = route_client_and_db
+    first = client.post(
+        "/api/customer-service/ask?debug=true",
+        json={"question": "瓦片烤盘是什么材质？"},
+        headers=headers,
+    ).json()
+    assert first.get("result_skus") == ["CF-PG19"], first
+    second = client.post(
+        "/api/customer-service/ask?debug=true",
+        json={"question": "它多大尺寸？", "conversation_id": first.get("conversation_id")},
+        headers=headers,
+    ).json()
+    assert second.get("result_skus") == ["CF-PG19"], second
+    assert (second.get("debug") or {}).get("active_single_product_anchor") == "CF-PG19", second
+    second_debug = second.get("debug") or {}
+    second_field = second_debug.get("field_contract") or {}
+    second_entity = second_debug.get("entity_resolution_contract") or {}
+    assert second_field.get("field_type") == "dimensions", second
+    assert second_entity.get("status") == "resolved", second
+    assert second_entity.get("resolved_sku") == "CF-PG19", second
+    assert second_entity.get("field_type") == "dimensions", second
+    assert second_debug.get("binding_provenance") == "resolved_entity_contract", second
+    metadata = second.get("answer_metadata") or {}
+    assert metadata.get("evidence_sku") in {None, "CF-PG19"}, second
+    assert metadata.get("contract_field_type") == "dimensions", second
+
+
+def test_ambiguous_variant_color_followup_resolves_with_existing_strong_contract(route_client_and_db):
+    client, headers, Session = route_client_and_db
+    with Session() as db:
+        for sku, name in (("KW-K32-白", "天鹅壶9杯白"), ("KW-K32-黑", "天鹅壶9杯黑")):
+            product = db.query(Product).filter(Product.sku == sku).one()
+            product.product_name_cn = name
+        db.commit()
+    first = client.post(
+        "/api/customer-service/ask?debug=true",
+        json={"question": "天鹅壶9杯是什么材质？"},
+        headers=headers,
+    ).json()
+    assert first.get("result_skus") == [], first
+    assert set(first.get("candidate_skus") or []) == {"KW-K32-白", "KW-K32-黑"}, first
+    second = client.post(
+        "/api/customer-service/ask?debug=true",
+        json={"question": "白色", "conversation_id": first.get("conversation_id")},
+        headers=headers,
+    ).json()
+    entity = (second.get("debug") or {}).get("entity_resolution_contract") or {}
+    assert entity.get("status") == "resolved", second
+    assert entity.get("resolved_sku") == "KW-K32-白", second
+    assert entity.get("matched_by") in {"canonical_name_exact", "normalized_alias_exact"}, second
+    assert second.get("result_skus") == ["KW-K32-白"], second
+
+
+def test_recommendation_explicit_griddle_scope_excludes_unrelated_categories(route_client_and_db):
+    client, headers, _ = route_client_and_db
+    payload = client.post(
+        "/api/customer-service/ask?debug=true",
+        json={"question": "推荐一款适合露营的烤盘。"},
+        headers=headers,
+    ).json()
+    assert payload.get("answer_type") == "recommendation", payload
+    assert payload.get("result_skus"), payload
+    for row in payload.get("results") or []:
+        haystack = " ".join(
+            str(row.get(key) or "")
+            for key in ("product_name_cn", "product_name_en", "category", "capacity", "features")
+        )
+        assert any(term in haystack.lower() for term in ("烤盘", "煎盘", "griddle")), row
 
 
 def test_context_anchor_survives_empty_comparison_result(route_client_and_db):
@@ -1315,11 +2763,9 @@ def test_scope_field_composition_resolves_exact_subject_material(route_client_an
     [
         "悠然杯Pro对应的产品编码是哪一个？",
         "瓦片烤盘Pro随单会送赠品吗？",
-        "炊墨炒锅的锅体用的是什么材质？",
         "灵巧包自身的长宽高怎么标注的？",
         "鸣泉壶大概能装多少水？",
         "小青炉系列收纳尺寸分别是多少？",
-        "聚能环水壶有没有随箱赠品记录？",
     ],
 )
 def test_weak_entity_contract_is_never_promoted_to_single_product_answer(
@@ -1338,3 +2784,43 @@ def test_weak_entity_contract_is_never_promoted_to_single_product_answer(
     assert payload.get("result_skus") in ([], None), payload
     assert payload.get("candidate_skus") in ([], None), payload
     assert (payload.get("answer_metadata") or {}).get("source") != "resolved_entity_unknown_field_fallback", payload
+
+
+def test_exact_canonical_name_with_gift_scaffolding_keeps_identity_and_safe_missing(route_client_and_db):
+    """Predicate scaffolding must not weaken a unique raw canonical product name."""
+    client, headers, _ = route_client_and_db
+    response = client.post(
+        "/api/customer-service/ask?debug=true",
+        json={"question": "聚能环水壶有没有随箱赠品记录？"},
+        headers=headers,
+    )
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    debug = payload.get("debug") or {}
+    entity = debug.get("entity_resolution_contract") or {}
+    field = debug.get("field_contract") or {}
+
+    assert field.get("field_type") == "gift", payload
+    assert entity.get("status") == "resolved", payload
+    assert entity.get("resolved_sku") == "CB253", payload
+    assert entity.get("matched_by") == "canonical_name_exact", payload
+    assert payload.get("candidate_skus") == ["CB253"], payload
+    assert payload.get("result_skus") == ["CB253"], payload
+    assert (payload.get("answer_metadata") or {}).get("evidence_sku") in (None, "CB253"), payload
+    assert "当前资料" in str(payload.get("answer") or ""), payload
+
+
+def test_component_scope_material_predicate_preserves_exact_product_identity(route_client_and_db):
+    """An exact product name stays exact when a component scope precedes the field."""
+    client, headers, _ = route_client_and_db
+    payload = client.post(
+        "/api/customer-service/ask?debug=true",
+        json={"question": "炊墨炒锅的锅体用的是什么材质？"},
+        headers=headers,
+    ).json()
+
+    entity = (payload.get("debug") or {}).get("entity_resolution_contract") or {}
+    assert entity.get("status") == "resolved", payload
+    assert entity.get("resolved_sku") == "CW-C83-1", payload
+    assert entity.get("field_type") == "material", payload
+    assert payload.get("result_skus") == ["CW-C83-1"], payload
