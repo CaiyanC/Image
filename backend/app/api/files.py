@@ -12,7 +12,7 @@ from ..core.config import settings
 from ..core.database import get_db
 from ..core.rate_limit import enforce_rate_limit
 from ..core.security import get_current_user, has_permission
-from ..core.permission_constants import MANAGEMENT_GROUP_NAME
+from ..core.permission_constants import FULL_ACCESS_GROUP_NAMES
 from ..models.generation import Generation
 from ..models.user import User
 from ..models.group import Group
@@ -69,7 +69,7 @@ def _authorize_sign_request(db: Session, user: User, normalized_path: str) -> No
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Knowledge files must be downloaded through the knowledge base API",
         )
-    if normalized_path.startswith("/uploads/images/") or normalized_path.startswith("/uploads/videos/"):
+    if normalized_path.startswith(("/uploads/images/", "/uploads/videos/", "/uploads/assets/")):
         if has_permission(db, user.id, "product.read"):
             return
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Permission required: product.read")
@@ -99,7 +99,7 @@ def _is_in_management_group(db: Session, user_id: str) -> bool:
     return (
         db.query(UserGroup)
         .join(Group, UserGroup.group_id == Group.id)
-        .filter(UserGroup.user_id == user_id, Group.group_name == MANAGEMENT_GROUP_NAME)
+        .filter(UserGroup.user_id == user_id, Group.group_name.in_(FULL_ACCESS_GROUP_NAMES))
         .first()
         is not None
     )

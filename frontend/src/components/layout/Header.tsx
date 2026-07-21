@@ -44,7 +44,7 @@ export default function Header() {
 
   const superAdminItems = [
     { path: '/admin/users', label: '用户' },
-    { path: '/admin/groups', label: '团队权限' },
+    { path: '/admin/groups', label: '部门权限' },
     { path: '/admin/settings', label: '设置' },
     { path: '/admin/logs', label: '日志' },
   ]

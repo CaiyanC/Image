@@ -1,6 +1,6 @@
 import type { User } from '../types'
 
-export const NO_PERMISSION_MESSAGE = '您所在的团队暂无该操作权限，如需使用请联系管理员'
+export const NO_PERMISSION_MESSAGE = '您所在的部门暂无该操作权限，如需使用请联系管理员'
 export const NO_PERMISSION_EVENT = 'caiyan:permission-denied'
 
 export function showNoPermissionToast() {

@@ -94,6 +94,8 @@ export interface Product {
   business?: ProductBusiness | null
   content?: ProductContent | null
   media?: ProductMediaItem[]
+  assets?: ProductAsset[]
+  media_data?: MediaAssets
   prompts?: ProductPrompts[]
   qa_items?: ProductQa[]
   qa_negative?: ProductQaNegative | null
@@ -266,12 +268,33 @@ export interface ProductAsset {
   thumbnail_url?: string | null
   brand?: string | null
   material_type?: string | null
+  source_key?: string | null
   angle_scene?: string | null
   channel?: string | null
   language_tag?: string | null
   version_tag?: string | null
+  product_version?: string | null
+  market_version?: string | null
   date_tag?: string | null
   status_tag?: string | null
+  file_name?: string | null
+  file_format?: string | null
+  resolution?: string | null
+  aspect_ratio?: string | null
+  asset_level: string
+  is_real_product: boolean
+  is_ai_generated: boolean
+  is_competitor: boolean
+  is_latest_version: boolean
+  is_public: boolean
+  ai_customer_usable: boolean
+  ai_marketing_usable: boolean
+  ai_reference_usable: boolean
+  editable_flag: boolean
+  review_status: string
+  authorization_status: string
+  forbidden_usage?: string | null
+  maintainer?: string | null
   seq: number
   sort_order: number
   tags?: AssetTags

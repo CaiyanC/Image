@@ -7,7 +7,7 @@ from sqlalchemy.orm import Session
 
 from ..core.config import resolve_project_path, settings
 from ..core.database import get_db
-from ..core.security import require_permission, require_product_permission
+from ..core.security import has_permission, require_permission, require_product_permission
 from ..models.user import User
 from ..schemas.asset import AssetTagsUpdate, ProductAssetCreate, ProductAssetUpdate
 from ..services import asset_service
@@ -20,6 +20,11 @@ ALLOWED_IMAGE_SUFFIXES = {".jpg", ".jpeg", ".png", ".webp", ".gif"}
 ALLOWED_IMAGE_MIME_TYPES = {"image/jpeg", "image/png", "image/webp", "image/gif"}
 ALLOWED_VIDEO_SUFFIXES = {".mp4", ".mov", ".webm"}
 ALLOWED_VIDEO_MIME_TYPES = {"video/mp4", "video/quicktime", "video/webm"}
+REVIEW_FIELDS = {
+    "status_tag", "review_status", "authorization_status", "asset_level",
+    "is_public", "ai_customer_usable", "ai_marketing_usable",
+    "ai_reference_usable", "forbidden_usage", "is_latest_version",
+}
 
 
 @router.get("")
@@ -53,9 +58,13 @@ def create_asset(
     sku: str,
     body: ProductAssetCreate,
     current_user: User = Depends(require_product_permission("update")),
+    upload_user: User = Depends(require_permission("media.upload")),
     db: Session = Depends(get_db),
 ):
-    return asset_service.model_to_dict(asset_service.create_asset(db, sku, body.model_dump()))
+    del upload_user
+    payload = body.model_dump()
+    _require_review_permission_for_changed_fields(db, current_user, payload)
+    return asset_service.model_to_dict(asset_service.create_asset(db, sku, payload))
 
 
 @router.post("/batch")
@@ -63,9 +72,13 @@ def create_assets_batch(
     sku: str,
     body: list[ProductAssetCreate],
     current_user: User = Depends(require_product_permission("update")),
+    upload_user: User = Depends(require_permission("media.upload")),
     db: Session = Depends(get_db),
 ):
     items = [item.model_dump() for item in body]
+    del upload_user
+    for item in items:
+        _require_review_permission_for_changed_fields(db, current_user, item)
     created = asset_service.create_assets_batch(db, sku, items)
     return [asset_service.model_to_dict(item) for item in created]
 
@@ -76,10 +89,40 @@ def update_asset(
     asset_id: str,
     body: ProductAssetUpdate,
     current_user: User = Depends(require_product_permission("update")),
+    upload_user: User = Depends(require_permission("media.upload")),
     db: Session = Depends(get_db),
 ):
     payload = body.model_dump(exclude_unset=True)
+    del upload_user
+    current_asset = asset_service.get_asset(db, sku, asset_id)
+    changed_review_fields = {
+        field for field in REVIEW_FIELDS.intersection(payload)
+        if payload[field] != getattr(current_asset, field)
+    }
+    if changed_review_fields and not has_permission(db, current_user.id, "media.review"):
+        raise HTTPException(status_code=403, detail="Permission required: media.review")
     return asset_service.model_to_dict(asset_service.update_asset(db, sku, asset_id, payload))
+
+
+def _require_review_permission_for_changed_fields(db: Session, user: User, payload: dict) -> None:
+    defaults = {
+        "status_tag": asset_service.DEFAULT_STATUS,
+        "review_status": "pending",
+        "authorization_status": "unknown",
+        "asset_level": "C",
+        "is_public": False,
+        "ai_customer_usable": False,
+        "ai_marketing_usable": False,
+        "ai_reference_usable": False,
+        "forbidden_usage": None,
+        "is_latest_version": True,
+    }
+    changed = {
+        field for field in REVIEW_FIELDS.intersection(payload)
+        if payload[field] != defaults[field]
+    }
+    if changed and not has_permission(db, user.id, "media.review"):
+        raise HTTPException(status_code=403, detail="Permission required: media.review")
 
 
 @router.patch("/{asset_id}/tags")
@@ -88,8 +131,12 @@ def update_asset_tags(
     asset_id: str,
     body: AssetTagsUpdate,
     current_user: User = Depends(require_product_permission("update")),
+    tag_user: User = Depends(require_permission("tag.edit")),
     db: Session = Depends(get_db),
 ):
+    del tag_user
+    if body.risk_tags is not None and not has_permission(db, current_user.id, "media.review"):
+        raise HTTPException(status_code=403, detail="Permission required: media.review")
     return asset_service.model_to_dict(
         asset_service.update_asset_tags(db, sku, asset_id, body.normalized())
     )
@@ -100,8 +147,10 @@ def delete_asset(
     sku: str,
     asset_id: str,
     current_user: User = Depends(require_product_permission("update")),
+    upload_user: User = Depends(require_permission("media.upload")),
     db: Session = Depends(get_db),
 ):
+    del current_user, upload_user
     asset_service.delete_asset(db, sku, asset_id)
     return {"ok": True}
 

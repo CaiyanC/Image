@@ -31,11 +31,13 @@ class FileAccessTest(unittest.TestCase):
         self.upload_dir = self.temp_path / "uploads"
         self.image_dir = self.upload_dir / "images"
         self.generated_dir = self.upload_dir / "generated"
+        self.asset_dir = self.upload_dir / "assets" / "ASSET-1"
         self.knowledge_dir = self.upload_dir / "knowledge-files"
-        for path in (self.image_dir, self.generated_dir, self.knowledge_dir):
+        for path in (self.image_dir, self.generated_dir, self.asset_dir, self.knowledge_dir):
             path.mkdir(parents=True, exist_ok=True)
         (self.image_dir / "sample.png").write_bytes(b"image")
         (self.generated_dir / "gen_sample.png").write_bytes(b"generated")
+        (self.asset_dir / "asset_sample.png").write_bytes(b"asset")
         self.knowledge_file = self.knowledge_dir / "doc.txt"
         self.knowledge_file.write_text("knowledge", encoding="utf-8")
 
@@ -112,6 +114,19 @@ class FileAccessTest(unittest.TestCase):
                 db=self.db,
             )
         self.assertEqual(ctx.exception.status_code, 403)
+
+    def test_product_asset_sign_uses_product_read_permission(self):
+        response = files_api.sign_file(
+            files_api.FileSignRequest(path="/uploads/assets/ASSET-1/asset_sample.png"),
+            current_user=self.user,
+            db=self.db,
+        )
+        signed_path = files_api._decode_file_token(response.url.rsplit("/", 1)[-1])
+        self.assertEqual(signed_path, "/uploads/assets/ASSET-1/asset_sample.png")
+        self.assertEqual(
+            files_api._resolve_upload_path(signed_path),
+            self.asset_dir / "asset_sample.png",
+        )
 
     def test_knowledge_files_cannot_use_signed_public_path(self):
         with self.assertRaises(HTTPException) as ctx:

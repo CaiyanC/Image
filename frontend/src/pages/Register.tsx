@@ -64,7 +64,7 @@ export default function Register() {
         {!allowPublicRegistration ? (
           <div className="auth-card glass space-y-5 p-6 text-center sm:p-8">
             <div className="relative z-10 rounded-2xl border border-teal-100 bg-teal-50/80 px-4 py-4 text-sm leading-6 text-teal-800">
-              当前系统已关闭公开注册。请联系管理员在“用户管理”中创建企业账号并分配团队权限。
+              当前系统已关闭公开注册。请联系管理员在“用户管理”中创建企业账号并分配部门权限。
             </div>
             <Link to="/login" className="btn-primary relative z-10 inline-flex w-full justify-center">
               返回登录

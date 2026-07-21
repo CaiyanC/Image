@@ -4,7 +4,7 @@ from ..models.group import Group
 from ..models.user_group import UserGroup
 from ..models.user import User
 from ..models.permissions import GroupPermission, Permission
-from ..core.permission_constants import MANAGEMENT_GROUP_NAME, PRESET_GROUP_NAMES
+from ..core.permission_constants import DEPARTMENT_ORDER, FULL_ACCESS_GROUP_NAMES, PRESET_GROUP_NAMES
 
 
 def _group_to_dict(group: Group) -> dict:
@@ -28,7 +28,7 @@ def _active_management_count(db: Session) -> int:
         Group, UserGroup.group_id == Group.id
     ).filter(
         User.is_active == True,  # noqa: E712
-        Group.group_name == MANAGEMENT_GROUP_NAME,
+        Group.group_name.in_(FULL_ACCESS_GROUP_NAMES),
     ).count()
 
 
@@ -41,7 +41,8 @@ def get_group_by_name(db: Session, name: str):
 
 
 def get_groups(db: Session):
-    groups = db.query(Group).order_by(Group.group_name).all()
+    groups = db.query(Group).all()
+    groups.sort(key=lambda group: (DEPARTMENT_ORDER.get(group.group_name, 999), group.group_name))
     return [_group_to_dict(g) for g in groups]
 
 
@@ -88,6 +89,8 @@ def update_group_permissions(db: Session, group_id: str, permission_keys: list[s
     if not group:
         raise HTTPException(status_code=404, detail="Group not found")
 
+    if group.group_name in FULL_ACCESS_GROUP_NAMES:
+        permission_keys = [key for (key,) in db.query(Permission.permission_key).all()]
     unique_keys = sorted(set(permission_keys))
     permissions = db.query(Permission).filter(Permission.permission_key.in_(unique_keys)).all() if unique_keys else []
     found_keys = {permission.permission_key for permission in permissions}
@@ -171,7 +174,7 @@ def remove_user_from_group(db: Session, group_id: str, user_id: str):
     ).first()
     if not ug:
         raise HTTPException(status_code=404, detail="User not in group")
-    if ug.group and ug.group.group_name == MANAGEMENT_GROUP_NAME:
+    if ug.group and ug.group.group_name in FULL_ACCESS_GROUP_NAMES:
         user = db.query(User).filter(User.id == user_id).first()
         if user and user.is_active and _active_management_count(db) <= 1:
             raise HTTPException(

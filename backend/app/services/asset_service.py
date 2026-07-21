@@ -8,6 +8,7 @@ from fastapi import HTTPException
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
+from ..core.config import resolve_project_path, settings
 from ..models.product import Product
 from ..models.product_asset import ProductAsset
 
@@ -80,12 +81,33 @@ def model_to_dict(asset: ProductAsset) -> dict[str, Any]:
         "thumbnail_url": asset.thumbnail_url,
         "brand": asset.brand,
         "material_type": asset.material_type,
+        "source_key": asset.source_key,
         "angle_scene": asset.angle_scene,
         "channel": asset.channel,
         "language_tag": asset.language_tag,
         "version_tag": asset.version_tag,
+        "product_version": asset.product_version,
+        "market_version": asset.market_version,
         "date_tag": asset.date_tag,
         "status_tag": asset.status_tag,
+        "file_name": asset.file_name,
+        "file_format": asset.file_format,
+        "resolution": asset.resolution,
+        "aspect_ratio": asset.aspect_ratio,
+        "asset_level": asset.asset_level,
+        "is_real_product": asset.is_real_product,
+        "is_ai_generated": asset.is_ai_generated,
+        "is_competitor": asset.is_competitor,
+        "is_latest_version": asset.is_latest_version,
+        "is_public": asset.is_public,
+        "ai_customer_usable": asset.ai_customer_usable,
+        "ai_marketing_usable": asset.ai_marketing_usable,
+        "ai_reference_usable": asset.ai_reference_usable,
+        "editable_flag": asset.editable_flag,
+        "review_status": asset.review_status,
+        "authorization_status": asset.authorization_status,
+        "forbidden_usage": asset.forbidden_usage,
+        "maintainer": asset.maintainer,
         "seq": asset.seq,
         "sort_order": asset.sort_order,
         "tags": parse_tags(asset.tags),
@@ -163,15 +185,25 @@ def next_seq(
 def apply_status_movement(data: dict[str, Any]) -> dict[str, Any]:
     status = data.get("status_tag")
     if status == "禁用":
+        data["review_status"] = "disabled"
+        data["is_public"] = False
+        data["ai_customer_usable"] = False
+        data["ai_marketing_usable"] = False
         data["category_code"] = ARCHIVE_CATEGORY_CODE
         data["category_name"] = ARCHIVE_CATEGORY_NAME
         data["sub_category"] = "禁用素材"
         data["material_type"] = "banned"
     elif status in ("归档历史版本", "归档"):
+        data["review_status"] = "archived"
+        data["is_latest_version"] = False
+        data["is_public"] = False
+        data["ai_customer_usable"] = False
         data["category_code"] = ARCHIVE_CATEGORY_CODE
         data["category_name"] = ARCHIVE_CATEGORY_NAME
         data["sub_category"] = "历史版本"
         data["material_type"] = "historical"
+    elif status in ("已审核", "通过", "Approved"):
+        data["review_status"] = "approved"
     return data
 
 
@@ -205,12 +237,33 @@ def create_asset(db: Session, sku: str, data: dict[str, Any]) -> ProductAsset:
         thumbnail_url=payload.get("thumbnail_url"),
         brand=payload.get("brand") or DEFAULT_BRAND,
         material_type=material_type,
+        source_key=payload.get("source_key"),
         angle_scene=payload.get("angle_scene"),
         channel=payload.get("channel") or DEFAULT_CHANNEL,
         language_tag=payload.get("language_tag") or DEFAULT_LANGUAGE,
         version_tag=payload.get("version_tag") or DEFAULT_VERSION,
+        product_version=payload.get("product_version") or payload.get("version_tag") or DEFAULT_VERSION,
+        market_version=payload.get("market_version"),
         date_tag=payload.get("date_tag") or today_tag(),
         status_tag=payload.get("status_tag") or DEFAULT_STATUS,
+        file_name=payload.get("file_name") or os.path.basename(url),
+        file_format=payload.get("file_format") or os.path.splitext(url.split("?", 1)[0])[1].lstrip(".").lower() or None,
+        resolution=payload.get("resolution"),
+        aspect_ratio=payload.get("aspect_ratio"),
+        asset_level=payload.get("asset_level") or "C",
+        is_real_product=bool(payload.get("is_real_product", True)),
+        is_ai_generated=bool(payload.get("is_ai_generated", False)),
+        is_competitor=bool(payload.get("is_competitor", False)),
+        is_latest_version=bool(payload.get("is_latest_version", True)),
+        is_public=bool(payload.get("is_public", False)),
+        ai_customer_usable=bool(payload.get("ai_customer_usable", False)),
+        ai_marketing_usable=bool(payload.get("ai_marketing_usable", False)),
+        ai_reference_usable=bool(payload.get("ai_reference_usable", False)),
+        editable_flag=bool(payload.get("editable_flag", False)),
+        review_status=payload.get("review_status") or "pending",
+        authorization_status=payload.get("authorization_status") or "unknown",
+        forbidden_usage=payload.get("forbidden_usage"),
+        maintainer=payload.get("maintainer"),
         seq=int(seq),
         sort_order=int(payload.get("sort_order") or 0),
         tags=normalize_tags(payload.get("tags")),
@@ -242,12 +295,33 @@ def update_asset(db: Session, sku: str, asset_id: str, data: dict[str, Any]) -> 
         "thumbnail_url",
         "brand",
         "material_type",
+        "source_key",
         "angle_scene",
         "channel",
         "language_tag",
         "version_tag",
+        "product_version",
+        "market_version",
         "date_tag",
         "status_tag",
+        "file_name",
+        "file_format",
+        "resolution",
+        "aspect_ratio",
+        "asset_level",
+        "is_real_product",
+        "is_ai_generated",
+        "is_competitor",
+        "is_latest_version",
+        "is_public",
+        "ai_customer_usable",
+        "ai_marketing_usable",
+        "ai_reference_usable",
+        "editable_flag",
+        "review_status",
+        "authorization_status",
+        "forbidden_usage",
+        "maintainer",
         "seq",
         "sort_order",
         "tags",
@@ -277,8 +351,26 @@ def update_asset_tags(db: Session, sku: str, asset_id: str, tags: dict[str, list
 def delete_asset(db: Session, sku: str, asset_id: str) -> None:
     ensure_product_exists(db, sku)
     asset = get_asset(db, sku, asset_id)
+    paths = [asset.url, asset.thumbnail_url]
     db.delete(asset)
     db.commit()
+    for path in paths:
+        _delete_local_asset_file(path)
+
+
+def _delete_local_asset_file(url: str | None) -> None:
+    normalized = str(url or "").split("?", 1)[0].replace("\\", "/")
+    if not normalized.startswith("/uploads/assets/"):
+        return
+    relative = normalized.removeprefix("/uploads/").lstrip("/")
+    target = os.path.abspath(resolve_project_path(os.path.join(settings.UPLOAD_DIR, relative)))
+    upload_root = os.path.abspath(resolve_project_path(settings.UPLOAD_DIR))
+    if os.path.commonpath([target, upload_root]) != upload_root:
+        return
+    try:
+        os.remove(target)
+    except FileNotFoundError:
+        pass
 
 
 def filename_without_extension(filename: str | None) -> str | None:

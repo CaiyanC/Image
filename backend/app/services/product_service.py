@@ -15,6 +15,7 @@ from ..models.product_specs import ProductSpecs
 from ..models.product_business import ProductBusiness
 from ..models.product_content import ProductContent
 from ..models.product_media import ProductMedia
+from ..models.product_asset import ProductAsset
 from ..models.product_prompts import ProductPrompts
 from ..models.product_qa import ProductQa, ProductQaNegative
 from ..models.product_associations import (
@@ -23,7 +24,7 @@ from ..models.product_associations import (
     Certification, ProductCertification,
     Keyword, ProductKeyword,
 )
-from . import customer_cache_service
+from . import asset_service, customer_cache_service, product_asset_sync_service
 
 
 def _product_detail_cache_key(db: Session, sku: str) -> str:
@@ -258,6 +259,12 @@ def _build_detail(product: Product, db: Session) -> dict:
     business = db.query(ProductBusiness).filter(ProductBusiness.product_id == pid).first()
     content = db.query(ProductContent).filter(ProductContent.product_id == pid).first()
     media_list = db.query(ProductMedia).filter(ProductMedia.product_id == pid).all()
+    bind = db.get_bind()
+    asset_list = []
+    if inspect(bind).has_table(ProductAsset.__tablename__):
+        asset_list = db.query(ProductAsset).filter(ProductAsset.sku == product.sku).order_by(
+            ProductAsset.category_code, ProductAsset.sub_category, ProductAsset.seq
+        ).all()
     prompts = db.query(ProductPrompts).filter(ProductPrompts.product_id == pid).all()
     qa_items = db.query(ProductQa).filter(ProductQa.product_id == pid).all()
     qa_negative = db.query(ProductQaNegative).filter(ProductQaNegative.product_id == pid).first()
@@ -379,6 +386,8 @@ def _build_detail(product: Product, db: Session) -> dict:
             "tag_list": _serialize_json(m.tag_list),
             "created_at": str(m.created_at), "updated_at": str(m.updated_at),
         } for m in media_list],
+        "assets": [asset_service.model_to_dict(asset) for asset in asset_list],
+        "media_data": product_asset_sync_service.media_data_from_assets(asset_list),
         "prompts": [{
             "id": p.id,
             "prompt_name": p.prompt_name,
@@ -869,6 +878,12 @@ def create_product(db: Session, data: dict, creator_id: str = None) -> Product:
                 version=p.get("version"),
             ))
 
+    product_asset_sync_service.sync_product_assets_from_media_data(
+        db,
+        product,
+        data.get("media_data") or data.get("media"),
+    )
+
     # Sync M2M associations (channels, regions, certifications, keywords)
     sync_product_m2m(db, product_id, data)
 
@@ -917,6 +932,19 @@ def delete_product(db: Session, sku: str):
     invalidate_product_detail_cache(db, sku)
 
     pid = product.id
+    has_asset_table = inspect(db.get_bind()).has_table(ProductAsset.__tablename__)
+    asset_files = (
+        [
+            path
+            for asset in db.query(ProductAsset).filter(ProductAsset.sku == sku).all()
+            for path in (asset.url, asset.thumbnail_url)
+            if path
+        ]
+        if has_asset_table
+        else []
+    )
+    if has_asset_table:
+        db.query(ProductAsset).filter(ProductAsset.sku == sku).delete(synchronize_session=False)
     for model in [
         ProductQa, ProductQaNegative, ProductPrompts, ProductMedia,
         ProductContent, ProductBusiness, ProductSpecs,
@@ -927,6 +955,8 @@ def delete_product(db: Session, sku: str):
 
     db.delete(product)
     db.commit()
+    for path in asset_files:
+        asset_service._delete_local_asset_file(path)
 
 
 # ── Sub-table updaters ──

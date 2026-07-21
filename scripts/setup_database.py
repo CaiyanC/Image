@@ -226,6 +226,55 @@ CREATE_STATEMENTS = [
     )
     """,
 
+    # L6: 统一视觉素材库（product_media 仅保留作旧数据兼容）
+    """
+    CREATE TABLE product_assets (
+        id VARCHAR(36) PRIMARY KEY,
+        sku VARCHAR(64) NOT NULL REFERENCES products(sku) ON UPDATE CASCADE ON DELETE CASCADE,
+        category_code VARCHAR(2) NOT NULL,
+        category_name VARCHAR(64) NOT NULL,
+        sub_category VARCHAR(64),
+        asset_type VARCHAR(10) NOT NULL DEFAULT 'image',
+        url TEXT NOT NULL,
+        thumbnail_url TEXT,
+        brand VARCHAR(64) NOT NULL DEFAULT 'alocs',
+        material_type VARCHAR(64),
+        source_key VARCHAR(128),
+        angle_scene VARCHAR(128),
+        channel VARCHAR(64),
+        language_tag VARCHAR(32),
+        version_tag VARCHAR(32),
+        product_version VARCHAR(32),
+        market_version VARCHAR(32),
+        date_tag VARCHAR(16),
+        status_tag VARCHAR(32),
+        file_name VARCHAR(255),
+        file_format VARCHAR(20),
+        resolution VARCHAR(32),
+        aspect_ratio VARCHAR(16),
+        asset_level VARCHAR(10) NOT NULL DEFAULT 'C',
+        is_real_product BOOLEAN NOT NULL DEFAULT TRUE,
+        is_ai_generated BOOLEAN NOT NULL DEFAULT FALSE,
+        is_competitor BOOLEAN NOT NULL DEFAULT FALSE,
+        is_latest_version BOOLEAN NOT NULL DEFAULT TRUE,
+        is_public BOOLEAN NOT NULL DEFAULT FALSE,
+        ai_customer_usable BOOLEAN NOT NULL DEFAULT FALSE,
+        ai_marketing_usable BOOLEAN NOT NULL DEFAULT FALSE,
+        ai_reference_usable BOOLEAN NOT NULL DEFAULT FALSE,
+        editable_flag BOOLEAN NOT NULL DEFAULT FALSE,
+        review_status VARCHAR(32) NOT NULL DEFAULT 'pending',
+        authorization_status VARCHAR(32) NOT NULL DEFAULT 'unknown',
+        forbidden_usage TEXT,
+        maintainer VARCHAR(100),
+        seq INTEGER NOT NULL DEFAULT 0,
+        sort_order INTEGER NOT NULL DEFAULT 0,
+        tags TEXT NOT NULL DEFAULT '{}',
+        notes TEXT,
+        created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+        updated_at TIMESTAMP NOT NULL DEFAULT NOW()
+    )
+    """,
+
     # L7: AI 生成资产表
     """
     CREATE TABLE ai_generated_assets (
@@ -749,17 +798,21 @@ def seed_data(conn):
 
     # 默认用户组
     groups = [
-        ("产品团队", "产品管理部门，负责产品元数据录入与维护"),
-        ("设计团队", "设计部门，负责产品视觉素材与 AI 生成"),
-        ("电商运营", "电商运营岗位"),
-        ("海外营销", "海外市场营销"),
-        ("AI内容岗", "AI 内容生成岗位"),
-        ("客服团队", "客户服务"),
-        ("管理层", "管理决策层"),
-        ("AI工程师", "AI 技术团队"),
-        ("经销商", "外部经销商"),
-        ("外部达人", "外部 KOL/达人"),
-        ("广告代理商", "广告代理商"),
+        ("总经办", "公司经营管理与系统最高权限"),
+        ("人资行政部", "人力资源与行政管理"),
+        ("财务部", "财务核算与经营数据管理"),
+        ("产品部", "产品规划、产品主数据与新品管理"),
+        ("国际贸易部", "国际贸易与海外客户业务"),
+        ("跨境电商部", "跨境电商渠道运营"),
+        ("电商一部", "国内电商渠道运营"),
+        ("商务部", "商务合作、客户支持与业务协同"),
+        ("品质部", "产品质量、资料准确性与审核"),
+        ("视觉一部", "产品视觉素材制作与审核"),
+        ("品牌部", "品牌内容、营销与传播"),
+        ("跟单部", "订单跟进与产品资料协同"),
+        ("金服", "金融服务业务"),
+        ("视觉二部", "产品视觉素材制作与审核"),
+        ("IT部", "系统、AI 与数据技术支持"),
     ]
     for name, desc in groups:
         cur.execute(
@@ -801,11 +854,12 @@ def seed_data(conn):
         ("/customer-service", "智能客服", None, "page"),
         ("/history", "历史记录", None, "page"),
         ("/products", "产品管理", None, "page"),
+        ("/assets", "视觉素材库", None, "page"),
         ("/products/create", "新增产品", None, "page"),
         ("/products/drafts", "草稿箱", None, "page"),
         ("/admin/users", "用户管理", None, "page"),
         ("/admin/settings", "系统设置", None, "page"),
-        ("/admin/groups", "用户组管理", None, "page"),
+        ("/admin/groups", "部门权限", None, "page"),
     ]
     for path, name, parent, rtype in route_list:
         cur.execute(
@@ -825,8 +879,8 @@ def seed_data(conn):
         (admin_id, "admin", "human", admin_pw_hash, "系统管理员", "admin@example.com", True),
     )
 
-    # 管理员加入产品团队和管理层
-    cur.execute("SELECT id FROM groups WHERE group_name IN ('产品团队', '管理层')")
+    # 管理员加入产品部和总经办
+    cur.execute("SELECT id FROM groups WHERE group_name IN ('产品部', '总经办')")
     admin_groups = cur.fetchall()
     for g in admin_groups:
         cur.execute(

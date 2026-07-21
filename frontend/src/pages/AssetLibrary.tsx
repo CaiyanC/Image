@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { api } from '../services/api'
+import { SecureImage, SecureVideo } from '../components/SecureFile'
 import type { AssetTags, ProductAsset, ProductListItem } from '../types'
 import {
   AMAZON_SLOTS,
@@ -17,11 +18,9 @@ import {
   addTag,
   buildNamingFormat,
   cloneTags,
-  getAssetDisplayUrl,
   getMaterialColor,
   removeTag,
   sortAssets,
-  toAssetUrl,
 } from './assetLibraryHelpers'
 
 type EditForm = Partial<ProductAsset>
@@ -606,7 +605,7 @@ function AssetCard({ asset, selected, editingTags, customInputs, setCustomInputs
             <div className="mt-2 text-sm font-black text-stone-700">{asset.notes || '视频素材'}</div>
           </div>
         ) : (
-          <img src={getAssetDisplayUrl(asset)} alt={buildNamingFormat(asset)} loading="lazy" className="h-full w-full object-cover" />
+          <SecureImage src={asset.thumbnail_url || asset.url} alt={buildNamingFormat(asset)} className="h-full w-full object-cover" />
         )}
         <span className={`absolute left-2 top-2 rounded-full border px-2 py-0.5 text-[11px] font-black ${getMaterialColor(asset.material_type)}`}>
           {asset.material_type || 'unknown'}
@@ -673,7 +672,7 @@ function EditModal({ asset, form, setForm, onClose, onSave }: {
         </div>
         <div className="grid gap-4 md:grid-cols-[220px_1fr]">
           <div className="aspect-square overflow-hidden rounded-xl bg-stone-100">
-            {asset.asset_type === 'image' ? <img src={getAssetDisplayUrl(asset)} className="h-full w-full object-cover" /> : <div className="flex h-full items-center justify-center text-3xl">🎬</div>}
+            {asset.asset_type === 'image' ? <SecureImage src={asset.thumbnail_url || asset.url} className="h-full w-full object-cover" /> : <div className="flex h-full items-center justify-center text-3xl">🎬</div>}
           </div>
           <div className="grid gap-3 sm:grid-cols-2">
             <Field label="品牌" value={form.brand || ''} onChange={value => setForm({ ...form, brand: value })} />
@@ -726,9 +725,9 @@ function Lightbox({ asset, assets, onClose, onChange }: {
       {index > 0 && <button className="absolute left-5 rounded-full bg-white px-4 py-3 text-xl font-black" onClick={() => onChange(visible[index - 1])}>←</button>}
       <div className="max-h-[86vh] max-w-[86vw]">
         {asset.asset_type === 'video' ? (
-          <video src={toAssetUrl(asset.url)} controls className="max-h-[86vh] max-w-[86vw] rounded-xl" />
+          <SecureVideo src={asset.url} controls className="max-h-[86vh] max-w-[86vw] rounded-xl" />
         ) : (
-          <img src={toAssetUrl(asset.url)} alt={buildNamingFormat(asset)} className="max-h-[86vh] max-w-[86vw] rounded-xl object-contain" />
+          <SecureImage src={asset.url} alt={buildNamingFormat(asset)} className="max-h-[86vh] max-w-[86vw] rounded-xl object-contain" />
         )}
         <div className="mt-3 text-center text-sm font-bold text-white">{buildNamingFormat(asset)}</div>
       </div>

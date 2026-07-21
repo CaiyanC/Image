@@ -156,6 +156,27 @@ class AssetServiceTest(unittest.TestCase):
             foreign_keys,
         )
 
+    def test_create_asset_persists_review_and_authorization_defaults(self):
+        asset = asset_service.create_asset(
+            self.db,
+            "ASSET-1",
+            {
+                "category_code": "07",
+                "category_name": "AI 生成图",
+                "sub_category": "AI 生成图",
+                "material_type": "aiGenerated",
+                "url": "/uploads/assets/ASSET-1/ai.png",
+                "is_real_product": False,
+                "is_ai_generated": True,
+            },
+        )
+        self.assertFalse(asset.is_real_product)
+        self.assertTrue(asset.is_ai_generated)
+        self.assertEqual(asset.review_status, "pending")
+        self.assertEqual(asset.authorization_status, "unknown")
+        self.assertFalse(asset.is_public)
+        self.assertFalse(asset.ai_customer_usable)
+
 
 if __name__ == "__main__":
     unittest.main()

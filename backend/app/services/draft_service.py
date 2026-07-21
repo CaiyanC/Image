@@ -268,6 +268,13 @@ def publish_draft(db: Session, draft_id: str, user_id: str = None) -> dict:
         # A partial draft must not erase L4 relations it did not carry.  An
         # explicit section still replaces that section atomically, preserving
         # the existing draft-publish semantics for deliberate QA updates.
+        if "media" in draft_data:
+            from . import product_asset_sync_service
+            product_asset_sync_service.sync_product_assets_from_media_data(
+                db, existing_product, draft_data.get("media")
+            )
+
+        # QA items - delete old and insert new
         from ..models.product_qa import ProductQa, ProductQaNegative
         if "qa_items" in draft_data:
             db.query(ProductQa).filter(ProductQa.product_id == pid).delete()
