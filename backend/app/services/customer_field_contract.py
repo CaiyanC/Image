@@ -19,6 +19,28 @@ FIELD_CONTRACTS: tuple[FieldContract, ...] = (
     # SKU is a catalogue record key.  It must not be presented as a
     # manufacturer model number merely because both can look like a code.
     FieldContract("sku", ("商品编码", "产品编码", "SKU", "sku", "货号"), "unknown"),
+    # English display name is a catalogue identity attribute, separate from
+    # brand (manufacturer) and specification (physical product summary).
+    FieldContract("product_name_cn", ("中文名", "中文名称", "中文商品名"), "unknown"),
+    FieldContract("product_name_en", ("英文名", "英文名称", "英文商品名"), "unknown"),
+    # Customer-facing listing content is distinct from catalogue identity.
+    # Language/channel are evidence subtypes selected after this contract has
+    # sealed the product, not parallel routing concepts.
+    FieldContract(
+        "content_title",
+        ("中文商品标题", "英文商品标题", "商品标题", "官网标题", "Amazon标题", "营销标题"),
+        "unknown",
+    ),
+    FieldContract(
+        "content_description",
+        ("中文长描述", "英文长描述", "中文刊登描述", "英文刊登描述", "长描述", "详情介绍", "详情描述", "刊登描述"),
+        "unknown",
+    ),
+    FieldContract("bullet_points", ("五点描述", "五点卖点", "五点要点", "商品五点"), "unknown"),
+    # Search terms are an internal retrieval aid. Recognise the customer
+    # request so it cannot be misrouted to a public content field, but keep
+    # it outside the supported evidence allowlist.
+    FieldContract("search_keywords", ("搜索关键词库", "后台检索词", "检索关键词"), "unknown"),
     # The current ORM has no products.model column.  Keep model number as a
     # formal, safely-missing customer intent rather than inventing it from SKU.
     FieldContract("model", ("型号",), "unknown"),
@@ -227,6 +249,12 @@ _LEGACY_SEMANTIC_FIELD_ALIASES = {
 
 DETAIL_FIELD_LABELS = {
     "sku": "SKU",
+    "product_name_cn": "中文名",
+    "product_name_en": "英文名",
+    "content_title": "商品标题",
+    "content_description": "商品长描述",
+    "bullet_points": "五点描述",
+    "search_keywords": "搜索关键词",
     "model": "型号",
     "brand": "品牌",
     "category": "商品类目",
@@ -324,6 +352,11 @@ LEGACY_DETAIL_FIELD_TYPES = {
 # they are allowed to participate in single-product detail arbitration.
 SUPPORTED_DETAIL_FIELDS = frozenset({
     "sku",
+    "product_name_cn",
+    "product_name_en",
+    "content_title",
+    "content_description",
+    "bullet_points",
     "brand",
     "category",
     "dimensions",
@@ -414,6 +447,22 @@ def _aliases(field_type: str) -> tuple[str, ...]:
 # This policy is field-scoped only. It never chooses a product or generates an answer.
 FIELD_EVIDENCE_POLICIES: dict[str, FieldEvidencePolicy] = {
     "sku": FieldEvidencePolicy("sku", _aliases("sku"), ("product.sku",), _aliases("sku")),
+    "product_name_cn": FieldEvidencePolicy(
+        "product_name_cn", _aliases("product_name_cn"), ("product.product_name_cn",), _aliases("product_name_cn")
+    ),
+    "product_name_en": FieldEvidencePolicy(
+        "product_name_en", _aliases("product_name_en"), ("product.product_name_en",), _aliases("product_name_en")
+    ),
+    "content_title": FieldEvidencePolicy(
+        "content_title", _aliases("content_title"), ("content.title_cn", "content.title_en", "content.website_title", "content.amazon_title"), _aliases("content_title")
+    ),
+    "content_description": FieldEvidencePolicy(
+        "content_description", _aliases("content_description"), ("content.long_description_cn", "content.long_description_en", "content.listing_cn", "content.listing_en"), _aliases("content_description")
+    ),
+    "bullet_points": FieldEvidencePolicy(
+        "bullet_points", _aliases("bullet_points"), ("content.bullet_points",), _aliases("bullet_points")
+    ),
+    "search_keywords": FieldEvidencePolicy("search_keywords", _aliases("search_keywords"), (), _aliases("search_keywords")),
     "model": FieldEvidencePolicy("model", _aliases("model"), ("product.model",), _aliases("model")),
     "brand": FieldEvidencePolicy("brand", _aliases("brand"), ("product.brand",), _aliases("brand")),
     "category": FieldEvidencePolicy("category", _aliases("category"), ("product.category",), _aliases("category")),
@@ -1495,6 +1544,40 @@ def resolve_requested_field_contract(
     )
     semantic_fields = validated_semantic_fields
     semantic_called = bool(isinstance(plan.get("semantic_preplan"), dict) and plan["semantic_preplan"].get("called"))
+    try:
+        semantic_product_qa_confidence = float(
+            (plan.get("semantic_preplan") or {}).get("confidence") or 0.0
+        )
+    except (TypeError, ValueError):
+        semantic_product_qa_confidence = 0.0
+    semantic_product_qa = bool(
+        semantic_called
+        and isinstance(plan.get("semantic_preplan"), dict)
+        and str(plan["semantic_preplan"].get("route_family") or "").strip() == "product_bound_qa"
+        and str(plan["semantic_preplan"].get("evidence_kind") or "").strip() == "product_qa"
+        and not str(plan["semantic_preplan"].get("fallback_reason") or "").strip()
+        and semantic_product_qa_confidence >= 0.9
+    )
+    # A valid semantic product-QA decision owns the distinction between a
+    # structured field and a product-specific capability/judgement.  Do not
+    # let aliases in the product name or question recreate a formal field;
+    # downstream code still has to form EntityResolutionContract and find
+    # same-SKU QA evidence before it can answer.
+    if semantic_product_qa:
+        return {
+            "field_type": None,
+            "requested_field": None,
+            "requested_fields": [],
+            "field_spans": field_spans,
+            "canonical_fields": [],
+            "supported_fields": [],
+            "unsupported_fields": [],
+            "subject": str(subject or "").strip(),
+            "requested_scope": str(requested_scope or "subject").strip() or "subject",
+            "source": "validated_semantic_product_qa",
+            "confidence": semantic_product_qa_confidence,
+            "compound": False,
+        }
     semantic_valid = bool(semantic_called and (semantic_fields or semantic_field) and semantic_confidence >= 0.5)
     semantic_candidate_fields = semantic_fields or ([semantic_field] if semantic_field else [])
     explicit_semantic_conflict = bool(
@@ -1679,11 +1762,33 @@ def _validated_semantic_field_candidate(
     # This remains field-only semantic input: it neither grants an identity
     # nor answers from the catalogue.  EntityResolutionContract still has to
     # resolve one product (or fail closed) before any evidence is consumed.
+    structured_subject = str(preplan.get("subject_text") or "").strip()
+    structured_constraints = preplan.get("structured_query_constraints")
+    # A high-confidence field predicate with a textual subject is sometimes
+    # emitted in the structured-query envelope even though it has no filter
+    # object at all.  That envelope is not an identity or evidence grant: the
+    # field can safely enter the central contract and EntityResolutionContract
+    # will still either seal exactly one product or return an ambiguity.
+    # Keeping this narrow to an *empty* validated constraint list preserves
+    # real catalogue filtering, whose predicate objects remain structured.
+    subject_bound_empty_structured_shape = bool(
+        structured_subject
+        and isinstance(structured_constraints, list)
+        and not structured_constraints
+    )
     structured_formal_field_shape = bool(
         field_type in FORMAL_DETAIL_FIELDS
         and semantic_shape == ("structured_query", "filter", "structured_query")
         and str(preplan.get("route_hint") or "").strip() == "query_products"
-        and bool(preplan.get("evidence_required"))
+        # ``evidence_required`` is a planner-side route diagnostic, not
+        # evidence authorization.  For a catalog-exact subject, the formal
+        # field still goes through EntityResolutionContract and the same-SKU
+        # evidence provider even when the model omitted that diagnostic flag.
+        and (
+            bool(preplan.get("evidence_required"))
+            or trusted_subject
+            or subject_bound_empty_structured_shape
+        )
     )
     allowed_route_hints = (
         {"product_detail", "comparison"} if comparison_shape else {"recommendation"} if pairwise_recommendation_adapter else {"product_detail"}

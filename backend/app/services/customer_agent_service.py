@@ -40,10 +40,23 @@ def _trim_sku_tail_candidate(candidate: str) -> str:
     value = str(candidate or "").strip().replace("_", "-").upper()
     if not value:
         return ""
+    # Chinese possessive “的” is grammar following a SKU (for example
+    # ``KW-K32-黑的容量``), never part of the canonical catalogue identity.
+    # Remove only that terminal grammatical tail before matching variants.
+    possessive = chr(0x7684)
+    if value.endswith(possessive):
+        value = value[:-1]
     for pattern in SKU_TAIL_TRIM_PATTERNS:
         match = pattern.match(value)
         if match:
-            return str(match.group(1) or "").strip()
+            value = str(match.group(1) or "").strip()
+            break
+    # A greedy Chinese suffix can include the possessive before the trailing
+    # question phrase (for example ``...-黑的容量``).  Strip grammatical
+    # possessives after structural trimming as well; they are never part of a
+    # canonical SKU.
+    while value.endswith(possessive):
+        value = value[:-1]
     return value
 
 
@@ -1050,7 +1063,27 @@ def _extract_skus(text: str) -> list[str]:
         for candidate in _extract_sku_prefix_candidates(variant):
             if candidate not in seen:
                 seen.append(candidate)
-    return seen
+    # SKU_RE also accepts plain compact SKUs for backwards compatibility.  In
+    # a longer hyphenated identity, its terminal segment (for example ``G25``
+    # in ``CS-G25``) is a parser by-product, not a second entity.  Retain a
+    # standalone compact SKU unless a complete extracted SKU explicitly ends
+    # in that segment.
+    retained = [
+        candidate
+        for candidate in seen
+        if not (
+            PLAIN_SKU_PREFIX_RE.fullmatch(candidate)
+            and any(
+                len(other) > len(candidate)
+                and other.endswith(f"-{candidate}")
+                for other in seen
+            )
+        )
+    ]
+    # The comparison contract consumes this list as the participant order.
+    # Regex passes can discover the final greedy match before an earlier prefix,
+    # so restore the literal utterance order after canonical normalization.
+    return sorted(retained, key=lambda candidate: normalized_text.find(candidate))
 
 
 def _find_field_path_in_text(text: str) -> str | None:

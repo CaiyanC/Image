@@ -28,6 +28,16 @@ const ERROR_MESSAGES: Record<string, string> = {
   'Request failed': '请求失败',
 }
 
+export class ApiRequestError extends Error {
+  readonly status: number
+
+  constructor(message: string, status: number) {
+    super(message)
+    this.name = 'ApiRequestError'
+    this.status = status
+  }
+}
+
 function normalizeErrorMessage(detail: unknown, status?: number) {
   const raw = typeof detail === 'string' ? detail : JSON.stringify(detail || '')
   if (ERROR_MESSAGES[raw]) return ERROR_MESSAGES[raw]
@@ -376,7 +386,7 @@ async function request<T>(url: string, options: RequestInit = {}, timeoutMs = 30
         })
       }
       if (response.status === 403) showNoPermissionToast()
-      throw new Error(normalizeErrorMessage(error.detail || error, response.status))
+      throw new ApiRequestError(normalizeErrorMessage(error.detail || error, response.status), response.status)
     }
 
     const data = await response.json()
@@ -453,7 +463,7 @@ async function streamRequest(
     if (!response.ok || !response.body) {
       const error = await response.json().catch(() => ({ detail: 'Request failed' }))
       if (response.status === 403) showNoPermissionToast()
-      throw new Error(normalizeErrorMessage(error.detail || error, response.status))
+      throw new ApiRequestError(normalizeErrorMessage(error.detail || error, response.status), response.status)
     }
 
     const reader = response.body.getReader()

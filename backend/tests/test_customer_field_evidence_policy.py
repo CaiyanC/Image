@@ -446,6 +446,61 @@ def test_semantic_price_positioning_keeps_its_compositionally_confirmed_field_ov
     assert contract["source"] == "validated_semantic_preplan"
 
 
+def test_semantic_preplan_prompt_distinguishes_product_need_from_user_persona():
+    """Natural wording about a product's role must not collapse into audience.
+
+    This is a taxonomy contract for the semantic planner, not an alias for a
+    product or a particular customer question.  Entity and evidence contracts
+    remain downstream of the selected canonical field.
+    """
+    messages = customer_agent_planner_service._semantic_preplan_messages(
+        question="示例折叠箱面向哪类需求？",
+        deterministic_plan={},
+        context={},
+    )
+    prompt = str(messages[0]["content"])
+
+    assert "positioning=target customer/problem, intended role, or brand strategy" in prompt
+    assert "need, use case, problem, role, or job-to-be-done" in prompt
+    assert "user persona, customer type, or user group" in prompt
+
+
+def test_semantic_preplan_prompt_keeps_named_product_safety_as_product_fact():
+    """A document may supply evidence without becoming the customer's subject."""
+    messages = customer_agent_planner_service._semantic_preplan_messages(
+        question="\u793a\u4f8b\u7089\u5177\u6709\u4ec0\u4e48\u7981\u6b62\u64cd\u4f5c\uff1f",
+        deterministic_plan={},
+        context={},
+    )
+    prompt = str(messages[0]["content"])
+
+    assert "named-product question about operating steps, safety rules, prohibited actions" in prompt
+    assert "is product_bound_qa even if its answer may later use a manual or knowledge-base document as evidence" in prompt
+
+
+def test_semantic_formal_field_signal_preempts_legacy_usage_shortcut_without_answering():
+    """A valid semantic field can block a shortcut before entity sealing.
+
+    This does not make the semantic layer an evidence authority: it only
+    prevents a legacy usage/contents branch from replacing a formal field
+    signal before FieldContract and EntityResolutionContract run.
+    """
+    preplan = {
+        "called": True,
+        "route_family": "knowledge_base_meta",
+        "field_type": "usage_instruction",
+        "field_hint": "usage_instruction",
+        "canonical_fields": ["usage_instruction"],
+        "confidence": 0.9,
+        "fallback_reason": "",
+        "ambiguity": False,
+    }
+
+    assert customer_service_service._semantic_formal_field_preempts_legacy_shortcuts(preplan) is True
+    assert customer_service_service._semantic_formal_field_preempts_legacy_shortcuts({**preplan, "confidence": 0.5}) is False
+    assert customer_service_service._semantic_formal_field_preempts_legacy_shortcuts({**preplan, "field_type": "not_a_field"}) is False
+
+
 def test_semantic_safe_field_forms_the_only_field_contract_without_a_phrase_alias():
     plan = {
         "semantic_preplan": {

@@ -7,7 +7,13 @@ import re
 import httpx
 from typing import Any
 from ..core.config import settings
-from . import customer_agent_service, customer_field_contract, customer_llm_service
+from ..models.product import Product
+from . import (
+    customer_agent_service,
+    customer_field_contract,
+    customer_llm_service,
+    customer_recommendation_verification_contract,
+)
 
 
 def _is_retryable_semantic_preplan_error(exc: Exception) -> bool:
@@ -118,9 +124,11 @@ SEMANTIC_PREPLAN_ROUTE_FAMILIES = {
     "unknown_realtime",
     "contents_accessories",
     "generic_query",
+    "knowledge_base_meta",
     "clarification",
     "product_navigation",
 }
+SEMANTIC_PREPLAN_INFORMATION_SCOPES = {"", "knowledge_base_meta"}
 SEMANTIC_PREPLAN_FIELD_TYPES = {
     "",
     "recommendation",
@@ -168,7 +176,8 @@ SEMANTIC_PREPLAN_ALLOWED_KEYS = {
     "unrepresented_recommendation_requirements",
     "recommendation_soft_preferences",
     "recommendation_followup_action",
-    "subject_text", "canonical_fields", "ambiguity", "evidence_required", "context_usage", "decision_requested", "reasoning_summary",
+    "information_scope",
+    "subject_text", "canonical_fields", "ambiguity", "evidence_required", "evidence_kind", "qa_evidence_query", "context_usage", "decision_requested", "reasoning_summary",
 }
 SEMANTIC_PREPLAN_SHORT_KEY_MAP = {
     "r": "route_hint",
@@ -215,8 +224,11 @@ def _empty_semantic_preplan(*, called: bool = False, fallback_reason: str = "") 
         "canonical_fields": [],
         "ambiguity": False,
         "evidence_required": True,
+        "evidence_kind": "",
+        "qa_evidence_query": "",
         "context_usage": "none",
         "decision_requested": False,
+        "information_scope": "",
         "recommendation_constraints": {},
         "structured_query_constraints": [],
         "unrepresented_recommendation_requirements": [],
@@ -353,6 +365,8 @@ def _semantic_route_family_defaults(route_family: str) -> dict[str, Any]:
         return {"route_hint": "product_detail", "question_type": "contents_accessories", "subtype": "contents_accessories"}
     if family == "generic_query":
         return {"route_hint": "query_products", "question_type": "filter", "subtype": "generic_query"}
+    if family == "knowledge_base_meta":
+        return {"route_hint": "clarification", "question_type": "field", "subtype": "no_match"}
     if family == "clarification":
         return {"route_hint": "clarification", "question_type": "field", "subtype": "no_match"}
     return {}
@@ -522,7 +536,11 @@ _SEMANTIC_STRUCTURED_QUERY_OPERATORS = {
 }
 
 
-def _validated_structured_query_constraints(value: Any) -> list[dict[str, Any]] | None:
+def _validated_structured_query_constraints(
+    value: Any,
+    *,
+    allow_empty_category_scope: bool = False,
+) -> list[dict[str, Any]] | None:
     """Validate semantic predicate structure without accepting product facts.
 
     The values remain provisional customer-language spans.  The structured
@@ -530,6 +548,8 @@ def _validated_structured_query_constraints(value: Any) -> list[dict[str, Any]] 
     then evaluates it against a product's own database columns.
     """
     if value is None:
+        return []
+    if value == [] and allow_empty_category_scope:
         return []
     if not isinstance(value, list) or not (1 <= len(value) <= 4):
         return None
@@ -623,6 +643,7 @@ def _validate_semantic_preplan(data: dict[str, Any] | None, *, raw_content: str 
     field_hint = str(field_hint).strip() if field_hint is not None and str(field_hint).strip() else None
     subtype = str(data.get("subtype") or "").strip()
     entity_scope = str(data.get("entity_scope") or "").strip()
+    information_scope = str(data.get("information_scope") or "").strip()
     field_type = str(data.get("field_type") or "").strip()
     if not route_family:
         route_family = _semantic_route_family_from_legacy(route_hint, question_type, subtype)
@@ -632,6 +653,8 @@ def _validate_semantic_preplan(data: dict[str, Any] | None, *, raw_content: str 
         subtype = ""
     if entity_scope not in SEMANTIC_PREPLAN_ENTITY_SCOPES:
         entity_scope = ""
+    if information_scope not in SEMANTIC_PREPLAN_INFORMATION_SCOPES:
+        information_scope = ""
     field_type = customer_field_contract.semantic_preplan_field_type(field_type)
     field_hint = customer_field_contract.semantic_preplan_field_type(field_hint) if field_hint else None
     if field_type not in SEMANTIC_PREPLAN_FIELD_TYPES:
@@ -639,6 +662,37 @@ def _validate_semantic_preplan(data: dict[str, Any] | None, *, raw_content: str 
     canonical_fields = data.get("canonical_fields") if isinstance(data.get("canonical_fields"), list) else []
     canonical_fields = [customer_field_contract.semantic_preplan_field_type(item) for item in canonical_fields]
     canonical_fields = list(dict.fromkeys(item for item in canonical_fields if item in SEMANTIC_PREPLAN_FIELD_TYPES and item))
+    raw_evidence_kind = str(data.get("evidence_kind") or "").strip()
+    # Backward-compatible semantic shape: before ``evidence_kind`` became a
+    # required key, a product-bound plan with no canonical field was already
+    # the model's only way to say “use same-SKU QA”.  Preserve that semantic
+    # decision rather than allowing aliases to reclassify it as a column.
+    evidence_kind = raw_evidence_kind or (
+        "product_qa"
+        if route_family == "product_bound_qa" and not canonical_fields and not field_type and not field_hint
+        else "structured_field"
+    )
+    if evidence_kind not in {"structured_field", "product_qa"}:
+        result = _empty_semantic_preplan(called=True, fallback_reason="invalid_evidence_kind")
+        result["raw_preview"] = _safe_preview(raw_content)
+        return result
+    # ``product_qa`` is a semantic decision that the customer asks for a
+    # product-specific capability, judgement, or procedure for which the
+    # authoritative source is same-SKU QA rather than a structured column.
+    # It intentionally clears compatibility mirrors as well: otherwise a
+    # keyword/alias from the question would silently recreate the very field
+    # the model rejected.  Identity and QA evidence are sealed downstream.
+    if evidence_kind == "product_qa":
+        if route_family not in {"product_bound_qa", "comparison"}:
+            result = _empty_semantic_preplan(called=True, fallback_reason="product_qa_outside_product_bound_route")
+            result["raw_preview"] = _safe_preview(raw_content)
+            return result
+        canonical_fields = []
+        field_type = ""
+        field_hint = None
+    qa_evidence_query = str(data.get("qa_evidence_query") or "").strip()[:160]
+    if evidence_kind != "product_qa":
+        qa_evidence_query = ""
     # A navigation turn changes only the active product subject.  It must not
     # manufacture a field merely because a model guesses an overview default.
     if route_family == "product_navigation":
@@ -656,6 +710,19 @@ def _validate_semantic_preplan(data: dict[str, Any] | None, *, raw_content: str 
         field_hint = field_type
     if not canonical_fields and field_type:
         canonical_fields = [field_type]
+    # A pairwise decision must name the single formal criterion that makes one
+    # participant more suitable. Empty fields leave the comparison executor no
+    # evidence policy to apply, so repair the semantic plan instead of asking a
+    # legacy clarification after both entities have already been resolved.
+    if (
+        route_family == "comparison"
+        and len(entities) >= 2
+        and not canonical_fields
+        and evidence_kind != "product_qa"
+    ):
+        result = _empty_semantic_preplan(called=True, fallback_reason="missing_comparison_decision_criterion")
+        result["raw_preview"] = _safe_preview(raw_content)
+        return result
     # Route labels (for example ``recommendation``) are not comparison
     # dimensions.  A named-product comparison must contain only formal fields
     # before later evidence can be sealed.  Returning this to the same
@@ -664,6 +731,7 @@ def _validate_semantic_preplan(data: dict[str, Any] | None, *, raw_content: str 
     # different field.
     if (
         route_family == "comparison"
+        and evidence_kind != "product_qa"
         and any(field not in customer_field_contract.FORMAL_DETAIL_FIELDS for field in canonical_fields)
     ):
         result = _empty_semantic_preplan(called=True, fallback_reason="invalid_comparison_decision_criterion")
@@ -732,7 +800,14 @@ def _validate_semantic_preplan(data: dict[str, Any] | None, *, raw_content: str 
         )
         data["recommendation_constraints"] = raw_constraints
     recommendation_constraints = _validated_recommendation_constraints(data.get("recommendation_constraints"))
-    structured_query_constraints = _validated_structured_query_constraints(data.get("structured_query_constraints"))
+    structured_query_constraints = _validated_structured_query_constraints(
+        data.get("structured_query_constraints"),
+        allow_empty_category_scope=(
+            route_family == "structured_query"
+            and not entities
+            and set(canonical_fields) == {"category"}
+        ),
+    )
     unrepresented_requirements = _validated_unrepresented_recommendation_requirements(
         data.get("unrepresented_recommendation_requirements")
     )
@@ -759,6 +834,23 @@ def _validate_semantic_preplan(data: dict[str, Any] | None, *, raw_content: str 
             # malformed multi-condition semantic plan.
             result["semantic_route_family_hint"] = "structured_query"
             result["semantic_confidence_hint"] = confidence
+            # A malformed filter predicate does not invalidate the model's
+            # independent recognition of one formal field and its textual
+            # subject.  Preserve that candidate for the service layer to
+            # validate against an EntityResolutionContract; it cannot select
+            # an SKU, evidence, or answer on its own.
+            subject_text = str(data.get("subject_text") or "").strip()
+            if (
+                subject_text
+                and len(canonical_fields) == 1
+                and canonical_fields[0] in customer_field_contract.FORMAL_DETAIL_FIELDS
+                and confidence >= 0.9
+            ):
+                result["invalid_structured_query_named_detail_candidate"] = {
+                    "subject_text": subject_text[:200],
+                    "canonical_fields": list(canonical_fields),
+                    "confidence": confidence,
+                }
         result["raw_preview"] = _safe_preview(raw_content)
         return result
     if unrepresented_requirements is None:
@@ -797,6 +889,14 @@ def _validate_semantic_preplan(data: dict[str, Any] | None, *, raw_content: str 
         and (entities or str(data.get("subject_text") or "").strip())
         and canonical_fields
         and any(field not in _SEMANTIC_STRUCTURED_QUERY_OPERATORS for field in canonical_fields)
+        # A value-grounded catalogue field (for example a stored series name)
+        # is a filter subject, not a named product.  The semantic planner must
+        # still choose this route; the executor later verifies the actual DB
+        # value before returning any rows.
+        and not (
+            not entities
+            and set(canonical_fields).issubset({"series", "brand", "category", "product_level"})
+        )
     ):
         result = _empty_semantic_preplan(
             called=True,
@@ -844,8 +944,11 @@ def _validate_semantic_preplan(data: dict[str, Any] | None, *, raw_content: str 
             "subject_text": str(data.get("subject_text") or "").strip()[:200],
             "ambiguity": bool(data.get("ambiguity")),
             "evidence_required": bool(data.get("evidence_required", True)),
+            "evidence_kind": evidence_kind,
+            "qa_evidence_query": qa_evidence_query,
             "context_usage": str(data.get("context_usage") or "none").strip()[:40],
             "decision_requested": bool(data.get("decision_requested")),
+            "information_scope": information_scope,
             "recommendation_constraints": recommendation_constraints,
             "structured_query_constraints": structured_query_constraints,
             "unrepresented_recommendation_requirements": unrepresented_requirements,
@@ -886,28 +989,32 @@ def _semantic_preplan_messages(
             "role": "system",
             "content": (
                 "Return only JSON, no markdown. You are a pre-route arbiter only; do not answer and do not judge product facts. "
-                "Required keys: route_family, entities, subject_text, canonical_fields, confidence, ambiguity, evidence_required, context_usage, decision_requested, reasoning_summary. "
+                "Required keys: route_family, entities, subject_text, canonical_fields, confidence, ambiguity, evidence_required, evidence_kind, qa_evidence_query, context_usage, decision_requested, information_scope, reasoning_summary. "
             "For route_family=recommendation, optionally add recommendation_constraints with only these abstract keys: subject_kind (cookware|waterware|stove), people ({min,max} positive integers), heat_sources (card_stove|gas_stove|alcohol_stove|open_flame|induction), scenarios (camping|hiking|self_drive|seaside|soup), weight_preference (lightweight), price_preference (affordable|premium), storage_preference (compact_storage). Every explicit cardinality or group-size expression is an independent people condition, including written or numeric one-person, two-person, three-person, family, or group wording; retain it even when the same sentence also names a scenario, heat source, or product kind. Heat-source codes are exact ontology values: card_stove=卡式炉, gas_stove=燃气炉, alcohol_stove=酒精炉, open_flame=明火, induction=电磁炉. Do not substitute one code for another. storage_preference=compact_storage is only for an explicit desire for compact storage, nesting, folding, or taking little packing space; it is a soft preference, never a hard eligibility condition. Classify every non-ontology customer expression by its meaning in the whole question. Do not assume it is already satisfied because it sounds typical for the requested product category or because a later writer might find related content. Put an unmet must-have eligibility condition in unrepresented_recommendation_requirements, but put every non-binding desire, use-context, or decision framing in recommendation_soft_preferences. A descriptive preference introduced as a wish, preference, or choice framing is non-binding unless the customer explicitly makes it non-negotiable (for example, must, only, cannot accept, or equivalent force); do not upgrade it to an unmet hard requirement merely because the current ontology has no key. Both arrays contain at most five exact literal customer phrases; never silently omit or paraphrase them. A phrase represented by a formal constraint must not also be copied into recommendation_soft_preferences. Soft preferences never prove a product fact and do not filter candidates. Never include product names, SKUs, candidates, database values, reasons about a particular product, or an answer in recommendation_constraints. "
-                "For route_family=structured_query with two or more explicit filters, add structured_query_constraints: an array of 2-4 objects {field,operator,value,evidence_span,unit}. field must be one of material,capacity,weight,dimensions,people,color,heat_source,usage_scene,waterproof and must also be in canonical_fields. operator must be: material/usage_scene contains; heat_source supports or not_supports; numeric fields >=,>,<=,<,=,between; color/dimensions contains or =; waterproof =. evidence_span must be an exact customer phrase in this turn, and each textual value must be a verbatim substring of that evidence_span (for example value=明火, evidence_span=支持明火). This is a query predicate only: never include a product name, SKU, candidate, database value, answer, or inferred condition. "
+                "For route_family=structured_query with one or more explicit filters, add structured_query_constraints: an array of 1-4 objects {field,operator,value,evidence_span,unit}. field must be one of material,capacity,weight,dimensions,people,color,heat_source,usage_scene,waterproof and must also be in canonical_fields. operator must be: material/usage_scene contains; heat_source supports or not_supports; numeric fields >=,>,<=,<,=,between; color/dimensions contains or =; waterproof =. evidence_span must be an exact customer phrase in this turn, and each textual value must be a verbatim substring of that evidence_span (for example value=明火, evidence_span=支持明火). A generic catalogue kind such as cookware, stove, or waterware is the query subject scope in subject_text, not a category predicate and not an extra canonical_fields entry; canonical_fields contains only the actual requested filter dimensions. This is a query predicate only: never include a product name, SKU, candidate, database value, answer, or inferred condition. "
+                "For a catalogue count or an unconstrained list whose only scope is a generic product kind (for example, how many stoves are recorded), use route_family=structured_query, route_hint=query_products, subject_text for that kind, canonical_fields=[category], and structured_query_constraints=[]; category describes the database membership scope here and MUST NOT appear as a predicate object. "
                 "subject_kind means the thing the customer is actually seeking: waterware is for a vessel explicitly requested to carry or boil water, cookware is for a pot, pan, griddle, or cooking vessel, and stove is for a burner or heat source. Do not select cookware merely because water can also be heated in cookware. weight_preference is only an explicit physical-mass requirement (for example light, heavy, weight, or carrying load). Compactness, storage, or not taking space is not weight_preference; use storage_preference=compact_storage for an explicit non-binding storage preference, and preserve an explicitly non-negotiable storage requirement in unrepresented_recommendation_requirements. "
                 "When decision_requested is true and the customer contrasts two or more product forms that all belong to one allowed broad subject_kind, emit that shared subject_kind so the evidence executor has a bounded catalogue scope. This does not decide which form wins and does not create a product-form constraint; the later semantic writer may choose only from sealed same-SKU evidence. "
                 "Every recommendation constraint must be explicitly stated by the customer in this turn or supplied by an explicit prior-turn customer preference; omit it when it is merely plausible or typical. In particular, do not infer people, heat_sources, scenarios, or weight_preference from the product category, a generic outdoor word, or the fact that a customer asks for a recommendation. "
                 "For a recommendation that explicitly asks to replace the prior recommendation, set recommendation_followup_action=alternative; otherwise omit it. This is only allowed when an explicit prior customer preference is supplied. "
                     "Before returning a recommendation plan, inspect every explicit customer requirement. When one customer expression contains multiple independently allowed requirements, emit every matching allowed constraint rather than letting one suppress another. If a must-have eligibility condition cannot be put in recommendation_constraints without inventing a meaning, it MUST appear verbatim in unrepresented_recommendation_requirements. Do not turn a non-binding preference into an eligibility gap merely because the ontology cannot encode it. "
-                "route_family enum: structured_query,recommendation,comparison,product_bound_qa,product_navigation,unresolved_product_like,negative_product_like,unknown_realtime,contents_accessories,generic_query,clarification. "
+                "route_family enum: structured_query,recommendation,comparison,product_bound_qa,product_navigation,unresolved_product_like,negative_product_like,unknown_realtime,contents_accessories,generic_query,knowledge_base_meta,clarification. Use knowledge_base_meta only when the user asks about a knowledge-base document itself, its contents, rules, or principles rather than requesting a product fact. A named-product question about operating steps, safety rules, prohibited actions, cleaning, maintenance, or any other product field is product_bound_qa even if its answer may later use a manual or knowledge-base document as evidence. "
                 "entity_scope enum: generic_scope,category_scope,product_like,resolved_product,ambiguous_product,unresolved_product,negative_product. "
                 "field_type enum: " + ",".join(sorted(SEMANTIC_PREPLAN_FIELD_TYPES)) + ". "
-                "canonical_fields is an ordered array of one or more field concepts; use every independently requested field. subject_text is the product mention only, never a SKU decision. "
-                "For a comparison between two or more named products, entities is mandatory: put each verbatim product mention in entities in mention order (at least two items). Any factual request that asks for those named participants' respective values is route_family=comparison even when it asks for no winner; structured_query is only for filters over a product set, never a pairwise product fact. canonical_fields must contain only the field explicitly asked for, or the single field that directly expresses the user's stated suitability criterion; never enumerate product dimensions that the user did not ask about. Set decision_requested=true whenever the user asks which named participant wins a stated criterion, including which is lighter, heavier, larger, cheaper, more suitable, or should be chosen; otherwise false. Never infer a preference from a product name, version label, or SKU, and never invent, normalize, or choose a SKU. "
+                "evidence_kind is required for every product_bound_qa request. Use structured_field only when the customer directly asks for a recorded field value. Use product_qa when the customer asks a product-specific capability, judgement, procedure, or compatibility fact that is not identical to one structured field; then canonical_fields MUST be [] and no field_type/field_hint may be emitted. For product_qa, qa_evidence_query is required: return a concise semantic retrieval phrase for the customer's intent, with no product name, SKU, database value, or answer. Preserve the customer's concrete operative condition rather than replacing it with an abstract category: for a question about whether low heat can be adjusted for simmering, the retrieval phrase must retain the low-heat adjustment and simmering condition, not merely say slow-cooking performance. For example, describe gifting suitability, authenticity verification, flame adjustability, household compatibility, durability, or load-bearing as the requested capability. For every other evidence_kind set qa_evidence_query="". Durability is not lifecycle_status; whether a product is suitable as a present is not whether a purchase includes a promotional gift; authenticity verification is not certification; adjustability is not a numeric power rating; household compatibility is not a list of usage scenes; and load-bearing is not net weight, headcount, or volume. These are ontology boundaries, not product facts: keep them product_qa so only a later same-SKU QA evidence contract may answer. "
+                "canonical_fields is an ordered array of one or more field concepts; use every independently requested field. A number, unit, model marker, capacity, size, color, or version that occurs only inside the product mention belongs only to subject_text and MUST NOT create an additional canonical field, structured filter, recommendation condition, or ambiguity. Add a field only when the customer's predicate independently asks for that fact. subject_text is the product mention only, never a SKU decision. "
+                "For a comparison between two or more named products, entities is mandatory: put each verbatim product mention in entities in mention order (at least two items). Any factual request that asks for those named participants' respective values is route_family=comparison even when it asks for no winner; structured_query is only for filters over a product set, never a pairwise product fact. canonical_fields must contain only the field explicitly asked for, or the single field that directly expresses the user's stated suitability criterion; never enumerate product dimensions that the user did not ask about. If the criterion is a product-specific capability, procedure, compatibility, judgement, or performance fact that is not identical to one structured field, set evidence_kind=product_qa, canonical_fields=[], and provide qa_evidence_query; never substitute a merely related structured field. Set decision_requested=true whenever the user asks which named participant wins a stated criterion, including which is lighter, heavier, larger, cheaper, more suitable, or should be chosen; otherwise false. Never infer a preference from a product name, version label, or SKU, and never invent, normalize, or choose a SKU. "
                 "Do not choose recommendation merely because a question asks where, what, or which: recommendation requires asking for options or advice, not a fact about one product. "
+                "information_scope enum: knowledge_base_meta when the user asks about a knowledge-base document, its contents, rules, or principles rather than requesting products; otherwise an empty string. A knowledge_base_meta turn has no product candidates unless a later provenance-bound retrieval supplies them. "
                 "brand=manufacturer or brand owner; questions asking whose brand, maker, or which company a named product is from are brand. "
                 "category=the product kind, class, merchandise type, or taxonomy bucket. A request for which kind, class, category, or type a product is belongs to category. "
                 "series=a named product family, collection, or product line, never a generic product kind/class. Use series only when the requested relationship is to a named family, collection, line, or range; "
                 "do not reinterpret a generic classification request as series merely because the product also has a series value. launch_date=market introduction time; "
-                "surface_finish=outer surface treatment; positioning=target customer/problem, intended role, or brand strategy; "
+                "surface_finish=outer surface treatment; positioning=target customer/problem, intended role, or brand strategy. A predicate about a product's need, use case, problem, role, or job-to-be-done is positioning even when it uses a broad word such as 'targeted at' or 'for'; it does not become target_audience unless it asks who the users are. "
                 "people=a numeric or bounded group-size fact: how many persons the product serves, supports, or is intended for. "
-                "target_audience=the user personas, customer types, or groups a product suits, not a numeric headcount. "
-                "Choose people for a requested person count and target_audience for requested user types; numbers such as volume or size inside the product name do not change that distinction. "
+                "target_audience=the user persona, customer type, or user group a product suits, not a numeric headcount and not the product need, use case, role, or problem it serves. "
+                "A question such as ‘适合哪些人/什么人/适合谁’ asks target_audience; it does not ask a person count. Choose people only when the customer asks a numeric or bounded headcount such as 几个人、几人、多少人 or 1-2人. Numbers such as volume or size inside the product name do not change that distinction. "
+                "cleaning=how to remove soot, stains, residue, or dirt after use; care=storage or ongoing preservation after cleaning. A question about 熏黑、污渍或清洗 therefore asks cleaning unless it explicitly asks storage or preservation. "
                 "price_positioning=entry, mid, premium, affordable, or high-end price tier rather than current price; "
                 "never use positioning or brand for a price-tier question. emotional_value=the intended feeling, emotional experience, or felt outcome the product is meant to create; "
                 "use emotional_value when the user asks about the feeling, experience, mood, or emotional outcome emphasized for the user; "
@@ -918,18 +1025,22 @@ def _semantic_preplan_messages(
                 "When wording asks about geographic places or markets, choose sales_region; when it asks about a platform/store/channel, choose purchase_channel. "
                 "manual=an official manual, user guide, handbook, or downloadable instruction document; it is not the same as asking how to operate the product. "
                 "after_sales_contact=a telephone number, hotline, customer-service contact, or method for contacting after-sales support; it is not purchase_channel. "
-                "inventory=current stock or in-stock availability; lifecycle_status is only the catalogue lifecycle label and must not be used as realtime stock. "
-                "gift=a promotional free gift or giveaway; accessories=the standard package contents, included parts, or items supplied with the product. "
+                "inventory=current stock or in-stock availability; lifecycle_status is only the catalogue lifecycle label and must not be used as realtime stock, product durability, expected usable years, service life, or replacement interval. "
+                "A question about how long one named product can normally be used is a product-bound QA or warranty fact; when the formal taxonomy has no direct recorded field, retain route_family=product_bound_qa with canonical_fields=[] so sealed same-SKU QA evidence can be evaluated. "
+                "gift=a promotional free gift or giveaway included with a purchase; it is not whether the named product itself is suitable to give someone as a present. A question about gifting suitability is a product-bound QA or selling-point fact, not gift. accessories=the standard package contents, included parts, or items supplied with the product. "
                 "warranty=a guarantee, warranty coverage, or warranty duration; it is not lifecycle_status. "
                 "shipping=dispatch time, delivery time, postage, or shipping commitment. price=current selling price; price_positioning=a price tier rather than a realtime amount. "
                 "competitor_benchmark=the named product's recorded comparison set, comparable products, competitive references, or official benchmark products; it is a product fact, not a generic category search or recommendation. "
                 "sku=the SKU, item number, product code, catalogue code, or stock code used to identify the product record. "
+                "product_name_cn=the product's short Chinese display name or Chinese product name. product_name_en=the product's short English display name or English product name; neither is the brand nor a specification. "
+                "content_title=a customer-facing listing, website, Amazon, or marketing title; it is distinct from the short catalogue product name. In particular, a request for a Chinese/English product title, listing title, website title, Amazon title, or marketing title is content_title, while a request for the Chinese/English product name is product_name_cn/product_name_en. content_description=a customer-facing long description, product detail introduction, or listing description. bullet_points=the product's recorded five-point bullets or listed key points. A request for five selling points, five key points, or a numbered product-point list is bullet_points even though it contains the word selling point; selling_point is only a non-numbered general highlights request. For these content fields, retain the language and channel expressed by the customer as the requested subtype; do not substitute a name, specification, or selling-point field. "
+                "search_keywords=an internal search-keyword or backend retrieval-key request. It is a recognised but non-public field: never substitute a title, description, name, SKU, or selling point for it. "
                 "model=a distinct manufacturer model number only when the product record explicitly provides one; never substitute SKU, item number, product code, catalogue code, or stock code for model. "
                 "barcode=an EAN, UPC, GTIN, scannable barcode, or printed bar-code value; never map a SKU, model, item number, product code, or catalogue code to barcode. "
                 "dimensions=physical measurements such as length, width, height, diameter, folded size, or unfolded size; capacity=volume or the amount a container can hold. "
                 "If generic wording such as how big could genuinely mean either physical dimensions or capacity, mark ambiguity instead of using a number in the product name to guess. "
                 "heat_source=compatible stove types, heating methods, fuel sources, or whether direct flame/charcoal/wood/induction is supported. "
-                "power=rated output, wattage, electrical power consumption, burner output, heat output, or firepower. A request for rated output or power must use power, not specification merely because it is a technical parameter. "
+                "power=rated output, wattage, electrical power consumption, burner output, heat output, or firepower. A request for rated output or power must use power, not specification merely because it is a technical parameter. Operating duration, fuel endurance, burn time, runtime, or how long a consumable load lasts are not power: when the formal taxonomy has no direct field for that product-specific fact, retain route_family=product_bound_qa with canonical_fields=[] so the sealed same-SKU QA evidence stage can evaluate it. "
                 "usage_instruction=operating or usage steps for the product; a request about stove, fuel, or heating compatibility remains heat_source even if phrased as how compatibility should be stated. "
                 "dishwasher=only whether the product is explicitly dishwasher-safe or compatible with a dishwashing machine. "
                 "generic machine-wash or washing-machine compatibility belongs to cleaning, not dishwasher; never translate generic machine-wash wording into dishwasher. "
@@ -944,6 +1055,8 @@ def _semantic_preplan_messages(
                 "If the user only selects, switches to, opens, or says they want to look at one named product without asking any fact, use route_family=product_navigation, extract that product mention in subject_text, set canonical_fields=[], evidence_required=false, and do not invent an overview field. "
                 "For a product fact use route_family=product_bound_qa, question_type=field, subtype=known_detail, "
                 "and repeat the selected canonical label in field_hint. "
+                "When evidence_kind=product_qa, qa_evidence_query must be a short retrieval phrase in the customer's language that describes only the requested capability, judgement, procedure, or concern. "
+                "For a Chinese question it must contain Chinese, not an English ontology label; it must not contain a product name, SKU, answer, or database fact. "
                 "confidence enum: low,medium,high. ambiguity is true only when the request itself has incompatible field meanings. evidence_required is true for product facts. context_usage is none,entity_anchor,or field_and_entity. reasoning_summary must be a short auditable summary, not private chain-of-thought. "
                 "Never output an answer or standalone factual values. Never output SKU facts, candidate_skus, recommended_skus, or result_skus."
             ),
@@ -956,10 +1069,13 @@ def _semantic_preplan_messages(
                 f"deterministic_answer_type: {deterministic_plan.get('answer_type') or ''}\n"
                 f"has_conversation_id: {bool(context.get('conversation_id'))}\n"
                 f"has_recommendation_context: {bool(context.get('has_recommendation_context'))}\n"
+                "database_field_value_hints: "
+                + json.dumps(context.get("database_field_value_hints") or [], ensure_ascii=False)
+                + "\n"
                 "explicit_prior_customer_preference_texts: "
                 + json.dumps(context.get("prior_customer_preference_texts") or [], ensure_ascii=False)
                 + "\n"
-                "Return every required key. Select canonical_fields only from the field_type enum above; do not copy a field from an output example."
+                "database_field_value_hints are only schema-grounding candidates whose matched_text occurs in the current question; they are not product facts and must never be returned as an answer. If a matched hint is a named collection/line and the user asks which products it contains, use route_family=structured_query, canonical_fields=[series], and preserve the matched customer phrase in subject_text. Do not infer a field from an unmatched hint. Return every required key. Select canonical_fields only from the field_type enum above; do not copy a field from an output example."
             ),
         },
     ]
@@ -1093,6 +1209,7 @@ async def _repair_semantic_preplan_output(
     if failure_reason in {
         "pairwise_recommendation_requires_comparison_contract",
         "invalid_comparison_decision_criterion",
+        "missing_comparison_decision_criterion",
         "pairwise_factual_requires_comparison_contract",
     }:
         messages[0]["content"] += (
@@ -1158,7 +1275,14 @@ async def _repair_semantic_preplan_output(
         # such as "which comparable products".  Let semantic repair correct
         # that route contradiction instead of deterministically reclassifying
         # the field or coercing the invalid filter route.
-        if any(field and field not in _SEMANTIC_STRUCTURED_QUERY_OPERATORS for field in prior_fields):
+        if set(prior_fields).issubset({"category"}):
+            messages[0]["content"] += (
+                " This is a catalogue count or unconstrained category list, not a multi-condition filter. "
+                "Keep route_family=structured_query and route_hint=query_products; put the requested product kind "
+                "only in subject_text, keep canonical_fields=[category], and return "
+                "structured_query_constraints=[] with no category predicate."
+            )
+        elif any(field and field not in _SEMANTIC_STRUCTURED_QUERY_OPERATORS for field in prior_fields):
             messages[0]["content"] += (
                 " The previous output used structured_query for a canonical "
                 "field that is not an executable catalogue predicate. A named-product "
@@ -1170,10 +1294,17 @@ async def _repair_semantic_preplan_output(
             )
         else:
             messages[0]["content"] += (
-                " This is a multi-condition catalogue filter. Keep the semantic "
-                "route and return one structured_query_constraints object for each "
-                "canonical field, using only exact literal spans from the current "
-                "customer question; do not omit a condition or invent a value."
+                " Before treating this as a catalogue filter, re-read the whole "
+                "question and identify the entire product mention separately from "
+                "the requested predicate. A number, capacity, size, count, color, "
+                "model marker, or version that is part of the entire product "
+                "mention is not an independent field or filter. If the customer "
+                "asks one fact about one named product, return "
+                "route_family=product_bound_qa, route_hint=product_detail, "
+                "question_type=field, subtype=known_detail, preserve the entire "
+                "product mention in subject_text, and keep only the independently "
+                "requested canonical field. Use structured_query only when the "
+                "customer independently asks to filter a catalogue set."
             )
     if failure_reason == "missing_recommendation_constraints":
         messages[0]["content"] += (
@@ -1530,6 +1661,7 @@ def _recommendation_literal_grounding_filter(
     constraints: dict[str, Any],
     evidence_spans: dict[str, list[str]],
     *,
+    preserve_semantic_subject_kind: bool = False,
     preserve_semantic_weight_preference: bool = False,
     preserve_semantic_storage_preference: bool = False,
 ) -> tuple[dict[str, Any], dict[str, list[str]]]:
@@ -1565,6 +1697,10 @@ def _recommendation_literal_grounding_filter(
                 ]
             continue
         if key == "subject_kind":
+            if preserve_semantic_subject_kind and spans:
+                filtered_constraints[key] = value
+                filtered_spans[key] = spans
+                continue
             if any(term in span for span in spans for term in _RECOMMENDATION_LITERAL_CONSTRAINT_TERMS[key][value]):
                 filtered_constraints[key] = value
                 filtered_spans[key] = spans
@@ -1600,15 +1736,21 @@ def _recommendation_literal_grounding_filter(
                 filtered_spans[key] = spans
             continue
         if key == "people":
-            # The semantic grounding pass has already returned a validated
-            # positive numeric range and an exact customer source span.  It
-            # owns whether a complete sentence expresses party size; a second
-            # lexical matcher is both narrower (for example, written group
-            # wording) and incorrectly able to erase that high-confidence
-            # semantic condition.
-            if spans:
+            # The semantic layer owns intent, but a party-size value is a
+            # structured numeric claim. Its cited span must parse to the same
+            # range before it can narrow the catalogue. This rejects semantic
+            # slips such as interpreting "beginner" as one person without
+            # deciding the route or replacing the semantic subject.
+            matching_spans = []
+            if isinstance(value, dict):
+                expected_range = (value.get("min"), value.get("max"))
+                for span in spans:
+                    lower, upper, _ = customer_recommendation_verification_contract._parse_people(span)
+                    if (lower, upper) == expected_range:
+                        matching_spans.append(span)
+            if matching_spans:
                 filtered_constraints[key] = value
-                filtered_spans[key] = spans
+                filtered_spans[key] = matching_spans
             continue
     return filtered_constraints, filtered_spans
 
@@ -1712,6 +1854,7 @@ async def _semantic_recommendation_constraint_grounding(
         constraints, normalized_spans = _recommendation_literal_grounding_filter(
             constraints,
             normalized_spans,
+            preserve_semantic_subject_kind=True,
             preserve_semantic_weight_preference=True,
             preserve_semantic_storage_preference=True,
         )
@@ -1730,6 +1873,43 @@ async def _semantic_recommendation_constraint_grounding(
     return None
 
 
+def _database_field_value_hints(db, question: str) -> list[dict[str, str]]:
+    """Offer the semantic planner compact, data-derived catalogue vocabulary.
+
+    A collection name often has no lexical marker such as “series”.  The model
+    still owns the route decision, but it needs to know that a phrase in the
+    current utterance is an actual value of a public catalogue field.  Hints
+    are emitted only when a meaningful component of a stored value occurs in
+    this turn; no SKU, product name, result, or fact is supplied.
+    """
+    normalized_question = customer_agent_service.normalize_search_text(question).lower()
+    if db is None or not normalized_question:
+        return []
+    hints: list[dict[str, str]] = []
+    field_columns = (
+        ("series", Product.series),
+        ("brand", Product.brand),
+        ("category", Product.category),
+        ("product_level", Product.product_level),
+    )
+    for field, column in field_columns:
+        values = db.query(column).filter(column.isnot(None), column != "").distinct().all()
+        for (raw_value,) in values:
+            value = str(raw_value or "").strip()
+            if not value:
+                continue
+            fragments = [part.strip() for part in re.split(r"[\-/|、，,；;]+", value) if part.strip()]
+            fragments.append(value)
+            for fragment in fragments:
+                normalized_fragment = customer_agent_service.normalize_search_text(fragment).lower()
+                if len(normalized_fragment) >= 2 and normalized_fragment in normalized_question:
+                    hint = {"field": field, "value": value, "matched_text": fragment}
+                    if hint not in hints:
+                        hints.append(hint)
+                    break
+    return hints[:12]
+
+
 async def plan_customer_question_semantic(
     db,
     question: str,
@@ -1742,6 +1922,8 @@ async def plan_customer_question_semantic(
         return _empty_semantic_preplan(fallback_reason="empty_question")
     deterministic_plan = deterministic_plan if isinstance(deterministic_plan, dict) else {}
     context = context if isinstance(context, dict) else {}
+    context = dict(context)
+    context["database_field_value_hints"] = _database_field_value_hints(db, text)
     messages = _semantic_preplan_messages(question=text, deterministic_plan=deterministic_plan, context=context)
     feature_summary = _semantic_preplan_feature_summary(text, deterministic_plan, context)
     runtime_settings = _semantic_preplan_runtime_settings()
@@ -1837,21 +2019,34 @@ async def plan_customer_question_semantic(
         result["semantic_retry_error"] = semantic_retry_error
     _apply_semantic_preplan_observability(result, llm_metadata, runtime_settings)
     # A high-confidence recommendation with an identified subject or formal
-    # customer fields but no executable constraints is incomplete semantic
+    # customer fields but no executable subject contract is incomplete semantic
     # output, not permission for a legacy keyword planner to decide the need.
     # Send only that semantic object back through the same schema repair path.
+    # The repair remains an allowlisted LLM decision; deterministic code never
+    # derives a subject kind from the customer's wording.
+    recommendation_constraints = result.get("recommendation_constraints")
     if (
         result.get("route_family") == "recommendation"
         and not result.get("fallback_reason")
         and float(result.get("confidence") or 0) >= 0.9
-        and not result.get("recommendation_constraints")
         and (
             result.get("subject_text")
             or result.get("canonical_fields")
             or result.get("decision_requested")
         )
+        and (
+            not recommendation_constraints
+            or (
+                isinstance(recommendation_constraints, dict)
+                and "subject_kind" not in recommendation_constraints
+                and bool(result.get("subject_text"))
+            )
+        )
     ):
-        result["fallback_reason"] = "missing_recommendation_constraints"
+        result["fallback_reason"] = (
+            "missing_recommendation_subject_kind"
+            if recommendation_constraints else "missing_recommendation_constraints"
+        )
     # A named-product question already understood as a factual request cannot
     # safely fall through to a legacy catalogue/KB route merely because the
     # first semantic JSON left its canonical field as ``unknown``.  Give the
@@ -1883,6 +2078,8 @@ async def plan_customer_question_semantic(
         "named_nonfilter_field_in_structured_query",
         "missing_structured_query_constraints",
         "missing_recommendation_constraints",
+        "missing_recommendation_subject_kind",
+        "missing_comparison_decision_criterion",
         "unclassified_product_bound_field",
         "invalid_comparison_decision_criterion",
         "invalid_comparison_participants",
@@ -1931,6 +2128,31 @@ async def plan_customer_question_semantic(
             return result
         repaired_data = _extract_json_object(repaired)
         result = _validate_semantic_preplan(repaired_data, raw_content=repaired)
+        # Structured comparison criteria occasionally remain empty or illegal
+        # after the first repair even though the two customer-named entities
+        # were valid. Retry this bounded, side-effect-free semantic repair once;
+        # deterministic code still accepts only a formal field enum and never
+        # supplies a comparison dimension itself.
+        if (
+            len(raw_pairwise_entities) >= 2
+            and result.get("fallback_reason") in {
+                "invalid_comparison_decision_criterion",
+                "missing_comparison_decision_criterion",
+            }
+        ):
+            try:
+                repaired = await _repair_semantic_preplan_output(
+                    db,
+                    question=text,
+                    raw_content=repaired,
+                    failure_reason=str(result.get("fallback_reason") or ""),
+                )
+                llm_call_count += 1
+                repaired_data = _extract_json_object(repaired)
+                result = _validate_semantic_preplan(repaired_data, raw_content=repaired)
+            except Exception as exc:
+                result["fallback_reason"] = f"repair_error:{type(exc).__name__}"
+                result["error"] = str(exc)[:240]
         # The full semantic replan occasionally repeats an invalid
         # recommendation partition while preserving every other valid route
         # field. Re-ask DeepSeek only for that partition rather than handing

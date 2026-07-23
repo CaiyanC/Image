@@ -1320,6 +1320,24 @@ class CustomerAgentServiceTest(unittest.TestCase):
             dmxapi_service.chat_completion = original_chat_completion
 
     def test_explicit_sku_with_chinese_suffix_is_not_truncated(self):
+        possessive_capacity_question = (
+            "KW-K31-" + chr(0x9ED1) + chr(0x548C) + "KW-K32-" + chr(0x9ED1)
+            + chr(0x7684) + chr(0x5BB9) + chr(0x91CF) + chr(0x5DEE) + chr(0x591A)
+            + chr(0x5C11) + chr(0xFF1F)
+        )
+        heat_source_question = (
+            "CS-B15S" + chr(0x548C) + "CS-G25" + chr(0x7684) + chr(0x70ED)
+            + chr(0x6E90) + chr(0x6709) + chr(0x4EC0) + chr(0x4E48) + chr(0x533A)
+            + chr(0x522B) + chr(0xFF1F)
+        )
+        self.assertEqual(
+            customer_agent_service._extract_skus(possessive_capacity_question),
+            ["KW-K31-" + chr(0x9ED1), "KW-K32-" + chr(0x9ED1)],
+        )
+        self.assertEqual(
+            customer_agent_service._extract_skus(heat_source_question),
+            ["CS-B15S", "CS-G25"],
+        )
         self._add_product("TW-422-蓝", "有时搪瓷碗盘套装-迷迭蓝", "餐具", "铁、304不锈钢", "搪瓷餐具")
         self._add_product("TW-422-绿", "有时搪瓷碗盘套装-竹灰绿", "餐具", "铁、304不锈钢", "搪瓷餐具")
         for sku in ("TW-422-蓝", "TW-422-绿"):
@@ -10164,6 +10182,38 @@ class CustomerServiceServiceTest(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(len(owner_history), 1)
         self.assertEqual(other_history, [])
+
+    def test_delete_customer_conversation_removes_its_messages_and_list_entry(self):
+        conversation_id = "delete-conversation"
+        self.db.add(CustomerServiceConversation(
+            id=conversation_id,
+            user_id="user-owner",
+            title="待删除会话",
+        ))
+        self.db.add_all([
+            CustomerServiceMessage(conversation_id=conversation_id, role="user", content="第一条"),
+            CustomerServiceMessage(conversation_id=conversation_id, role="assistant", content="第二条"),
+        ])
+        self.db.commit()
+
+        result = customer_service_service.delete_conversation(
+            self.db,
+            conversation_id,
+            "user-owner",
+        )
+
+        self.assertEqual(result, {"deleted": True, "id": conversation_id})
+        self.assertIsNone(self.db.get(CustomerServiceConversation, conversation_id))
+        self.assertEqual(
+            self.db.query(CustomerServiceMessage).filter(
+                CustomerServiceMessage.conversation_id == conversation_id
+            ).count(),
+            0,
+        )
+        self.assertNotIn(
+            conversation_id,
+            [item["id"] for item in customer_service_service.list_conversations(self.db, "user-owner")["items"]],
+        )
 
     def test_customer_conversations_are_isolated_under_20_parallel_users(self):
         with tempfile.TemporaryDirectory() as tmpdir:

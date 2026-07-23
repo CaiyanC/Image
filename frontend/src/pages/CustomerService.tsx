@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { AgentAction, AgentStep, ProductSearchResult, api } from '../services/api'
+import { AgentAction, AgentStep, ApiRequestError, ProductSearchResult, api } from '../services/api'
 import { useAuthStore } from '../store/authStore'
 
 interface ChatMessage {
@@ -56,6 +56,7 @@ interface ConversationListItem {
   title: string
   lastMessage: string
   loading: boolean
+  deleting: boolean
 }
 
 const CUSTOMER_SERVICE_DRAFT_VERSION = 2
@@ -78,6 +79,13 @@ export default function CustomerService() {
   const chatContainerRef = useRef<HTMLDivElement | null>(null)
   const conversationStatesRef = useRef(conversationStates)
   const deletedConversationKeysRef = useRef<Set<ConversationKey>>(new Set())
+  const deletedConversationIdsRef = useRef<Set<string>>(new Set())
+  // The ref is an immediate mutual-exclusion guard. React state alone is
+  // asynchronous, so it cannot stop two rapid clicks from issuing two DELETEs.
+  const deletingConversationKeysRef = useRef<Set<ConversationKey>>(new Set())
+  const [deletingConversationKeys, setDeletingConversationKeys] = useState<Set<ConversationKey>>(() => new Set())
+  const activeConversationKeyRef = useRef(activeConversationKey)
+  const conversationListRequestRef = useRef(0)
   const draftHydratedRef = useRef(false)
   const skipNextDraftPersistRef = useRef(false)
   const draftCacheKey = useMemo(() => customerServiceDraftKey(user?.id || user?.username), [user?.id, user?.username])
@@ -90,6 +98,10 @@ export default function CustomerService() {
   useEffect(() => {
     conversationStatesRef.current = conversationStates
   }, [conversationStates])
+
+  useEffect(() => {
+    activeConversationKeyRef.current = activeConversationKey
+  }, [activeConversationKey])
 
   useEffect(() => {
     if (!Object.values(conversationStates).some((state) => state.loading)) return
@@ -149,8 +161,9 @@ export default function CustomerService() {
   }, [messages])
 
   const conversationListItems = useMemo(() => {
-    const serverIds = new Set(conversations.map((item) => String(item.id)))
-    const serverItems = conversations.map((item): ConversationListItem => {
+    const visibleConversations = conversations.filter((item) => !deletedConversationIdsRef.current.has(String(item.id)))
+    const serverIds = new Set(visibleConversations.map((item) => String(item.id)))
+    const serverItems = visibleConversations.map((item): ConversationListItem => {
       const id = String(item.id)
       const key = findConversationKeyById(conversationStates, id) || conversationKeyForId(id)
       const state = conversationStates[key]
@@ -160,6 +173,7 @@ export default function CustomerService() {
         title: String(item.title || state?.title || titleFromMessages(state?.messages || []) || '客服会话'),
         lastMessage: String(item.last_message || item.sku || lastMessagePreview(state?.messages || []) || '暂无消息'),
         loading: Boolean(state?.loading),
+        deleting: deletingConversationKeys.has(key),
       }
     })
     const localItems = Object.entries(conversationStates)
@@ -170,9 +184,10 @@ export default function CustomerService() {
         title: state.title || titleFromMessages(state.messages) || (state.question.trim() ? state.question.trim().slice(0, 20) : '客服会话'),
         lastMessage: lastMessagePreview(state.messages) || state.question || '暂无消息',
         loading: state.loading,
+        deleting: deletingConversationKeys.has(key),
       }))
     return [...localItems, ...serverItems]
-  }, [conversationStates, conversations])
+  }, [conversationStates, conversations, deletingConversationKeys])
 
   function updateConversationState(
     key: ConversationKey,
@@ -193,14 +208,47 @@ export default function CustomerService() {
     updateConversationState(activeConversationKey, updater)
   }
 
-  async function loadSideData() {
+  async function loadConversationList() {
+    const requestVersion = ++conversationListRequestRef.current
     try {
-      const [conversationResult, status, review] = await Promise.all([
-        api.customerService.conversations(),
+      const conversationResult = await api.customerService.conversations()
+      if (requestVersion !== conversationListRequestRef.current) return
+      // A response that began before a deletion may complete afterward.  Do
+      // not let that stale list response resurrect an already deleted row.
+      setConversations(conversationResult.items.filter((item) => !deletedConversationIdsRef.current.has(String(item.id))))
+      if (conversationResult.total === 0) {
+        // Server-side history may be cleared outside this tab.  A persisted
+        // draft with a former conversation_id is no longer a real session and
+        // must not be rendered or reused for the next ask request.
+        localStorage.removeItem(draftCacheKey)
+        const activeKey = activeConversationKeyRef.current
+        setConversationStates((prev) => {
+          const next: Record<ConversationKey, CustomerConversationState> = {}
+          for (const [key, state] of Object.entries(prev)) {
+            if (!state.conversationId || state.loading) {
+              next[key] = state
+            } else if (key === activeKey) {
+              next[key] = createConversationState()
+            }
+          }
+          return Object.keys(next).length ? next : { [activeKey]: createConversationState() }
+        })
+      }
+    } catch {
+      // Conversation history must not block the chat surface.
+    }
+  }
+
+  async function loadSideData() {
+    // History is an independently useful, lightweight request.  Do not wait
+    // for knowledge/review panels before showing it, otherwise old records
+    // appear as a surprising late batch after the user sends a new message.
+    void loadConversationList()
+    try {
+      const [status, review] = await Promise.all([
         api.knowledgeBase.status(),
         api.customerService.reviewSamples(50),
       ])
-      setConversations(conversationResult.items)
       setKnowledgeStatus(status)
       setReviewSummary(review.summary || null)
     } catch {
@@ -346,6 +394,19 @@ export default function CustomerService() {
         )))
         return
       }
+      if (err instanceof ApiRequestError && err.status === 404 && requestConversationId) {
+        // The server has already removed this history (for example after a
+        // cleanup in another tab).  Reset the local draft instead of keeping
+        // a dead conversation_id that can never be sent again.
+        deletedConversationIdsRef.current.add(requestConversationId)
+        localStorage.removeItem(draftCacheKey)
+        setConversations((prev) => prev.filter((conversation) => String(conversation.id) !== requestConversationId))
+        updateConversationState(requestKey, () => createConversationState({
+          question: userText,
+          error: '历史会话已被清理，已新建会话；请重新发送。',
+        }))
+        return
+      }
       const message = err instanceof Error ? err.message : '智能客服请求失败'
       updateConversationState(requestKey, (state) => ({
         ...state,
@@ -393,22 +454,30 @@ export default function CustomerService() {
   }
 
   async function deleteConversation(item: ConversationListItem) {
+    if (deletedConversationKeysRef.current.has(item.key) || deletingConversationKeysRef.current.has(item.key)) return
     conversationStates[item.key]?.abortController?.abort()
-    updateConversationState(item.key, (state) => ({ ...state, error: '' }))
+    // Tombstone the local key before awaiting the HTTP request.  A cancelled
+    // stream can still deliver a final event briefly; without this guard that
+    // event writes the deleted chat back into React state and localStorage.
+    deletedConversationKeysRef.current.add(item.key)
+    if (item.id) deletedConversationIdsRef.current.add(item.id)
+    deletingConversationKeysRef.current.add(item.key)
+    setDeletingConversationKeys((prev) => new Set(prev).add(item.key))
+    const remainingItems = conversationListItems.filter((conversation) => conversation.key !== item.key)
+    const deletedIndex = conversationListItems.findIndex((conversation) => conversation.key === item.key)
+    const nextItem = remainingItems.find((conversation) => !deletingConversationKeysRef.current.has(conversation.key))
+      || remainingItems[Math.min(Math.max(deletedIndex, 0), Math.max(remainingItems.length - 1, 0))]
     try {
       if (item.id) {
         await api.customerService.deleteConversation(item.id)
         setConversations((prev) => prev.filter((conversation) => String(conversation.id) !== item.id))
       }
-      deletedConversationKeysRef.current.add(item.key)
-      const deletedIndex = conversationListItems.findIndex((conversation) => conversation.key === item.key)
-      const nextItem = conversationListItems[deletedIndex + 1] || conversationListItems[deletedIndex - 1]
       setConversationStates((prev) => {
         const next = { ...prev }
         delete next[item.key]
         return next
       })
-      if (activeConversationKey === item.key) {
+      if (activeConversationKeyRef.current === item.key) {
         if (nextItem?.id) {
           void openConversation(nextItem.id, nextItem.key)
         } else if (nextItem) {
@@ -420,10 +489,22 @@ export default function CustomerService() {
         }
       }
     } catch (err) {
+      // The server did not delete the conversation, so restore normal state
+      // updates and keep the existing chat available with a visible error.
+      deletedConversationKeysRef.current.delete(item.key)
+      if (item.id) deletedConversationIdsRef.current.delete(item.id)
       updateConversationState(item.key, (state) => ({
         ...state,
         error: err instanceof Error ? err.message : '删除会话失败',
       }))
+    } finally {
+      deletingConversationKeysRef.current.delete(item.key)
+      setDeletingConversationKeys((prev) => {
+        if (!prev.has(item.key)) return prev
+        const next = new Set(prev)
+        next.delete(item.key)
+        return next
+      })
     }
   }
 
@@ -514,10 +595,11 @@ export default function CustomerService() {
                 </button>
                 <button
                   onClick={() => deleteConversation(item)}
-                  className="mt-2 mr-2 shrink-0 rounded-lg px-2 py-1 text-xs text-red-500 opacity-0 transition-opacity hover:bg-red-50 group-hover:opacity-100"
-                  title="删除会话"
+                  disabled={item.deleting}
+                  className="mt-2 mr-2 shrink-0 rounded-lg px-2 py-1 text-xs text-red-500 opacity-0 transition-opacity hover:bg-red-50 group-hover:opacity-100 disabled:cursor-not-allowed disabled:opacity-60"
+                  title={item.deleting ? '正在删除会话' : '删除会话'}
                 >
-                  删除
+                  {item.deleting ? '删除中…' : '删除'}
                 </button>
               </div>
             ))}

@@ -558,6 +558,14 @@ def _expand_and_enrich_semantic_rows(db: Session, rows: list[dict]) -> list[dict
         metadata = row.get("metadata") if isinstance(row.get("metadata"), dict) else {}
         related_skus = metadata.get("related_skus") if isinstance(metadata, dict) else None
         if not isinstance(related_skus, list) or not related_skus:
+            # An uploaded file without an explicit SKU relationship can be
+            # useful to back-office users, but it cannot establish a customer
+            # product fact.  Do not expose a semantically similar internal
+            # paragraph through the customer-service retrieval path.  Bound
+            # files continue below and are independently verified against the
+            # canonical product record before evidence is used.
+            if str(metadata.get("source_type") or "").strip().lower() == "file":
+                continue
             expanded_rows.append(row)
             continue
         seen: set[str] = set()
