@@ -1274,6 +1274,41 @@ def test_final_guard_replaces_mismatched_evidence_with_missing_field_result(fiel
     assert result.get("answer_metadata", {}).get("field_evidence_missing") is True
 
 
+def test_final_guard_preserves_same_sku_shipping_qa_evidence(field_evidence_client):
+    _, _, Session = field_evidence_client
+    with Session() as db:
+        original = {
+            "intent": "product_detail",
+            "answer_type": "product_detail",
+            "answer": "Default carrier is verified by the order page.",
+            "result_skus": ["FE-100"],
+            "candidate_skus": ["FE-100"],
+            "results": [{"sku": "FE-100"}],
+            "answer_metadata": {
+                "contract_field_type": "shipping",
+                "evidence_status": "matched",
+                "evidence_field": "product_qa",
+                "evidence_source": "product_qa:shipping-qa-id",
+                "evidence_sku": "FE-100",
+                "field_evidence_match": True,
+            },
+            "debug": {
+                "field_contract": {
+                    "field_type": "shipping",
+                    "source": "validated_semantic_preplan",
+                },
+            },
+        }
+        result = customer_service_service._enforce_field_evidence_policy(
+            db,
+            "FE-100 shipping method?",
+            original,
+        )
+
+    assert result is original
+    assert result["answer_metadata"]["evidence_source"] == "product_qa:shipping-qa-id"
+
+
 def test_final_guard_preserves_attached_semantic_field_contract_over_incidental_raw_alias(field_evidence_client):
     _, _, Session = field_evidence_client
     with Session() as db:

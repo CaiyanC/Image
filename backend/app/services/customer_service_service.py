@@ -691,6 +691,17 @@ async def _maybe_run_semantic_preplan(
         prior_question = str(recommendation_context.get("user_question") or "").strip()
         if prior_question:
             prior_customer_preference_texts.append(prior_question)
+    active_anchor_sku = str(
+        (recommendation_context or {}).get("active_single_product_anchor") or ""
+    ).strip().upper()
+    active_anchor = {}
+    if active_anchor_sku:
+        product = db.query(Product).filter(Product.sku == active_anchor_sku).first()
+        if product is not None:
+            active_anchor = {
+                "sku": active_anchor_sku,
+                "product_name": str(product.product_name_cn or product.product_name_en or "").strip(),
+            }
     return await customer_agent_planner_service.plan_customer_question_semantic(
         db,
         question,
@@ -699,6 +710,7 @@ async def _maybe_run_semantic_preplan(
             "conversation_id": conversation_id,
             "has_recommendation_context": bool(prior_customer_preference_texts),
             "prior_customer_preference_texts": prior_customer_preference_texts,
+            "active_product_anchor": active_anchor,
         },
     )
 
@@ -838,7 +850,7 @@ def _apply_pairwise_recommendation_field_adapter(preplan: dict | None) -> None:
         return
     if preplan.get("recommendation_constraint_grounding") != "validated_semantic_grounding":
         return
-    constraints = preplan.get("recommendation_constraints")
+    constraints = dict(preplan.get("recommendation_constraints") or {})
     if not isinstance(constraints, dict):
         return
     mapping = (
@@ -892,6 +904,20 @@ def _apply_structured_named_field_entity_adapter(
     field_type = customer_field_contract.semantic_preplan_field_type(value.get("field_type"))
     field_hint = customer_field_contract.semantic_preplan_field_type(value.get("field_hint"))
     if len(fields) != 1 or fields[0] != field_type or field_hint != field_type:
+        return False
+    # A category-only catalogue request with no current-turn entity has no
+    # product field to adapt.  Preserve that semantic structured-query route.
+    # Conversely, do not let this catalogue-scope escape consume an explicit
+    # SKU or a product identity already resolved from the current question:
+    # those cases must first form the ordinary FieldContract and
+    # EntityResolutionContract.
+    if (
+        field_type == "category"
+        and not (value.get("entities") or [])
+        and not (value.get("structured_query_constraints") or [])
+        and not customer_agent_service._extract_skus(question)
+        and not _products_named_in_question(db, question)
+    ):
         return False
     subject = str(value.get("subject_text") or "").strip()
     if not subject:
@@ -2010,6 +2036,42 @@ def _phase1_catalog_rows(db: Session, product_ref: str) -> list[dict]:
     return rows
 
 
+def _database_category_scope_ref(rows: list[dict], semantic_subject: str) -> str:
+    """Resolve a semantic category subject to an existing DB category label.
+
+    This is a bounded catalogue-identity adapter, not a field-intent router:
+    the semantic preplan has already chosen ``structured_query/category``.
+    We only accept a subject that maps to a real category value (including a
+    segment of a stored composite category) so product-name recall cannot
+    broaden a category count.
+    """
+    subject = customer_agent_service.normalize_search_text(semantic_subject)
+    if not subject:
+        return ""
+    normalized_categories = {
+        customer_agent_service.normalize_search_text(str(row.get("category") or "")): str(row.get("category") or "").strip()
+        for row in rows
+        if str(row.get("category") or "").strip()
+    }
+    if subject in normalized_categories:
+        return normalized_categories[subject]
+    # A one-character head noun is a common customer shorthand for a stored
+    # category label (锅 -> 锅具, 炉 -> 炉具).  Match only an actual category
+    # label, never a product name or selling-point field.
+    if len(subject) == 1:
+        matches = [
+            label for normalized, label in normalized_categories.items()
+            if normalized.startswith(subject) and normalized.endswith("具")
+        ]
+        if len(matches) == 1:
+            return matches[0]
+    composite_matches = [
+        label for normalized, label in normalized_categories.items()
+        if subject and subject in normalized and any(separator in normalized for separator in ("/", "、", "，", ","))
+    ]
+    return composite_matches[0] if len(composite_matches) == 1 else ""
+
+
 def _phase1_catalog_count_rows(db: Session, product_ref: str, question: str) -> tuple[list[dict], str | None]:
     """Return the authoritative category-membership population for count questions.
 
@@ -2326,6 +2388,8 @@ def _structured_product_query_result(
     rows: list[dict[str, Any]],
     source: str,
     reason_label: str,
+    answer_type: str = "product_query",
+    metadata_source: str | None = None,
 ) -> dict | None:
     display_rows = rows[:10]
     if not display_rows:
@@ -2343,12 +2407,12 @@ def _structured_product_query_result(
     )
     return {
         "intent": "query_products",
-        "answer_type": "product_query",
+        "answer_type": answer_type,
         "answer": answer,
         "results": display_rows,
         "result_skus": result_skus,
         "candidate_skus": result_skus,
-        "answer_metadata": {"source": source, "product_ref": product_ref, "matched_count": len(rows)},
+        "answer_metadata": {"source": metadata_source or source, "product_ref": product_ref, "matched_count": len(rows)},
         "debug": {"agent_mode": source, "raw_results": display_rows, "candidate_skus": result_skus},
         "skip_polish": True,
     }
@@ -3132,6 +3196,22 @@ def _enforce_field_evidence_policy(db: Session, question: str, agent_result: dic
     ):
         return agent_result
     metadata = agent_result.get("answer_metadata") if isinstance(agent_result.get("answer_metadata"), dict) else {}
+    # Shipping is safely unsupported as a structured database field, but an
+    # explicit same-SKU ProductQa record is an allowed evidence source under
+    # the shipping FieldEvidencePolicy.  Preserve that sealed result instead
+    # of rebuilding it as a generic real-time shipping safe-missing answer.
+    # The metadata is created only after the QA helper has sealed both the
+    # EntityResolutionContract and the field-compatible QA evidence.
+    has_same_sku_shipping_qa_evidence = bool(
+        field_contract.field_type == "shipping"
+        and metadata.get("contract_field_type") == "shipping"
+        and metadata.get("field_evidence_match") is True
+        and str(metadata.get("evidence_field") or "") == "product_qa"
+        and str(metadata.get("evidence_sku") or "").strip().upper() == result_skus[0]
+        and str(metadata.get("evidence_source") or "").startswith("product_qa:")
+    )
+    if has_same_sku_shipping_qa_evidence:
+        return agent_result
     if not customer_field_contract.is_supported_detail_field(field_contract.field_type):
         # Safely unsupported fields are never repaired from a different
         # structured field. Rebuild their answer through the exact-entity safe
@@ -3410,6 +3490,20 @@ def _try_resolved_product_unknown_field_shortcut(db: Session, question: str) -> 
         exact_qa = _best_product_qa_match(db, product, text)
         if exact_qa and _is_exact_product_qa_question_match(exact_qa, text):
             return None
+        field_contract = customer_field_contract.detect_field_contract(text)
+        field_type = str(field_contract.field_type or "").strip() if field_contract else ""
+        if field_type:
+            compatible_qa = _best_product_qa_match(
+                db,
+                product,
+                text,
+                requested_field_type=field_type,
+            )
+            if compatible_qa is not None:
+                # A compatible QA is not an alternate route: it is admissible
+                # evidence for the existing formal FieldContract. Let the
+                # central detail executor consume it after identity is sealed.
+                return None
         return _build_resolved_product_unknown_field_result(
             db,
             product,
@@ -3546,6 +3640,17 @@ def _pre_route_high_risk_contract_result(
             None,
         )
         if product:
+            field_type = str(field_contract.field_type or "").strip() if field_contract else ""
+            if field_type and _best_product_qa_match(
+                db,
+                product,
+                text,
+                requested_field_type=field_type,
+            ) is not None:
+                # A same-SKU QA compatible with the already recognised formal
+                # field is evidence for the central detail executor, not a
+                # reason to emit a generic realtime-safe fallback early.
+                return None
             result = _build_resolved_product_unknown_field_result(
                 db,
                 product,
@@ -4652,6 +4757,7 @@ def _semantic_structured_query_result(
     question: str,
     *,
     candidate_context: dict[str, Any] | None = None,
+    semantic_preplan: dict[str, Any] | None = None,
 ) -> dict | None:
     text = str(question or "").strip()
     if not text:
@@ -4687,6 +4793,54 @@ def _semantic_structured_query_result(
     # defer this catalogue query to product detail.
     if _has_resolved_named_product_contract(db, text):
         return None
+    # For a high-confidence catalogue request, semantic planning has already
+    # interpreted the whole utterance and supplied only a generic catalogue
+    # scope.  Resolve that scope through the database search provider instead
+    # of requiring a second lexical recognizer to rediscover the same term.
+    # The plan cannot supply products, SKUs, or facts: all candidates remain
+    # bounded by the actual database result set.
+    semantic_subject = str((semantic_preplan or {}).get("subject_text") or "").strip()
+    semantic_fields = list((semantic_preplan or {}).get("canonical_fields") or [])
+    if (
+        _semantic_preplan_confident(semantic_preplan, minimum=0.9)
+        and _semantic_preplan_route_family(semantic_preplan) == "structured_query"
+        and semantic_fields == ["category"]
+        and semantic_subject
+    ):
+        # Semantic planning owns the meaning "this is a catalogue category
+        # request"; this adapter only resolves that abstract subject against
+        # the categories actually present in the database.  A lexical product
+        # search is deliberately not an acceptable substitute: "锅" may
+        # occur in a kettle or stove name while the customer asks for the
+        # database's cookware category.
+        category_rows = _phase1_catalog_rows(db, "产品")
+        category_ref = _database_category_scope_ref(category_rows, semantic_subject)
+        if category_ref:
+            if any(token in text for token in ("多少", "几款", "几种", "几个")):
+                return _phase1_catalog_count_result(
+                    db,
+                    {"product_ref": category_ref, "raw_question": text},
+                )
+            rows = _phase1_catalog_rows(db, category_ref)
+            return _structured_product_query_result(
+                question=text,
+                product_ref=category_ref,
+                rows=rows,
+                source="structured_catalog_semantic_category_scope",
+                reason_label="语义目录范围",
+                answer_type="query_products",
+                metadata_source="product_catalog_structured_query",
+            )
+        rows = customer_agent_service.search_products(db, semantic_subject, limit=50)
+        return _structured_product_query_result(
+            question=text,
+            product_ref=semantic_subject,
+            rows=rows,
+            source="structured_catalog_count",
+            reason_label="语义目录范围",
+            answer_type="query_products",
+            metadata_source="product_catalog_structured_query",
+        )
     structured_field_filter = _structured_field_filter_result(db, text)
     if structured_field_filter:
         return structured_field_filter
@@ -4918,6 +5072,16 @@ def _should_prioritize_semantic_structured_route(question: str, phase1_plan: dic
         if isinstance(phase1_plan, dict) and isinstance(phase1_plan.get("semantic_preplan"), dict)
         else None
     )
+    # ``category`` is catalogue scope, not a product-detail FieldContract.
+    # A validated semantic catalogue plan must reach the DB-backed structured
+    # executor before the generic formal-field shortcut veto is considered.
+    if (
+        _semantic_preplan_confident(semantic_preplan, minimum=0.9)
+        and _semantic_preplan_route_family(semantic_preplan) == "structured_query"
+        and list((semantic_preplan or {}).get("canonical_fields") or []) == ["category"]
+        and str((semantic_preplan or {}).get("subject_text") or "").strip()
+    ):
+        return True
     # A legacy catalogue plan can retain a category-shaped reading from the
     # product name. It is a fallback only: a validated formal semantic field
     # must first reach the central FieldContract -> EntityResolutionContract
@@ -6186,6 +6350,77 @@ async def _phase1_compare_choice_result(db: Session, plan: dict) -> dict | None:
     )
     canonical_field = str(field_request.get("field_type") or "").strip()
     semantic_preplan = plan.get("semantic_preplan") if isinstance(plan.get("semantic_preplan"), dict) else {}
+    # Semantic planning has explicitly identified a non-decisive comparison
+    # with no customer-specified criterion. This is an evidence presentation,
+    # not a deterministic choice of a field route: show only recorded values
+    # that differ across every sealed participant.
+    if (
+        plan.get("semantic_comparison_entity_contracts")
+        and str(semantic_preplan.get("evidence_kind") or "") == "structured_field"
+        and not list(field_request.get("canonical_fields") or [])
+        and str(semantic_preplan.get("subtype") or "") == "comparison_overview"
+        and not bool(semantic_preplan.get("decision_requested"))
+    ):
+        overview_fields = (
+            "series", "category", "dimensions", "weight", "material",
+            "capacity", "color", "usage_scene", "selling_point",
+        )
+        lines: list[str] = []
+        sources: list[dict[str, Any]] = []
+        for field in overview_fields:
+            values: list[tuple[str, str, str, str]] = []
+            for product, specs, business, content in bundles:
+                if product is None:
+                    continue
+                value, source = _structured_product_field_evidence(
+                    field,
+                    db=db,
+                    product=product,
+                    specs=specs,
+                    business=business,
+                    content=content,
+                )
+                if not value:
+                    values = []
+                    break
+                sku = str(product.sku or "").strip().upper()
+                name = str(product.product_name_cn or product.product_name_en or sku).strip()
+                values.append((sku, name, str(value), str(source or "")))
+            if len(values) != len(bundles) or len({value for _, _, value, _ in values}) < 2:
+                continue
+            label = customer_field_contract.product_detail_field_label(field) or field
+            lines.append(
+                f"- {label}：" + "；".join(
+                    f"{name}（{sku}）为{value}" for sku, name, value, _source in values
+                ) + "。"
+            )
+            sources.extend(
+                {"type": "product_field", "sku": sku, "field": field, "source": source, "value": value}
+                for sku, _name, value, source in values
+            )
+        result_skus = [str(row.get("sku") or "").strip().upper() for row in rows if str(row.get("sku") or "").strip()]
+        answer = (
+            "按两款商品当前已标注且可直接对照的资料，主要差异如下：\n" + "\n".join(lines)
+            if lines
+            else "两款商品已锁定，但当前没有找到可同时核验且存在差异的同字段资料；请告诉我更关心容量、重量、材质或使用场景，我会按该字段继续比较。"
+        )
+        return {
+            "intent": "compare_products", "answer_type": "comparison", "answer": answer,
+            "results": rows, "result_skus": result_skus, "candidate_skus": result_skus,
+            "sources": sources,
+            "answer_metadata": {
+                "source": "semantic_pairwise_structured_overview_contract",
+                "contract_field_types": [],
+                "evidence_status": "supported" if lines else "missing",
+                "final_choice_sku": None,
+            },
+            "debug": {
+                "agent_mode": "semantic_pairwise_structured_overview_contract",
+                "field_contract": {"field_type": "comparison_overview", "canonical_fields": [], "source": "validated_semantic_preplan"},
+                "entity_resolution_contracts": plan.get("semantic_comparison_entity_contracts"),
+            },
+            "skip_polish": True,
+        }
     if (
         plan.get("semantic_comparison_entity_contracts")
         and str(semantic_preplan.get("evidence_kind") or "") == "product_qa"
@@ -6198,15 +6433,18 @@ async def _phase1_compare_choice_result(db: Session, plan: dict) -> dict | None:
             if product is None:
                 complete = False
                 continue
-            qa = _best_product_qa_match(db, product, raw_question, semantic_query=qa_query)
-            if qa is None:
-                qa = await _select_same_sku_product_qa_with_semantic_selection(
-                    db,
-                    product,
-                    raw_question,
-                    semantic_query=qa_query,
-                    comparison_criterion=qa_query,
-                )
+            # Pairwise capability comparisons must not use the legacy matcher:
+            # it scores answer text, so a generic word such as "camping" in a
+            # gifting answer could masquerade as evidence for cooking or water
+            # capability. The bounded selector sees only this sealed SKU's QA
+            # questions and must reject a merely related record.
+            qa = await _select_same_sku_product_qa_with_semantic_selection(
+                db,
+                product,
+                raw_question,
+                semantic_query=qa_query,
+                comparison_criterion=qa_query,
+            )
             sku = str(product.sku or "").strip().upper()
             name = str(product.product_name_cn or product.product_name_en or sku).strip()
             if qa is None or not str(qa.answer or "").strip():
@@ -6924,6 +7162,27 @@ def _active_product_anchor_field_followup_result(
         classified_field = customer_field_contract.classify_product_qa_evidence_type(text)
         field_type = classified_field if classified_field == "usage_scene" else None
     if not field_type:
+        # A high-confidence semantic QA follow-up still needs the same sealed
+        # product identity.  The preplan owns the field meaning; this adapter
+        # only supplies that identity to the bounded same-SKU QA selector.
+        if _semantic_prefers_sealed_product_qa(phase1_plan or {}):
+            product = db.query(Product).filter(Product.sku == anchor_sku).first()
+            if product is not None:
+                anchored_question = f"{product.product_name_cn or product.product_name_en or anchor_sku} {text}".strip()
+                result = _try_product_qa_shortcut(
+                    db,
+                    anchored_question,
+                    phase1_plan=phase1_plan,
+                )
+                if isinstance(result, dict):
+                    debug = result.get("debug") if isinstance(result.get("debug"), dict) else {}
+                    debug.update({
+                        "agent_mode": "recommendation_context_product_qa",
+                        "product_identity_source": "recommendation_context_anchor",
+                        "active_single_product_anchor": anchor_sku,
+                    })
+                    result["debug"] = debug
+                    return _attach_recommendation_followup_contract(result, text, context, anchor_sku=anchor_sku)
         return None
     detail_label = (
         "适用场景"
@@ -8744,6 +9003,19 @@ async def _semantic_recommendation_contract_result(
             "answer_metadata": {"source": "validated_semantic_preplan_unrepresented_requirement_clarification"},
             "skip_polish": True,
         }
+    semantic_subject = str(preplan.get("subject_text") or "").strip()
+    subject_rows = customer_agent_service.search_products(db, semantic_subject, limit=50) if semantic_subject else []
+    # The semantic model understands the requested thing; the database owns
+    # its actual category. If the model's small abstract subject_kind schema
+    # conflicts with a non-empty DB subject scope, do not use it to discard
+    # those candidates. This never broadens beyond the database scope.
+    if subject_rows and constraints.get("subject_kind"):
+        expected_category = {"cookware": "锅具", "waterware": "水具", "stove": "炉具"}.get(
+            str(constraints.get("subject_kind") or "")
+        )
+        actual_categories = {str(row.get("category") or "").strip() for row in subject_rows}
+        if expected_category and actual_categories and all(expected_category not in category for category in actual_categories):
+            constraints.pop("subject_kind", None)
     contract = customer_recommendation_verification_contract.build_recommendation_request_contract(
         question,
         semantic_constraints=constraints,
@@ -8753,7 +9025,7 @@ async def _semantic_recommendation_contract_result(
         for item in contract.field_provenance.values()
     ):
         return None
-    rows = _phase1_catalog_rows(db, "产品")
+    rows = subject_rows or _phase1_catalog_rows(db, "产品")
     # The semantic plan alone decides whether the customer asks for an
     # alternative. Deterministic code only excludes already-returned sealed
     # SKUs; it never infers a replacement from a keyword or rewrites intent.
@@ -12020,12 +12292,22 @@ def _build_phase2_entity_state_response(db: Session, question: str, decision: di
 
     field = decision["field"]
     requested_field = decision["requested_field"]
+    product = next(
+        (item for item in products if str(item.sku or "").strip().upper() == contract.resolved_sku),
+        None,
+    )
+    shipping_qa_evidence_available = bool(
+        str(field.field_type or "") == "shipping"
+        and product is not None
+        and _best_product_qa_match(
+            db,
+            product,
+            question,
+            requested_field_type="shipping",
+        ) is not None
+    )
 
-    if not customer_field_contract.is_supported_detail_field(field.field_type):
-        product = next(
-            (item for item in products if str(item.sku or "").strip().upper() == contract.resolved_sku),
-            None,
-        )
+    if not customer_field_contract.is_supported_detail_field(field.field_type) and not shipping_qa_evidence_available:
         if not product:
             return None
         resolution_decision = customer_entity_resolution_contract.can_resolve_single_product(
@@ -12060,7 +12342,7 @@ def _build_phase2_entity_state_response(db: Session, question: str, decision: di
         name = str(getattr(product, "product_name_cn", "") or getattr(product, "product_name_en", "") or "").strip()
         prefix = f"{name}（{contract.resolved_sku}）" if name else contract.resolved_sku
         result["answer"] = f"{prefix}：{str(result.get('answer') or '').strip()}"
-    preserves_unknown_field_route = not customer_field_contract.is_supported_detail_field(field.field_type)
+    preserves_unknown_field_route = not customer_field_contract.is_supported_detail_field(field.field_type) and not shipping_qa_evidence_available
     route_source = (
         "resolved_entity_unknown_field_fallback"
         if preserves_unknown_field_route
@@ -12647,6 +12929,52 @@ async def ask_customer_service(
 
     if (
         _semantic_preplan_confident(semantic_preplan, minimum=0.9)
+        and _semantic_preplan_route_family(semantic_preplan) == "general_chat"
+        and not (semantic_preplan.get("entities") or [])
+        and not (semantic_preplan.get("canonical_fields") or [])
+        and not bool(semantic_preplan.get("evidence_required"))
+    ):
+        try:
+            answer = await customer_llm_service.chat_completion(
+                db,
+                [
+                    {
+                        "role": "system",
+                        "content": "You are a concise Chinese outdoor-product customer assistant. Respond naturally to ordinary conversation only. Do not state or infer any product fact, SKU, price, stock, shipping, warranty, promotion, or after-sales policy. If the user asks to choose or prepare equipment, ask for the minimum useful preferences rather than recommending products.",
+                    },
+                    {"role": "user", "content": question},
+                ],
+                temperature=0.4,
+                max_tokens=180,
+                purpose="general_customer_chat",
+            )
+        except Exception:
+            answer = "我在。你可以告诉我准备去哪里、几个人、主要做什么，或直接说想了解哪件商品，我会按已有资料帮你一起梳理。"
+        general_chat_result = {
+            "answer": str(answer or "").strip(),
+            "intent": "general_chat",
+            "answer_type": "chat",
+            "confidence": "high",
+            "uncertainty": "resolved",
+            "needs_clarification": False,
+            "anomalies": [], "suggested_followups": [], "followups": [], "warnings": [],
+            "evidence": [], "sources": [{"type": "semantic_chat", "label": "DeepSeek ordinary conversation"}],
+            "actions": [], "results": [], "result_skus": [], "candidate_skus": [],
+            "answer_metadata": {"source": "semantic_general_chat", "evidence_status": "not_applicable"},
+            "debug": {"agent_mode": "semantic_general_chat"},
+            "skip_polish": True,
+        }
+        general_chat_result = _attach_phase1_plan_and_timing(
+            general_chat_result, phase1_plan, _phase1_timing(request_start=request_start, planner_duration_ms=planner_duration_ms)
+        )
+        return await _save_agent_result_and_return(
+            db, user_id=user_id, question=question, conversation_id=conversation_id,
+            agent_result=general_chat_result, request_start=request_start,
+            branch="semantic_general_chat", semantic_preplan=semantic_preplan,
+        )
+
+    if (
+        _semantic_preplan_confident(semantic_preplan, minimum=0.9)
         and (
             _semantic_preplan_route_family(semantic_preplan) == "knowledge_base_meta"
             or str(semantic_preplan.get("information_scope") or "").strip() == "knowledge_base_meta"
@@ -13211,6 +13539,39 @@ async def ask_customer_service(
             semantic_preplan=semantic_preplan,
         )
 
+    # Before the realtime/commercial guard produces a safe-missing answer,
+    # give an explicit same-SKU shipping QA one chance to satisfy the formal
+    # field contract. The helper still requires unique entity resolution and
+    # field-compatible QA evidence; absence of either falls through to the
+    # guard unchanged.
+    pre_guard_shipping_qa = None
+    semantic_shipping_field = bool(
+        _semantic_preplan_confident(semantic_preplan, minimum=0.9)
+        and str((semantic_preplan or {}).get("field_type") or "").strip() == "shipping"
+    )
+    if customer_field_contract.detect_shipping_intent_signal(question) or semantic_shipping_field:
+        pre_guard_shipping_qa = _try_product_qa_shortcut(
+            db,
+            question,
+            phase1_plan=phase1_plan,
+        )
+    if pre_guard_shipping_qa:
+        pre_guard_shipping_qa = _attach_phase1_plan_and_timing(
+            pre_guard_shipping_qa,
+            phase1_plan,
+            _phase1_timing(request_start=request_start, planner_duration_ms=planner_duration_ms),
+        )
+        return await _save_agent_result_and_return(
+            db,
+            user_id=user_id,
+            question=question,
+            conversation_id=conversation_id,
+            agent_result=pre_guard_shipping_qa,
+            request_start=request_start,
+            branch="sealed_shipping_qa_before_high_risk_guard",
+            semantic_preplan=semantic_preplan,
+        )
+
     high_risk_contract_result = _pre_route_high_risk_contract_result(
         db,
         question,
@@ -13688,6 +14049,39 @@ async def ask_customer_service(
         question,
         candidate_context=structured_candidate_context,
     )
+    semantic_catalog_subject = str((semantic_preplan or {}).get("subject_text") or "").strip()
+    semantic_catalog_unresolved = bool(
+        _semantic_preplan_confident(semantic_preplan, minimum=0.9)
+        and _semantic_preplan_route_family(semantic_preplan) == "structured_query"
+        and list((semantic_preplan or {}).get("canonical_fields") or []) == ["category"]
+        and semantic_catalog_subject
+        and not customer_agent_service.search_products(db, semantic_catalog_subject, limit=1)
+    )
+    if semantic_catalog_unresolved:
+        clarification = {
+            "intent": "clarify",
+            "answer_type": "clarification",
+            "answer": f"没有找到“{semantic_catalog_subject}”对应的商品范围。请确认商品名、SKU 或希望查询的实际品类后，我再按数据库资料查询。",
+            "results": [], "result_skus": [], "candidate_skus": [], "evidence": [],
+            "answer_metadata": {"source": "semantic_catalog_subject_unresolved", "evidence_status": "subject_not_found"},
+            "debug": {"agent_mode": "semantic_catalog_subject_unresolved"},
+            "skip_polish": True,
+        }
+        clarification = _attach_phase1_plan_and_timing(
+            clarification,
+            phase1_plan,
+            _phase1_timing(request_start=request_start, planner_duration_ms=planner_duration_ms),
+        )
+        return await _save_agent_result_and_return(
+            db,
+            user_id=user_id,
+            question=question,
+            conversation_id=conversation_id,
+            agent_result=clarification,
+            request_start=request_start,
+            branch="semantic_catalog_subject_unresolved",
+            semantic_preplan=semantic_preplan,
+        )
     if (
         structured_query_contract.status == "resolved" or category_general_eligible
     ) and not scoped_heat_source_structured_followup and not (
@@ -13830,8 +14224,19 @@ async def ask_customer_service(
     )
     if (
         exact_qa_before_scope_guard
-        and ((exact_qa_before_scope_guard.get("debug") or {}).get("field_contract") or {}).get("field_type") == "product_qa"
         and not _formal_field_contract_preempts_product_qa(question, phase1_plan)
+        and (
+            (exact_qa_before_scope_guard.get("answer_metadata") or {}).get("qa_match_type") == "exact"
+            or (
+                ((exact_qa_before_scope_guard.get("debug") or {}).get("field_contract") or {}).get("field_type")
+                == str((semantic_preplan or {}).get("field_type") or "").strip()
+                and str((exact_qa_before_scope_guard.get("answer_metadata") or {}).get("evidence_sku") or "").strip()
+            )
+            or (
+                ((exact_qa_before_scope_guard.get("debug") or {}).get("field_contract") or {}).get("field_type") == "product_qa"
+                and not _formal_field_contract_preempts_product_qa(question, phase1_plan)
+            )
+        )
     ):
         exact_qa_before_scope_guard = _attach_phase1_plan_and_timing(
             exact_qa_before_scope_guard,
@@ -14003,6 +14408,7 @@ async def ask_customer_service(
             db,
             question,
             candidate_context=_latest_candidate_context_for_sources(db, conversation_id),
+            semantic_preplan=semantic_preplan,
         )
         if semantic_structured_result:
             semantic_structured_result = _post_filter_recommendation_result(db, question, semantic_structured_result)
@@ -14217,6 +14623,7 @@ async def ask_customer_service(
             db,
             question,
             candidate_context=_latest_candidate_context_for_sources(db, conversation_id),
+            semantic_preplan=semantic_preplan,
         )
     if semantic_structured_result:
         semantic_structured_result = _post_filter_recommendation_result(db, question, semantic_structured_result)
@@ -14542,7 +14949,13 @@ async def ask_customer_service(
         and guardrail_field_contract.field_type != "usage_scene"
     )
     agent_result = customer_enterprise_guardrail_service.evaluate_question(question)
-    if shipping_intent_signal or formal_non_weather_field_signal:
+    semantic_catalog_request = bool(
+        isinstance(semantic_preplan, dict)
+        and _semantic_preplan_confident(semantic_preplan, minimum=0.9)
+        and str(semantic_preplan.get("route_family") or "").strip() == "structured_query"
+        and str(semantic_preplan.get("route_hint") or "").strip() == "query_products"
+    )
+    if shipping_intent_signal or formal_non_weather_field_signal or semantic_catalog_request:
         agent_result = None
     customer_perf_service.log_stage("guardrail.evaluate_question", stage_start, matched=bool(agent_result))
     if not agent_result and context_pair_result:
@@ -14696,9 +15109,15 @@ async def ask_customer_service(
 
     qa_start = perf_counter()
     qa_result = None
-    if (
+    if not agent_result and shipping_intent_signal:
+        # Shipping remains a safety-sensitive formal field.  A response is
+        # allowed here only when the normal helper seals the product and finds
+        # field-compatible QA evidence on that same SKU; otherwise it returns
+        # None and the existing safe-missing path remains authoritative.
+        qa_result = _try_product_qa_shortcut(db, question, phase1_plan=phase1_plan)
+        agent_result = qa_result
+    elif (
         not agent_result
-        and not shipping_intent_signal
         and not _formal_field_contract_preempts_product_qa(question, phase1_plan)
     ):
         qa_result = await _try_product_qa_shortcut_with_semantic_selection(
@@ -16158,13 +16577,14 @@ def _try_product_qa_shortcut(
         )
     if not qa:
         return None
+    exact_qa_match = _is_exact_product_qa_question_match(qa, question)
     # An exact QA can prove a product fact that is outside the formal field
     # ontology.  A semantic field label is not allowed to relabel that fact
     # when its own evidence policy rejects the matched QA record (for example
     # durability is not lifecycle status).  Keep formal-field QA untouched.
     if (
         field_type
-        and _is_exact_product_qa_question_match(qa, question)
+        and exact_qa_match
         and not customer_field_contract.qa_evidence_matches_field(
             str(qa.question or ""),
             str(getattr(qa, "tags", "") or ""),
@@ -16179,7 +16599,7 @@ def _try_product_qa_shortcut(
             entity_text_override=entity_subject or None,
             field_type_override=None,
         )
-    if _has_direct_structured_detail_answer(db, product, question) and not _is_exact_product_qa_question_match(qa, question):
+    if _has_direct_structured_detail_answer(db, product, question) and not exact_qa_match:
         return None
     answer = str(qa.answer or "").strip()
     if not answer:
@@ -16248,6 +16668,7 @@ def _try_product_qa_shortcut(
         "sku": sku,
         "result_skus": [sku],
         "answer_metadata": {
+            "qa_match_type": "exact" if exact_qa_match else "semantic",
             "contract_field_type": qa_field_contract["field_type"],
             "requested_field": qa_field_contract["requested_field"],
             "evidence_status": "matched",
@@ -16624,11 +17045,12 @@ def _best_product_qa_match(
     best: tuple[int, ProductQa] | None = None
     for qa in qas:
         exact_question_match = _is_exact_product_qa_question_match(qa, question)
-        if requested_field_type and not customer_field_contract.qa_evidence_matches_field(
+        field_compatible_qa = bool(requested_field_type and customer_field_contract.qa_evidence_matches_field(
             str(qa.question or ""),
             str(getattr(qa, "tags", "") or ""),
             requested_field_type,
-        ) and not exact_question_match:
+        ))
+        if requested_field_type and not field_compatible_qa and not exact_question_match:
             continue
         qa_text = f"{qa.question or ''} {qa.answer or ''}"
         qa_terms = _qa_match_terms(qa_text)
@@ -16652,12 +17074,14 @@ def _best_product_qa_match(
             requested_qa_type,
             evidence_type,
             has_semantic_overlap=bool(overlap or semantic_overlap),
-        ) and not exact_question_match:
+        ) and not exact_question_match and not field_compatible_qa:
             continue
         score = len(overlap) + (2 * len(semantic_overlap))
         if exact_question_match:
             score += 8
         if requested_qa_type != "unknown" and requested_qa_type == evidence_type:
+            score += 1
+        elif field_compatible_qa:
             score += 1
         if score <= 0:
             continue

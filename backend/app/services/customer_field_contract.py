@@ -507,10 +507,16 @@ FIELD_EVIDENCE_POLICIES: dict[str, FieldEvidencePolicy] = {
     "cleaning": FieldEvidencePolicy("cleaning", _aliases("cleaning"), ("specs.usage_instruction",), _aliases("cleaning")),
     "care": FieldEvidencePolicy("care", _aliases("care"), ("specs.usage_instruction",), _aliases("care")),
     "usage_scene": FieldEvidencePolicy("usage_scene", _aliases("usage_scene"), ("business.usage_scenarios",), _aliases("usage_scene")),
-    # Shipping is product-bound only when the catalog carries same-SKU
-    # fulfillment data.  The empty policy is deliberate: the formatter must
-    # produce a safe missing-data answer rather than infer a delivery promise.
-    "shipping": FieldEvidencePolicy("shipping", _aliases("shipping"), (), _aliases("shipping")),
+    # Shipping may consume an explicit same-SKU QA record, such as a stated
+    # default courier.  It never infers a delivery promise from a product
+    # name or category, and falls back to the shipping-specific safe-missing
+    # formatter when no compatible record exists.
+    "shipping": FieldEvidencePolicy(
+        "shipping",
+        _aliases("shipping"),
+        (),
+        _aliases("shipping") + ("快递", "发什么快递", "默认发"),
+    ),
     "gift": FieldEvidencePolicy("gift", _aliases("gift"), (), _aliases("gift")),
     "price": FieldEvidencePolicy("price", _aliases("price"), (), _aliases("price")),
     "accessories": FieldEvidencePolicy("accessories", _aliases("accessories"), (), _aliases("accessories")),

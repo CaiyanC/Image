@@ -191,10 +191,11 @@ def _recommendation_contract_from_validated_semantic_constraints(
     contract = RecommendationRequestContract()
     subject_kind = constraints.get("subject_kind")
     subject_categories = {"cookware": "锅具", "waterware": "水具", "stove": "炉具"}
-    if subject_kind not in subject_categories:
+    if subject_kind is not None and subject_kind not in subject_categories:
         return None
-    contract.subject_kind = subject_kind
-    contract.subject_category = subject_categories[subject_kind]
+    if subject_kind is not None:
+        contract.subject_kind = subject_kind
+        contract.subject_category = subject_categories[subject_kind]
     people = constraints.get("people")
     if people is not None:
         if not isinstance(people, dict) or set(people) != {"min", "max"}:
