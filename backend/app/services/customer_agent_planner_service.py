@@ -680,6 +680,15 @@ def _validate_semantic_preplan(data: dict[str, Any] | None, *, raw_content: str 
         result = _empty_semantic_preplan(called=True, fallback_reason="invalid_evidence_kind")
         result["raw_preview"] = _safe_preview(raw_content)
         return result
+    # A formal field and product-QA evidence are mutually exclusive semantic
+    # claims.  The allowlisted canonical field is the semantic decision about
+    # what the customer asked; evidence_kind only selects the downstream source
+    # class.  Preserve the accepted field and normalize its incompatible source
+    # class to structured evidence.  This never derives a field from wording,
+    # identity, or data -- it prevents an incidental QA label from erasing the
+    # model's explicit high-confidence field contract.
+    if evidence_kind == "product_qa" and (canonical_fields or field_type or field_hint):
+        evidence_kind = "structured_field"
     # ``product_qa`` is a semantic decision that the customer asks for a
     # product-specific capability, judgement, or procedure for which the
     # authoritative source is same-SKU QA rather than a structured column.

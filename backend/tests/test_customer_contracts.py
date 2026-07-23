@@ -203,6 +203,31 @@ def test_semantic_comparison_preplan_rejects_missing_participants():
     assert preplan["fallback_reason"] == "invalid_comparison_participants"
 
 
+def test_semantic_preplan_preserves_formal_field_over_conflicting_qa_source():
+    """The model owns the field meaning; code only normalizes its source class."""
+    preplan = customer_agent_planner_service._validate_semantic_preplan(
+        {
+            "route_family": "product_bound_qa",
+            "route_hint": "product_detail",
+            "question_type": "field",
+            "entities": ["sample product"],
+            "subject_text": "sample product",
+            "canonical_fields": ["emotional_value"],
+            "evidence_kind": "product_qa",
+            "qa_evidence_query": "customer experience",
+            "confidence": "high",
+            "ambiguity": False,
+            "evidence_required": True,
+            "context_usage": "none",
+            "reasoning_summary": "conflicting semantic evidence contract",
+        }
+    )
+
+    assert preplan["fallback_reason"] == ""
+    assert preplan["canonical_fields"] == ["emotional_value"]
+    assert preplan["evidence_kind"] == "structured_field"
+
+
 def test_semantic_comparison_field_forms_the_same_formal_field_contract():
     field_contract = resolve_requested_field_contract(
         "示例甲和示例乙，哪个更适合多人使用？",
