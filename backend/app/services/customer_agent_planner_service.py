@@ -3332,8 +3332,7 @@ async def plan_customer_question_semantic(
             db, question=text, runtime_settings=runtime_settings,
         )
         llm_call_count += 1
-        if len(split_queries) > 1:
-            result["compound"] = True
+        if result.get("compound") is True and len(split_queries) > 1:
             result["qa_evidence_queries"] = split_queries
     if (
         result.get("fallback_reason") in {"incomplete_structured_query_scope", "catalogue_value_requires_structured_query"}
