@@ -15887,6 +15887,7 @@ async def ask_customer_service(
     if (
         generic_qa_contract
         and not _is_sealed_product_qa_safe_missing(generic_qa_contract)
+        and not ((semantic_preplan or {}).get("qa_evidence_queries") or [])
         and ((generic_qa_contract.get("debug") or {}).get("field_contract") or {}).get("field_type") == "product_qa"
         and not _formal_field_contract_preempts_product_qa(question, phase1_plan)
     ):
