@@ -15641,6 +15641,7 @@ async def ask_customer_service(
     if (
         exact_qa_before_scope_guard
         and not _is_sealed_product_qa_safe_missing(exact_qa_before_scope_guard)
+        and not ((semantic_preplan or {}).get("qa_evidence_queries") or [])
         and not _formal_field_contract_preempts_product_qa(question, phase1_plan)
         and (
             (exact_qa_before_scope_guard.get("answer_metadata") or {}).get("qa_match_type") == "exact"
