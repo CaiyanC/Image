@@ -2681,6 +2681,8 @@ async def _semantic_product_qa_scope_review(
                         "Return only JSON: {compound:boolean}. You are a semantic intent-shape auditor, not a router or answer writer. "
                         "Read the complete customer question. compound=true only when it independently asks two or more product facts, capabilities, conditions, procedures, judgements, or comparisons that need separate evidence; "
                         "compound=false for one broad product overview, preparation, tradeoff, or decision-support request even if it has several words. "
+                        "For example, a question asking whether a product is durable AND whether it can hold boiling water is compound=true; "
+                        "a question asking generally what to know before using it is compound=false. "
                         "Do not infer a product, SKU, value, evidence, or answer."
                     ),
                 },
