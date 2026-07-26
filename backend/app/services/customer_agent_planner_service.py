@@ -2690,6 +2690,8 @@ async def _semantic_product_qa_scope_review(
                         "a question asking generally what to know before using it is compound=false. "
                         "Questions such as 'what is worth noting', 'what are its main points', or 'what should I know about using it' are one broad overview and compound=false, "
                         "unless the customer separately asks another independent fact or condition. "
+                        "A single suitability judgment whose wording includes a user type and use scenario (for example whether it suits a beginner for pour-over coffee) is one fact, compound=false; "
+                        "do not split its user type, scenario, or product name into extra questions. "
                         "Do not infer a product, SKU, value, evidence, or answer."
                     ),
                 },
