@@ -10,6 +10,10 @@ from .customer_field_contract import detect_field_contract, select_entity_subjec
 
 _DISPLAY_VERSION_PREFIX_RE = re.compile(r"^\d+(?:\.\d+)*(?:版本|版)[\s\-_]*", re.IGNORECASE)
 _DISPLAY_LABEL_PREFIX_RE = re.compile(r"^[\[(（【][^\])）】]+[\])）】]\s*", re.IGNORECASE)
+_NUMERIC_VERSION_VARIANT_RE = re.compile(
+    r"(?:(?:\bv\s*)(\d+(?:\.\d+)+)|(\d+(?:\.\d+)+)\s*(?:版本|版))",
+    re.IGNORECASE,
+)
 _VERSION_TOKEN_RE = re.compile(r"(?:pro|plus|max|lite|mini|ultra)", re.IGNORECASE)
 _FAMILY_CATEGORY_SUFFIX_RE = re.compile(r"(?:水壶|保温杯|水杯|套锅|单锅|炒锅|煎锅|烤盘|盘|椅子|桌椅|炉具|炉子)$")
 _GENERIC_CATEGORY_TERMS = {"水壶", "水杯", "杯", "杯子", "锅", "锅具", "炉", "炉具", "炉子", "椅子", "桌椅", "配件", "产品", "商品", "水具"}
@@ -351,6 +355,17 @@ def _catalog_unique_exact_alias_product(
     return product if containing_owner_skus == {sku} else None
 
 
+def recover_explicit_versioned_subject(question: str, subject: str) -> str:
+    """Recover only a version-bearing current-turn identity span for validation."""
+    raw_question = str(question or "")
+    raw_subject = str(subject or "").strip()
+    if not raw_question or not raw_subject:
+        return ""
+    version = r"(?:(?:v\s*)\d+(?:\.\d+)+|\d+(?:\.\d+)+\s*(?:版本|版))"
+    match = re.search(rf"({version}\s*[-—–_]?\s*{re.escape(raw_subject)})", raw_question, re.IGNORECASE)
+    return match.group(1).strip() if match else ""
+
+
 def unique_canonical_subject_in_question(question: str, products: list[Product]) -> str:
     """Return a unique longest catalog display alias explicitly present.
 
@@ -362,9 +377,19 @@ def unique_canonical_subject_in_question(question: str, products: list[Product])
     normalized_question = _normalized(question)
     if not normalized_question:
         return ""
+    question_versions = _numeric_version_variants(question)
     canonical_matches: dict[str, set[str]] = {}
     for product in products:
         sku = str(getattr(product, "sku", "") or "").strip().upper()
+        product_versions = set().union(
+            _numeric_version_variants(str(getattr(product, "product_name_cn", "") or "")),
+            _numeric_version_variants(str(getattr(product, "product_name_en", "") or "")),
+        )
+        # A display alias can intentionally omit a version prefix, but an
+        # explicit version in the current turn is identity-bearing. Do not let
+        # that derived alias revive a different catalog version.
+        if question_versions and product_versions and question_versions != product_versions:
+            continue
         for raw_name in (
             str(getattr(product, "product_name_cn", "") or "").strip(),
             str(getattr(product, "product_name_en", "") or "").strip(),
@@ -382,6 +407,12 @@ def unique_canonical_subject_in_question(question: str, products: list[Product])
     matches: list[tuple[int, int, str, str]] = []
     for product in products:
         sku = str(getattr(product, "sku", "") or "").strip().upper()
+        product_versions = set().union(
+            _numeric_version_variants(str(getattr(product, "product_name_cn", "") or "")),
+            _numeric_version_variants(str(getattr(product, "product_name_en", "") or "")),
+        )
+        if question_versions and product_versions and question_versions != product_versions:
+            continue
         for raw_name in (
             str(getattr(product, "product_name_cn", "") or "").strip(),
             str(getattr(product, "product_name_en", "") or "").strip(),
@@ -465,9 +496,19 @@ def _display_aliases(value: str) -> set[str]:
     return aliases
 
 
+def _numeric_version_variants(value: str) -> set[str]:
+    """Extract explicit version labels without treating dimensions as variants."""
+    return {
+        str(match.group(1) or match.group(2) or "").strip().lower()
+        for match in _NUMERIC_VERSION_VARIANT_RE.finditer(str(value or ""))
+        if str(match.group(1) or match.group(2) or "").strip()
+    }
+
+
 def _explicit_variant_attributes(value: str) -> dict[str, set[str]]:
     normalized = _normalized(value)
     cups = {match.group(1) for match in _CUP_COUNT_RE.finditer(normalized)}
+    versions = _numeric_version_variants(value)
     colors: set[str] = set()
     complete_color_words = tuple(
         sorted(
@@ -497,11 +538,11 @@ def _explicit_variant_attributes(value: str) -> dict[str, set[str]]:
             and re.search(rf"{re.escape(alias)}(?=(?:{complete_color_pattern}))", normalized)
         ):
             colors.add(canonical)
-    return {"cup_count": cups, "color": colors}
+    return {"cup_count": cups, "color": colors, "version": versions}
 
 
 def _product_variant_attributes(product: Product) -> dict[str, set[str]]:
-    combined = {"cup_count": set(), "color": set()}
+    combined = {"cup_count": set(), "color": set(), "version": set()}
     for value in (
         getattr(product, "product_name_cn", ""),
         getattr(product, "product_name_en", ""),
@@ -624,6 +665,7 @@ def build_entity_resolution_contract(
     resolver_candidates: list[Product] | None = None,
     entity_text_override: str | None = None,
     field_type_override: str | None = None,
+    participant_local_identity: bool = False,
 ) -> EntityResolutionContract:
     field = detect_field_contract(question)
     entity_text = str(entity_text_override or "").strip() or _entity_text_from_question(question)
@@ -654,9 +696,13 @@ def build_entity_resolution_contract(
                 if sku:
                     question_sku_products.add(sku)
     identity_sources = (
-        (entity_text, question)
-        if not entity_text_override or len(question_sku_products) == 1
-        else (entity_text,)
+        (entity_text,)
+        if participant_local_identity
+        else (
+            (entity_text, question)
+            if not entity_text_override or len(question_sku_products) == 1
+            else (entity_text,)
+        )
     )
     extracted_sku_tokens = [
         str(sku or "").strip().upper().replace("_", "-")

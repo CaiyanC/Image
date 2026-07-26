@@ -233,13 +233,11 @@ async def semantic_retrieve(db: Session, query: str, sku: str | None = None, lim
         params = {"embedding": _vector_literal(embedding), "limit": limit}
         if sku:
             where += (
-                " AND (sku = :sku OR sku IS NULL "
-                "OR metadata_json LIKE :sku_json_quoted "
-                "OR metadata_json LIKE :sku_json_plain)"
+                " AND (sku = :sku "
+                "OR metadata_json LIKE :sku_json_quoted)"
             )
             params["sku"] = sku
             params["sku_json_quoted"] = f'%"{sku}"%'
-            params["sku_json_plain"] = f"%{sku}%"
         rows = db.execute(text(
             "SELECT source_type, sku, content, metadata_json, "
             "embedding <=> CAST(:embedding AS vector) AS distance "
@@ -286,14 +284,49 @@ def _safe_json(value: str | None) -> dict:
         return {}
 
 
+def same_sku_customer_context(db: Session, sku: str, limit: int = 1) -> list[dict]:
+    """Return a small authoritative same-SKU product context for semantic RAG.
+
+    Vector similarity is useful for narrow QA, but broad product questions can
+    rank several related QA rows above the product's own Listing or profile.
+    This function does not choose an answer: it merely makes one customer-
+    facing, same-SKU source available to the semantic evidence selector.
+    """
+    normalized_sku = str(sku or "").strip().upper()
+    if not normalized_sku or limit <= 0:
+        return []
+    rows = (
+        db.query(KnowledgeChunk)
+        .filter(
+            KnowledgeChunk.sku == normalized_sku,
+            KnowledgeChunk.source_type == "product",
+        )
+        .all()
+    )
+    ranked: list[tuple[int, KnowledgeChunk]] = []
+    for row in rows:
+        section = str((_safe_json(row.metadata_json).get("section") or "")).strip().lower()
+        priority = {"content": 0, "profile": 1}.get(section)
+        if priority is not None and str(row.content or "").strip():
+            ranked.append((priority, row))
+    ranked.sort(key=lambda item: (item[0], str(item[1].id or "")))
+    return [
+        {
+            "source_type": row.source_type,
+            "sku": normalized_sku,
+            "content": str(row.content or ""),
+            "metadata": _safe_json(row.metadata_json),
+            "score": None,
+        }
+        for _, row in ranked[:limit]
+    ]
+
+
 def _chunk_matches_sku_sql(sku: str):
     like_quoted = f'%"{sku}"%'
-    like_plain = f"%{sku}%"
     return or_(
         KnowledgeChunk.sku == sku,
-        KnowledgeChunk.sku.is_(None),
         KnowledgeChunk.metadata_json.ilike(like_quoted),
-        KnowledgeChunk.metadata_json.ilike(like_plain),
     )
 
 

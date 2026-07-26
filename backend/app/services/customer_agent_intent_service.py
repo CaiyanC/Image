@@ -2034,7 +2034,17 @@ async def _query_products_result(
     kb_results = supporting["raw_rows"]
 
     if not rows and (supporting.get("qa") or supporting.get("kb")):
-        answer = _compose_semantic_evidence_answer(supporting)
+        # Retrieval without a resolved catalogue row is only a diagnostic
+        # signal.  The returned QA/KB hits can belong to different SKUs, so
+        # selecting the first answer would expose an unrelated product fact
+        # (for example a generic "非常适合" gift answer) as if it answered the
+        # customer's catalogue query.  Same-SKU product questions are handled
+        # by the sealed routes before this fallback; this branch must remain
+        # fail-closed and ask for a resolvable product/category instead.
+        answer = (
+            "当前没有找到可唯一对应的商品资料，暂时不能据此给出确定答案。"
+            "请提供完整商品名、SKU，或明确要查询的品类/系列后再帮您核对。"
+        )
         response = _build_response(
             intent=intent,
             answer=answer,
@@ -2045,22 +2055,22 @@ async def _query_products_result(
             ],
             results=[],
             steps=_steps(intent, [{"type": tool_name, "label": "执行产品查询", "detail": "商品库未命中，使用 QA/知识库语义证据补充", "ok": True}]),
-            confidence="medium",
-            warnings=["product_db_empty_used_semantic_evidence"],
+            confidence="low",
+            warnings=["unbound_semantic_evidence_not_customer_answer"],
             anomalies=[],
             suggested_followups=followups,
-            answer_type="knowledge_base_answer",
-            evidence=supporting["evidence"],
+            answer_type="clarification",
+            evidence=[],
             debug=_knowledge_enrichment_debug(
                 intent,
                 steps=_steps(intent, [{"type": tool_name, "label": "执行产品查询", "detail": "商品库未命中，使用 QA/知识库语义证据补充", "ok": True}]),
-                warnings=["product_db_empty_used_semantic_evidence"],
+                warnings=["unbound_semantic_evidence_not_customer_answer"],
                 anomalies=[],
                 results=[],
                 supporting=supporting,
             ),
         )
-        _attach_knowledge_enrichment(response, primary_source="qa_kb", supporting=supporting)
+        _attach_knowledge_enrichment(response, primary_source="unbound_retrieval_diagnostic", supporting=supporting)
         response["skip_polish"] = True
         return response
 

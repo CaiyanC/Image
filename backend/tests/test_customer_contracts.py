@@ -1,5 +1,7 @@
 import asyncio
 import inspect
+import json
+from types import SimpleNamespace
 
 import pytest
 
@@ -85,6 +87,222 @@ def test_semantic_preplan_uses_the_formal_canonical_taxonomy_for_safe_fields():
     assert semantic_preplan_field_type("contents") == "accessories"
 
 
+def test_semantic_preplan_preserves_supplemental_same_sku_qa_for_mixed_product_fact():
+    result = customer_agent_planner_service._validate_semantic_preplan(
+        {
+            "route_family": "product_bound_qa",
+            "route_hint": "product_detail",
+            "question_type": "field",
+            "subject_text": "示例水袋",
+            "canonical_fields": ["certification"],
+            "field_type": "certification",
+            "field_hint": "certification",
+            "evidence_kind": "structured_field",
+            "supplemental_qa_evidence_query": "是否可以直接装开水",
+            "confidence": "high",
+            "ambiguity": False,
+            "evidence_required": True,
+            "context_usage": "none",
+            "reasoning_summary": "The question asks for one recorded certification and one separate capability.",
+        }
+    )
+
+    assert result["canonical_fields"] == ["certification"]
+    assert result["supplemental_qa_evidence_query"] == "是否可以直接装开水"
+    assert not result["fallback_reason"]
+
+
+def test_semantic_compound_adapter_separates_capability_from_safety_evaluation(monkeypatch):
+    """A semantic subtask must retrieve compatibility, never manufacture safety."""
+    prompts = []
+
+    async def fake_chat_completion(_db, messages, **_kwargs):
+        prompts.append(messages)
+        return '{"capability_query":"high-altitude use compatibility","safety_evaluation_requested":true}'
+
+    monkeypatch.setattr(customer_agent_planner_service.customer_llm_service, "chat_completion", fake_chat_completion)
+
+    result = asyncio.run(
+        customer_agent_planner_service._semantic_compound_supplemental_query(
+            None,
+            question="Is Sample stove material safe for high-altitude use?",
+            canonical_fields=["material"],
+            runtime_settings={"max_tokens": 512, "model": "test", "response_format": None, "thinking": None},
+        )
+    )
+
+    assert result == {
+        "capability_query": "high-altitude use compatibility",
+        "safety_evaluation_requested": True,
+    }
+    assert "not material safety" in prompts[0][0]["content"]
+
+
+def test_compound_supplement_keeps_safe_missing_as_rag_fallback_only():
+    safe_missing = {"debug": {"agent_mode": "sealed_product_qa_safe_missing"}}
+    grounded = {"debug": {"agent_mode": "sealed_same_sku_knowledge_rag"}}
+
+    assert customer_service_service._is_sealed_product_qa_safe_missing(safe_missing)
+    assert not customer_service_service._is_sealed_product_qa_safe_missing(grounded)
+
+
+def test_compound_supplement_tries_same_sku_rag_after_qa_safe_missing(monkeypatch):
+    calls = []
+
+    async def qa_safe_missing(_db, question, *, phase1_plan):
+        calls.append(("qa", question, phase1_plan["semantic_preplan"]["qa_evidence_query"]))
+        return {"debug": {"agent_mode": "sealed_product_qa_safe_missing"}}
+
+    async def rag_grounded(_db, question, phase1_plan):
+        calls.append(("rag", question, phase1_plan["semantic_preplan"]["qa_evidence_query"]))
+        return {"debug": {"agent_mode": "sealed_same_sku_knowledge_rag"}, "result_skus": ["SKU-1"]}
+
+    monkeypatch.setattr(customer_service_service, "_try_product_qa_shortcut_with_semantic_selection", qa_safe_missing)
+    monkeypatch.setattr(customer_service_service, "_try_sealed_same_sku_knowledge_answer", rag_grounded)
+
+    result, query = asyncio.run(
+        customer_service_service._resolve_sealed_supplemental_product_evidence(
+            None,
+            question="Sample stove material safety plus altitude use?",
+            semantic_preplan={
+                "subject_text": "Sample stove",
+                "supplemental_qa_evidence_query": "high-altitude compatibility",
+            },
+        )
+    )
+
+    assert query == "high-altitude compatibility"
+    assert result["debug"]["agent_mode"] == "sealed_same_sku_knowledge_rag"
+    assert calls == [
+        ("qa", "Sample stove high-altitude compatibility", "high-altitude compatibility"),
+        ("rag", "Sample stove high-altitude compatibility", "high-altitude compatibility"),
+    ]
+
+
+def test_rag_safety_boundary_does_not_upgrade_compatibility_to_a_guarantee():
+    answer, bounded = customer_service_service._bound_unsupported_rag_safety_guarantee(
+        "You can use it without worry; there will be no problem.",
+        {"evidence_quotes": ["adapted to high-altitude conditions"]},
+        "The product is adapted to high-altitude conditions.",
+    )
+
+    assert bounded is True
+    assert "adapted to high-altitude conditions" in answer
+    assert "保证" in answer
+
+
+def test_semantic_preplan_requests_repair_when_model_reports_partial_multi_intent_coverage():
+    result = customer_agent_planner_service._validate_semantic_preplan(
+        {
+            "route_family": "product_bound_qa",
+            "route_hint": "product_detail",
+            "question_type": "field",
+            "subject_text": "示例商品",
+            "canonical_fields": ["product_name_en"],
+            "field_type": "product_name_en",
+            "evidence_kind": "structured_field",
+            "intent_coverage": "partial",
+            "confidence": "high",
+            "ambiguity": False,
+            "evidence_required": True,
+            "context_usage": "none",
+            "reasoning_summary": "A second independently requested product fact was not represented.",
+        }
+    )
+
+    assert result["intent_coverage"] == "partial"
+    assert result["fallback_reason"] == "incomplete_product_bound_multi_intent"
+
+
+def test_semantic_preplan_preserves_compound_product_qa_signal():
+    """The semantic layer, not a lexical fallback, marks two product facts.
+
+    A compound product-QA plan lets the evidence layer retain a supported part
+    while safely identifying any independently requested part without direct
+    same-SKU evidence.
+    """
+    result = customer_agent_planner_service._validate_semantic_preplan(
+        {
+            "route_family": "product_bound_qa",
+            "route_hint": "product_detail",
+            "question_type": "field",
+            "subject_text": "示例水袋",
+            "canonical_fields": [],
+            "evidence_kind": "product_qa",
+            "qa_evidence_query": "耐用性和特定暴露条件",
+            "compound": True,
+            "intent_coverage": "full",
+            "confidence": "high",
+            "ambiguity": False,
+            "evidence_required": True,
+            "context_usage": "none",
+            "reasoning_summary": "The customer independently asks durability and an exposure condition.",
+        }
+    )
+
+    assert result["compound"] is True
+    assert not result["fallback_reason"]
+
+
+def test_semantic_product_qa_scope_review_uses_the_full_question_not_keywords(monkeypatch):
+    """The bounded second semantic review owns multi-intent shape detection."""
+    seen: dict = {}
+
+    async def fake_completion(_db, *, messages, **_kwargs):
+        seen["payload"] = json.loads(messages[-1]["content"])
+        return '{"compound":true}'
+
+    monkeypatch.setattr(customer_agent_planner_service.customer_llm_service, "chat_completion", fake_completion)
+
+    import asyncio
+
+    result = asyncio.run(
+        customer_agent_planner_service._semantic_product_qa_scope_review(
+            SimpleNamespace(),
+            question="Can it perform one task and remain in a specific environment?",
+            runtime_settings={"model": "test", "response_format": None, "thinking": None, "max_tokens": 80},
+        )
+    )
+
+    assert result is True
+    assert seen["payload"] == {
+        "question": "Can it perform one task and remain in a specific environment?"
+    }
+
+
+def test_supplemental_same_sku_qa_is_merged_after_formal_field_evidence_repair():
+    """A valid second product-QA intent must survive formal-field formatting.
+
+    The semantic plan owns the mixed intent.  This helper only joins a QA
+    answer already sealed to the same resolved SKU, or adds a scoped missing
+    statement when that evidence cannot be selected.
+    """
+    result = {
+        "answer": "示例水袋（AC-19）的产品认证：食品级认证。",
+        "result_skus": ["AC-19"],
+        "answer_metadata": {"evidence_field": "certification"},
+    }
+    supplemental = {
+        "answer": "同 SKU 问答确认：可以直接装开水。",
+        "result_skus": ["AC-19"],
+        "answer_metadata": {"evidence_sku": "AC-19", "evidence_field": "product_qa"},
+    }
+
+    merged = customer_service_service._merge_supplemental_product_qa_into_field_answer(
+        result,
+        supplemental=supplemental,
+        supplemental_query="是否可以直接装开水",
+    )
+
+    assert "食品级认证" in merged["answer"]
+    assert "可以直接装开水" in merged["answer"]
+    assert merged["answer_metadata"]["supplemental_product_qa"]["evidence_sku"] == "AC-19"
+
+
+def test_sealed_context_anchor_is_eligible_for_compound_field_execution():
+    assert "recommendation_context_anchor" in customer_service_service._PHASE2_EXACT_ENTITY_MATCHES
+
+
 def test_named_product_fact_always_reaches_semantic_preplan_before_legacy_recommendation_words():
     assert customer_service_service._should_call_semantic_preplan(
         "示例露营壶适合露营吗？",
@@ -142,6 +360,27 @@ def test_explicit_price_positioning_contract_rejects_conflicting_semantic_price(
     assert result["canonical_fields"] == ["price_positioning"]
 
 
+def test_compound_semantic_product_qa_preempts_a_single_explicit_field_predicate():
+    """A complete semantic multi-QA turn must not lose one half to an alias."""
+    result = resolve_requested_field_contract(
+        "\u793a\u4f8b\u7089\u5177\u5982\u4f55\u8fa8\u522b\u771f\u4f2a\uff1f\u80fd\u5728\u7535\u78c1\u7089\u4e0a\u7528\u5417\uff1f",
+        planner_plan={
+            "semantic_preplan": {
+                "called": True,
+                "route_family": "product_bound_qa",
+                "evidence_kind": "product_qa",
+                "canonical_fields": [],
+                "confidence": 0.95,
+                "compound": True,
+                "fallback_reason": "",
+            },
+        },
+    )
+
+    assert result["field_type"] is None
+    assert result["source"] == "validated_semantic_product_qa"
+
+
 def test_legacy_unknown_fact_guard_yields_to_formal_price_positioning_contract():
     """A legacy realtime-fact guard cannot preempt a formal product field."""
     assert customer_service_service._unknown_product_fact_result("它的价格定位") is None
@@ -184,6 +423,71 @@ def test_semantic_comparison_preplan_preserves_verbatim_participants_and_field_c
     assert preplan["canonical_fields"] == ["people"]
 
 
+def test_semantic_comparison_preplan_normalizes_structured_product_mentions():
+    """Provider JSON entity objects must preserve their verbatim mentions for sealing."""
+    preplan = customer_agent_planner_service._validate_semantic_preplan(
+        {
+            "route_family": "comparison",
+            "route_hint": "comparison",
+            "question_type": "comparison",
+            "subtype": "comparison_overview",
+            "entities": [
+                {"entity_type": "product", "entity_value": "示例甲"},
+                {"entity_type": "product", "entity_value": "示例乙"},
+            ],
+            "subject_text": "示例甲和示例乙",
+            "canonical_fields": [],
+            "evidence_kind": "structured_field",
+            "confidence": "high",
+            "ambiguity": False,
+            "evidence_required": True,
+            "context_usage": "none",
+            "reasoning_summary": "Two named products need a factual overview.",
+        }
+    )
+
+    assert preplan["fallback_reason"] == ""
+    assert preplan["entities"] == ["示例甲", "示例乙"]
+
+
+def test_semantic_structured_comparison_overview_is_not_replaced_by_legacy_field_guess():
+    """An empty semantic comparison field list is an intentional overview contract."""
+    assert customer_service_service._semantic_structured_comparison_overview_contract(
+        {
+            "route_family": "comparison",
+            "subtype": "comparison_overview",
+            "evidence_kind": "structured_field",
+            "canonical_fields": [],
+            "decision_requested": False,
+        }
+    )
+
+
+def test_semantic_comparison_preserves_explicit_non_decision_flag():
+    """Factual differences must not be turned into a product recommendation."""
+    preplan = customer_agent_planner_service._validate_semantic_preplan(
+        {
+            "route_family": "comparison",
+            "route_hint": "comparison",
+            "question_type": "comparison",
+            "subtype": "relation_comparison",
+            "entities": ["示例甲", "示例乙"],
+            "subject_text": "示例甲和示例乙",
+            "canonical_fields": ["weight"],
+            "evidence_kind": "structured_field",
+            "decision_requested": False,
+            "confidence": "high",
+            "ambiguity": False,
+            "evidence_required": True,
+            "context_usage": "none",
+            "reasoning_summary": "The customer asks which named product is lighter.",
+        }
+    )
+
+    assert preplan["fallback_reason"] == ""
+    assert preplan["decision_requested"] is False
+
+
 def test_semantic_comparison_preplan_rejects_missing_participants():
     preplan = customer_agent_planner_service._validate_semantic_preplan(
         {
@@ -201,6 +505,31 @@ def test_semantic_comparison_preplan_rejects_missing_participants():
 
     assert preplan["route_hint"] == ""
     assert preplan["fallback_reason"] == "invalid_comparison_participants"
+
+
+def test_semantic_comparison_preplan_rejects_unknown_subtype_for_semantic_repair():
+    """A provider-specific comparison label cannot silently bypass the overview contract."""
+    preplan = customer_agent_planner_service._validate_semantic_preplan(
+        {
+            "route_family": "comparison",
+            "question_type": "comparison",
+            "subtype": "product_comparison",
+            "entities": ["sample A", "sample B"],
+            "subject_text": "sample A and sample B",
+            "canonical_fields": [],
+            "evidence_kind": "product_qa",
+            "qa_evidence_query": "their differences",
+            "decision_requested": False,
+            "confidence": "high",
+            "ambiguity": False,
+            "evidence_required": True,
+            "context_usage": "none",
+            "reasoning_summary": "A broad factual comparison needs the formal overview shape.",
+        }
+    )
+
+    assert preplan["fallback_reason"] == "invalid_comparison_subtype"
+    assert preplan["route_family"] == ""
 
 
 def test_semantic_preplan_preserves_formal_field_over_conflicting_qa_source():
@@ -226,6 +555,249 @@ def test_semantic_preplan_preserves_formal_field_over_conflicting_qa_source():
     assert preplan["fallback_reason"] == ""
     assert preplan["canonical_fields"] == ["emotional_value"]
     assert preplan["evidence_kind"] == "structured_field"
+
+
+def test_semantic_single_product_field_clears_legacy_prefix_comparison_state():
+    """A validated singular field cannot inherit a parser-created second SKU."""
+    plan = {
+        "primary_intent": "comparison",
+        "answer_type": "comparison",
+        "product_refs": ["AP01-98", "AP01"],
+        "must_compare_both_products": True,
+        "must_make_choice": True,
+        "tasks": [{"type": "product_compare", "products": ["AP01-98", "AP01"]}],
+    }
+    semantic_preplan = {
+        "called": True,
+        "route_family": "product_bound_qa",
+        "canonical_fields": ["series"],
+        "field_type": "series",
+        "confidence": 0.9,
+    }
+
+    customer_service_service._apply_semantic_single_field_route_precedence(
+        plan,
+        semantic_preplan,
+    )
+
+    assert plan["primary_intent"] == "product_detail"
+    assert plan["answer_type"] == "product_detail"
+    assert plan["product_refs"] == []
+    assert plan["must_compare_both_products"] is False
+    assert plan["must_make_choice"] is False
+    assert plan["tasks"] == []
+
+
+def test_semantic_preplan_rejects_partial_contract_when_another_requested_field_is_unknown():
+    """Do not silently drop one customer intent and answer only the other."""
+    preplan = customer_agent_planner_service._validate_semantic_preplan(
+        {
+            "route_family": "product_bound_qa",
+            "route_hint": "product_detail",
+            "question_type": "field",
+            "subject_text": "sample product",
+            "canonical_fields": ["durability", "usage_instruction"],
+            "field_type": "usage_instruction",
+            "field_hint": "usage_instruction",
+            "evidence_kind": "structured_field",
+            "confidence": "high",
+            "ambiguity": False,
+            "evidence_required": True,
+            "context_usage": "none",
+            "reasoning_summary": "The request includes durability and boiling-water capability.",
+        }
+    )
+
+    assert preplan["fallback_reason"] == "unknown_canonical_field_in_multi_intent"
+
+
+def test_semantic_preplan_prompt_keeps_unrepresented_capabilities_in_product_qa():
+    messages = customer_agent_planner_service._semantic_preplan_messages(
+        question="sample product durability and compatibility question",
+        deterministic_plan={},
+        context={},
+    )
+
+    assert "There is no durability canonical field" in messages[0]["content"]
+
+
+def test_semantic_preplan_prompt_keeps_broad_named_product_overviews_out_of_single_field_contracts():
+    """Open evidence-backed product overviews are QA/RAG work, not inferred selling-point requests."""
+    messages = customer_agent_planner_service._semantic_preplan_messages(
+        question="What should I know about this named product before a trip?",
+        deterministic_plan={},
+        context={"has_unique_current_turn_catalog_product_name": True},
+    )
+
+    assert "broad evidence-supported overview" in messages[0]["content"]
+    assert "do not infer a single field" in messages[0]["content"]
+    assert "Only select selling_point when the customer directly asks for highlights" in messages[0]["content"]
+
+
+def test_semantic_preplan_prompt_keeps_setting_availability_as_product_qa():
+    """Whether a setting exists is a capability question, not a request for every usage step."""
+    messages = customer_agent_planner_service._semantic_preplan_messages(
+        question="Can this product adjust a setting?",
+        deterministic_plan={},
+        context={"has_unique_current_turn_catalog_product_name": True},
+    )
+
+    assert "setting, adjustment, or control is available" in messages[0]["content"]
+    assert "unless the customer explicitly asks for step-by-step operation" in messages[0]["content"]
+
+
+def test_semantic_preplan_prompt_separates_promotional_gift_from_gifting_suitability():
+    """The promotion field must not swallow an open product-suitability question."""
+    messages = customer_agent_planner_service._semantic_preplan_messages(
+        question="Is this product suitable to give as a present?",
+        deterministic_plan={},
+        context={"has_unique_current_turn_catalog_product_name": True},
+    )
+
+    system = messages[0]["content"]
+    assert "only when the customer asks whether a purchase includes a promotional gift" in system
+    assert "gifting suitability is product_qa, not gift" in system
+
+
+def test_semantic_preplan_prompt_preserves_identity_bearing_version_in_subject_span():
+    messages = customer_agent_planner_service._semantic_preplan_messages(
+        question="How do I adjust the length of version 1.1 of this named product?",
+        deterministic_plan={},
+        context={},
+    )
+
+    assert "must preserve every customer-stated identity-bearing version or edition" in messages[0]["content"]
+
+
+def test_semantic_subject_contract_detects_dropped_explicit_numeric_version():
+    assert customer_agent_planner_service._semantic_subject_omits_explicit_numeric_version(
+        "1.0版本-行川包包椅怎么调长度？", "行川包包椅"
+    )
+    assert not customer_agent_planner_service._semantic_subject_omits_explicit_numeric_version(
+        "1.1版本-行川包包椅怎么调长度？", "1.1版本-行川包包椅"
+    )
+
+
+def test_customer_polish_lead_rejects_a_duplicate_of_the_verified_body():
+    draft = "It can adjust grind coarseness for different brewing methods."
+
+    assert customer_service_service._is_nonduplicative_customer_lead(
+        "I checked the verified information for you.", draft
+    )
+    assert not customer_service_service._is_nonduplicative_customer_lead(
+        "It can adjust grind coarseness for different brewing methods.", draft
+    )
+
+
+def test_semantic_named_formal_field_normalizes_provider_subtype_into_field_contract():
+    """A provider subtype cannot erase an otherwise valid formal field plan."""
+    preplan = customer_agent_planner_service._validate_semantic_preplan(
+        {
+            "route_family": "product_bound_qa",
+            "route_hint": "product_detail",
+            "question_type": "field",
+            "subtype": "single_product_fact",
+            "entities": ["sample product"],
+            "subject_text": "sample product",
+            "canonical_fields": ["series"],
+            "field_type": "series",
+            "field_hint": "series",
+            "evidence_kind": "structured_field",
+            "confidence": "high",
+            "ambiguity": False,
+            "evidence_required": True,
+            "context_usage": "none",
+            "reasoning_summary": "The customer requests the named product's series.",
+        }
+    )
+
+    field_contract = customer_field_contract.resolve_requested_field_contract(
+        "CW-C95 belongs to which series?",
+        {"semantic_preplan": preplan},
+    )
+
+    assert preplan["subtype"] == "known_detail"
+    assert field_contract["field_type"] == "series"
+    assert field_contract["source"] == "validated_semantic_preplan"
+
+
+def test_resolved_named_product_contract_uses_unique_canonical_subject_before_full_question():
+    product = _product("SKU-CHOP", "便携式户外旅行筷")
+
+    class Query:
+        def order_by(self, *_args):
+            return self
+
+        def all(self):
+            return [product]
+
+    class Db:
+        def query(self, _model):
+            return Query()
+
+    assert customer_service_service._has_resolved_named_product_contract(
+        Db(),
+        "便携式户外旅行筷有哪些值得留意的地方？",
+    )
+
+
+def test_structured_catalogue_router_yields_to_high_confidence_semantic_product_qa(monkeypatch):
+    """A product-bound semantic plan must not be turned into a category recommendation."""
+    monkeypatch.setattr(customer_service_service, "_try_product_qa_shortcut", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(customer_service_service, "_has_unresolved_product_like_scope", lambda *_args, **_kwargs: False)
+    monkeypatch.setattr(
+        customer_service_service,
+        "_structured_cookware_multi_condition_recommendation_result",
+        lambda *_args, **_kwargs: {"answer_type": "recommendation", "result_skus": ["OTHER-SKU"]},
+    )
+    preplan = {
+        "called": True,
+        "confidence": 0.9,
+        "confidence_label": "high",
+        "route_family": "product_bound_qa",
+        "route_hint": "product_detail",
+        "evidence_kind": "product_qa",
+        "canonical_fields": [],
+        "field_type": "",
+        "field_hint": None,
+        "ambiguity": False,
+        "fallback_reason": "",
+    }
+
+    result = customer_service_service._semantic_structured_query_result(
+        object(),
+        "轻途套锅如果想带去周末露营，资料里有哪些对选择有帮助的内容？",
+        semantic_preplan=preplan,
+    )
+
+    assert result is None
+
+
+def test_unsealed_phase1_knowledge_result_is_rejected_for_unique_named_product():
+    product = _product("SKU-CHOP", "便携式户外旅行筷")
+
+    class Query:
+        def order_by(self, *_args):
+            return self
+
+        def all(self):
+            return [product]
+
+    class Db:
+        def query(self, _model):
+            return Query()
+
+    result = {
+        "answer_type": "knowledge_base_answer",
+        "answer": "unsealed knowledge snippet",
+        "debug": {},
+    }
+
+    assert customer_service_service._reject_unsealed_named_product_phase1_result(
+        Db(),
+        "便携式户外旅行筷有哪些值得留意的地方？",
+        result,
+    ) is None
 
 
 def test_semantic_comparison_field_forms_the_same_formal_field_contract():
@@ -274,6 +846,30 @@ def test_semantic_comparison_builds_an_entity_contract_for_each_verbatim_partici
     assert [contract.resolved_sku for contract in contracts] == ["SKU-A", "SKU-B"]
     assert all(contract.status == "resolved" for contract in contracts)
     assert [contract.field_type for contract in contracts] == ["people", "people"]
+
+
+def test_semantic_comparison_keeps_each_participant_local_when_only_one_is_sku():
+    """One explicit SKU must not overwrite a second named comparison participant."""
+    products = [
+        _product("CW-C95", "风暴炉pro-两用版"),
+        _product("CS-B15S", "围雪炉-酒精版"),
+    ]
+    preplan = {
+        "called": True,
+        "route_family": "comparison",
+        "entities": ["CW-C95", "围雪炉-酒精版"],
+        "canonical_fields": [],
+        "confidence": 0.9,
+        "ambiguity": False,
+    }
+
+    contracts = customer_service_service._semantic_comparison_entity_contracts(
+        "CW-C95和围雪炉-酒精版分别有什么特点？",
+        preplan,
+        products,
+    )
+
+    assert [contract.resolved_sku for contract in contracts] == ["CW-C95", "CS-B15S"]
 
 
 def test_high_confidence_semantic_comparison_replaces_legacy_participant_extraction_with_sealed_contracts():
@@ -543,6 +1139,8 @@ def test_semantic_preplan_prompt_distinguishes_category_from_series():
     assert "never translate generic machine-wash wording into dishwasher" in system
     assert "care=maintenance, upkeep, drying before storage" in system
     assert "product_level=the catalogue's grade or tier label" in system
+    assert "product_level requires an explicit catalogue grade label" in system
+    assert "price_positioning, not product_level" in system
     assert "selling_point=the named product's benefits, highlights, advantages" in system
     assert "emotional_value=the intended feeling, emotional experience, or felt outcome" in system
     assert "do not use selling_point merely because an experience can also be described as a benefit" in system
@@ -551,6 +1149,351 @@ def test_semantic_preplan_prompt_distinguishes_category_from_series():
     assert "sales_region=geographic markets, countries, areas, territories, or launch regions" in system
     assert "Asking why one already named product is worth choosing is a product_bound_qa" in system
     assert 'canonical_fields":["series"]' not in messages[1]["content"]
+
+
+def test_recommendation_preplan_ignores_irrelevant_evidence_kind_variant():
+    result = customer_agent_planner_service._validate_semantic_preplan(
+        {
+            "route_family": "recommendation",
+            "subtype": "product_selection",
+            "entities": [],
+            "subject_text": "",
+            "canonical_fields": [],
+            "confidence": "high",
+            "ambiguity": False,
+            "evidence_required": False,
+            "evidence_kind": "recommendation",
+            "qa_evidence_query": "",
+            "context_usage": "none",
+            "decision_requested": False,
+            "information_scope": "",
+            "reasoning_summary": "customer requests product options",
+            "recommendation_constraints": {"subject_kind": "cookware"},
+        }
+    )
+
+    assert result["fallback_reason"] == ""
+    assert result["route_family"] == "recommendation"
+    assert result["evidence_kind"] == "structured_field"
+
+
+def test_semantic_preplan_prompt_stays_within_live_provider_budget():
+    """Route arbitration needs the contract, not a multi-thousand-token handbook."""
+    messages = customer_agent_planner_service._semantic_preplan_messages(
+        question="稳稳水袋耐用吗？",
+        deterministic_plan={},
+        context={},
+    )
+
+    assert sum(len(message["content"]) for message in messages) <= 12_000
+
+
+def test_semantic_preplan_prompt_exposes_only_unique_catalog_identity_signal():
+    messages = customer_agent_planner_service._semantic_preplan_messages(
+        question="便携式户外旅行筷有哪些值得留意的地方？",
+        deterministic_plan={},
+        context={"has_unique_current_turn_catalog_product_name": True},
+    )
+
+    user_packet = json.loads(messages[1]["content"])
+    assert user_packet["has_unique_current_turn_catalog_product_name"] is True
+    assert "server has independently verified" in messages[0]["content"]
+    assert "product_bound_qa" in messages[0]["content"]
+    assert "does not provide an SKU, answer, or database value" in messages[0]["content"]
+
+
+def test_unique_catalog_identity_repairs_generic_semantic_route_without_server_route_override(monkeypatch):
+    responses = iter(
+        [
+            json.dumps(
+                {
+                    "route_family": "generic_query",
+                    "route_hint": "query_products",
+                    "question_type": "filter",
+                    "subtype": "generic_query",
+                    "entities": [],
+                    "subject_text": "",
+                    "canonical_fields": [],
+                    "confidence": "high",
+                    "ambiguity": False,
+                    "evidence_required": False,
+                    "evidence_kind": "structured_field",
+                    "qa_evidence_query": "",
+                    "context_usage": "none",
+                    "decision_requested": False,
+                    "information_scope": "",
+                    "reasoning_summary": "initially treated as a generic catalogue request",
+                }
+            ),
+            json.dumps(
+                {
+                    "route_family": "product_bound_qa",
+                    "route_hint": "product_detail",
+                    "question_type": "field",
+                    "subtype": "known_detail",
+                    "entities": ["便携式户外旅行筷"],
+                    "subject_text": "便携式户外旅行筷",
+                    "canonical_fields": [],
+                    "confidence": "high",
+                    "ambiguity": False,
+                    "evidence_required": True,
+                    "evidence_kind": "product_qa",
+                    "qa_evidence_query": "值得留意的产品特点",
+                    "context_usage": "none",
+                    "decision_requested": False,
+                    "information_scope": "",
+                    "reasoning_summary": "the customer asks about the uniquely named product",
+                }
+            ),
+        ]
+    )
+    prompts = []
+
+    async def fake_chat_completion(_db, messages, **_kwargs):
+        prompts.append(messages)
+        return next(responses)
+
+    monkeypatch.setattr(customer_agent_planner_service.customer_llm_service, "chat_completion", fake_chat_completion)
+    monkeypatch.setattr(customer_agent_planner_service, "_database_field_value_hints", lambda *_args: [])
+
+    result = asyncio.run(
+        customer_agent_planner_service.plan_customer_question_semantic(
+            None,
+            "便携式户外旅行筷有哪些值得留意的地方？",
+            {},
+            context={"has_unique_current_turn_catalog_product_name": True},
+        )
+    )
+
+    assert len(prompts) == 2
+    assert result["route_family"] == "product_bound_qa"
+    assert result["evidence_kind"] == "product_qa"
+    assert result["qa_evidence_query"] == "值得留意的产品特点"
+    assert "unique catalog product name" in prompts[1][0]["content"]
+
+
+def test_semantic_preserves_a_complete_product_qa_plan_without_lexical_reclassification(monkeypatch):
+    """A complete semantic QA plan remains QA; field meaning stays model-owned."""
+    responses = iter(
+        [
+            json.dumps(
+                {
+                    "route_family": "product_bound_qa",
+                    "route_hint": "product_detail",
+                    "question_type": "field",
+                    "subtype": "known_detail",
+                    "entities": ["Sample product"],
+                    "subject_text": "Sample product",
+                    "canonical_fields": [],
+                    "confidence": "high",
+                    "ambiguity": False,
+                    "evidence_required": True,
+                    "evidence_kind": "product_qa",
+                    "qa_evidence_query": "why it is better than comparable products",
+                    "context_usage": "none",
+                    "decision_requested": False,
+                    "information_scope": "",
+                    "reasoning_summary": "A product fact without a formal field.",
+                }
+            ),
+            json.dumps({"compound": False}),
+        ]
+    )
+    prompts = []
+
+    async def fake_chat_completion(_db, messages, **_kwargs):
+        prompts.append(messages)
+        return next(responses)
+
+    monkeypatch.setattr(customer_agent_planner_service.customer_llm_service, "chat_completion", fake_chat_completion)
+    monkeypatch.setattr(customer_agent_planner_service, "_database_field_value_hints", lambda *_args: [])
+
+    result = asyncio.run(
+        customer_agent_planner_service.plan_customer_question_semantic(
+            None,
+            "Why is Sample product better than comparable products?",
+            {},
+            context={},
+        )
+    )
+
+    assert len(prompts) == 2
+    assert result["canonical_fields"] == []
+    assert result["evidence_kind"] == "product_qa"
+
+
+def test_semantic_rechecks_a_supplemental_qa_that_is_only_courtesy_scaffolding(monkeypatch):
+    """Semantic review removes a non-factual supplement without lexical routing."""
+    responses = iter(
+        [
+            json.dumps(
+                {
+                    "route_family": "product_bound_qa",
+                    "route_hint": "product_detail",
+                    "question_type": "field",
+                    "subtype": "known_detail",
+                    "entities": ["Sample pan"],
+                    "subject_text": "Sample pan",
+                    "canonical_fields": ["weight"],
+                    "field_type": "weight",
+                    "field_hint": "weight",
+                    "confidence": "high",
+                    "ambiguity": False,
+                    "evidence_required": True,
+                    "evidence_kind": "structured_field",
+                    "qa_evidence_query": "",
+                    "supplemental_qa_evidence_query": "product introduction",
+                    "intent_coverage": "full",
+                    "context_usage": "none",
+                    "decision_requested": False,
+                    "information_scope": "",
+                    "reasoning_summary": "Weight plus a generic introduction.",
+                }
+            ),
+            '{"independent":false}',
+        ]
+    )
+    prompts = []
+
+    purposes = []
+
+    async def fake_chat_completion(_db, messages, **kwargs):
+        prompts.append(messages)
+        purposes.append(kwargs.get("purpose"))
+        return next(responses)
+
+    monkeypatch.setattr(customer_agent_planner_service.customer_llm_service, "chat_completion", fake_chat_completion)
+    monkeypatch.setattr(customer_agent_planner_service, "_database_field_value_hints", lambda *_args: [])
+
+    result = asyncio.run(
+        customer_agent_planner_service.plan_customer_question_semantic(
+            None,
+            "Please explain Sample pan's weight for me.",
+            {},
+            context={},
+        )
+    )
+
+    # Once semantic review rejects the proposed supplement as courtesy only,
+    # the planner must not issue a third supplemental query for this ordinary
+    # single-field request.
+    assert len(prompts) == 2
+    assert purposes == ["semantic_preplan", "semantic_supplemental_intent_review"]
+    assert result["canonical_fields"] == ["weight"]
+    assert result["supplemental_qa_evidence_query"] == ""
+    assert "Courtesy scaffolding" in prompts[1][0]["content"]
+
+
+def test_semantic_recheck_preserves_a_real_compound_field_and_capability(monkeypatch):
+    """The structural review must not erase a genuinely independent QA intent."""
+    compound = {
+        "route_family": "product_bound_qa",
+        "route_hint": "product_detail",
+        "question_type": "field",
+        "subtype": "known_detail",
+        "entities": ["Sample pan"],
+        "subject_text": "Sample pan",
+        "canonical_fields": ["weight"],
+        "field_type": "weight",
+        "field_hint": "weight",
+        "confidence": "high",
+        "ambiguity": False,
+        "evidence_required": True,
+        "evidence_kind": "structured_field",
+        "qa_evidence_query": "",
+        "supplemental_qa_evidence_query": "whether it is compatible with gas stoves",
+        "intent_coverage": "full",
+        "context_usage": "none",
+        "decision_requested": False,
+        "information_scope": "",
+        "reasoning_summary": "Weight plus an independent compatibility fact.",
+    }
+    responses = iter([
+        json.dumps(compound),
+        '{"independent":true}',
+        '{"capability_query":"whether it is compatible with gas stoves","safety_evaluation_requested":false}',
+    ])
+    prompts = []
+
+    purposes = []
+
+    async def fake_chat_completion(_db, messages, **kwargs):
+        prompts.append(messages)
+        purposes.append(kwargs.get("purpose"))
+        return next(responses)
+
+    monkeypatch.setattr(customer_agent_planner_service.customer_llm_service, "chat_completion", fake_chat_completion)
+    monkeypatch.setattr(customer_agent_planner_service, "_database_field_value_hints", lambda *_args: [])
+
+    result = asyncio.run(
+        customer_agent_planner_service.plan_customer_question_semantic(
+            None,
+            "What is Sample pan's weight and is it compatible with gas stoves?",
+            {},
+            context={},
+        )
+    )
+
+    assert len(prompts) == 3
+    assert purposes == ["semantic_preplan", "semantic_supplemental_intent_review", "semantic_compound_supplemental_query"]
+    assert result["canonical_fields"] == ["weight"]
+    assert result["supplemental_qa_evidence_query"] == "whether it is compatible with gas stoves"
+
+
+def test_semantic_preplan_prompt_exposes_executable_recommendation_constraint_schema():
+    messages = customer_agent_planner_service._semantic_preplan_messages(
+        question="recommend a lightweight cookware option for two campers",
+        deterministic_plan={},
+        context={},
+    )
+
+    system = messages[0]["content"]
+    assert "recommendation_constraints" in system
+    assert "subject_kind" in system
+    assert "people={min,max}" in system
+    assert "scenarios=[camping|hiking|self_drive|seaside|soup]" in system
+    assert "weight_preference=lightweight" in system
+
+
+def test_semantic_preplan_prompt_keeps_current_purchase_availability_out_of_product_qa():
+    messages = customer_agent_planner_service._semantic_preplan_messages(
+        question="can I still buy this named product now?",
+        deterministic_plan={},
+        context={},
+    )
+
+    system = messages[0]["content"]
+    assert "purchasability" in system
+    assert "unknown_realtime" in system
+
+
+def test_current_purchase_availability_uses_inventory_safety_contract_not_lifecycle_label():
+    contract = customer_field_contract.detect_field_contract("\u6d4b\u8bd5\u4ea7\u54c1\u8fd8\u5728\u552e\u5417\uff1f")
+
+    assert contract is not None
+    assert contract.field_type == "inventory"
+
+
+def test_semantic_unknown_realtime_provider_subtype_normalizes_without_dropping_route():
+    preplan = customer_agent_planner_service._validate_semantic_preplan(
+        {
+            "route_family": "unknown_realtime",
+            "route_hint": "unknown_field",
+            "question_type": "unknown_field",
+            "subtype": "purchasability",
+            "subject_text": "AC-Z11",
+            "canonical_fields": [],
+            "confidence": "high",
+            "ambiguity": False,
+            "evidence_required": True,
+            "evidence_kind": "product_qa",
+        }
+    )
+
+    assert preplan["fallback_reason"] == ""
+    assert preplan["route_family"] == "unknown_realtime"
+    assert preplan["subtype"] == "commercial_realtime"
+    assert preplan["evidence_kind"] == "structured_field"
 
 
     assert field_contract_metadata("某商品型号是什么") == {
@@ -671,6 +1614,90 @@ def test_high_confidence_semantic_technical_advantages_outranks_overlapping_sell
     assert field_request["field_type"] == "technical_advantages"
     assert field_request["canonical_fields"] == ["technical_advantages"]
     assert field_request["source"] == "validated_semantic_preplan"
+
+
+def test_explicit_technical_advantages_predicate_outranks_generic_selling_point_without_semantic_plan():
+    """A conservative fallback keeps a specific field inside a generic predicate."""
+    phrase_match = customer_field_contract._field_phrase_match("示例收纳箱有哪些技术优势？")
+
+    assert phrase_match is not None
+    assert phrase_match[0].field_type == "technical_advantages"
+
+
+def test_explicit_technical_advantages_label_rejects_semantic_product_qa_route():
+    field_request = resolve_requested_field_contract(
+        "示例收纳箱技术特点是什么？",
+        {
+            "semantic_preplan": {
+                "called": True,
+                "route_family": "product_bound_qa",
+                "evidence_kind": "product_qa",
+                "confidence": 0.9,
+                "canonical_fields": [],
+                "fallback_reason": "",
+            }
+        },
+    )
+
+    assert field_request["field_type"] == "technical_advantages"
+    assert field_request["canonical_fields"] == ["technical_advantages"]
+    assert field_request["source"] == "deterministic_alias"
+
+
+def test_formal_field_contract_preempts_semantic_product_qa_shortcut():
+    phase1_plan = {
+        "semantic_preplan": {
+            "called": True,
+            "route_family": "product_bound_qa",
+            "evidence_kind": "product_qa",
+            "confidence": 0.9,
+            "canonical_fields": [],
+            "fallback_reason": "",
+        }
+    }
+
+    assert customer_service_service._formal_field_contract_preempts_product_qa(
+        "示例收纳箱技术特点是什么？",
+        phase1_plan,
+    ) is True
+
+
+@pytest.mark.parametrize("question", ["示例收纳箱拿着重不重？", "示例收纳箱携带重不重？"])
+def test_carrying_weight_questions_are_formal_weight_contracts(question):
+    field_request = resolve_requested_field_contract(
+        question,
+        {
+            "semantic_preplan": {
+                "called": True,
+                "route_family": "product_bound_qa",
+                "evidence_kind": "product_qa",
+                "confidence": 0.9,
+                "canonical_fields": [],
+                "fallback_reason": "",
+            }
+        },
+    )
+
+    assert field_request["field_type"] == "weight"
+    assert customer_service_service._formal_field_contract_preempts_product_qa(question, {
+        "semantic_preplan": {
+            "called": True, "route_family": "product_bound_qa",
+            "evidence_kind": "product_qa", "confidence": 0.9,
+            "canonical_fields": [], "fallback_reason": "",
+        }
+    }) is True
+
+
+@pytest.mark.parametrize("question", ["示例收纳箱应该怎么使用？", "示例收纳箱第一次用要注意什么？"])
+def test_usage_instruction_natural_forms_preempt_semantic_product_qa(question):
+    plan = {"semantic_preplan": {
+        "called": True, "route_family": "product_bound_qa", "evidence_kind": "product_qa",
+        "confidence": 0.9, "canonical_fields": [], "fallback_reason": "",
+    }}
+    field_request = resolve_requested_field_contract(question, plan)
+
+    assert field_request["field_type"] == "usage_instruction"
+    assert customer_service_service._formal_field_contract_preempts_product_qa(question, plan) is True
 
 
 def test_high_confidence_semantic_multi_field_plan_forms_one_compound_contract():
@@ -872,3 +1899,25 @@ def test_contract_is_not_injected_into_semantic_preplan_input_or_global_product_
     preplan_call = source.index("_maybe_run_semantic_preplan")
     arbitration_call = source.index("_phase2_entity_state_arbitration_result")
     assert preplan_call < arbitration_call
+
+
+def test_semantic_catalogue_listing_subtype_requires_structured_repair():
+    """A provider listing label cannot fall through to legacy KB/FAQ routes."""
+    preplan = customer_agent_planner_service._validate_semantic_preplan(
+        {
+            "route_family": "knowledge_base_meta",
+            "subtype": "series_listing",
+            "entities": [],
+            "subject_text": "Lake Beauty theme series",
+            "canonical_fields": [],
+            "confidence": "high",
+            "ambiguity": False,
+            "evidence_required": True,
+            "evidence_kind": "structured_field",
+            "context_usage": "none",
+            "reasoning_summary": "List products in one stored series.",
+        }
+    )
+
+    assert preplan["fallback_reason"] == "unbound_catalogue_browse_requires_structured_query"
+    assert preplan["semantic_route_family_hint"] == "structured_query"

@@ -10,6 +10,7 @@ from app.services.customer_entity_resolution_contract import (
     can_resolve_single_product,
     choose_effective_entity_contract,
     identity_provenance_from_entity_contract,
+    recover_explicit_versioned_subject,
     unique_canonical_subject_in_question,
 )
 from app.services.customer_field_contract import (
@@ -876,6 +877,35 @@ def test_variant_constraints_keep_missing_or_nonexistent_cup_safe():
     assert nonexistent_cup.status_reason == "explicit_attribute_conflict"
 
 
+def test_explicit_numeric_version_never_binds_a_different_catalog_version():
+    """A shared family alias must not erase a version the customer actually named."""
+    current = _product("CHAIR-1-1")
+    current.product_name_cn = "1.1版本-行川包包椅"
+
+    question = "1.0版本-行川包包椅怎么调长度？"
+    assert unique_canonical_subject_in_question(question, [current]) == ""
+
+    contract = build_entity_resolution_contract(
+        question,
+        [current],
+        resolver_candidates=[current],
+        entity_text_override="1.0版本-行川包包椅",
+        field_type_override="product_qa",
+    )
+
+    assert contract.status != "resolved"
+    assert contract.resolved_sku is None
+    assert contract.resolver_candidate_skus == []
+    assert contract.status_reason == "explicit_attribute_conflict"
+
+
+def test_recover_explicit_versioned_subject_uses_only_the_current_turn_span():
+    assert recover_explicit_versioned_subject(
+        "1.0版本-行川包包椅怎么调长度？", "行川包包椅"
+    ) == "1.0版本-行川包包椅"
+    assert recover_explicit_versioned_subject("行川包包椅怎么调长度？", "行川包包椅") == ""
+
+
 def test_variant_constraints_do_not_promote_a_weak_single_candidate():
     weak = _product("WEAK-4-BLACK")
     weak.product_name_cn = "旅行咖啡壶4杯-黑色"
@@ -1220,6 +1250,25 @@ def test_field_adjacent_scope_normalization_does_not_trim_nonstandard_or_nonadja
 
 
 @pytest.mark.parametrize(
+    "raw_subject",
+    [
+        "我想买可放",
+        "想挑一套可以直接放进",
+        "准备买一个能进",
+    ],
+)
+def test_field_scope_normalization_rejects_shopping_predicates_as_product_entities(raw_subject):
+    result = normalize_field_adjacent_entity_scope(
+        question="想挑一套可以直接放进洗碗机清洁的户外餐具，资料里有确认过的吗？",
+        raw_subject=raw_subject,
+        canonical_field="dishwasher",
+    )
+
+    assert result.entity_subject == ""
+    assert result.normalization_reason == "request_predicate_not_entity"
+
+
+@pytest.mark.parametrize(
     ("question", "expected_field"),
     [
         ("示例商品的主体主要用什么材质？", "material"),
@@ -1245,7 +1294,10 @@ def test_grammatical_field_predicate_is_removed_before_entity_resolution(questio
         ("示例商品的条码是什么？", "barcode"),
         ("示例商品属于哪个产品系列？", "series"),
         ("示例商品是什么时候上市的？", "launch_date"),
-        ("示例商品现在还在售吗？", "lifecycle_status"),
+        # “当前是否在售”是实时商业事实，不能借内部生命周期标签
+        # 对客户作出承诺；它必须走 inventory 的安全实时边界。
+        ("示例商品现在还在售吗？", "inventory"),
+        ("示例商品的生命周期状态是什么？", "lifecycle_status"),
         ("示例商品表面用了什么处理工艺？", "surface_finish"),
         ("示例商品的产品定位是什么？", "positioning"),
         ("示例商品属于什么价格定位？", "price_positioning"),
@@ -1310,6 +1362,32 @@ def test_material_predicate_field_contract_wins_over_empty_planner_field():
     assert result["requested_fields"] == ["材质"]
     assert result["canonical_fields"] == ["material"]
     assert result["supported_fields"] == ["material"]
+
+
+def test_explicit_dishwasher_predicate_keeps_formal_contract_when_semantic_calls_it_product_qa():
+    """A provider may call a capability question product QA, but an existing
+    full FieldContract predicate remains a high-precision formal request.
+
+    This is a contract adapter test, not a new wording rule: the dishwasher
+    predicate is already registered in the canonical field ontology.
+    """
+    result = customer_field_contract.resolve_requested_field_contract(
+        "它可以放进洗碗机洗吗？",
+        {
+            "semantic_preplan": {
+                "called": True,
+                "route_family": "product_bound_qa",
+                "route_hint": "product_detail",
+                "evidence_kind": "product_qa",
+                "canonical_fields": [],
+                "confidence": 0.9,
+            }
+        },
+    )
+
+    assert result["field_type"] == "dishwasher"
+    assert result["canonical_fields"] == ["dishwasher"]
+    assert result["supported_fields"] == ["dishwasher"]
 
 
 @pytest.mark.parametrize(

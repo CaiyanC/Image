@@ -29,6 +29,7 @@ class RecommendationRequestContract:
     stability_required: bool = False
     portability_required: bool = False
     storage_required: bool = False
+    dishwasher_safe_required: bool = False
     exclusions: list[str] = field(default_factory=list)
     hard_constraints: list[str] = field(default_factory=list)
     soft_preferences: list[str] = field(default_factory=list)
@@ -185,12 +186,12 @@ def _recommendation_contract_from_validated_semantic_constraints(
     """
     if not isinstance(constraints, dict):
         return None
-    allowed = {"subject_kind", "people", "heat_sources", "scenarios", "weight_preference", "price_preference", "storage_preference"}
+    allowed = {"subject_kind", "people", "heat_sources", "scenarios", "weight_preference", "price_preference", "storage_preference", "dishwasher_safe"}
     if not constraints or any(key not in allowed for key in constraints):
         return None
     contract = RecommendationRequestContract()
     subject_kind = constraints.get("subject_kind")
-    subject_categories = {"cookware": "锅具", "waterware": "水具", "stove": "炉具"}
+    subject_categories = {"cookware": "锅具", "waterware": "水具", "stove": "炉具", "coffee_gear": "咖啡器具", "accessories": "配件"}
     if subject_kind is not None and subject_kind not in subject_categories:
         return None
     if subject_kind is not None:
@@ -247,7 +248,12 @@ def _recommendation_contract_from_validated_semantic_constraints(
             return None
         contract.storage_required = True
         _append_unique(contract.soft_preferences, "storage")
-    for key in ("subject_category", "people", "heat_sources", "scenario", "weight", "price_positioning", "storage"):
+    if constraints.get("dishwasher_safe") is not None:
+        if constraints.get("dishwasher_safe") is not True:
+            return None
+        contract.dishwasher_safe_required = True
+        _append_unique(contract.hard_constraints, "dishwasher")
+    for key in ("subject_category", "people", "heat_sources", "scenario", "weight", "price_positioning", "storage", "dishwasher"):
         present = {
             "subject_category": bool(contract.subject_category),
             "people": contract.people_min is not None,
@@ -256,6 +262,7 @@ def _recommendation_contract_from_validated_semantic_constraints(
             "weight": bool(contract.weight_preference),
             "price_positioning": bool(contract.budget_level),
             "storage": bool(contract.storage_required),
+            "dishwasher": bool(contract.dishwasher_safe_required),
         }[key]
         if present:
             contract.field_provenance[key] = {"source_turn": 1, "provenance": "validated_semantic_preplan"}
@@ -291,6 +298,9 @@ def build_recommendation_request_contract(
         contract.subject_kind = "stove"
         contract.source_spans["subject"] = stove_subject[0]
         contract.subject_subtype = stove_subject[1]
+    elif any(term in text for term in ("咖啡", "磨豆", "磨豆器", "手冲")):
+        contract.subject_category = "咖啡器具"
+        contract.subject_kind = "coffee_gear"
 
     contract.people_min, contract.people_max, people_span = _parse_people(text)
     if people_span:
@@ -551,6 +561,11 @@ def _subject_evidence(contract: RecommendationRequestContract, row: dict[str, An
     category = str(row.get("category") or "").strip()
     scope = _row_scope(row)
     evidence = {"status": "verified", "field_source": "product.category", "raw_value": category, "scope": scope}
+    if contract.subject_category == "配件":
+        if scope == "accessory" or "配件" in category:
+            return True, evidence, None
+        evidence["status"] = "conflict"
+        return False, evidence, "subject_category_mismatch"
     if scope != "subject":
         evidence["status"] = "conflict"
         return False, evidence, "accessory_scope"
@@ -563,7 +578,15 @@ def _subject_evidence(contract: RecommendationRequestContract, row: dict[str, An
     if contract.subject_category == "水具" and not any(term in category for term in ("水具", "水壶", "水杯")):
         evidence["status"] = "conflict"
         return False, evidence, "subject_category_mismatch"
-    if contract.subject_category == "炉具" and "炉具" not in category:
+    if contract.subject_category == "咖啡器具" and "咖啡器具" not in category:
+        evidence["status"] = "conflict"
+        return False, evidence, "subject_category_mismatch"
+    # The catalog's first-party taxonomy has both broad ``炉具`` rows and
+    # subtype-labelled ``酒精炉`` rows (including a combined-category row).
+    # They are all stove candidates; accessories remain excluded above by
+    # _row_scope and a requested subtype is still verified from this SKU's
+    # own identity below.
+    if contract.subject_category == "炉具" and not any(term in category for term in ("炉具", "酒精炉")):
         evidence["status"] = "conflict"
         return False, evidence, "subject_category_mismatch"
     return True, evidence, None
@@ -620,6 +643,21 @@ def _people_range(row: dict[str, Any]) -> tuple[int | None, int | None, str, str
         if match:
             value = int(match.group(1))
             return value, value, raw, key
+        # Imported business fields commonly express the intended group with
+        # Chinese count labels rather than an Arabic numeral. This normalizes
+        # evidence already recorded on the candidate SKU; it never infers a
+        # customer requirement or chooses a product.
+        for label, value in (
+            ("单人", 1),
+            ("一人", 1),
+            ("两人", 2),
+            ("双人", 2),
+            ("三人", 3),
+            ("四人", 4),
+            ("五人", 5),
+        ):
+            if label in raw:
+                return value, value, raw, key
     return None, None, "", ""
 
 
@@ -771,6 +809,16 @@ def verify_recommendation_candidates(
             if _usable(raw_material) and not matched:
                 rejection_reasons.append("material_condition_not_met")
 
+        if contract.dishwasher_safe_required:
+            raw_usage = str(row.get("usage_instruction") or "").strip()
+            positive = ("洗碗机" in raw_usage and not any(token in raw_usage for token in ("不可", "不能", "不建议", "避免")))
+            if not _usable(raw_usage):
+                evidence["dishwasher"] = _condition("unknown")
+            else:
+                evidence["dishwasher"] = _condition("verified" if positive else "conflict", "usage_instruction", raw_usage)
+                if not positive:
+                    rejection_reasons.append("dishwasher_condition_not_met")
+
         if contract.budget_level in {"affordable", "premium"}:
             raw_price_positioning = str(row.get("price_positioning") or "").strip()
             if not _usable(raw_price_positioning):
@@ -903,6 +951,34 @@ _CONSTRAINT_LABELS = {
 }
 
 
+def _customer_safe_missing_requirement_note(values: list[str]) -> str:
+    """Describe missing recommendation evidence without exposing verifier state."""
+    notices = [
+        f"{_CONSTRAINT_LABELS.get(value, value)}资料暂未明确"
+        for value in values
+    ]
+    return "；".join(notices)
+
+
+def _display_verified_evidence_value(value: Any) -> str:
+    """Render sealed structured evidence without leaking serialized JSON."""
+    if isinstance(value, (list, tuple, set)):
+        return "、".join(_display_verified_evidence_value(item) for item in value if _usable(item))
+    if isinstance(value, dict):
+        return "；".join(
+            f"{key}：{_display_verified_evidence_value(item)}"
+            for key, item in value.items()
+            if _usable(item)
+        )
+    text = str(value or "").strip()
+    if text.startswith(("[", "{")):
+        try:
+            return _display_verified_evidence_value(__import__("json").loads(text))
+        except (TypeError, ValueError):
+            pass
+    return text.replace("\n", "；")
+
+
 def build_verified_recommendation_answer(
     contract: RecommendationRequestContract,
     verified_rows: list[dict[str, Any]],
@@ -915,11 +991,19 @@ def build_verified_recommendation_answer(
     if not rows:
         return "当前未找到符合条件且能验证所有硬性条件的商品。"
     partial_result = any(accepted[str(row.get("sku") or "").strip().upper()].verification_level == "partially_verified" for row in rows)
+    fully_verified_result = any(
+        accepted[str(row.get("sku") or "").strip().upper()].verification_level == "fully_verified"
+        for row in rows
+    )
     lines = (
         ["当前没有找到所有条件都能完整验证的商品。以下推荐锅具候选未发现明确冲突，但部分条件缺少资料，仅供参考；首项优先参考，其余作为备选："]
-        if partial_result
+        if partial_result and not fully_verified_result
         else ["\u63a8\u8350\u4f18\u5148\u770b\u4ee5\u4e0b\u5019\u9009\uff1b\u5b83\u4eec\u901a\u8fc7\u4e86\u53ef\u9a8c\u8bc1\u7684\u786c\u6027\u6761\u4ef6\uff1a"]
     )
+    if fully_verified_result and partial_result:
+        lines = [
+            "以下优先展示已通过当前可验证的硬性条件的候选；其余备选会明确标出尚未验证的条件，供你结合实际需求判断："
+        ]
     if contract.subject_kind == "stove":
         subject_label = {
             "card_stove": "卡式炉",
@@ -932,7 +1016,7 @@ def build_verified_recommendation_answer(
     total = len(rows) if total_match_count is None else max(int(total_match_count), 0)
     if total > len(rows):
         lines.insert(0, f"共找到{total}款可供参考的商品，以下先展示前{len(rows)}款：")
-    if partial_result and contract.subject_category == "锅具":
+    if partial_result and not fully_verified_result and contract.subject_category == "锅具":
         people_label = ""
         if contract.people_min is not None:
             people_label = (
@@ -965,7 +1049,7 @@ def build_verified_recommendation_answer(
             elif label in {"stability", "portability", "storage"}:
                 display = "商品资料有明确标注"
             else:
-                display = str(raw).replace("\n", "、")
+                display = _display_verified_evidence_value(raw)
             reasons.append(f"{_CONSTRAINT_LABELS.get(label, label)}：{display}")
         name = str(row.get("product_name_cn") or sku).strip()
         line = f"- {name}（{sku}）"
@@ -973,7 +1057,6 @@ def build_verified_recommendation_answer(
             line += "，" + "；".join(reasons)
         unsupported = list(dict.fromkeys([*item.unsupported_constraints, *item.unsupported_preferences]))
         if unsupported:
-            labels = "、".join(_CONSTRAINT_LABELS.get(value, value) for value in unsupported)
-            line += f"。尚未验证：{labels}"
+            line += f"。{_customer_safe_missing_requirement_note(unsupported)}"
         lines.append(line)
     return "\n".join(lines)

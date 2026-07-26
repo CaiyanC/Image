@@ -1,6 +1,7 @@
 import pytest
 
 from app.services.customer_recommendation_verification_contract import (
+    CandidateVerification,
     build_recommendation_request_contract,
     build_verified_recommendation_answer,
     merge_recommendation_request_contracts,
@@ -270,6 +271,51 @@ def test_alcohol_stove_subject_does_not_become_a_cookware_heat_condition():
         assert contract.heat_sources == []
 
 
+def test_stove_subject_accepts_alcohol_stove_catalog_category():
+    """A database category may name the stove subtype rather than ``炉具``."""
+    contract = build_recommendation_request_contract(
+        "recommend a stove",
+        semantic_constraints={"subject_kind": "stove"},
+    )
+
+    result = verify_recommendation_candidates(
+        contract,
+        [
+            _row(
+                "ALCOHOL-STOVE",
+                category="\u9152\u7cbe\u7089",
+                product_name_cn="\u65cb\u7130\u9152\u7cbe\u7089",
+            )
+        ],
+    )[0]
+
+    assert result.subject_eligible is True
+    assert result.evidence_by_constraint["subject"]["status"] == "verified"
+    assert result.verification_level == "fully_verified"
+
+
+def test_people_verification_accepts_single_person_business_evidence():
+    """Chinese customer-count labels in stored product data are valid evidence."""
+    contract = build_recommendation_request_contract(
+        "recommend a stove for one person",
+        semantic_constraints={"subject_kind": "stove", "people": {"min": 1, "max": 1}},
+    )
+
+    result = verify_recommendation_candidates(
+        contract,
+        [
+            _row(
+                "SINGLE-STOVE",
+                category="\u7089\u5177",
+                target_audience="\u9002\u5408\u5355\u4eba\u9732\u8425",
+            )
+        ],
+    )[0]
+
+    assert result.evidence_by_constraint["people"]["status"] == "verified"
+    assert result.verification_level == "fully_verified"
+
+
 def test_alcohol_heat_verification_uses_explicit_same_sku_raw_evidence_only():
     contract = build_recommendation_request_contract("推荐能用液体酒精的锅具")
     liquid, stove, vague, unsupported = verify_recommendation_candidates(
@@ -524,6 +570,26 @@ def test_verified_rows_are_the_only_rows_eligible_for_results():
     assert [item.sku for item in results if item.hard_constraints_passed] == ["PASS"]
 
 
+def test_answer_renders_serialized_list_evidence_as_customer_text():
+    contract = build_recommendation_request_contract("")
+    row = _row("LISTED")
+    verification = CandidateVerification(
+        sku="LISTED",
+        subject_eligible=True,
+        hard_constraints_passed=True,
+        verification_level="fully_verified",
+        evidence_by_constraint={
+            "scenario": {"status": "verified", "raw_value": '["camping", "hiking"]'},
+        },
+    )
+
+    answer = build_verified_recommendation_answer(contract, [row], [verification])
+
+    assert "[" not in answer
+    assert "camping" in answer
+    assert "hiking" in answer
+
+
 def test_answer_uses_only_same_sku_verified_evidence():
     contract = build_recommendation_request_contract("两个人露营，要支持明火的套锅")
     row = _row("PASS", product_name_cn="双人套锅", target_audience="适合1-2人", heat_source="明火")
@@ -542,9 +608,9 @@ def test_answer_discloses_unsupported_soft_preferences():
     verification = verify_recommendation_candidates(contract, [row])[0]
     answer = build_verified_recommendation_answer(contract, [row], [verification])
 
-    assert "尚未验证" in answer
-    assert "重量" in answer
-    assert "预算" in answer
+    assert "尚未验证" not in answer
+    assert "重量资料暂未明确" in answer
+    assert "预算资料暂未明确" in answer
 
 
 def test_no_hard_constraint_match_returns_safe_answer_without_skus():
@@ -781,9 +847,28 @@ def test_partial_answer_discloses_unknown_hard_and_soft_constraints():
 
     assert "没有找到所有条件都能完整验证的商品" in answer
     assert "仅供参考" in answer
-    assert "尚未验证：人数、稳定性" in answer
+    assert "人数资料暂未明确；稳定性资料暂未明确" in answer
+    assert "尚未验证" not in answer
     assert "人数：" not in answer
     assert "稳定性：" not in answer
+
+
+def test_mixed_verified_and_partial_stove_answer_keeps_their_status_distinct():
+    contract = build_recommendation_request_contract(
+        "recommend a stove for one person",
+        semantic_constraints={"subject_kind": "stove", "people": {"min": 1, "max": 1}},
+    )
+    rows = [
+        _row("FULL", category="\u7089\u5177", target_audience="\u9002\u5408\u5355\u4eba\u9732\u8425"),
+        _row("PARTIAL", category="\u7089\u5177"),
+    ]
+    verifications = verify_recommendation_candidates(contract, rows)
+    answer = build_verified_recommendation_answer(contract, rows, verifications)
+
+    assert "\u5f53\u524d\u6ca1\u6709\u627e\u5230\u6240\u6709\u6761\u4ef6\u90fd\u80fd\u5b8c\u6574\u9a8c\u8bc1\u7684\u5546\u54c1" not in answer
+    assert "\u5df2\u901a\u8fc7\u5f53\u524d\u53ef\u9a8c\u8bc1\u7684\u786c\u6027\u6761\u4ef6" in answer
+    assert "\u63a8\u8350\u9505\u5177\u5019\u9009" not in answer
+    assert "\u7089\u5177\u7c7b\u5546\u54c1" in answer
 
 
 def test_fully_verified_candidates_precede_safe_partial_candidates():

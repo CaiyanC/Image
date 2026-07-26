@@ -941,6 +941,27 @@ def test_central_only_structured_queries_do_not_require_legacy_contract(route_cl
     assert payload["result_skus"] == [item["sku"] for item in evaluations if item["matched"] and item["sku"]][:10]
 
 
+@pytest.mark.parametrize(
+    "question",
+    [
+        "我想买可放洗碗机的户外餐具，库里有可确认的选择吗？",
+        "能进洗碗机的露营餐具有哪些？",
+        "给我找资料明确写能放洗碗机的餐具。",
+    ],
+)
+def test_generic_dishwasher_catalog_selection_builds_evidence_backed_filter(question):
+    contract = customer_service_service._structured_hard_filter_contract(question)
+
+    assert contract["product_ref"] == "餐具"
+    assert contract["filters"]["product.category"] == "餐具"
+    assert contract["filters"]["_contract.dishwasher"] == "洗碗机"
+    assert customer_service_service._looks_like_structured_field_filter_query(question)
+
+
+def test_named_dishwasher_question_does_not_become_catalog_selection_contract():
+    assert customer_service_service._structured_hard_filter_contract("CW-C95 能放洗碗机吗？") == {}
+
+
 def test_waterware_legacy_parity_includes_strict_compatible_vessels_without_accessories(route_client_and_db):
     from test_customer_service_route_level_supplemental_regression import _qualified_structured_rows
 

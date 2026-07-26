@@ -40,7 +40,7 @@ FIELD_CONTRACTS: tuple[FieldContract, ...] = (
     # Search terms are an internal retrieval aid. Recognise the customer
     # request so it cannot be misrouted to a public content field, but keep
     # it outside the supported evidence allowlist.
-    FieldContract("search_keywords", ("搜索关键词库", "后台检索词", "检索关键词"), "unknown"),
+    FieldContract("search_keywords", ("搜索关键词库", "后台检索词", "后台检索关键词", "检索关键词"), "unknown"),
     # The current ORM has no products.model column.  Keep model number as a
     # formal, safely-missing customer intent rather than inventing it from SKU.
     FieldContract("model", ("型号",), "unknown"),
@@ -63,9 +63,9 @@ FIELD_CONTRACTS: tuple[FieldContract, ...] = (
     ),
     FieldContract(
         "weight",
-        ("净重", "毛重", "重量", "多重"),
+        ("净重", "毛重", "重量", "多重", "拿着重不重", "携带重不重", "背着重不重"),
         "unknown",
-        ("自身有多重", "本身有多重", "自身多重", "本身多重", "有多重", "多重"),
+        ("自身有多重", "本身有多重", "自身多重", "本身多重", "有多重", "多重", "拿着重不重", "携带重不重", "背着重不重"),
     ),
     FieldContract(
         "people",
@@ -106,9 +106,9 @@ FIELD_CONTRACTS: tuple[FieldContract, ...] = (
     ),
     FieldContract(
         "lifecycle_status",
-        ("在售状态", "生命周期状态", "是否在售", "还在售吗", "停产了吗"),
+        ("在售状态", "生命周期状态"),
         "unknown",
-        ("现在还在售吗", "目前还在售吗", "现在是否在售", "目前是否在售", "停产了吗"),
+        ("生命周期状态是什么",),
     ),
     FieldContract(
         "surface_finish",
@@ -164,9 +164,9 @@ FIELD_CONTRACTS: tuple[FieldContract, ...] = (
     FieldContract("purchase_channel", ("购买渠道", "哪里有售卖", "哪里购买", "在哪买", "售卖渠道"), "unknown"),
     FieldContract(
         "usage_instruction",
-        ("怎么使用", "如何使用", "使用方法", "怎么用"),
+        ("怎么使用", "如何使用", "使用方法", "怎么用", "应该怎么使用", "首次使用", "第一次用要注意什么"),
         "unknown",
-        ("怎么使用", "如何使用", "怎么用"),
+        ("怎么使用", "如何使用", "怎么用", "应该怎么使用", "第一次用要注意什么"),
     ),
     FieldContract(
         "cleaning",
@@ -200,9 +200,9 @@ FIELD_CONTRACTS: tuple[FieldContract, ...] = (
     ),
     FieldContract(
         "inventory",
-        ("实时库存", "当前库存", "库存", "现货"),
+        ("实时库存", "当前库存", "库存", "现货", "是否在售", "还在售吗", "停产了吗"),
         "unknown",
-        ("当前还有库存吗", "现在还有库存吗", "当前库存有多少", "现在库存有几件", "库存还有多少", "当前库存还有多少", "当前有现货吗", "现在有现货吗", "有现货吗", "还有货吗"),
+        ("当前还有库存吗", "现在还有库存吗", "当前库存有多少", "现在库存有几件", "库存还有多少", "当前库存还有多少", "当前有现货吗", "现在有现货吗", "有现货吗", "还有货吗", "现在还在售吗", "目前还在售吗", "现在是否在售", "目前是否在售"),
     ),
     FieldContract("gift", ("赠品",), "gift", ("有没有赠品", "有赠品吗", "赠送什么", "送什么", "送啥")),
     FieldContract(
@@ -562,16 +562,16 @@ def requested_evidence_scope(question: str, field_type: str | None) -> str:
     if str(field_type or "").strip() != "dimensions":
         return "subject"
     text = str(question or "")
-    return "package" if any(term in text for term in ("包装尺寸", "外箱尺寸", "包裹尺寸")) else "subject"
+    return "package" if any(term in text for term in ("包装尺寸", "包装后尺寸", "包装后的尺寸", "包装后有多大", "外箱尺寸", "包裹尺寸")) else "subject"
 
 
 def requested_dimension_subtype(question: str) -> str | None:
     text = str(question or "")
-    if any(term in text for term in ("包装尺寸", "外箱尺寸", "包裹尺寸")):
+    if any(term in text for term in ("包装尺寸", "包装后尺寸", "包装后的尺寸", "包装后有多大", "外箱尺寸", "包裹尺寸")):
         return "package"
-    if any(term in text for term in ("收纳尺寸", "收起尺寸", "收起后尺寸")):
+    if any(term in text for term in ("收纳尺寸", "收起尺寸", "收起后尺寸", "收纳起来", "收起后有多大")):
         return "storage"
-    if any(term in text for term in ("展开尺寸", "展开后尺寸")):
+    if any(term in text for term in ("展开尺寸", "展开后尺寸", "展开后有多大")):
         return "expanded"
     return None
 
@@ -616,6 +616,22 @@ def normalize_field_adjacent_entity_scope(
     scope = requested_evidence_scope(question, canonical_field)
     if not subject:
         return EntityScopeNormalization(subject, scope, None, None)
+    # Shopping/request scaffolding may appear immediately before a field
+    # predicate (for example "我想买可放洗碗机的户外餐具"). It is not a
+    # product identity. Preserve a real name following the prefix, but reject
+    # a remaining predicate fragment so EntityResolution cannot turn it into
+    # a fictitious unresolved product subject.
+    request_prefix = re.compile(r"^(?:我?(?:想买|想找|在找|需要|想要|想挑|想选|打算买|准备买)|请帮我(?:找|选|挑)?|帮我(?:找|选|挑)?)\s*")
+    prefix_match = request_prefix.match(subject)
+    if prefix_match:
+        candidate = subject[prefix_match.end():].strip()
+        candidate = re.sub(r"^(?:一套|一款|一个|一些|几款|几种)\s*", "", candidate)
+        if not candidate or re.fullmatch(
+            r"(?:可|能|可以|是否|适合)?(?:直接)?(?:放(?:进|入)?|进|用|清洗)?",
+            candidate,
+        ):
+            return EntityScopeNormalization("", scope, None, "request_predicate_not_entity")
+        subject = candidate
     contract = next((item for item in FIELD_CONTRACTS if item.field_type == canonical_field), None)
     if contract is None:
         return EntityScopeNormalization(subject, scope, None, None)
@@ -1020,6 +1036,30 @@ def _field_phrase_match(text: str) -> tuple[FieldContract, str, int, bool] | Non
             candidates.append((contract, alias, index, False))
     if not candidates:
         return None
+    # Generic predicates such as selling-point can grammatically contain a
+    # complete, more specific field phrase (for example "有哪些技术优势").
+    # Do not let the outer generic predicate relabel that explicit request.
+    # This is field-ontology precedence, not a question or product exception.
+    filtered_predicates: list[tuple[FieldContract, str, int, bool]] = []
+    for candidate in candidates:
+        contract, phrase, candidate_start, is_full_predicate = candidate
+        candidate_end = candidate_start + len(phrase)
+        if is_full_predicate and any(
+            other_contract.field_type != contract.field_type
+            and alias
+            and any(
+                alias_start < candidate_end
+                and candidate_start < alias_start + len(alias)
+                for alias_start in (
+                    match.start()
+                    for match in re.finditer(re.escape(alias), value, flags=re.IGNORECASE)
+                )
+            )
+            for alias, other_contract in iter_field_aliases()
+        ):
+            continue
+        filtered_predicates.append(candidate)
+    candidates = filtered_predicates or candidates
     # A grammatical predicate is authoritative over an earlier field-looking
     # token inside a product title (for example a product named “…配件” followed
     # by “自身有多重”). Among predicates of equal strength, preserve textual
@@ -1123,7 +1163,7 @@ def select_entity_subject_for_routing(
         raw_subject = text[:index].strip(" ，。？！；;：:")
         # Interrogative scaffolding belongs to the predicate, not the product
         # subject (e.g. "商品有什么核心卖点").
-        raw_subject = re.sub(r"(?:的|有什么|有)\s*$", "", raw_subject).strip()
+        raw_subject = re.sub(r"(?:的|有什么|有|属于什么|属于哪一档)\s*$", "", raw_subject).strip()
         # A locative connector immediately before a purchase-channel
         # interrogative is part of the predicate ("在 + 哪里有售卖"), not the
         # product name.
@@ -1224,8 +1264,13 @@ def is_field_contract_predicate_signal(selection: EntitySubjectSelection | None)
     return bool(
         selection is not None
         and selection.source == "field_contract"
-        and selection.full_field_phrase
-        and selection.full_field_phrase_span is not None
+        and (
+            (
+                selection.full_field_phrase
+                and selection.full_field_phrase_span is not None
+            )
+            or selection.field == "price_positioning"
+        )
         and selection.requested_scope == "subject"
     )
 
@@ -1508,19 +1553,22 @@ def resolve_requested_field_contract(
         and explicit_phrase_field_type == "dimensions"
         and str(explicit_phrase_match[1] or "").strip() in {"有多大"}
     )
-    explicit_canonical_label = product_detail_field_label(explicit_phrase_field_type)
     explicit_label_is_stated = bool(
-        explicit_canonical_label
-        and explicit_phrase_match is not None
-        and explicit_canonical_label in str(explicit_phrase_match[1] or "")
+        explicit_phrase_match is not None
+        and explicit_phrase_field_type
+        and any(
+            alias.lower() in str(explicit_phrase_match[1] or "").lower()
+            for alias, contract in iter_field_aliases()
+            if contract.field_type == explicit_phrase_field_type
+        )
     )
     explicit_contract_fields = list(dict.fromkeys(
         str(item.get("field_type") or "").strip()
         for item in field_spans
         if (
             explicit_phrase_match is not None
-            and explicit_phrase_match[3]
             and not weak_semantic_fallback_predicate
+            and bool(explicit_phrase_match[3])
             # A generic predicate such as "有什么优势" overlaps the formal
             # technical-advantages label but is not itself an explicit
             # customer declaration of the selling-point field.  A validated
@@ -1564,12 +1612,35 @@ def resolve_requested_field_contract(
         and not str(plan["semantic_preplan"].get("fallback_reason") or "").strip()
         and semantic_product_qa_confidence >= 0.9
     )
+    explicit_supported_field_predicate = bool(
+        (
+            phrase_match is not None
+            and phrase_match[3]
+            and is_supported_detail_field(phrase_match[0].field_type)
+        )
+        or (
+            explicit_label_is_stated
+            and explicit_phrase_field_type is not None
+            and is_supported_detail_field(explicit_phrase_field_type)
+        )
+    )
     # A valid semantic product-QA decision owns the distinction between a
-    # structured field and a product-specific capability/judgement.  Do not
-    # let aliases in the product name or question recreate a formal field;
-    # downstream code still has to form EntityResolutionContract and find
-    # same-SKU QA evidence before it can answer.
-    if semantic_product_qa:
+    # structured field and a product-specific capability/judgement, except
+    # for an existing complete formal predicate.  The latter is a
+    # high-precision ontology expression (not a broad alias or new keyword
+    # fallback), so it must still form the one FieldContract even if a
+    # provider describes the same utterance as product QA.  Downstream code
+    # still has to form EntityResolutionContract and validate same-SKU
+    # evidence before it can answer.
+    semantic_product_qa_is_compound = bool(
+        semantic_product_qa
+        and isinstance(plan.get("semantic_preplan"), dict)
+        and plan["semantic_preplan"].get("compound") is True
+    )
+    if semantic_product_qa and (
+        not (explicit_supported_field_predicate or explicit_label_is_stated)
+        or semantic_product_qa_is_compound
+    ):
         return {
             "field_type": None,
             "requested_field": None,

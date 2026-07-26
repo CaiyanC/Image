@@ -56,6 +56,89 @@ def test_polish_customer_answer_skips_when_answer_metadata_marks_insufficient_ev
     assert called == []
 
 
+def test_polish_grounding_uses_the_structured_semantic_runtime():
+    calls = []
+
+    async def fake_chat_completion(*args, **kwargs):
+        calls.append(kwargs)
+        return '{"grounded": true}'
+
+    original = customer_service_service.customer_llm_service.chat_completion
+    customer_service_service.customer_llm_service.chat_completion = fake_chat_completion
+    try:
+        import asyncio
+
+        grounded = asyncio.run(customer_service_service._polished_answer_is_evidence_grounded(
+            None,
+            "稳稳水袋耐用吗？",
+            "采用耐用材质制造。",
+            "这款水袋采用耐用材质制造。",
+            [{"sku": "AC-19", "value": "采用耐用材质制造。"}],
+        ))
+    finally:
+        customer_service_service.customer_llm_service.chat_completion = original
+
+    runtime = customer_service_service.customer_agent_planner_service._semantic_preplan_runtime_settings()
+    assert grounded is True
+    assert calls[0]["api_model_override"] == runtime["model"]
+    assert calls[0]["response_format"] == runtime["response_format"]
+    assert calls[0]["thinking"] == runtime["thinking"]
+
+
+def test_polish_prompt_forbids_summarising_grounded_product_facts():
+    calls = []
+
+    async def fake_chat_completion(*args, **kwargs):
+        calls.append(kwargs)
+        return "采用方形设计，支持中式煎炒。" if len(calls) == 1 else '{"grounded": true}'
+
+    original = customer_service_service.customer_llm_service.chat_completion
+    customer_service_service.customer_llm_service.chat_completion = fake_chat_completion
+    try:
+        import asyncio
+
+        asyncio.run(customer_service_service._polish_customer_answer(
+            None,
+            "资料如何帮助理解这件装备？",
+            {
+                "answer": "方形设计增加烹饪空间，支持中式煎炒，轻量便携易收纳。",
+                "answer_type": "product_detail",
+                "uncertainty": "confirmed",
+                "evidence": [{"sku": "CW-C69-1", "value": "方形设计增加烹饪空间，支持中式煎炒，轻量便携易收纳。"}],
+            },
+        ))
+    finally:
+        customer_service_service.customer_llm_service.chat_completion = original
+
+    system_prompt = calls[0]["messages"][0]["content"]
+    assert "不要改写、总结、复述或截取 draft_answer" in system_prompt
+
+
+def test_polish_keeps_the_verified_draft_after_a_model_written_friendly_lead():
+    async def fake_chat_completion(*args, **kwargs):
+        return "给您说明一下：" if kwargs["purpose"] == "evidence_bounded_customer_polish" else '{"grounded": true}'
+
+    original = customer_service_service.customer_llm_service.chat_completion
+    customer_service_service.customer_llm_service.chat_completion = fake_chat_completion
+    try:
+        import asyncio
+
+        answer = asyncio.run(customer_service_service._polish_customer_answer(
+            None,
+            "资料如何帮助理解这件装备？",
+            {
+                "answer": "方形设计增加烹饪空间，支持中式煎炒，轻量便携易收纳。",
+                "answer_type": "product_detail",
+                "uncertainty": "confirmed",
+                "evidence": [{"sku": "CW-C69-1", "value": "方形设计增加烹饪空间，支持中式煎炒，轻量便携易收纳。"}],
+            },
+        ))
+    finally:
+        customer_service_service.customer_llm_service.chat_completion = original
+
+    assert answer == "给您说明一下：\n方形设计增加烹饪空间，支持中式煎炒，轻量便携易收纳。"
+
+
 def test_compact_retrieved_product_ignores_string_content_without_crashing():
     product = {
         "sku": "CS-B14",
