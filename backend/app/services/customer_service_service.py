@@ -11227,7 +11227,10 @@ def _phase1_filter_alcohol_stove_cookware_result(
         return agent_result
     debug = agent_result.get("debug") if isinstance(agent_result.get("debug"), dict) else {}
     intent_debug = debug.get("intent") if isinstance(debug.get("intent"), dict) else {}
-    if str(intent_debug.get("source_context") or "") == "previous_results":
+    if (
+        str(intent_debug.get("source_context") or "") == "previous_results"
+        and not customer_agent_intent_service._looks_like_alcohol_stove_cookware_recommendation_question(question)
+    ):
         # The candidate-domain executor has already evaluated the sealed rows
         # against same-SKU evidence.  A later global catalogue filter has a
         # narrower evidence view and must not erase that validated subset.
