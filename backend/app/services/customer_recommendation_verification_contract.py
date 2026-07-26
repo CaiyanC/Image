@@ -557,7 +557,7 @@ def _cookware_subject_identity_is_valid(row: dict[str, Any]) -> bool:
         and not any(term in descriptive for term in cookware_shape_terms)
     ) and not (
         any(term in identity for term in stove_identity_terms)
-        and not any(term in descriptive for term in cookware_shape_terms)
+        and not any(term in identity for term in cookware_shape_terms)
     )
 
 
