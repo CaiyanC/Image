@@ -2036,6 +2036,8 @@ async def _semantic_compound_product_qa_queries(
                     "product capabilities, judgements, procedures, compatibility facts, or conditions. Each query must be a concise "
                     "retrieval phrase for exactly one requested fact, without product names, SKU, values, answers, or inferred facts. "
                     "Return one to three queries in customer-intent order. Do not combine separate conditions into one query."
+                    " A broad request for an overview, notable points, preparation, or general usage advice is one query, not separate "
+                    "selection and usage sub-queries."
                 )},
                 {"role": "user", "content": json.dumps({"question": question}, ensure_ascii=False)},
             ],

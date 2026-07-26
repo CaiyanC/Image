@@ -409,6 +409,13 @@ async def _save_agent_result_and_return(
             compound_metadata = agent_result.setdefault("answer_metadata", {})
             compound_metadata["compound_product_qa_queries"] = compound_queries
             compound_metadata["compound_missing_child_queries"] = missing_child_queries
+        elif len(compound_queries) > 1:
+            # The parent answer may still be valid for the first child, but a
+            # failed narrow retrieval must not make later semantic children
+            # disappear from the customer-visible response.
+            compound_metadata = agent_result.setdefault("answer_metadata", {})
+            compound_metadata["compound_product_qa_queries"] = compound_queries
+            compound_metadata["compound_missing_child_queries"] = compound_queries[1:]
     if supplemental_query and len(agent_result.get("result_skus") or []) == 1:
         supplemental, supplemental_query = await _resolve_sealed_supplemental_product_evidence(
             db,
