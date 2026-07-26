@@ -1803,7 +1803,9 @@ async def _repair_semantic_preplan_output(
                 "route_hint=query_products, question_type=filter. Preserve a named stored collection in subject_text "
                 "with canonical_fields=[series] (or brand/product_level for those exact collection questions) and "
                 "structured_query_constraints=[]. Use canonical_fields=[category] only when the customer names a "
-                "generic product class. Do not answer from QA/KB or invent a SKU."
+                "generic product class. For a generic category, subject_text must be the exact category phrase from the "
+                "customer question; never replace it with a database label, composite category, synonym, SKU, or answer. "
+                "Do not answer from QA/KB or invent a SKU."
             )
         elif set(prior_fields).issubset({"category"}):
             messages[0]["content"] += (
