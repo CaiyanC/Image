@@ -3336,7 +3336,27 @@ async def plan_customer_question_semantic(
         and str(result.get("catalogue_field_candidate") or "") in {"series", "brand", "category", "product_level"}
     ):
         field = str(result.get("catalogue_field_candidate") or "")
-        hints = [item for item in context.get("database_field_value_hints") or [] if isinstance(item, dict) and item.get("field") == field]
+        if field == "category" and not str(result.get("subject_text") or "").strip():
+            normalized_question = customer_agent_service.normalize_search_text(text).lower()
+            database_categories = [
+                str(value or "").strip()
+                for (value,) in db.query(Product.category).distinct().all()
+                if str(value or "").strip()
+            ]
+            exact_category_values = [
+                value for value in database_categories
+                if customer_agent_service.normalize_search_text(value).lower() in normalized_question
+            ]
+            if exact_category_values:
+                shortest = min(len(customer_agent_service.normalize_search_text(value)) for value in exact_category_values)
+                exact_category_values = [
+                    value for value in exact_category_values
+                    if len(customer_agent_service.normalize_search_text(value)) == shortest
+                ]
+            if len(exact_category_values) == 1:
+                value = exact_category_values[0]
+                result.update({"route_family": "structured_query", "route_hint": "query_products", "question_type": "filter", "subject_text": value, "canonical_fields": [field], "field_type": field, "field_hint": field, "confidence": 0.9, "confidence_label": "high", "fallback_reason": "", "catalogue_scope_recovery": "exact_current_turn_database_category"})
+        hints = [] if result.get("catalogue_scope_recovery") == "exact_current_turn_database_category" else [item for item in context.get("database_field_value_hints") or [] if isinstance(item, dict) and item.get("field") == field]
         values = list(dict.fromkeys(str(item.get("value") or "").strip() for item in hints if str(item.get("value") or "").strip()))
         # When a customer asks for a broad catalogue kind, a longer composite
         # database label that merely contains that kind must not narrow the
