@@ -3338,8 +3338,11 @@ async def plan_customer_question_semantic(
         field = str(result.get("catalogue_field_candidate") or "")
         hints = [item for item in context.get("database_field_value_hints") or [] if isinstance(item, dict) and item.get("field") == field]
         values = list(dict.fromkeys(str(item.get("value") or "").strip() for item in hints if str(item.get("value") or "").strip()))
-        longest = max((len(customer_agent_service.normalize_search_text(value)) for value in values), default=0)
-        exact_values = [value for value in values if len(customer_agent_service.normalize_search_text(value)) == longest]
+        # When a customer asks for a broad catalogue kind, a longer composite
+        # database label that merely contains that kind must not narrow the
+        # requested collection. Prefer the smallest verified matching value.
+        shortest = min((len(customer_agent_service.normalize_search_text(value)) for value in values), default=0)
+        exact_values = [value for value in values if len(customer_agent_service.normalize_search_text(value)) == shortest]
         if len(exact_values) == 1:
             result.update({"route_family": "structured_query", "route_hint": "query_products", "question_type": "filter", "subject_text": exact_values[0], "canonical_fields": [field], "field_type": field, "field_hint": field, "confidence": 0.9, "confidence_label": "high", "fallback_reason": "", "catalogue_scope_recovery": "exact_current_turn_database_value"})
     result["llm_call_count"] = llm_call_count
