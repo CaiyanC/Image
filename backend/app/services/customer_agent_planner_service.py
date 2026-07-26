@@ -3369,6 +3369,25 @@ async def plan_customer_question_semantic(
             result.update({"route_family": "structured_query", "route_hint": "query_products", "question_type": "filter", "subject_text": exact_values[0], "canonical_fields": [field], "field_type": field, "field_hint": field, "confidence": 0.9, "confidence_label": "high", "fallback_reason": "", "catalogue_scope_recovery": "exact_current_turn_database_value"})
     result["llm_call_count"] = llm_call_count
     result["llm_call_count_delta"] = llm_call_count
+    if (
+        result.get("route_family") == "structured_query"
+        and str(result.get("field_type") or result.get("catalogue_field_candidate") or "") == "category"
+    ):
+        normalized_question = customer_agent_service.normalize_search_text(text).lower()
+        normalized_subject = customer_agent_service.normalize_search_text(str(result.get("subject_text") or "")).lower()
+        if normalized_subject and normalized_subject not in normalized_question:
+            direct_categories = [
+                str(value or "").strip()
+                for (value,) in db.query(Product.category).distinct().all()
+                if str(value or "").strip()
+                and customer_agent_service.normalize_search_text(str(value)).lower() in normalized_question
+            ]
+            if direct_categories:
+                shortest = min(len(customer_agent_service.normalize_search_text(value)) for value in direct_categories)
+                direct_categories = [value for value in direct_categories if len(customer_agent_service.normalize_search_text(value)) == shortest]
+            if len(direct_categories) == 1:
+                result["subject_text"] = direct_categories[0]
+                result["catalogue_scope_recovery"] = "current_turn_exact_category_contract"
     # A successful semantic preplan owns field meaning.  The compositional
     # classifier above is intentionally used only when that call fails; it
     # must not turn into a second router that overwrites a valid, contextual
