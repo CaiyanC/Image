@@ -14373,6 +14373,11 @@ async def ask_customer_service(
         _latest_recommendation_context_for_sources(db, conversation_id) if conversation_id else None,
     )
     if semantic_recommendation_result:
+        semantic_recommendation_result = _post_filter_recommendation_result(
+            db,
+            question,
+            semantic_recommendation_result,
+        )
         semantic_recommendation_result = _attach_phase1_plan_and_timing(
             semantic_recommendation_result,
             phase1_plan,
