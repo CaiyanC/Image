@@ -17376,11 +17376,17 @@ async def ask_customer_service(
             for item in ((phase1_plan.get("semantic_preplan") or {}).get("qa_evidence_queries") or [])
             if str(item or "").strip()
         ]
-        if len(final_compound_queries) > 1 and str(agent_result.get("answer") or "").count("\n") < 1:
-            agent_result["answer"] = "\n".join([
-                str(agent_result.get("answer") or "").strip(),
-                *(f"关于“{query}”：当前同 SKU 资料未直接确认，无法确认。" for query in final_compound_queries[1:]),
-            ])
+        if len(final_compound_queries) > 1:
+            answer_text = str(agent_result.get("answer") or "").strip()
+            uncovered_queries = [
+                query for query in final_compound_queries[1:]
+                if customer_agent_service.normalize_search_text(query) not in customer_agent_service.normalize_search_text(answer_text)
+            ]
+            if uncovered_queries:
+                agent_result["answer"] = "\n".join([
+                    answer_text,
+                    *(f"关于“{query}”：当前同 SKU 资料未直接确认，无法确认。" for query in uncovered_queries),
+                ])
         agent_result = _shape_answer_for_output(agent_result)
         agent_result["skip_polish"] = skip_polish
         agent_result = _attach_agent_quality(agent_result, question)
