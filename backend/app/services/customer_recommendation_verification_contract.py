@@ -551,8 +551,12 @@ def _cookware_subject_identity_is_valid(row: dict[str, Any]) -> bool:
         "单锅", "套锅", "炒锅", "汤锅", "锅具套装", "炊具套装", "炊具组合",
         "野餐锅", "野营锅", "小方锅", "cookware set", "cook set", "pot set",
     )
+    stove_identity_terms = ("炉", "stove", "burner")
     return not (
         any(term in identity for term in water_container_terms)
+        and not any(term in descriptive for term in cookware_shape_terms)
+    ) and not (
+        any(term in identity for term in stove_identity_terms)
         and not any(term in descriptive for term in cookware_shape_terms)
     )
 
