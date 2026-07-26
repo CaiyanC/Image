@@ -2687,6 +2687,8 @@ async def _semantic_product_qa_scope_review(
                         "compound=false for one broad product overview, preparation, tradeoff, or decision-support request even if it has several words. "
                         "For example, a question asking whether a product is durable AND whether it can hold boiling water is compound=true; "
                         "a question asking generally what to know before using it is compound=false. "
+                        "Questions such as 'what is worth noting', 'what are its main points', or 'what should I know about using it' are one broad overview and compound=false, "
+                        "unless the customer separately asks another independent fact or condition. "
                         "Do not infer a product, SKU, value, evidence, or answer."
                     ),
                 },
