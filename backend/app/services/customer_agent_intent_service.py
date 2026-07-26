@@ -4598,7 +4598,7 @@ async def _compose_recommendation_answer(
 ) -> str:
     """Compose a recommendation answer from ranked products."""
     result_rows = result_rows or []
-    if _looks_like_alcohol_stove_cookware_recommendation_question(question):
+    if _looks_like_alcohol_stove_cookware_recommendation_question(question) and not result_rows:
         alcohol_answer = _shape_alcohol_stove_cookware_recommendation_answer_from_ranked(ranked)
         if alcohol_answer:
             return alcohol_answer
@@ -8833,7 +8833,7 @@ def _shape_recommendation_answer_from_ranked(ranked: list[dict], question: str =
         dual_scope_answer = _shape_barbecue_dual_scope_answer_from_ranked(ranked, question=question)
         if dual_scope_answer:
             return dual_scope_answer
-    if _looks_like_alcohol_stove_cookware_recommendation_question(question):
+    if _looks_like_alcohol_stove_cookware_recommendation_question(question) and not ranked:
         alcohol_answer = _shape_alcohol_stove_cookware_recommendation_answer_from_ranked(ranked)
         if alcohol_answer:
             return alcohol_answer
