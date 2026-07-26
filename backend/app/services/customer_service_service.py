@@ -11243,6 +11243,17 @@ def _phase1_filter_alcohol_stove_cookware_result(
     )
     rows = [row for row in (agent_result.get("results") or []) if isinstance(row, dict)]
     if not rows:
+        result_skus = {
+            str(sku or "").strip().upper()
+            for sku in (agent_result.get("result_skus") or [])
+            if str(sku or "").strip()
+        }
+        if result_skus:
+            rows = [
+                row for row in _phase1_catalog_rows(db, "产品")
+                if str(row.get("sku") or "").strip().upper() in result_skus
+            ]
+    if not rows:
         return agent_result
     products = db.query(Product).filter(Product.sku.in_([
         str(row.get("sku") or "").strip().upper()
