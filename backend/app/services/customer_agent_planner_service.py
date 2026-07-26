@@ -3321,14 +3321,16 @@ async def plan_customer_question_semantic(
     if (
         result.get("route_family") == "product_bound_qa"
         and str(result.get("evidence_kind") or "").strip() == "product_qa"
-        and result.get("compound") is True
         and str(result.get("confidence_label") or "").strip().lower() == "high"
         and not result.get("fallback_reason")
     ):
-        result["qa_evidence_queries"] = await _semantic_compound_product_qa_queries(
+        split_queries = await _semantic_compound_product_qa_queries(
             db, question=text, runtime_settings=runtime_settings,
         )
         llm_call_count += 1
+        if len(split_queries) > 1:
+            result["compound"] = True
+            result["qa_evidence_queries"] = split_queries
     if (
         result.get("fallback_reason") in {"incomplete_structured_query_scope", "catalogue_value_requires_structured_query"}
         and str(result.get("catalogue_field_candidate") or "") in {"series", "brand", "category", "product_level"}

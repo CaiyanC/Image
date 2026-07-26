@@ -1297,6 +1297,7 @@ def test_semantic_preserves_a_complete_product_qa_plan_without_lexical_reclassif
                 }
             ),
             json.dumps({"compound": False}),
+            json.dumps({"queries": ["why it is better than comparable products"]}),
         ]
     )
     prompts = []
@@ -1317,7 +1318,7 @@ def test_semantic_preserves_a_complete_product_qa_plan_without_lexical_reclassif
         )
     )
 
-    assert len(prompts) == 2
+    assert len(prompts) == 3
     assert result["canonical_fields"] == []
     assert result["evidence_kind"] == "product_qa"
 
