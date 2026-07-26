@@ -16640,6 +16640,10 @@ async def ask_customer_service(
             extras = [str(item.get("answer") or "").strip() for item in compound_answers if str(item.get("answer") or "").strip() and str(item.get("answer") or "").strip() not in base_text]
             if extras:
                 agent_result["answer"] = "\n".join([base_text, *extras])
+            elif len(compound_queries) > 1 and not compound_missing_queries:
+                # A reused parent QA does not constitute evidence for an
+                # independently split child question.
+                compound_missing_queries.extend(compound_queries[1:])
             if compound_missing_queries:
                 agent_result["answer"] = "\n".join([
                     str(agent_result.get("answer") or "").strip(),
