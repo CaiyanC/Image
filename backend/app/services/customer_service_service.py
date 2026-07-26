@@ -23542,6 +23542,17 @@ def _is_service_pot_or_cookware_set_candidate(row: dict[str, Any], product: Prod
         )
     text = f"{row_text} {product_text}".lower()
     category = str(row.get("category") or "").strip()
+    identity_text = " ".join(
+        str(row.get(key) or "")
+        for key in ("product_name_cn", "product_name_en", "name", "title")
+    ).lower()
+    if product is not None:
+        identity_text = f"{identity_text} {str(product.product_name_cn or '')} {str(product.product_name_en or '')}".lower()
+    if (
+        any(term in identity_text for term in ("炉", "stove", "burner"))
+        and not any(term in identity_text for term in ("单锅", "套锅", "锅具套装", "炊具套装", "cookware set", "pot set"))
+    ):
+        return False
     # A cookware set may legitimately list a frying/griddle component beside
     # multiple pots.  Treat that as a cookware set only when the canonical
     # category and structured capacity both establish the multi-pot set; a
