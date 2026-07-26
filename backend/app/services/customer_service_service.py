@@ -339,6 +339,17 @@ async def _save_agent_result_and_return(
         for item in ((effective_semantic_preplan or {}).get("qa_evidence_queries") or [])
         if str(item or "").strip()
     ]
+    semantic_subject = customer_agent_service.normalize_search_text(
+        str((effective_semantic_preplan or {}).get("subject_text") or "")
+    ).lower()
+    if (
+        semantic_subject
+        and len(compound_queries) > 1
+        and all(semantic_subject in customer_agent_service.normalize_search_text(query).lower() for query in compound_queries)
+    ):
+        # Repeated subject-bearing rewrites are an overview decomposition, not
+        # independently answerable product facts.
+        compound_queries = []
     compound_metadata = agent_result.get("answer_metadata") if isinstance(agent_result.get("answer_metadata"), dict) else {}
     if (
         compound_queries
