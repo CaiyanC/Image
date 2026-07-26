@@ -16604,6 +16604,12 @@ async def ask_customer_service(
         for item in (compound_preplan.get("qa_evidence_queries") or [])
         if str(item or "").strip()
     ]
+    if agent_result is not None and compound_queries:
+        # A single exact QA may cover one child, but it cannot terminate a
+        # semantic multi-question contract before the remaining children have
+        # been independently evaluated.
+        qa_safe_missing = agent_result
+        agent_result = None
     if compound_queries and (agent_result is not None or qa_safe_missing is not None):
         compound_answers: list[dict] = []
         compound_missing_queries: list[str] = []
