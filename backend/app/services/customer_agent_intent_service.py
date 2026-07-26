@@ -4598,10 +4598,6 @@ async def _compose_recommendation_answer(
 ) -> str:
     """Compose a recommendation answer from ranked products."""
     result_rows = result_rows or []
-    if _looks_like_alcohol_stove_cookware_recommendation_question(question) and not result_rows:
-        alcohol_answer = _shape_alcohol_stove_cookware_recommendation_answer_from_ranked(ranked)
-        if alcohol_answer:
-            return alcohol_answer
     if result_rows:
         product_data_list = _recommendation_product_data(db, result_rows, supporting_by_sku=supporting_by_sku)
         answer = await _finalize_recommendation_answer(
@@ -8833,10 +8829,6 @@ def _shape_recommendation_answer_from_ranked(ranked: list[dict], question: str =
         dual_scope_answer = _shape_barbecue_dual_scope_answer_from_ranked(ranked, question=question)
         if dual_scope_answer:
             return dual_scope_answer
-    if _looks_like_alcohol_stove_cookware_recommendation_question(question) and not ranked:
-        alcohol_answer = _shape_alcohol_stove_cookware_recommendation_answer_from_ranked(ranked)
-        if alcohol_answer:
-            return alcohol_answer
     picks = []
     for item in ranked[:3]:
         row = item.get("row") or {}
