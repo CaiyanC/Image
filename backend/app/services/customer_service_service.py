@@ -6451,6 +6451,20 @@ def _semantic_catalog_value_query_result(
     ):
         return None
     normalized_subject = customer_agent_service.normalize_search_text(subject).lower()
+    normalized_question = customer_agent_service.normalize_search_text(question).lower()
+    if field == "category" and normalized_subject and normalized_subject not in normalized_question:
+        direct_categories = [
+            str(value or "").strip()
+            for (value,) in db.query(Product.category).distinct().all()
+            if str(value or "").strip()
+            and customer_agent_service.normalize_search_text(str(value)).lower() in normalized_question
+        ]
+        if direct_categories:
+            shortest = min(len(customer_agent_service.normalize_search_text(value)) for value in direct_categories)
+            direct_categories = [value for value in direct_categories if len(customer_agent_service.normalize_search_text(value)) == shortest]
+        if len(direct_categories) == 1:
+            subject = direct_categories[0]
+            normalized_subject = customer_agent_service.normalize_search_text(subject).lower()
     subject_candidates = [normalized_subject]
     field_contract = customer_field_contract.field_contract_for_type(field)
     field_labels = [customer_field_contract.product_detail_field_label(field)]
