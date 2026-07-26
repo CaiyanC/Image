@@ -9480,6 +9480,11 @@ def _post_filter_recommendation_result(db: Session, question: str, agent_result:
     ):
         return agent_result
     contract = _recommendation_question_contract(question)
+    if not contract and isinstance(metadata.get("recommendation_contract"), dict):
+        # Semantic planning already supplied a validated recommendation
+        # contract; do not let an older lexical contract gate bypass its
+        # candidate verification.
+        contract = {"filters": {}, "negative_filters": {}}
     if not contract:
         return agent_result
     rows = [row for row in (agent_result.get("results") or []) if isinstance(row, dict)]
