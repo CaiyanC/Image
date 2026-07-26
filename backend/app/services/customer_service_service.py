@@ -16646,6 +16646,15 @@ async def ask_customer_service(
                     *(f"关于“{query}”：当前同 SKU 资料未直接确认，无法确认。" for query in compound_missing_queries),
                 ])
             agent_result.setdefault("answer_metadata", {})["compound_product_qa_queries"] = compound_queries
+        elif agent_result is not None and len(compound_queries) > 1:
+            # The parent QA may be valid while every narrowed child misses.
+            # Keep the parent answer, but never silently drop the remaining
+            # semantically independent questions.
+            agent_result["answer"] = "\n".join([
+                str(agent_result.get("answer") or "").strip(),
+                *(f"关于“{query}”：当前同 SKU 资料未直接确认，无法确认。" for query in compound_queries[1:]),
+            ])
+            agent_result.setdefault("answer_metadata", {})["compound_product_qa_queries"] = compound_queries
     for _sealed_attempt in range(3):
         if agent_result or not _semantic_prefers_sealed_product_qa(phase1_plan):
             break
