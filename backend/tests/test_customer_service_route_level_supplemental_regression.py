@@ -3287,6 +3287,66 @@ def test_semantic_pairwise_compound_criteria_never_fall_through_to_legacy_choice
     assert "不能据此指定" in result["answer"]
 
 
+def test_fieldless_pairwise_overview_is_built_from_same_sku_evidence_bundles(monkeypatch):
+    first = SimpleNamespace(sku="SKU-A", product_name_cn="Alpha", product_name_en="")
+    second = SimpleNamespace(sku="SKU-B", product_name_cn="Beta", product_name_en="")
+    bundles = [(first, None, None, None), (second, None, None, None)]
+    monkeypatch.setattr(
+        customer_service_service,
+        "_phase1_product_bundle_by_ref",
+        lambda _db, ref: bundles[0] if ref == "SKU-A" else bundles[1],
+    )
+    monkeypatch.setattr(
+        customer_service_service,
+        "_product_row_from_model",
+        lambda product, *_args: {"sku": product.sku, "product_name_cn": product.product_name_cn},
+    )
+    monkeypatch.setattr(
+        customer_service_service,
+        "resolve_requested_field_contract",
+        lambda *_args, **_kwargs: {
+            "field_type": None,
+            "canonical_fields": [],
+            "supported_fields": [],
+        },
+    )
+    monkeypatch.setattr(
+        customer_service_service,
+        "_structured_product_field_evidence",
+        lambda field, **kwargs: (
+            (
+                "hard-anodized aluminum" if kwargs["product"].sku == "SKU-A" else "stainless steel",
+                "specs.body_material",
+            )
+            if field == "material"
+            else ("", None)
+        ),
+    )
+
+    result = asyncio.run(customer_service_service._phase1_compare_choice_result(None, {
+        "raw_question": "How do SKU-A and SKU-B differ?",
+        "product_refs": ["SKU-A", "SKU-B"],
+        "must_make_choice": False,
+        "semantic_comparison_entity_contracts": [
+            {"status": "resolved", "resolved_sku": "SKU-A"},
+            {"status": "resolved", "resolved_sku": "SKU-B"},
+        ],
+        "semantic_preplan": {
+            "called": True,
+            "route_family": "comparison",
+            "subtype": "comparison_overview",
+            "evidence_kind": "structured_field",
+            "canonical_fields": [],
+            "decision_requested": False,
+        },
+    }))
+
+    assert result["answer_type"] == "comparison"
+    assert result["result_skus"] == ["SKU-A", "SKU-B"]
+    assert result["answer_metadata"]["evidence_bundle_skus"] == ["SKU-A", "SKU-B"]
+    assert {source["sku"] for source in result["sources"]} == {"SKU-A", "SKU-B"}
+
+
 def test_pairwise_choice_with_one_participant_missing_requested_field_never_calls_adjudicator(monkeypatch):
     """A semantic chooser cannot fill a requested-field evidence gap with another field."""
     first = SimpleNamespace(sku="SKU-A", product_name_cn="\u7532\u6b3e", product_name_en="")

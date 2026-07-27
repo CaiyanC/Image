@@ -29,6 +29,7 @@ from . import (
     customer_cache_service,
     customer_dialogue_state,
     customer_entity_resolution_contract,
+    customer_evidence_bundle,
     customer_field_contract,
     customer_llm_service,
     customer_perf_service,
@@ -7075,13 +7076,14 @@ async def _phase1_compare_choice_result(db: Session, plan: dict) -> dict | None:
             "series", "category", "dimensions", "weight", "material",
             "capacity", "color", "usage_scene", "selling_point",
         )
-        lines: list[str] = []
-        sources: list[dict[str, Any]] = []
-        for field in overview_fields:
-            values: list[tuple[str, str, str, str]] = []
-            for product, specs, business, content in bundles:
-                if product is None:
-                    continue
+        evidence_bundles: list[customer_evidence_bundle.CustomerEvidenceBundle] = []
+        for product, specs, business, content in bundles:
+            if product is None:
+                continue
+            sku = str(product.sku or "").strip().upper()
+            name = str(product.product_name_cn or product.product_name_en or sku).strip()
+            structured_items: list[dict[str, Any]] = []
+            for field in overview_fields:
                 value, source = _structured_product_field_evidence(
                     field,
                     db=db,
@@ -7090,13 +7092,44 @@ async def _phase1_compare_choice_result(db: Session, plan: dict) -> dict | None:
                     business=business,
                     content=content,
                 )
-                if not value:
+                if value and source:
+                    structured_items.append({
+                        "evidence_id": f"{sku}:field:{field}:{source}",
+                        "sku": sku,
+                        "source_type": "structured_field",
+                        "source": str(source),
+                        "field": field,
+                        "value": str(value),
+                        "visibility": "customer_visible",
+                    })
+            evidence_bundles.append(
+                customer_evidence_bundle.build_customer_evidence_bundle(
+                    sku=sku,
+                    product_name=name,
+                    evidence_items=structured_items,
+                )
+            )
+        lines: list[str] = []
+        sources: list[dict[str, Any]] = []
+        for field in overview_fields:
+            values: list[tuple[str, str, str, str]] = []
+            for evidence_bundle in evidence_bundles:
+                field_evidence = evidence_bundle.evidence_for_field(field)
+                if not field_evidence:
                     values = []
                     break
-                sku = str(product.sku or "").strip().upper()
-                name = str(product.product_name_cn or product.product_name_en or sku).strip()
-                values.append((sku, name, str(value), str(source or "")))
-            if len(values) != len(bundles) or len({value for _, _, value, _ in values}) < 2:
+                item = field_evidence[0]
+                values.append((
+                    evidence_bundle.sku,
+                    evidence_bundle.product_name,
+                    item.value,
+                    item.source,
+                ))
+            if (
+                len(values) != len(evidence_bundles)
+                or len(evidence_bundles) != len(bundles)
+                or len({value for _, _, value, _ in values}) < 2
+            ):
                 continue
             label = customer_field_contract.product_detail_field_label(field) or field
             lines.append(
@@ -7123,6 +7156,7 @@ async def _phase1_compare_choice_result(db: Session, plan: dict) -> dict | None:
                 "contract_field_types": [],
                 "evidence_status": "supported" if lines else "missing",
                 "final_choice_sku": None,
+                "evidence_bundle_skus": [bundle.sku for bundle in evidence_bundles],
             },
             "debug": {
                 "agent_mode": "semantic_pairwise_structured_overview_contract",
