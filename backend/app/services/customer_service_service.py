@@ -18471,6 +18471,22 @@ def _try_product_qa_shortcut(
     if not answer:
         return None
     sku = product_sku
+    qa_bundle = customer_evidence_bundle.build_customer_evidence_bundle(
+        sku=sku,
+        product_name=product.product_name_cn or product.product_name_en or sku,
+        evidence_items=[{
+            "evidence_id": f"product_qa:{qa.id}",
+            "sku": sku,
+            "source_type": "product_qa",
+            "source": "product_qa",
+            "field": field_type or "product_qa",
+            "value": answer,
+            "visibility": customer_evidence_bundle.CUSTOMER_VISIBLE,
+        }],
+    )
+    if len(qa_bundle.items) != 1:
+        return None
+    qa_evidence = qa_bundle.items[0]
     steps = [{"type": "product_qa_shortcut", "label": "产品 QA 快速命中", "detail": sku, "ok": True}]
     qa_field_contract = {
         "field_type": field_type,
@@ -18511,10 +18527,11 @@ def _try_product_qa_shortcut(
         "suggested_followups": [],
         "followups": [],
         "evidence": [{
+            "evidence_id": qa_evidence.evidence_id,
             "sku": sku,
             "product_name": product.product_name_cn or product.product_name_en or "",
             "field_label": "产品 QA",
-            "value": answer,
+            "value": qa_evidence.value,
             "source_layer": "QA",
             "matched_by": "product_qa",
             "source_type": "product_qa",
@@ -18543,6 +18560,8 @@ def _try_product_qa_shortcut(
             "evidence_value": answer,
             "evidence_sku": sku,
             "evidence_skus": [sku],
+            "evidence_bundle_skus": [qa_bundle.sku],
+            "evidence_ids": [qa_evidence.evidence_id],
             "field_evidence_match": True,
             "field_evidence_missing": False,
         },
@@ -18911,6 +18930,7 @@ async def _try_sealed_same_sku_knowledge_answer(
     # from that same chunk. Split only after SKU sealing and customer-safe
     # filtering; DeepSeek still decides relevance.
     candidates: list[dict[str, Any]] = []
+    candidate_evidence_items: dict[int, dict[str, Any]] = {}
     seen_candidate_content: set[str] = set()
     for row in retrieved or []:
         if not isinstance(row, dict) or str(row.get("sku") or "").strip().upper() != sku:
@@ -18921,7 +18941,24 @@ async def _try_sealed_same_sku_knowledge_answer(
             if not normalized_unit or normalized_unit in seen_candidate_content:
                 continue
             seen_candidate_content.add(normalized_unit)
-            candidates.append({"index": len(candidates), "content": evidence_unit})
+            candidate_index = len(candidates)
+            candidates.append({"index": candidate_index, "content": evidence_unit})
+            metadata = row.get("metadata") if isinstance(row.get("metadata"), dict) else {}
+            section = str(metadata.get("section") or "").strip().casefold()
+            source_type = "product_qa" if section in {"qa", "product_qa"} else "knowledge_chunk"
+            candidate_evidence_items[candidate_index] = {
+                "evidence_id": customer_evidence_bundle.stable_customer_evidence_id(
+                    namespace="knowledge",
+                    sku=sku,
+                    value=evidence_unit,
+                ),
+                "sku": sku,
+                "source_type": source_type,
+                "source": source_type,
+                "field": "product_qa",
+                "value": evidence_unit,
+                "visibility": customer_evidence_bundle.CUSTOMER_VISIBLE,
+            }
             # Bound the semantic prompt while retaining a diverse set of
             # retriever-ranked, independently auditable facts.
             if len(candidates) >= 24:
@@ -18977,6 +19014,16 @@ async def _try_sealed_same_sku_knowledge_answer(
         selected_index_set = set(selected_indexes)
         selected_evidence = [item for item in candidates if item["index"] in selected_index_set]
         if len(selected_evidence) != len(selected_index_set):
+            return None
+        selected_bundle = customer_evidence_bundle.build_customer_evidence_bundle(
+            sku=sku,
+            product_name=sku,
+            evidence_items=[
+                candidate_evidence_items[item["index"]]
+                for item in selected_evidence
+            ],
+        )
+        if len(selected_bundle.items) != len(selected_evidence):
             return None
         evidence_content = "\n\n".join(item["content"] for item in selected_evidence)
         answer = await customer_llm_service.chat_completion(
@@ -19125,9 +19172,28 @@ async def _try_sealed_same_sku_knowledge_answer(
     safe_missing["answer"] = answer
     safe_missing["confidence"] = "high"
     safe_missing["uncertainty"] = "resolved"
-    safe_missing["evidence"] = [{"sku": sku, "field_label": "产品知识库", "value": evidence_content, "source_type": "knowledge_base", "source_layer": "RAG", "matched_by": "semantic_same_sku_evidence"}]
+    safe_missing["evidence"] = [
+        {
+            "evidence_id": item.evidence_id,
+            "sku": item.sku,
+            "field_label": "产品知识库",
+            "value": item.value,
+            "source_type": item.source_type,
+            "source_layer": "RAG",
+            "matched_by": "semantic_same_sku_evidence",
+        }
+        for item in selected_bundle.items
+    ]
     safe_missing["sources"] = [{"type": "knowledge_base", "label": "同 SKU 文件知识库", "sku": sku}]
-    safe_missing["answer_metadata"] = {"contract_field_type": "product_qa", "evidence_status": "matched", "evidence_sku": sku, "evidence_skus": [sku], "evidence_source": "same_sku_knowledge"}
+    safe_missing["answer_metadata"] = {
+        "contract_field_type": "product_qa",
+        "evidence_status": "matched",
+        "evidence_sku": sku,
+        "evidence_skus": [sku],
+        "evidence_bundle_skus": [selected_bundle.sku],
+        "evidence_ids": [item.evidence_id for item in selected_bundle.items],
+        "evidence_source": "same_sku_knowledge",
+    }
     safe_missing["debug"]["agent_mode"] = "sealed_same_sku_knowledge_rag"
     safe_missing["debug"]["knowledge_evidence_selector"] = {
         "confidence": "high",

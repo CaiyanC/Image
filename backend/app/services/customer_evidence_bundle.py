@@ -1,5 +1,6 @@
 """Customer-visible evidence bound to one canonical SKU."""
 
+import hashlib
 from dataclasses import dataclass
 from typing import Iterable
 
@@ -75,6 +76,16 @@ def _valid_customer_value(value: object) -> str:
     if normalized.casefold() in INVALID_PLACEHOLDERS:
         return ""
     return normalized
+
+
+def stable_customer_evidence_id(*, namespace: str, sku: str, value: str) -> str:
+    """Return a stable opaque identifier without exposing source internals."""
+    canonical_sku = str(sku or "").strip().upper()
+    normalized_value = " ".join(str(value or "").split())
+    digest = hashlib.sha256(
+        f"{namespace.strip()}|{canonical_sku}|{normalized_value}".encode("utf-8")
+    ).hexdigest()[:20]
+    return f"{namespace.strip()}:{digest}"
 
 
 def build_customer_evidence_bundle(

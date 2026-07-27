@@ -1194,9 +1194,10 @@ def test_same_sku_rag_broad_product_question_merges_multiple_selected_evidence(m
     )
 
     assert result is not None
-    assert "Core benefit" in result["evidence"][0]["value"]
-    assert "Usage scene" in result["evidence"][0]["value"]
-    assert "Weight" not in result["evidence"][0]["value"]
+    selected_values = "\n".join(item["value"] for item in result["evidence"])
+    assert "Core benefit" in selected_values
+    assert "Usage scene" in selected_values
+    assert "Weight" not in selected_values
     assert result["debug"]["knowledge_evidence_selector"]["selected_count"] == 2
 
 
@@ -1313,6 +1314,9 @@ def test_same_sku_rag_generation_uses_semantically_selected_broad_evidence(monke
 
     assert result is not None
     assert result["answer_metadata"]["evidence_status"] == "matched"
+    assert result["answer_metadata"]["evidence_bundle_skus"] == ["RAG-OVERVIEW-100"]
+    assert result["evidence"][0]["evidence_id"].startswith("knowledge:")
+    assert result["evidence"][0]["sku"] == "RAG-OVERVIEW-100"
     assert result["debug"]["agent_mode"] == "sealed_same_sku_knowledge_rag"
 
 

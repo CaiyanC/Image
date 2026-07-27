@@ -6446,6 +6446,8 @@ def test_sealed_semantic_product_qa_does_not_rederive_field_from_product_title(r
     assert result["answer"] == "加满100ml燃料可燃烧约60分钟。"
     assert result["debug"]["field_contract"]["field_type"] == "product_qa"
     assert result["debug"]["entity_resolution_contract"]["resolved_sku"] == "SEM-QA-RUNTIME-02"
+    assert result["answer_metadata"]["evidence_bundle_skus"] == ["SEM-QA-RUNTIME-02"]
+    assert result["evidence"][0]["evidence_id"].startswith("product_qa:")
 
 
 def test_product_qa_output_keeps_full_same_sku_answer():
