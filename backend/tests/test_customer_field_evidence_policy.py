@@ -934,6 +934,30 @@ def test_same_sku_rag_coverage_treats_broad_decision_prompt_as_one_request():
     assert "broad overview or decision question" in instruction
     assert "Do not invent" in instruction
     assert "Only state that evidence does not directly confirm" in instruction
+    assert "both resolves a condition and says that same condition is not confirmed" in instruction
+    assert "internally_consistent:boolean" in instruction
+
+
+def test_same_sku_rag_coverage_rejects_an_internally_contradictory_draft(monkeypatch):
+    async def fake_completion(*_args, **_kwargs):
+        return '{"complete":true,"internally_consistent":false}'
+
+    monkeypatch.setattr(
+        customer_service_service.customer_llm_service,
+        "chat_completion",
+        fake_completion,
+    )
+
+    import asyncio
+
+    assert not asyncio.run(
+        customer_service_service._same_sku_rag_answer_covers_question(
+            SimpleNamespace(),
+            "\u80fd\u5426\u76f4\u63a5\u704c\u6cb8\u6c34\uff1f",
+            "\u8010\u6e29\u4e0a\u9650\u4e3a140\u00b0F\uff0c\u4e0d\u5efa\u8bae\u704c\u6cb8\u6c34\u3002\u4f46\u8d44\u6599\u672a\u786e\u8ba4\u80fd\u5426\u704c\u6cb8\u6c34\u3002",
+            "\u8010\u6e29\u8303\u56f4\u4e3a32\u00b0F\u81f3140\u00b0F\u3002",
+        )
+    )
 
 
 def test_same_sku_rag_selector_allows_partial_direct_evidence_only_for_semantic_compound_turn():
@@ -1287,6 +1311,8 @@ def test_same_sku_rag_generation_uses_semantically_selected_broad_evidence(monke
         if "candidates" in payload:
             return '{"indexes":[0,1],"confidence":"high"}'
         if "upstream semantic selector has already accepted" in messages[0]["content"]:
+            assert "decision-support factors" in messages[0]["content"]
+            assert "A listed target audience never excludes an unlisted audience" in messages[0]["content"]
             return '{"answer":"It is portable, simple to operate, and suited to camping and outdoor heating.","evidence_quotes":["portable and simple to operate","camping and outdoor heating"]}'
         return '{"answer":"NO_EVIDENCE"}'
 
@@ -1318,6 +1344,143 @@ def test_same_sku_rag_generation_uses_semantically_selected_broad_evidence(monke
     assert result["evidence"][0]["evidence_id"].startswith("knowledge:")
     assert result["evidence"][0]["sku"] == "RAG-OVERVIEW-100"
     assert result["debug"]["agent_mode"] == "sealed_same_sku_knowledge_rag"
+
+
+def test_same_sku_rag_retrieval_keeps_semantically_relevant_lower_ranked_evidence(monkeypatch):
+    """Same-SKU retrieval should leave enough candidates for the semantic
+    selector when a natural paraphrase ranks the useful file chunk below five.
+    """
+    sku = "RAG-RECALL-100"
+    safe_missing = {
+        "sku": sku,
+        "answer": "safe missing",
+        "debug": {"agent_mode": "sealed_product_qa_safe_missing"},
+    }
+    rows = [
+        {"sku": sku, "content": f"Unrelated same-SKU fact {index}."}
+        for index in range(10)
+    ]
+    rows.append({
+        "sku": sku,
+        "content": "Withstands 32\u00b0F to 140\u00b0F temperatures.",
+    })
+    observed_limits = []
+
+    monkeypatch.setattr(
+        customer_service_service,
+        "_sealed_semantic_product_qa_entity_guard",
+        lambda *_args, **_kwargs: safe_missing.copy(),
+    )
+
+    async def fake_retrieve(*_args, **kwargs):
+        limit = int(kwargs["limit"])
+        observed_limits.append(limit)
+        return rows[:limit]
+
+    async def fake_completion(_db, *, messages, **_kwargs):
+        payload = json.loads(messages[-1]["content"])
+        if "candidates" in payload:
+            assert "explicit numeric operating boundary" in messages[0]["content"]
+            selected = [
+                candidate["index"]
+                for candidate in payload["candidates"]
+                if "140\u00b0F" in candidate["content"]
+            ]
+            return json.dumps({
+                "indexes": selected,
+                "confidence": "high" if selected else "low",
+            })
+        assert "transparent conservative reasoning from an explicit numeric boundary" in messages[0]["content"]
+        assert "never answer with cannot, impossible, or unsafe" in messages[0]["content"]
+        return json.dumps({
+            "answer": "\u8be5\u6c34\u888b\u8010\u6e29\u4e0a\u9650\u4e3a140\u00b0F\uff0c\u4e0d\u80fd\u76f4\u63a5\u704c\u6cb8\u6c34\u3002",
+            "evidence_quotes": ["32\u00b0F to 140\u00b0F"],
+        }, ensure_ascii=False)
+
+    async def grounded(*_args, **_kwargs):
+        return True
+
+    async def covered(*_args, **_kwargs):
+        return True
+
+    monkeypatch.setattr(customer_service_service.knowledge_service, "semantic_retrieve", fake_retrieve)
+    monkeypatch.setattr(customer_service_service.knowledge_service, "same_sku_customer_context", lambda *_args, **_kwargs: [])
+    monkeypatch.setattr(customer_service_service.customer_llm_service, "chat_completion", fake_completion)
+    monkeypatch.setattr(customer_service_service, "_same_sku_evidence_answer_is_grounded", grounded)
+    monkeypatch.setattr(customer_service_service, "_same_sku_rag_answer_covers_question", covered)
+
+    import asyncio
+
+    result = asyncio.run(
+        customer_service_service._try_sealed_same_sku_knowledge_answer(
+            SimpleNamespace(),
+            "\u8fd9\u4e2a\u6c34\u888b\u80fd\u4e0d\u80fd\u76f4\u63a5\u704c\u521a\u716e\u5f00\u7684\u6c34\uff1f",
+            {"semantic_preplan": {"qa_evidence_query": "\u80fd\u5426\u76f4\u63a5\u704c\u6cb8\u6c34"}},
+        )
+    )
+
+    assert observed_limits == [12]
+    assert result is not None
+    assert "140\u00b0F" in result["answer"]
+    assert result["debug"]["agent_mode"] == "sealed_same_sku_knowledge_rag"
+
+
+def test_same_sku_rag_retries_a_transient_low_confidence_evidence_selection(monkeypatch):
+    sku = "RAG-SELECT-RETRY"
+    safe_missing = {
+        "sku": sku,
+        "answer": "safe missing",
+        "debug": {"agent_mode": "sealed_product_qa_safe_missing"},
+    }
+    selector_calls = 0
+
+    monkeypatch.setattr(
+        customer_service_service,
+        "_sealed_semantic_product_qa_entity_guard",
+        lambda *_args, **_kwargs: safe_missing.copy(),
+    )
+
+    async def fake_retrieve(*_args, **_kwargs):
+        return [
+            {"sku": sku, "content": "Unrelated same-SKU fact."},
+            {"sku": sku, "content": "Recorded operating range: 32\u00b0F to 140\u00b0F."},
+        ]
+
+    async def fake_completion(_db, *, messages, **_kwargs):
+        nonlocal selector_calls
+        payload = json.loads(messages[-1]["content"])
+        if "candidates" in payload:
+            selector_calls += 1
+            if selector_calls == 1:
+                return '{"indexes":[],"confidence":"low"}'
+            return '{"indexes":[1],"confidence":"high"}'
+        return json.dumps({
+            "answer": "\u8bb0\u5f55\u8010\u6e29\u4e0a\u9650\u4e3a140\u00b0F\uff0c\u6cb8\u6c34\u8d85\u51fa\u8be5\u8303\u56f4\uff0c\u4e0d\u5efa\u8bae\u76f4\u63a5\u704c\u88c5\u3002",
+            "evidence_quotes": ["32\u00b0F to 140\u00b0F"],
+        }, ensure_ascii=False)
+
+    async def approved(*_args, **_kwargs):
+        return True
+
+    monkeypatch.setattr(customer_service_service.knowledge_service, "semantic_retrieve", fake_retrieve)
+    monkeypatch.setattr(customer_service_service.knowledge_service, "same_sku_customer_context", lambda *_args, **_kwargs: [])
+    monkeypatch.setattr(customer_service_service.customer_llm_service, "chat_completion", fake_completion)
+    monkeypatch.setattr(customer_service_service, "_same_sku_evidence_answer_is_grounded", approved)
+    monkeypatch.setattr(customer_service_service, "_same_sku_rag_answer_covers_question", approved)
+
+    import asyncio
+
+    result = asyncio.run(
+        customer_service_service._try_sealed_same_sku_knowledge_answer(
+            SimpleNamespace(),
+            "\u80fd\u4e0d\u80fd\u76f4\u63a5\u704c\u6cb8\u6c34\uff1f",
+            {"semantic_preplan": {"qa_evidence_query": "\u76f4\u63a5\u704c\u6cb8\u6c34"}},
+        )
+    )
+
+    assert selector_calls == 2
+    assert result is not None
+    assert "140\u00b0F" in result["answer"]
 
 
 def test_same_sku_structured_best_effort_answers_only_from_selected_evidence(monkeypatch):
@@ -1464,8 +1627,8 @@ def test_same_sku_rag_keeps_supported_part_of_a_compound_question(monkeypatch):
         payload = json.loads(messages[-1]["content"])
         if "candidates" in payload:
             return '{"indexes":[0],"confidence":"high"}'
-        if "keep the supported part" in messages[0]["content"]:
-                return '{"answer":"Grinding coarseness can be adjusted. The supplied evidence does not directly confirm heating.","evidence_quotes":["Grinding coarseness can be adjusted"]}'
+        if "Answer only the parts directly supported" in messages[0]["content"]:
+            return '{"answer":"Grinding coarseness can be adjusted.","evidence_quotes":["Grinding coarseness can be adjusted"]}'
         return '{"answer":"NO_EVIDENCE"}'
 
     async def grounded(*_args, **_kwargs):
@@ -1492,7 +1655,7 @@ def test_same_sku_rag_keeps_supported_part_of_a_compound_question(monkeypatch):
 
     assert result is not None
     assert "Grinding coarseness can be adjusted" in result["answer"]
-    assert "does not directly confirm heating" in result["answer"]
+    assert "does not directly confirm heating" not in result["answer"]
 
 
 def test_same_sku_rag_repairs_grounded_draft_that_omits_a_compound_part(monkeypatch):
@@ -1877,6 +2040,64 @@ def test_same_sku_rag_rejects_one_false_grounding_verdict_after_quote_validation
 
     assert result is False
     assert calls == 1
+
+
+def test_same_sku_rag_falls_back_to_literal_selected_facts_when_drafts_overclaim(monkeypatch):
+    sku = "RAG-BOUNDED-REFERENCE"
+    safe_missing = {
+        "sku": sku,
+        "answer": "safe missing",
+        "debug": {"agent_mode": "sealed_product_qa_safe_missing"},
+    }
+    rows = [
+        {"sku": sku, "content": "Target audience: experienced campers."},
+        {"sku": sku, "content": "Folding design for compact storage."},
+    ]
+
+    monkeypatch.setattr(
+        customer_service_service,
+        "_sealed_semantic_product_qa_entity_guard",
+        lambda *_args, **_kwargs: safe_missing.copy(),
+    )
+
+    async def fake_retrieve(*_args, **_kwargs):
+        return rows
+
+    async def fake_completion(_db, *, messages, **_kwargs):
+        payload = json.loads(messages[-1]["content"])
+        if "candidates" in payload:
+            return '{"indexes":[0,1],"confidence":"high"}'
+        return json.dumps({
+            "answer": "It is definitely ideal for every beginner.",
+            "evidence_quotes": [
+                "Target audience: experienced campers.",
+                "Folding design for compact storage.",
+            ],
+        })
+
+    async def rejected(*_args, **_kwargs):
+        return False
+
+    monkeypatch.setattr(customer_service_service.knowledge_service, "semantic_retrieve", fake_retrieve)
+    monkeypatch.setattr(customer_service_service.knowledge_service, "same_sku_customer_context", lambda *_args, **_kwargs: [])
+    monkeypatch.setattr(customer_service_service.customer_llm_service, "chat_completion", fake_completion)
+    monkeypatch.setattr(customer_service_service, "_same_sku_evidence_answer_is_grounded", rejected)
+
+    import asyncio
+
+    result = asyncio.run(
+        customer_service_service._try_sealed_same_sku_knowledge_answer(
+            SimpleNamespace(),
+            "Is it suitable for a beginner?",
+            {"semantic_preplan": {}},
+        )
+    )
+
+    assert result is not None
+    assert "It is definitely ideal" not in result["answer"]
+    assert "Target audience: experienced campers." in result["answer"]
+    assert "\u53ef\u6838\u9a8c\u7684\u53c2\u8003\u4fe1\u606f" in result["answer"]
+    assert result["skip_polish"] is True
 
 
 def test_same_sku_rag_uses_strict_entailment_as_the_claim_delivery_gate(monkeypatch):

@@ -1418,7 +1418,7 @@ def _semantic_preplan_messages(
         "route_family must be one of structured_query,recommendation,comparison,product_bound_qa,product_navigation,"
         "unresolved_product_like,negative_product_like,unknown_realtime,contents_accessories,generic_query,knowledge_base_meta,general_chat,clarification. "
         "Use general_chat only for ordinary guidance that needs no catalogue fact; then entities and canonical_fields are empty and evidence_required=false. "
-        "Use recommendation only when the customer asks to select actual catalogue products. For recommendation, emit recommendation_constraints as an object using only subject_kind=cookware|waterware|stove|coffee_gear, people={min,max}, heat_sources=[card_stove|gas_stove|alcohol_stove|open_flame|induction], scenarios=[camping|hiking|self_drive|seaside|soup], weight_preference=lightweight, price_preference=affordable|premium, storage_preference=compact_storage, or dishwasher_safe=true for an explicit dishwasher-safe requirement. An explicitly requested coffee grinder or coffee-brewing apparatus means coffee_gear; do not classify it as cookware. Include every explicitly stated compatible requirement: a pot, pan, or griddle means cookware; an exact group size becomes people={min:N,max:N}; camping becomes scenarios=[camping]; an explicit dishwasher-safe request becomes dishwasher_safe=true; and a request for low carrying weight becomes weight_preference=lightweight. Do not infer any constraint the customer did not state. "
+        "Use recommendation only when the customer asks to select actual catalogue products. For recommendation, emit recommendation_constraints as an object using only subject_kind=cookware|waterware|stove|coffee_gear, people={min,max}, heat_sources=[card_stove|gas_stove|alcohol_stove|open_flame|induction], scenarios=[camping|hiking|self_drive|seaside|soup], weight_preference=lightweight, price_preference=affordable|premium, storage_preference=compact_storage, or dishwasher_safe=true for an explicit dishwasher-safe requirement. An explicitly requested coffee grinder or coffee-brewing apparatus means coffee_gear; do not classify it as cookware. Include every explicitly stated compatible requirement: a pot, pan, or griddle means cookware; an exact group size becomes people={min:N,max:N}; camping becomes scenarios=[camping]; an explicit dishwasher-safe request becomes dishwasher_safe=true; and a request for low carrying weight becomes weight_preference=lightweight. Every constraint must be explicitly stated by the customer; do not infer any constraint the customer did not state. "
         "Use comparison only for two or more named catalogue participants. "
         "A named-product question about operating steps, safety rules, prohibited actions, cleaning, maintenance, or any other product field "
         "is product_bound_qa even if its answer may later use a manual or knowledge-base document as evidence. "
@@ -1426,8 +1426,7 @@ def _semantic_preplan_messages(
         "Do not shorten a versioned product mention to its family name merely because the shorter name is sufficient to describe the product type. "
         "When has_unique_current_turn_catalog_product_name=true, the server has independently verified that this turn contains exactly one catalog product name. "
         "unique_current_turn_catalog_product_mention, when non-empty, is that verbatim customer span; it can look like a category phrase but must be treated as the named-product subject for semantic interpretation. "
-        "This does not provide an SKU, answer, or database value and does not force a route: use product_bound_qa only if the complete question asks about that product; "
-        "keep general_chat, recommendation, comparison, and category requests in their appropriate families. "
+        "It does not provide an SKU, answer, or database value; choose the route from the complete question. "
         "For product_navigation, the customer only switches or opens a product and asks no fact. "
         "entity_scope is generic_scope,category_scope,product_like,resolved_product,ambiguous_product,unresolved_product,or negative_product. "
         "canonical_fields is an ordered subset of this allowlist: " + field_types + ". "
@@ -2065,10 +2064,13 @@ async def _semantic_compound_product_qa_queries(
             db,
             messages=[
                 {"role": "system", "content": (
-                    "Return only JSON: {queries:string[]}. Split the complete customer question into its independently requested "
-                    "product capabilities, judgements, procedures, compatibility facts, or conditions. Each query must be a concise "
-                    "retrieval phrase for exactly one requested fact, without product names, SKU, values, answers, or inferred facts. "
-                    "Return one to three queries in customer-intent order. Do not combine separate conditions into one query."
+                    "Return only JSON: {items:[{query:string,source_span:string}]}. Split the complete customer question into its independently requested "
+                    "product capabilities, judgements, procedures, compatibility facts, or conditions. query is a concise retrieval phrase for exactly "
+                    "one requested fact, without product names, SKU, values, answers, or inferred facts. source_span must be the exact uninterrupted customer "
+                    "words that ask that fact, copied verbatim from the complete question; include the full condition and predicate, not a shorter inferred property. "
+                    "Return one to three items in customer-intent order. Every item must correspond one-to-one to an explicit customer clause. "
+                    "Do not emit a prerequisite property, possible evidence type, rationale, or intermediate concept merely because it could help answer "
+                    "another explicit clause; keep that explicit clause as one query. Do not combine genuinely separate customer conditions into one query."
                     " A broad request for an overview, notable points, preparation, or general usage advice is one query, not separate "
                     "selection and usage sub-queries."
                 )},
@@ -2084,6 +2086,18 @@ async def _semantic_compound_product_qa_queries(
     except Exception:
         return []
     payload = _extract_json_object(str(raw or "")) or {}
+    items = payload.get("items") if isinstance(payload.get("items"), list) else []
+    source_spans = []
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        source_span = str(item.get("source_span") or "").strip()[:160]
+        query = str(item.get("query") or "").strip()[:160]
+        if query and source_span and source_span in question:
+            source_spans.append(source_span)
+    if source_spans:
+        return list(dict.fromkeys(source_spans))[:3]
+    # Accept the former query-only shape during the model-output migration.
     values = payload.get("queries") if isinstance(payload.get("queries"), list) else []
     return list(dict.fromkeys(str(value or "").strip()[:160] for value in values if str(value or "").strip()))[:3]
 
@@ -3328,20 +3342,9 @@ async def plan_customer_question_semantic(
         )
     # The preplan already owns product-QA intent shape. A scope review is only
     # justified after a semantic repair changed the shape; complete ordinary
-    # QA plans must not pay for a second classifier. Compound turns are
-    # represented by the validated ``compound`` flag in the preplan itself.
-    if (
-        result.get("route_family") == "product_bound_qa"
-        and str(result.get("evidence_kind") or "").strip() == "product_qa"
-        and str(result.get("confidence_label") or "").strip().lower() == "high"
-        and not bool(result.get("ambiguity"))
-        and not result.get("fallback_reason")
-    ):
-        scope_review = await _semantic_product_qa_scope_review(db, question=text, runtime_settings=runtime_settings)
-        llm_call_count += 1
-        if scope_review is not None:
-            result["compound"] = scope_review
-            result["product_qa_scope_review"] = "validated_semantic_review"
+    # The validated preplan already owns whether a product-QA turn is compound.
+    # Do not pay for a second classifier that can override the accepted intent
+    # shape or turn one broad overview into several unrelated retrievals.
     if (
         result.get("route_family") == "product_bound_qa"
         and str(result.get("evidence_kind") or "").strip() == "structured_field"
@@ -3373,6 +3376,7 @@ async def plan_customer_question_semantic(
     if (
         result.get("route_family") == "product_bound_qa"
         and str(result.get("evidence_kind") or "").strip() == "product_qa"
+        and result.get("compound") is True
         and str(result.get("confidence_label") or "").strip().lower() == "high"
         and not result.get("fallback_reason")
     ):

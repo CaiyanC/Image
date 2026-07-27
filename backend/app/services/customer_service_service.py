@@ -31,6 +31,7 @@ from . import (
     customer_entity_resolution_contract,
     customer_evidence_bundle,
     customer_field_contract,
+    customer_final_answer_arbiter,
     customer_llm_service,
     customer_perf_service,
     customer_recommendation_verification_contract,
@@ -759,6 +760,7 @@ async def _save_agent_result_and_return(
         if top_line_index is not None:
             agent_result["answer"] = "\n".join(lines[top_line_index:]).strip()
     agent_result["skip_polish"] = skip_polish
+    agent_result = customer_final_answer_arbiter.arbitrate_final_answer(agent_result)
     agent_result = _attach_agent_quality(agent_result, question)
     conversation = _get_or_create_conversation(db, user_id, question, agent_result.get("sku"), conversation_id)
     db.add(CustomerServiceMessage(
@@ -5878,12 +5880,45 @@ def _formal_field_contract_preempts_product_qa(question: str, phase1_plan: dict[
     provider, but it cannot replace the contract with a QA response before
     entity arbitration reaches the structured detail executor.
     """
+    semantic_preplan = (
+        phase1_plan.get("semantic_preplan")
+        if isinstance(phase1_plan, dict) and isinstance(phase1_plan.get("semantic_preplan"), dict)
+        else {}
+    )
     field_request = customer_field_contract.resolve_requested_field_contract(
         question,
         phase1_plan if isinstance(phase1_plan, dict) else {},
     )
     field_type = str(field_request.get("field_type") or "").strip()
     if field_type in customer_field_contract.FORMAL_DETAIL_FIELDS:
+        semantic_subject = str(semantic_preplan.get("subject_text") or "").strip()
+        subject_start = str(question or "").find(semantic_subject) if semantic_subject else -1
+        subject_end = subject_start + len(semantic_subject) if subject_start >= 0 else -1
+        field_spans = [
+            item
+            for item in (field_request.get("field_spans") or [])
+            if isinstance(item, dict)
+            and isinstance(item.get("start"), int)
+            and isinstance(item.get("end"), int)
+        ]
+        alias_is_inside_bound_subject = bool(
+            subject_start >= 0
+            and field_spans
+            and all(
+                subject_start <= int(item["start"])
+                and int(item["end"]) <= subject_end
+                for item in field_spans
+            )
+        )
+        if (
+            _semantic_product_qa_preempts_legacy_shortcuts(semantic_preplan)
+            and alias_is_inside_bound_subject
+        ):
+            # A noun embedded in the already-bound product title is not the
+            # requested predicate. Preserve the validated semantic QA route;
+            # full-predicate FieldContracts (for example "拿着重不重" or
+            # "应该怎么使用") still preempt as formal customer questions.
+            return False
         return True
     return False
 
@@ -7229,6 +7264,7 @@ async def _semantic_comparison_adjudication(
                 "Use only the supplied sealed_evidence. Ignore product names, version labels, SKU-like text, and any facts outside that evidence. "
                 "Choose selected_index only when the evidence directly supports one participant for the user's stated need; otherwise use null. "
                 "evidence_fields must list only the minimal, directly sufficient evidence fields actually used; do not pad the list with merely related fields. Never return a SKU, product name, answer text, or copied evidence value. "
+                "Whether or not a winner is supported, evidence_fields must select one to four complete fields that most directly answer the requested comparison when such evidence exists; use an empty list only when no supplied field is directly relevant. Omit merely incidental differences. "
                 "Schema: {\"selected_index\":0|1|null,\"evidence_fields\":[\"canonical_field\"],\"reasoning_summary\":\"brief audit reason\"}."
             ),
         },
@@ -7257,11 +7293,69 @@ async def _semantic_comparison_adjudication(
         )
     except Exception:
         return None
-    return _validate_semantic_comparison_adjudication(
+    decision = _validate_semantic_comparison_adjudication(
         _parse_semantic_json_object(content),
         participant_count=participant_count,
         allowed_evidence_fields=set(evidence_packet),
     )
+    if decision is None or decision.get("selected_index") is None:
+        return decision
+    review_messages = [
+        {
+            "role": "system",
+            "content": (
+                "Return only JSON. Independently verify a proposed product-comparison choice using only "
+                "the customer question and sealed_evidence. approved may be true only when the selected "
+                "participant is directly supported for the exact requested need and no supplied evidence "
+                "contradicts that choice. A larger number, more fields, or merely related usage text is not "
+                "sufficient by itself. Never use product names or facts outside the packet. "
+                "Schema: {\"approved\":boolean,\"reasoning_summary\":\"brief audit reason\"}."
+            ),
+        },
+        {
+            "role": "user",
+            "content": json.dumps(
+                {
+                    "question": question,
+                    "participant_count": participant_count,
+                    "sealed_evidence": model_packet,
+                    "proposed_decision": {
+                        "selected_index": decision["selected_index"],
+                        "evidence_fields": decision["evidence_fields"],
+                    },
+                },
+                ensure_ascii=False,
+            ),
+        },
+    ]
+    try:
+        review_content = await customer_llm_service.chat_completion(
+            db,
+            messages=review_messages,
+            temperature=0,
+            max_tokens=160,
+            purpose="semantic_comparison_adjudication_grounding_review",
+            api_model_override=str(settings.SEMANTIC_PREPLAN_MODEL or "").strip() or None,
+            response_format={"type": "json_object"} if settings.SEMANTIC_PREPLAN_JSON_MODE else None,
+            thinking={"type": "disabled"} if settings.SEMANTIC_PREPLAN_THINKING_DISABLED else None,
+        )
+    except Exception:
+        review_content = ""
+    review = _parse_semantic_json_object(review_content)
+    if (
+        isinstance(review, dict)
+        and set(review).issubset({"approved", "reasoning_summary"})
+        and review.get("approved") is True
+    ):
+        return decision
+    return {
+        "selected_index": None,
+        "evidence_fields": list(decision.get("evidence_fields") or []),
+        "reasoning_summary": str(
+            (review or {}).get("reasoning_summary")
+            or "Independent grounding review did not approve the proposed choice."
+        ).strip(),
+    }
 
 
 async def _phase1_compare_choice_result(db: Session, plan: dict) -> dict | None:
@@ -7324,7 +7418,8 @@ async def _phase1_compare_choice_result(db: Session, plan: dict) -> dict | None:
     ):
         overview_fields = (
             "series", "category", "dimensions", "weight", "material",
-            "capacity", "color", "usage_scene", "selling_point",
+            "capacity", "people", "target_audience", "color",
+            "usage_scene", "selling_point",
         )
         evidence_bundles: list[customer_evidence_bundle.CustomerEvidenceBundle] = []
         for product, specs, business, content in bundles:
@@ -7361,6 +7456,8 @@ async def _phase1_compare_choice_result(db: Session, plan: dict) -> dict | None:
             )
         lines: list[str] = []
         sources: list[dict[str, Any]] = []
+        lines_by_field: dict[str, str] = {}
+        sources_by_field: dict[str, list[dict[str, Any]]] = {}
         for field in overview_fields:
             values: list[tuple[str, str, str, str]] = []
             for evidence_bundle in evidence_bundles:
@@ -7382,15 +7479,19 @@ async def _phase1_compare_choice_result(db: Session, plan: dict) -> dict | None:
             ):
                 continue
             label = customer_field_contract.product_detail_field_label(field) or field
-            lines.append(
+            rendered_line = (
                 f"- {label}：" + "；".join(
                     f"{name}（{sku}）为{value}" for sku, name, value, _source in values
                 ) + "。"
             )
-            sources.extend(
+            field_sources = [
                 {"type": "product_field", "sku": sku, "field": field, "source": source, "value": value}
                 for sku, _name, value, source in values
-            )
+            ]
+            lines.append(rendered_line)
+            sources.extend(field_sources)
+            lines_by_field[field] = rendered_line
+            sources_by_field[field] = field_sources
         result_skus = [str(row.get("sku") or "").strip().upper() for row in rows if str(row.get("sku") or "").strip()]
         try:
             overview_evidence_packet = _comparison_adjudication_evidence(
@@ -7416,6 +7517,22 @@ async def _phase1_compare_choice_result(db: Session, plan: dict) -> dict | None:
         )
         overview_selected_sku = None
         overview_choice_line = ""
+        overview_evidence_fields = [
+            str(field or "").strip()
+            for field in (
+                overview_adjudication.get("evidence_fields") or []
+                if isinstance(overview_adjudication, dict)
+                else []
+            )
+            if str(field or "").strip() in lines_by_field
+        ]
+        if overview_evidence_fields:
+            lines = [lines_by_field[field] for field in overview_evidence_fields]
+            sources = [
+                source
+                for field in overview_evidence_fields
+                for source in sources_by_field[field]
+            ]
         if (
             isinstance(overview_selected_index, int)
             and 0 <= overview_selected_index < len(bundles)
@@ -7569,11 +7686,7 @@ async def _phase1_compare_choice_result(db: Session, plan: dict) -> dict | None:
                 )
                 if str(field or "").strip() in evidence_packet
             ]
-            if (
-                isinstance(selected_index, int)
-                and 0 <= selected_index < len(bundles)
-                and evidence_fields
-            ):
+            if evidence_fields:
                 structured_lines: list[str] = []
                 structured_sources: list[dict[str, Any]] = []
                 for field in evidence_fields:
@@ -7604,17 +7717,27 @@ async def _phase1_compare_choice_result(db: Session, plan: dict) -> dict | None:
                         structured_lines.append(
                             f"- {label}：" + "；".join(rendered_values) + "。"
                         )
-                selected_product = bundles[selected_index][0]
-                selected_sku = str(selected_product.sku or "").strip().upper()
-                selected_name = str(
-                    selected_product.product_name_cn
-                    or selected_product.product_name_en
-                    or selected_sku
-                ).strip()
-                structured_lines.append(
-                    f"结合以上已核验资料，更适合你所述需求的是"
-                    f"{selected_name}（{selected_sku}）。"
-                )
+                selected_sku = None
+                if (
+                    isinstance(selected_index, int)
+                    and 0 <= selected_index < len(bundles)
+                    and bundles[selected_index][0] is not None
+                ):
+                    selected_product = bundles[selected_index][0]
+                    selected_sku = str(selected_product.sku or "").strip().upper()
+                    selected_name = str(
+                        selected_product.product_name_cn
+                        or selected_product.product_name_en
+                        or selected_sku
+                    ).strip()
+                    structured_lines.append(
+                        f"结合以上已核验资料，更适合你所述需求的是"
+                        f"{selected_name}（{selected_sku}）。"
+                    )
+                else:
+                    structured_lines.append(
+                        "这些同 SKU 资料可以说明差异，但不足以可靠指定其中一款更适合。"
+                    )
                 result_skus = [
                     str(row.get("sku") or "").strip().upper()
                     for row in rows
@@ -7631,13 +7754,19 @@ async def _phase1_compare_choice_result(db: Session, plan: dict) -> dict | None:
                     "answer_metadata": {
                         "source": "semantic_pairwise_structured_best_effort_contract",
                         "contract_field_types": evidence_fields,
-                        "evidence_status": "supported",
+                        "evidence_status": (
+                            "supported" if selected_sku else "supported_without_choice"
+                        ),
                         "final_choice_sku": selected_sku,
                         "semantic_comparison_adjudication": adjudication,
                         "evidence_bundle_skus": result_skus,
                     },
                     "debug": {
-                        "agent_mode": "semantic_pairwise_structured_best_effort_contract",
+                        "agent_mode": (
+                            "semantic_pairwise_structured_best_effort_contract"
+                            if selected_sku
+                            else "semantic_pairwise_structured_evidence_no_choice"
+                        ),
                         "field_contract": {
                             "field_type": "product_qa",
                             "canonical_fields": [],
@@ -7722,14 +7851,19 @@ async def _phase1_compare_choice_result(db: Session, plan: dict) -> dict | None:
                 rendered.append(f"{name}（{sku}）：{item['value']}。")
                 sources.append({"type": "product_field", "sku": sku, "field": field, "source": item["source"], "value": item["value"]})
             lines.append(f"- {label}：" + " ".join(rendered))
+        complete_evidence_packet = {
+            field: evidence_rows
+            for field, evidence_rows in evidence_packet.items()
+            if len(evidence_rows) == len(bundles)
+        }
         adjudication = (
             await _semantic_comparison_adjudication(
                 db,
                 question=str(plan.get("raw_question") or ""),
-                evidence_packet={field: evidence_packet[field] for field in complete_fields},
+                evidence_packet=complete_evidence_packet,
                 participant_count=len(bundles),
             )
-            if plan.get("must_make_choice") and len(complete_fields) == len(requested_comparison_fields)
+            if plan.get("must_make_choice") and complete_evidence_packet
             else None
         )
         selected_index = adjudication.get("selected_index") if isinstance(adjudication, dict) else None
@@ -7738,6 +7872,35 @@ async def _phase1_compare_choice_result(db: Session, plan: dict) -> dict | None:
             if isinstance(selected_index, int) and 0 <= selected_index < len(bundles) and bundles[selected_index][0] is not None
             else None
         )
+        for field in [
+            str(item or "").strip()
+            for item in (
+                adjudication.get("evidence_fields") or []
+                if isinstance(adjudication, dict)
+                else []
+            )
+            if str(item or "").strip() not in requested_comparison_fields
+            and str(item or "").strip() in complete_evidence_packet
+        ]:
+            label = customer_field_contract.product_detail_field_label(field) or field
+            rendered = []
+            for item in complete_evidence_packet[field]:
+                participant_index = int(item["participant_index"])
+                product = bundles[participant_index][0]
+                if product is None:
+                    continue
+                sku = str(product.sku or "").strip().upper()
+                name = str(product.product_name_cn or product.product_name_en or sku).strip()
+                rendered.append(f"{name}（{sku}）：{item['value']}。")
+                sources.append({
+                    "type": "product_field",
+                    "sku": sku,
+                    "field": field,
+                    "source": item["source"],
+                    "value": item["value"],
+                })
+            if rendered:
+                lines.append(f"- 相关依据（{label}）：" + " ".join(rendered))
         if selected_sku:
             selected_product = bundles[int(selected_index)][0]
             selected_name = str(selected_product.product_name_cn or selected_product.product_name_en or selected_sku).strip()
@@ -7756,7 +7919,13 @@ async def _phase1_compare_choice_result(db: Session, plan: dict) -> dict | None:
             "answer_metadata": {
                 "source": "semantic_pairwise_compound_evidence_contract",
                 "contract_field_types": requested_comparison_fields,
-                "evidence_status": "supported" if len(complete_fields) == len(requested_comparison_fields) else "missing",
+                "evidence_status": (
+                    "supported"
+                    if len(complete_fields) == len(requested_comparison_fields)
+                    else "supported_with_requested_field_gaps"
+                    if selected_sku
+                    else "missing"
+                ),
                 "final_choice_sku": selected_sku,
                 "semantic_comparison_adjudication": adjudication,
             },
@@ -11833,6 +12002,77 @@ def _compound_display_value(value: Any) -> str:
     return text
 
 
+def _record_semantic_compound_child(
+    *,
+    query: str,
+    candidate: dict[str, Any] | None,
+    compound_answers: list[dict[str, Any]],
+    answered_requests: list[tuple[str, str]],
+) -> bool:
+    """Record one independently verified semantic child and its provenance.
+
+    Related child requests may legitimately share one same-SKU evidence item.
+    Deduplicating on a coarse provider label turned that valid support into a
+    false missing-data tail. Each candidate has already passed its own
+    semantic selection and grounding gates, so this layer records coverage
+    without re-deciding relevance.
+    """
+    if not isinstance(candidate, dict):
+        return False
+    metadata = (
+        candidate.get("answer_metadata")
+        if isinstance(candidate.get("answer_metadata"), dict)
+        else {}
+    )
+    evidence_ids = [
+        str(item or "").strip()
+        for item in (metadata.get("evidence_ids") or [])
+        if str(item or "").strip()
+    ]
+    receipt = "|".join(dict.fromkeys(evidence_ids))
+    if not receipt:
+        receipt = str(
+            metadata.get("evidence_source")
+            or metadata.get("source")
+            or "same_sku_child_evidence"
+        ).strip()
+    compound_answers.append(candidate)
+    answered_requests.append((str(query or "").strip(), receipt))
+    return True
+
+
+async def _try_semantic_compound_child_answer(
+    db: Session,
+    child_question: str,
+    child_plan: dict[str, Any],
+) -> dict[str, Any] | None:
+    """Resolve one LLM-issued child against the same sealed entity/evidence.
+
+    A transient conservative reranker or grounding vote must not turn valid
+    same-SKU file evidence into a false missing answer. Retry the identical
+    sealed RAG request once; no wording, candidate, SKU, or contract is
+    changed between attempts.
+    """
+    candidate = await _try_product_qa_shortcut_with_semantic_selection(
+        db,
+        child_question,
+        phase1_plan=child_plan,
+    )
+    if _is_sealed_product_qa_safe_missing(candidate):
+        candidate = None
+    if candidate:
+        return candidate
+    for _rag_attempt in range(2):
+        candidate = await _try_sealed_same_sku_knowledge_answer(
+            db,
+            child_question,
+            child_plan,
+        )
+        if candidate:
+            return candidate
+    return None
+
+
 async def _execute_composite_customer_question(
     db: Session,
     *,
@@ -14922,7 +15162,20 @@ async def ask_customer_service(
     # formal catalogue filter from the same turn.  This preserves the
     # semantic decision (the dishwasher field) while letting the deterministic
     # layer execute only the category/evidence contract it can prove.
-    if semantic_recommendation_clarification and not _products_named_in_question(db, question):
+    semantic_structured_fields = [
+        str(item or "").strip()
+        for item in [
+            *((semantic_preplan or {}).get("canonical_fields") or []),
+            (semantic_preplan or {}).get("field_type"),
+            (semantic_preplan or {}).get("field_hint"),
+        ]
+        if str(item or "").strip()
+    ]
+    if (
+        semantic_recommendation_clarification
+        and semantic_structured_fields
+        and not _products_named_in_question(db, question)
+    ):
         structured_catalog_result = _structured_field_filter_result(db, question)
         if structured_catalog_result:
             structured_catalog_result = _attach_phase1_plan_and_timing(
@@ -16783,6 +17036,9 @@ async def ask_customer_service(
         )
         usage_care_result = _finalize_answer(usage_care_result)
         usage_care_result = _shape_answer_for_output(usage_care_result)
+        usage_care_result = customer_final_answer_arbiter.arbitrate_final_answer(
+            usage_care_result
+        )
         stage_start = perf_counter()
         conversation = _get_or_create_conversation(db, user_id, question, usage_care_result.get("sku"), conversation_id)
         db.add(CustomerServiceMessage(
@@ -16886,6 +17142,7 @@ async def ask_customer_service(
         faq_result = _shape_answer_for_output(faq_result)
         faq_result = await _attach_debug_supporting_knowledge(db, faq_result, question)
         faq_result = _shape_answer_for_output(faq_result)
+        faq_result = customer_final_answer_arbiter.arbitrate_final_answer(faq_result)
         stage_start = perf_counter()
         conversation = _get_or_create_conversation(db, user_id, question, faq_result.get("sku"), conversation_id)
         db.add(CustomerServiceMessage(
@@ -16994,6 +17251,7 @@ async def ask_customer_service(
             final_route=str(agent_result.get("answer_type") or agent_result.get("intent") or ""),
         )
         agent_result = _shape_answer_for_output(agent_result)
+        agent_result = customer_final_answer_arbiter.arbitrate_final_answer(agent_result)
         agent_result = _attach_agent_quality(agent_result, question)
         conversation = _get_or_create_conversation(db, user_id, question, agent_result.get("sku"), conversation_id)
         db.add(CustomerServiceMessage(
@@ -17183,7 +17441,6 @@ async def ask_customer_service(
         compound_answers: list[dict] = []
         compound_missing_queries: list[str] = []
         compound_answered_requests: list[tuple[str, str]] = []
-        compound_evidence_ids: set[str] = set()
         parent_preplan = compound_preplan
         for query in compound_queries:
             child_preplan = dict(parent_preplan)
@@ -17191,28 +17448,17 @@ async def ask_customer_service(
             child_plan = dict(phase1_plan)
             child_plan["semantic_preplan"] = child_preplan
             child_question = " ".join(item for item in (str(child_preplan.get("subject_text") or "").strip(), query) if item) or question
-            candidate = await _try_product_qa_shortcut_with_semantic_selection(
-                db, child_question, phase1_plan=child_plan,
+            candidate = await _try_semantic_compound_child_answer(
+                db,
+                child_question,
+                child_plan,
             )
-            if _is_sealed_product_qa_safe_missing(candidate):
-                candidate = None
-            if not candidate:
-                candidate = await _try_sealed_same_sku_knowledge_answer(db, child_question, child_plan)
-            if candidate:
-                candidate_meta = candidate.get("answer_metadata") if isinstance(candidate.get("answer_metadata"), dict) else {}
-                evidence_id = str(candidate_meta.get("evidence_source") or "").strip()
-                if evidence_id and evidence_id in compound_evidence_ids:
-                    compound_missing_queries.append(query)
-                else:
-                    if evidence_id:
-                        compound_evidence_ids.add(evidence_id)
-                    compound_answers.append(candidate)
-                    compound_answered_requests.append((
-                        query,
-                        evidence_id
-                        or str(candidate_meta.get("source") or "same_sku_child_evidence"),
-                    ))
-            else:
+            if not _record_semantic_compound_child(
+                query=query,
+                candidate=candidate,
+                compound_answers=compound_answers,
+                answered_requests=compound_answered_requests,
+            ):
                 compound_missing_queries.append(query)
         if compound_answers:
             base_result = agent_result or compound_answers[0]
@@ -17221,10 +17467,6 @@ async def ask_customer_service(
             extras = [str(item.get("answer") or "").strip() for item in compound_answers if str(item.get("answer") or "").strip() and str(item.get("answer") or "").strip() not in base_text]
             if extras:
                 agent_result["answer"] = "\n".join([base_text, *extras])
-            elif len(compound_queries) > 1 and not compound_missing_queries:
-                # A reused parent QA does not constitute evidence for an
-                # independently split child question.
-                compound_missing_queries.extend(compound_queries[1:])
             if compound_missing_queries:
                 agent_result["answer"] = "\n".join([
                     str(agent_result.get("answer") or "").strip(),
@@ -17325,29 +17567,17 @@ async def ask_customer_service(
             child_question = " ".join(
                 item for item in (str(child_preplan.get("subject_text") or "").strip(), query) if item
             ) or question
-            candidate = await _try_product_qa_shortcut_with_semantic_selection(
-                db, child_question, phase1_plan=child_plan,
+            candidate = await _try_semantic_compound_child_answer(
+                db,
+                child_question,
+                child_plan,
             )
-            if _is_sealed_product_qa_safe_missing(candidate):
-                candidate = None
-            if not candidate:
-                candidate = await _try_sealed_same_sku_knowledge_answer(db, child_question, child_plan)
-            if candidate:
-                compound_answers.append(candidate)
-                candidate_meta = (
-                    candidate.get("answer_metadata")
-                    if isinstance(candidate.get("answer_metadata"), dict)
-                    else {}
-                )
-                compound_answered_requests.append((
-                    query,
-                    str(
-                        candidate_meta.get("evidence_source")
-                        or candidate_meta.get("source")
-                        or "same_sku_child_evidence"
-                    ),
-                ))
-            else:
+            if not _record_semantic_compound_child(
+                query=query,
+                candidate=candidate,
+                compound_answers=compound_answers,
+                answered_requests=compound_answered_requests,
+            ):
                 compound_missing_queries.append(query)
         if compound_answers:
             agent_result = compound_answers[0]
@@ -18001,6 +18231,7 @@ async def ask_customer_service(
                 ])
         agent_result = _shape_answer_for_output(agent_result)
         agent_result["skip_polish"] = skip_polish
+        agent_result = customer_final_answer_arbiter.arbitrate_final_answer(agent_result)
         agent_result = _attach_agent_quality(agent_result, question)
         conversation = _get_or_create_conversation(db, user_id, question, agent_result.get("sku"), conversation_id)
         db.add(CustomerServiceMessage(
@@ -19252,6 +19483,8 @@ def _same_sku_knowledge_evidence_selection_messages(
                 "usage instructions, or a product title alone as package-contents evidence. "
                 "A selected same-SKU record in the form 'Q: ... A: ...' is direct evidence when its stored question semantically addresses the "
                 "customer's question: its A text may then support the answer. Do not reject it merely because the customer used a natural paraphrase. "
+                "An explicit numeric operating boundary is directly relevant when the customer's named condition can be transparently and conservatively "
+                "checked against that boundary. Select the boundary evidence, but do not invent a hidden tolerance, failure mode, or safety guarantee. "
                 "Do not select a comparison claim unless the customer explicitly asks for a comparison or names a comparison target. "
                 "Do not include merely related material such as purchase, authenticity, delivery, returns, warranty, "
                 "gifting, first-use, cleaning, maintenance, or other after-sales information unless the customer directly asks about it. "
@@ -19315,7 +19548,12 @@ async def _try_sealed_same_sku_knowledge_answer(
         or question
     ).strip() or question
     try:
-        retrieved = await knowledge_service.semantic_retrieve(db, retrieval_question, sku=sku, limit=5)
+        # Same-SKU sealing has already removed the principal precision risk.
+        # Keep a wider retriever pool so natural paraphrases and multilingual
+        # file chunks are not discarded before the semantic evidence selector
+        # can judge them. The downstream prompt remains bounded to 24 atomic
+        # evidence units and still fails closed on low confidence.
+        retrieved = await knowledge_service.semantic_retrieve(db, retrieval_question, sku=sku, limit=12)
     except Exception:
         return None
     # Semantic vector results are strongest for narrow QA, but may omit the
@@ -19386,36 +19624,52 @@ async def _try_sealed_same_sku_knowledge_answer(
         return None
     explicit_missing_clause_allowed = _semantic_product_qa_allows_explicit_missing_clause(phase1_plan)
     missing_capability_instruction = (
-        "The semantic plan identifies multiple independently requested capabilities. When selected evidence directly supports one part but not another, "
-        "keep the supported part and say only that the supplied evidence does not directly confirm the remaining explicitly requested capability, "
-        "without presenting that as a negative product claim. Do not add a related specification, range, unit conversion, or general benefit to imply, "
-        "explain, or soften that separate unsupported condition unless it directly answers that same condition. "
+        "The semantic plan identifies multiple independently requested capabilities. Answer only the parts directly supported by the selected evidence. "
+        "Do not append a missing-data or cannot-confirm clause here; the compound coverage orchestrator owns unsupported child requests after each child "
+        "has been independently retrieved and grounded. Never use a related fact to imply support for a separate unsupported condition. "
         if explicit_missing_clause_allowed
         else "The semantic plan identifies one broad product request, not separate capability checks. Do not add an absence, missing-data, unsupported, "
         "or cannot-confirm sentence, and do not invent a second use case, criterion, or example scenario. "
     )
     runtime = customer_agent_planner_service._semantic_preplan_runtime_settings()
     try:
-        selected = {"indexes": [candidates[0]["index"]], "confidence": "high"} if len(candidates) == 1 else customer_agent_planner_service._extract_json_object(str(await customer_llm_service.chat_completion(
-            db,
-            messages=_same_sku_knowledge_evidence_selection_messages(
-                question,
-                sku,
-                candidates,
-                allow_partial_compound=explicit_missing_clause_allowed,
-            ),
-            temperature=0,
-            max_tokens=min(int(runtime["max_tokens"]), 120),
-            purpose="semantic_product_knowledge_evidence_selection",
-            api_model_override=runtime["model"],
-            response_format=runtime["response_format"],
-            thinking=runtime["thinking"],
-        ) or "")) or {}
+        selected = {"indexes": [candidates[0]["index"]], "confidence": "high"} if len(candidates) == 1 else {}
         selected_indexes = selected.get("indexes")
-        # Accept a prior one-item response shape during the prompt migration,
-        # but let the semantic selector, not lexical code, decide coverage.
-        if not isinstance(selected_indexes, list) and isinstance(selected.get("index"), int):
-            selected_indexes = [selected["index"]]
+        if len(candidates) > 1:
+            # Provider/model variance can make an otherwise relevant,
+            # same-SKU reranker return one transient low-confidence empty
+            # result. Retry only the identical sealed candidate set once;
+            # no route, entity, field, or evidence is changed between votes.
+            for _selection_attempt in range(2):
+                selected = customer_agent_planner_service._extract_json_object(str(
+                    await customer_llm_service.chat_completion(
+                        db,
+                        messages=_same_sku_knowledge_evidence_selection_messages(
+                            question,
+                            sku,
+                            candidates,
+                            allow_partial_compound=explicit_missing_clause_allowed,
+                        ),
+                        temperature=0,
+                        max_tokens=min(int(runtime["max_tokens"]), 120),
+                        purpose="semantic_product_knowledge_evidence_selection",
+                        api_model_override=runtime["model"],
+                        response_format=runtime["response_format"],
+                        thinking=runtime["thinking"],
+                    ) or ""
+                )) or {}
+                selected_indexes = selected.get("indexes")
+                # Accept a prior one-item response shape during the prompt
+                # migration, while relevance remains owned by the selector.
+                if not isinstance(selected_indexes, list) and isinstance(selected.get("index"), int):
+                    selected_indexes = [selected["index"]]
+                if (
+                    str(selected.get("confidence") or "").lower() in {"high", "medium"}
+                    and isinstance(selected_indexes, list)
+                    and selected_indexes
+                    and all(isinstance(index, int) for index in selected_indexes)
+                ):
+                    break
         # Evidence selection is semantic, not an authorization to state a
         # product fact.  A nonempty medium-confidence selection remains
         # cautiously useful for broad product questions because generation is
@@ -19453,6 +19707,16 @@ async def _try_sealed_same_sku_knowledge_answer(
                         "The upstream semantic selector has already accepted each supplied evidence item as directly relevant to the customer's complete question. "
                         "For a broad product overview or decision question, synthesize the concrete traits, stated capabilities, applicable scenes, "
                         "limitations, or trade-offs in that selected evidence; do not set answer to NO_EVIDENCE merely because no item repeats the customer's wording. "
+                        "For a suitability or decision question, when the evidence supplies relevant decision-support factors but does not explicitly state the "
+                        "requested final suitability judgement, present those concrete factors and say the records do not directly establish that final judgement. "
+                        "Do not claim suitable or unsuitable merely from adjacent traits. "
+                        "A listed target audience never excludes an unlisted audience and never proves that the product was not designed for them. "
+                        "For an unlisted audience, state the recorded audience and useful traits, then keep the final suitability judgement explicitly unconfirmed. "
+                        "You may make transparent conservative reasoning from an explicit numeric boundary in the evidence when the customer's stated condition "
+                        "unambiguously falls outside that boundary. State the recorded boundary and phrase the result as outside the recorded range or not recommended; "
+                        "never answer with cannot, impossible, or unsafe unless the evidence explicitly states that stronger conclusion. "
+                        "Do not turn boundary reasoning into an unrecorded product failure, safety guarantee, or hidden tolerance. "
+                        "Never both resolve a condition from accepted evidence and then say that same condition is unconfirmed or missing. "
                         "Only state that evidence does not directly confirm something when the customer explicitly asks a separate capability or condition. "
                         "For a broad overview or decision request, do not invent a missing use case, accessory, performance criterion, or example scenario. "
                         "Evidence that says suitable, adapted, or compatible with a condition supports only that attributed compatibility statement, never a safety, risk-free, certification, or 'no problem' guarantee without explicit evidence. "
@@ -19532,6 +19796,17 @@ async def _try_sealed_same_sku_knowledge_answer(
                             "Return only JSON: {answer:string,evidence_quotes:string[]}. Rewrite the answer using only the supplied same-product evidence. "
                             "Correct the previous draft when it says information is missing even though the evidence contains it. "
                             "Complete every independently requested part of the customer question; do not silently omit a part. "
+                            "For a suitability or decision question, when the evidence supplies relevant decision-support factors but does not explicitly state the "
+                            "requested final suitability judgement, present those concrete factors and say the records do not directly establish that final judgement. "
+                            "If the previous draft claimed suitable or unsuitable merely from adjacent traits, replace it with this bounded decision-support answer. "
+                            "A listed target audience never excludes an unlisted audience and never proves the product was not designed for them. "
+                            "Remove any such exclusion; state the recorded audience and traits, then keep the final suitability judgement explicitly unconfirmed. "
+                            "You may make transparent conservative reasoning from an explicit numeric boundary in the evidence when the customer's stated condition "
+                            "unambiguously falls outside that boundary. State the recorded boundary and phrase the result as outside the recorded range or not recommended; "
+                            "never answer with cannot, impossible, or unsafe unless the evidence explicitly states that stronger conclusion. "
+                            "If the prior draft used such a stronger word, replace it with the recorded range plus a bounded not-recommended conclusion. "
+                            "Do not turn boundary reasoning into an unrecorded product failure, safety guarantee, or hidden tolerance. "
+                            "Never both resolve a condition from accepted evidence and then say that same condition is unconfirmed or missing; remove the contradictory missing clause. "
                             "Only state that evidence does not directly confirm something when the customer explicitly asks a separate capability or condition; "
                             "for a broad overview or decision request, do not invent a missing use case, accessory, performance criterion, or example scenario. "
                             "For a question about what a set, package, box, or unboxing includes, state only components explicitly introduced by an includes, contains, or composition statement in the evidence. "
@@ -19568,24 +19843,35 @@ async def _try_sealed_same_sku_knowledge_answer(
         answer = str(repaired_payload.get("answer") or "").strip()
         answer, repaired_safety_bounded = _bound_unsupported_rag_safety_guarantee(answer, repaired_payload, evidence_content)
         safety_bounded = safety_bounded or repaired_safety_bounded
-        if (
-            not answer
-            or answer == "NO_EVIDENCE"
-            or not await _same_sku_rag_answer_is_grounded_after_quote_validation(
+        repaired_grounded = bool(
+            answer
+            and answer != "NO_EVIDENCE"
+            and await _same_sku_rag_answer_is_grounded_after_quote_validation(
                 db,
                 question,
                 answer,
                 repaired_payload,
                 evidence_content,
             )
-            or not await _same_sku_rag_answer_covers_question(
+        )
+        repaired_complete = bool(
+            repaired_grounded
+            and await _same_sku_rag_answer_covers_question(
                 db,
                 question,
                 answer,
                 evidence_content,
             )
-        ):
-            return None
+        )
+        if not repaired_grounded or not repaired_complete:
+            bounded_reference = (
+                _bounded_selected_evidence_reference_answer(repaired_payload, evidence_content)
+                or _bounded_selected_evidence_reference_answer(answer_payload, evidence_content)
+            )
+            if not bounded_reference:
+                return None
+            answer = bounded_reference
+            safety_bounded = True
     safe_missing["answer"] = answer
     safe_missing["confidence"] = "high"
     safe_missing["uncertainty"] = "resolved"
@@ -19663,6 +19949,25 @@ def _same_sku_rag_validated_quotes(payload: dict[str, Any], evidence: str) -> li
     if not all(len(quote) >= 4 and quote in normalized_evidence for quote in normalized_quotes):
         return []
     return cleaned_quotes
+
+
+def _bounded_selected_evidence_reference_answer(
+    payload: dict[str, Any],
+    evidence: str,
+) -> str:
+    """Render selected literal facts after an overclaiming draft is rejected.
+
+    This fallback never revives the rejected conclusion. It exposes only
+    provenance-validated snippets already selected as relevant by DeepSeek,
+    then states the remaining judgement boundary explicitly.
+    """
+    quotes = _same_sku_rag_validated_quotes(payload, evidence)[:3]
+    if not quotes:
+        return ""
+    return (
+        f"当前同 SKU 资料中可核验的参考信息是：{'；'.join(quotes)}。"
+        "这些资料可以作为判断参考，但未直接确认您询问的最终结论。"
+    )
 
 
 async def _same_sku_rag_answer_is_grounded_after_quote_validation(
@@ -19812,7 +20117,10 @@ async def _same_sku_rag_answer_covers_question(
     except Exception:
         return False
     verdict = customer_agent_planner_service._extract_json_object(str(raw or "")) or {}
-    return verdict.get("complete") is True
+    return (
+        verdict.get("complete") is True
+        and verdict.get("internally_consistent", True) is True
+    )
 
 
 def _same_sku_knowledge_grounding_messages(
@@ -19873,7 +20181,13 @@ def _same_sku_knowledge_strict_entailment_messages(
                 "do not reject it merely because no one source sentence repeats the combined wording. "
                 "Customer-facing framing such as what to know before taking a product out, whether it fits a plan, or what to consider is not itself a new product claim; "
                 "when the selected evidence directly states traits or applicable scenes, summarizing those facts for that framing is allowed. "
+                "For a suitability or decision request, a draft may present directly stated decision-support factors and explicitly say the records do not directly "
+                "establish the requested final suitability judgement. That evidence-boundary sentence is allowed; a definitive suitable/unsuitable conclusion still "
+                "requires direct evidence. "
                 "A related property, specification, numeric range, or general benefit is not enough to prove a distinct condition or conclusion. "
+                "One narrow exception is transparent conservative boundary reasoning: when the evidence explicitly states a numeric operating range and the customer's "
+                "named condition unambiguously falls outside it, the draft may state the recorded range and say that condition is outside the recorded range or is not recommended. "
+                "This exception does not permit an unrecorded failure mode, hidden tolerance, safety guarantee, or stronger cannot/unsafe claim. "
                 "A supplied same-SKU QA statement that the product has official warranty directly entails the bounded claim that the record states official warranty. "
                 "It never entails a warranty duration, coverage term, or any policy detail absent from that statement. "
                 "For a semantic compound question, a statement that the supplied evidence does not directly confirm a separately requested condition is allowed "
@@ -19902,10 +20216,11 @@ def _same_sku_knowledge_coverage_messages(
         {
             "role": "system",
             "content": (
-                "Return only JSON: {complete:boolean}. You are a coverage auditor, not a route planner or answer writer. "
+                "Return only JSON: {complete:boolean,internally_consistent:boolean}. You are a coverage auditor and internal-consistency auditor, not a route planner or answer writer. "
                 "Decide whether the draft addresses every independently requested product fact in the complete customer question. "
                 "A compound question is complete only when every part is either answered from the supplied same-product evidence "
                 "or explicitly and safely stated as not directly confirmed by that evidence. "
+                "Return false when a draft both resolves a condition and says that same condition is not confirmed or missing; that contradiction must be rewritten. "
                 "Return true when the draft both gives a directly evidenced part and names the other separately requested condition as not directly confirmed by the supplied evidence; "
                 "that is a complete evidence-boundary answer, not an unsupported negative product claim. "
                 "A factually grounded answer that silently omits an independent requested capability is incomplete. "

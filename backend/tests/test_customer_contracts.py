@@ -1207,10 +1207,12 @@ def test_semantic_comparison_adjudication_accepts_a_safe_no_choice_without_evide
 
 
 def test_semantic_comparison_adjudication_uses_the_same_constrained_semantic_model_runtime(monkeypatch):
-    captured = {}
+    captured = []
 
     async def fake_chat_completion(db, messages, **kwargs):
-        captured.update(kwargs, messages=messages)
+        captured.append({**kwargs, "messages": messages})
+        if kwargs.get("purpose") == "semantic_comparison_adjudication_grounding_review":
+            return '{"approved":true,"reasoning_summary":"the selected participant is directly supported and has no contrary evidence"}'
         return '{"selected_index":1,"evidence_fields":["usage_scene"],"reasoning_summary":"sealed evidence supports participant 2"}'
 
     monkeypatch.setattr(customer_service_service.customer_llm_service, "chat_completion", fake_chat_completion)
@@ -1229,10 +1231,50 @@ def test_semantic_comparison_adjudication_uses_the_same_constrained_semantic_mod
     )
 
     assert decision and decision["selected_index"] == 1
-    assert captured["api_model_override"] == "deepseek-v4-flash"
-    assert captured["response_format"] == {"type": "json_object"}
-    assert captured["thinking"] == {"type": "disabled"}
-    assert "minimal, directly sufficient evidence fields" in captured["messages"][0]["content"]
+    assert [item["purpose"] for item in captured] == [
+        "semantic_comparison_adjudication",
+        "semantic_comparison_adjudication_grounding_review",
+    ]
+    assert all(item["api_model_override"] == "deepseek-v4-flash" for item in captured)
+    assert all(item["response_format"] == {"type": "json_object"} for item in captured)
+    assert all(item["thinking"] == {"type": "disabled"} for item in captured)
+    assert "minimal, directly sufficient evidence fields" in captured[0]["messages"][0]["content"]
+
+
+def test_semantic_comparison_adjudication_removes_a_choice_rejected_by_independent_grounding_review(monkeypatch):
+    calls = []
+
+    async def fake_chat_completion(db, messages, **kwargs):
+        calls.append(kwargs.get("purpose"))
+        if kwargs.get("purpose") == "semantic_comparison_adjudication":
+            return '{"selected_index":1,"evidence_fields":["capacity","target_audience"],"reasoning_summary":"participant 2 looks larger"}'
+        return '{"approved":false,"reasoning_summary":"the selected participant is marked for 1-2 people, contrary to the four-person request"}'
+
+    monkeypatch.setattr(customer_service_service.customer_llm_service, "chat_completion", fake_chat_completion)
+    decision = asyncio.run(
+        customer_service_service._semantic_comparison_adjudication(
+            None,
+            question="四个人露营应该选哪个？",
+            participant_count=2,
+            evidence_packet={
+                "capacity": [
+                    {"participant_index": 0, "value": "3.7L+2.3L"},
+                    {"participant_index": 1, "value": "3L+1.7L"},
+                ],
+                "target_audience": [
+                    {"participant_index": 0, "value": "家庭露营"},
+                    {"participant_index": 1, "value": "1-2人露营者"},
+                ],
+            },
+        )
+    )
+
+    assert calls == [
+        "semantic_comparison_adjudication",
+        "semantic_comparison_adjudication_grounding_review",
+    ]
+    assert decision["selected_index"] is None
+    assert decision["evidence_fields"] == ["capacity", "target_audience"]
 
 
 def test_semantic_comparison_without_sealed_participants_fails_closed_before_legacy_compare_paths():
@@ -1465,8 +1507,6 @@ def test_semantic_preserves_a_complete_product_qa_plan_without_lexical_reclassif
                     "reasoning_summary": "A product fact without a formal field.",
                 }
             ),
-            json.dumps({"compound": False}),
-            json.dumps({"queries": ["why it is better than comparable products"]}),
         ]
     )
     prompts = []
@@ -1487,7 +1527,7 @@ def test_semantic_preserves_a_complete_product_qa_plan_without_lexical_reclassif
         )
     )
 
-    assert len(prompts) == 3
+    assert len(prompts) == 1
     assert result["canonical_fields"] == []
     assert result["evidence_kind"] == "product_qa"
 
