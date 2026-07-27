@@ -10292,6 +10292,11 @@ def _rehydrate_recommendation_rows_from_database(
 def _post_filter_recommendation_result(db: Session, question: str, agent_result: dict) -> dict:
     if not isinstance(agent_result, dict):
         return agent_result
+    original_visible_result_skus = [
+        str(sku or "").strip().upper()
+        for sku in (agent_result.get("result_skus") or [])
+        if str(sku or "").strip()
+    ]
     agent_result = _rehydrate_recommendation_rows_from_database(db, agent_result)
     recommendation_like_question = _looks_like_recommendation_request(question)
     explicit_recommendation_request = any(
@@ -10547,11 +10552,15 @@ def _post_filter_recommendation_result(db: Session, question: str, agent_result:
         return agent_result
 
     filtered_skus = [str(row.get("sku") or "").strip().upper() for row in qualified_rows if str(row.get("sku") or "").strip()]
-    original_skus = [
-        str(row.get("sku") or "").strip().upper()
-        for row in rows
-        if str(row.get("sku") or "").strip()
-    ]
+    original_skus = (
+        original_visible_result_skus
+        if has_sealed_semantic_contract and original_visible_result_skus
+        else [
+            str(row.get("sku") or "").strip().upper()
+            for row in rows
+            if str(row.get("sku") or "").strip()
+        ]
+    )
     agent_result["intent"] = "recommendation"
     agent_result["answer_type"] = "recommendation"
     agent_result["results"] = qualified_rows

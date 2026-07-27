@@ -3786,7 +3786,9 @@ def test_recommendation_post_filter_preserves_validated_deepseek_narrative_when_
     monkeypatch.setattr(
         customer_service_service.customer_recommendation_verification_contract,
         "select_recommendation_candidates",
-        lambda rows, verifications: list(rows),
+        lambda rows, verifications: [
+            row for row in rows if row.get("sku") == "CW-S10-A"
+        ],
     )
     monkeypatch.setattr(
         customer_service_service.customer_recommendation_verification_contract,
@@ -3801,12 +3803,30 @@ def test_recommendation_post_filter_preserves_validated_deepseek_narrative_when_
     monkeypatch.setattr(
         customer_service_service,
         "_is_service_pot_or_cookware_set_candidate",
-        lambda row: True,
+        lambda row: row.get("sku") == "CW-S10-A",
     )
     monkeypatch.setattr(
         customer_service_service,
         "_should_use_central_subject_recommendation",
         lambda **kwargs: True,
+    )
+    monkeypatch.setattr(
+        customer_service_service,
+        "_rehydrate_recommendation_rows_from_database",
+        lambda db, result: {
+            **result,
+            "results": [
+                {
+                    "sku": "CW-C95",
+                    "product_name_cn": "风暴炉pro-两用版",
+                    "category": "炉具、锅具",
+                    "heat_source": "酒精炉",
+                },
+                *result["results"],
+            ],
+            "result_skus": ["CW-C95", "CW-S10-A"],
+            "candidate_skus": ["CW-C95", "CW-S10-A"],
+        },
     )
 
     answer = "如果您要搭配酒精炉，可以看看激川单锅；资料标注它支持酒精炉。"
@@ -3825,7 +3845,7 @@ def test_recommendation_post_filter_preserves_validated_deepseek_narrative_when_
                 "heat_source": "酒精炉；气炉",
             }],
             "result_skus": ["CW-S10-A"],
-            "candidate_skus": ["CW-S10-A"],
+            "candidate_skus": ["CW-C95", "CW-S10-A"],
             "answer_metadata": {
                 "source": "validated_semantic_preplan_then_same_sku_verification",
                 "recommendation_contract": {
