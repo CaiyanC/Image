@@ -1320,6 +1320,128 @@ def test_same_sku_rag_generation_uses_semantically_selected_broad_evidence(monke
     assert result["debug"]["agent_mode"] == "sealed_same_sku_knowledge_rag"
 
 
+def test_same_sku_structured_best_effort_answers_only_from_selected_evidence(monkeypatch):
+    product = SimpleNamespace(
+        sku="BEST-100",
+        product_name_cn="测试套锅",
+        product_name_en="",
+    )
+    monkeypatch.setattr(
+        customer_service_service,
+        "_phase1_product_bundle_by_ref",
+        lambda *_args, **_kwargs: (product, None, None, None),
+    )
+    monkeypatch.setattr(
+        customer_service_service,
+        "_structured_product_field_evidence",
+        lambda field, **_kwargs: (
+            ("1-2人露营者", "business.target_audience")
+            if field == "target_audience"
+            else ("", None)
+        ),
+    )
+    evidence_id = customer_service_service.customer_evidence_bundle.stable_customer_evidence_id(
+        namespace="structured",
+        sku="BEST-100",
+        value="target_audience|1-2人露营者",
+    )
+
+    async def fake_completion(*_args, **_kwargs):
+        return json.dumps({
+            "answer": "这款适合两人出行。",
+            "evidence_ids": [evidence_id],
+            "evidence_quotes": ["1-2人露营者"],
+        }, ensure_ascii=False)
+
+    async def grounded(*_args, **_kwargs):
+        return True
+
+    monkeypatch.setattr(
+        customer_service_service.customer_llm_service,
+        "chat_completion",
+        fake_completion,
+    )
+    monkeypatch.setattr(
+        customer_service_service,
+        "_same_sku_rag_answer_is_grounded_after_quote_validation",
+        grounded,
+    )
+
+    import asyncio
+
+    result = asyncio.run(
+        customer_service_service._try_same_sku_structured_best_effort_answer(
+            SimpleNamespace(),
+            question="这款两个人出行够用吗？",
+            safe_missing={
+                "result_skus": ["BEST-100"],
+                "results": [{"sku": "BEST-100", "product_name_cn": "测试套锅"}],
+                "debug": {"agent_mode": "sealed_product_qa_safe_missing"},
+            },
+            semantic_preplan={"evidence_kind": "product_qa"},
+        )
+    )
+
+    assert result is not None
+    assert result["answer"] == "这款适合两人出行。"
+    assert result["result_skus"] == ["BEST-100"]
+    assert result["evidence"][0]["sku"] == "BEST-100"
+    assert result["debug"]["agent_mode"] == "sealed_same_sku_structured_best_effort"
+
+
+def test_same_sku_structured_best_effort_rejects_adjacent_evidence(monkeypatch):
+    product = SimpleNamespace(
+        sku="BEST-200",
+        product_name_cn="测试磨豆器",
+        product_name_en="",
+    )
+    monkeypatch.setattr(
+        customer_service_service,
+        "_phase1_product_bundle_by_ref",
+        lambda *_args, **_kwargs: (product, None, None, None),
+    )
+    monkeypatch.setattr(
+        customer_service_service,
+        "_structured_product_field_evidence",
+        lambda field, **_kwargs: (
+            ("不锈钢", "specs.material")
+            if field == "material"
+            else ("", None)
+        ),
+    )
+
+    async def fake_completion(*_args, **_kwargs):
+        return json.dumps({
+            "answer": "NO_EVIDENCE",
+            "evidence_ids": [],
+            "evidence_quotes": [],
+        })
+
+    monkeypatch.setattr(
+        customer_service_service.customer_llm_service,
+        "chat_completion",
+        fake_completion,
+    )
+
+    import asyncio
+
+    result = asyncio.run(
+        customer_service_service._try_same_sku_structured_best_effort_answer(
+            SimpleNamespace(),
+            question="这款手摇起来费力吗？",
+            safe_missing={
+                "sku": "BEST-200",
+                "result_skus": ["BEST-200"],
+                "results": [{"sku": "BEST-200", "product_name_cn": "测试磨豆器"}],
+                "debug": {"agent_mode": "sealed_product_qa_safe_missing"},
+            },
+            semantic_preplan={"evidence_kind": "product_qa"},
+        )
+    )
+
+    assert result is None
+
+
 def test_same_sku_rag_keeps_supported_part_of_a_compound_question(monkeypatch):
     """One unverified sub-question must not erase another sealed product fact."""
     safe_missing = {

@@ -286,6 +286,173 @@ def _merge_supplemental_product_qa_into_field_answer(
     return agent_result
 
 
+async def _try_same_sku_structured_best_effort_answer(
+    db: Session,
+    *,
+    question: str,
+    safe_missing: dict,
+    semantic_preplan: dict | None,
+) -> dict | None:
+    """Answer an open product question from directly relevant structured facts.
+
+    DeepSeek decides relevance and wording. Deterministic code only supplies
+    customer-visible fields for the already sealed SKU and validates that the
+    resulting answer cites those exact facts.
+    """
+    if str((semantic_preplan or {}).get("evidence_kind") or "") != "product_qa":
+        return None
+    sku = str(safe_missing.get("sku") or "").strip().upper()
+    if not sku:
+        sealed_skus = {
+            str(item or "").strip().upper()
+            for item in (safe_missing.get("result_skus") or [])
+            if str(item or "").strip()
+        }
+        sealed_skus.update(
+            str(row.get("sku") or "").strip().upper()
+            for row in (safe_missing.get("results") or [])
+            if isinstance(row, dict) and str(row.get("sku") or "").strip()
+        )
+        if len(sealed_skus) == 1:
+            sku = next(iter(sealed_skus))
+    if not sku:
+        return None
+    product, specs, business, content = _phase1_product_bundle_by_ref(db, sku)
+    if product is None or str(product.sku or "").strip().upper() != sku:
+        return None
+    excluded_fields = {
+        "sku", "barcode", "product_name_cn", "product_name_en",
+        "content_title", "content_description", "bullet_points",
+        "search_keywords", "manual", "inventory", "price",
+    }
+    raw_items: list[dict[str, Any]] = []
+    for field in sorted(customer_field_contract.FORMAL_DETAIL_FIELDS):
+        if field in excluded_fields or not customer_field_contract.is_supported_detail_field(field):
+            continue
+        value, source = _structured_product_field_evidence(
+            field,
+            db=db,
+            product=product,
+            specs=specs,
+            business=business,
+            content=content,
+        )
+        if not value or not source:
+            continue
+        raw_items.append({
+            "evidence_id": customer_evidence_bundle.stable_customer_evidence_id(
+                namespace="structured",
+                sku=sku,
+                value=f"{field}|{value}",
+            ),
+            "sku": sku,
+            "source_type": "structured_field",
+            "source": str(source),
+            "field": field,
+            "value": str(value)[:800],
+            "visibility": customer_evidence_bundle.CUSTOMER_VISIBLE,
+        })
+    bundle = customer_evidence_bundle.build_customer_evidence_bundle(
+        sku=sku,
+        product_name=product.product_name_cn or product.product_name_en or sku,
+        evidence_items=raw_items,
+    )
+    if not bundle.items:
+        return None
+    candidates = [
+        {
+            "evidence_id": item.evidence_id,
+            "field": item.field,
+            "field_label": customer_field_contract.product_detail_field_label(item.field) or item.field,
+            "value": item.value,
+        }
+        for item in bundle.items
+    ]
+    runtime = customer_agent_planner_service._semantic_preplan_runtime_settings()
+    try:
+        raw = await customer_llm_service.chat_completion(
+            db,
+            messages=[
+                {
+                    "role": "system",
+                    "content": (
+                        "Return only JSON: {answer:string,evidence_ids:string[],evidence_quotes:string[]}. "
+                        "Answer the complete customer question only when one or more supplied same-product "
+                        "structured facts directly support it. You may combine multiple directly relevant "
+                        "facts for a bounded suitability judgement, but never infer safety, durability, "
+                        "compatibility, performance, ease of use, or a guarantee from merely adjacent facts. "
+                        "Use NO_EVIDENCE when the facts are only related rather than sufficient. "
+                        "Use only supplied facts, keep uncertainty explicit, and copy one to three literal "
+                        "evidence quotes of at most 60 characters."
+                    ),
+                },
+                {
+                    "role": "user",
+                    "content": json.dumps(
+                        {"question": question, "same_sku": sku, "candidates": candidates},
+                        ensure_ascii=False,
+                    ),
+                },
+            ],
+            temperature=0,
+            max_tokens=min(int(runtime["max_tokens"]), 360),
+            purpose="same_sku_structured_best_effort_answer",
+            api_model_override=runtime["model"],
+            response_format=runtime["response_format"],
+            thinking=runtime["thinking"],
+        )
+    except Exception:
+        return None
+    payload = customer_agent_planner_service._extract_json_object(str(raw or "")) or {}
+    answer = str(payload.get("answer") or "").strip()
+    evidence_ids = payload.get("evidence_ids")
+    if not answer or answer == "NO_EVIDENCE" or not isinstance(evidence_ids, list) or not evidence_ids:
+        return None
+    selected_id_set = {str(item or "").strip() for item in evidence_ids if str(item or "").strip()}
+    selected_items = [item for item in bundle.items if item.evidence_id in selected_id_set]
+    if len(selected_items) != len(selected_id_set):
+        return None
+    evidence_content = "\n".join(item.value for item in selected_items)
+    if (
+        not _same_sku_rag_answer_has_selected_quotes(payload, evidence_content)
+        or not await _same_sku_rag_answer_is_grounded_after_quote_validation(
+            db, question, answer, payload, evidence_content
+        )
+    ):
+        return None
+    result = dict(safe_missing)
+    result.update({
+        "answer": answer,
+        "confidence": "high",
+        "uncertainty": "resolved",
+        "evidence": [
+            {
+                "evidence_id": item.evidence_id,
+                "sku": sku,
+                "field_label": customer_field_contract.product_detail_field_label(item.field) or item.field,
+                "value": item.value,
+                "source_type": "structured_field",
+                "source_layer": "structured",
+                "matched_by": "semantic_same_sku_structured_evidence",
+            }
+            for item in selected_items
+        ],
+        "sources": [{"type": "product_field", "label": "同 SKU 商品资料", "sku": sku}],
+        "answer_metadata": {
+            "contract_field_type": "product_qa",
+            "evidence_status": "matched",
+            "evidence_sku": sku,
+            "evidence_skus": [sku],
+            "evidence_bundle_skus": [sku],
+            "evidence_ids": [item.evidence_id for item in selected_items],
+            "evidence_source": "same_sku_structured_best_effort",
+        },
+        "skip_polish": False,
+    })
+    result.setdefault("debug", {})["agent_mode"] = "sealed_same_sku_structured_best_effort"
+    return result
+
+
 async def _save_agent_result_and_return(
     db: Session,
     *,
@@ -299,18 +466,28 @@ async def _save_agent_result_and_return(
 ) -> dict:
     stage_start = perf_counter()
     original_debug = agent_result.get("debug") if isinstance(agent_result.get("debug"), dict) else {}
-    if str(original_debug.get("agent_mode") or "") == "sealed_product_qa_safe_missing":
-        rows = [row for row in (agent_result.get("results") or []) if isinstance(row, dict)]
-        if rows:
-            row = rows[0]
-            sku = str(row.get("sku") or "").strip().upper()
-            name = str(row.get("product_name_cn") or row.get("product_name_en") or sku).strip()
-            agent_result["answer"] = (
-                f"{name}（{sku}）：当前同 SKU 资料中暂未找到可直接确认这个问题的产品问答内容。"
-            )
-        agent_result["skip_polish"] = True
     persisted_plan = original_debug.get("plan") if isinstance(original_debug.get("plan"), dict) else {}
     effective_semantic_preplan = semantic_preplan or persisted_plan.get("semantic_preplan") or {}
+    if str(original_debug.get("agent_mode") or "") == "sealed_product_qa_safe_missing":
+        recovered = await _try_same_sku_structured_best_effort_answer(
+            db,
+            question=question,
+            safe_missing=agent_result,
+            semantic_preplan=effective_semantic_preplan,
+        )
+        if recovered is not None:
+            agent_result = recovered
+            original_debug = agent_result.get("debug") if isinstance(agent_result.get("debug"), dict) else {}
+        else:
+            rows = [row for row in (agent_result.get("results") or []) if isinstance(row, dict)]
+            if rows:
+                row = rows[0]
+                sku = str(row.get("sku") or "").strip().upper()
+                name = str(row.get("product_name_cn") or row.get("product_name_en") or sku).strip()
+                agent_result["answer"] = (
+                    f"{name}（{sku}）：当前同 SKU 资料中暂未找到可直接确认这个问题的产品问答内容。"
+                )
+            agent_result["skip_polish"] = True
     supplemental_query = str((effective_semantic_preplan or {}).get("supplemental_qa_evidence_query") or "").strip()
     if not ((agent_result.get("debug") or {}).get("timing")) or not ((agent_result.get("answer_metadata") or {}).get("timing")):
         existing_debug = agent_result.get("debug") if isinstance(agent_result.get("debug"), dict) else {}
