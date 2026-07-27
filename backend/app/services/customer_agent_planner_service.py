@@ -684,9 +684,14 @@ def _validate_semantic_preplan(data: dict[str, Any] | None, *, raw_content: str 
         # still required to occur in the customer turn and is later sealed by
         # EntityResolutionContract, so it never accepts an LLM SKU decision.
         if isinstance(raw_entity, dict):
-            if str(raw_entity.get("entity_type") or "").strip() != "product":
+            entity_type = str(
+                raw_entity.get("entity_type") or raw_entity.get("type") or ""
+            ).strip()
+            if entity_type != "product":
                 continue
             candidate = raw_entity.get("entity_value")
+            if candidate is None:
+                candidate = raw_entity.get("name")
         else:
             candidate = raw_entity
         if not isinstance(candidate, str):

@@ -488,6 +488,35 @@ def test_semantic_comparison_preserves_explicit_non_decision_flag():
     assert preplan["decision_requested"] is False
 
 
+def test_semantic_comparison_normalizes_provider_name_type_entity_objects():
+    """A schema-equivalent provider entity object must retain comparison participants."""
+    preplan = customer_agent_planner_service._validate_semantic_preplan(
+        {
+            "route_family": "comparison",
+            "route_hint": "comparison",
+            "question_type": "comparison",
+            "subtype": "relation_comparison",
+            "entities": [
+                {"name": "CW-C83", "type": "product"},
+                {"name": "CW-C95", "type": "product"},
+            ],
+            "subject_text": "CW-C83 and CW-C95",
+            "canonical_fields": ["material"],
+            "evidence_kind": "structured_field",
+            "decision_requested": False,
+            "confidence": "high",
+            "ambiguity": False,
+            "evidence_required": True,
+            "context_usage": "none",
+            "reasoning_summary": "Compare the recorded materials for two products.",
+        }
+    )
+
+    assert preplan["fallback_reason"] == ""
+    assert preplan["entities"] == ["CW-C83", "CW-C95"]
+    assert preplan["canonical_fields"] == ["material"]
+
+
 def test_semantic_comparison_preplan_rejects_missing_participants():
     preplan = customer_agent_planner_service._validate_semantic_preplan(
         {
