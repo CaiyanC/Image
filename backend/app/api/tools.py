@@ -53,6 +53,11 @@ def _precheck_draft(run: ToolRun) -> dict:
         roles = recognize_ecommerce_input_files(tool_run_service.input_directory(run))
     except ToolRuntimeError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+    roles.update(
+        str(item.get("manual_role"))
+        for item in (run.input_files or [])
+        if item.get("manual_role") in ecommerce_precheck_service.WORKFLOW_ROLE_ORDER[mode]
+    )
     result = ecommerce_precheck_service.build_precheck(mode, roles)
     result["recognized_roles"] = sorted(roles)
     return result
@@ -81,15 +86,21 @@ def create_ecommerce_data_fill_draft(
 def add_ecommerce_data_fill_draft_files(
     draft_id: str,
     files: list[UploadFile] = File(...),
+    role: str | None = Form(None),
     current_user: User = Depends(require_permission(ECOMMERCE_DATA_FILL_PERMISSION)),
     db: Session = Depends(get_db),
 ):
     draft = _ensure_draft_access(db, draft_id, current_user.id)
     if not files or len(draft.input_files or []) + len(files) > tool_run_service.MAX_UPLOAD_FILES:
         raise HTTPException(status_code=400, detail="Invalid number of Excel files")
-    draft.input_files = [*list(draft.input_files or []), *[
-        tool_run_service.save_input_file(draft, filename=file.filename, source=file.file) for file in files
-    ]]
+    mode = str((draft.parameters or {}).get("mode", ""))
+    if role and role not in ecommerce_precheck_service.WORKFLOW_ROLE_ORDER.get(mode, ()):
+        raise HTTPException(status_code=400, detail="Invalid spreadsheet file role")
+    additions = [tool_run_service.save_input_file(draft, filename=file.filename, source=file.file) for file in files]
+    for item in additions:
+        if role:
+            item["manual_role"] = role
+    draft.input_files = [*list(draft.input_files or []), *additions]
     db.commit()
     db.refresh(draft)
     return draft

@@ -126,7 +126,7 @@ export interface ToolRun {
   tool_key: string
   status: 'queued' | 'running' | 'succeeded' | 'failed'
   parameters: Record<string, unknown>
-  input_files: Array<{ display_name: string; relative_path: string; size: number }>
+  input_files: Array<{ display_name: string; relative_path: string; size: number; manual_role?: string }>
   output_files: Array<{ display_name: string; relative_path: string; size: number }>
   error_message?: string | null
   created_at: string
@@ -583,9 +583,10 @@ export const api = {
         for (const file of files) formData.append('files', file)
         return request<ToolRun>('/tools/ecommerce-data-fill/drafts', { method: 'POST', body: formData })
       },
-      addDraftFiles: (draftId: string, files: File[]) => {
+      addDraftFiles: (draftId: string, files: File[], role?: string) => {
         const formData = new FormData()
         for (const file of files) formData.append('files', file)
+        if (role) formData.append('role', role)
         return request<ToolRun>(`/tools/ecommerce-data-fill/drafts/${encodeURIComponent(draftId)}/files`, { method: 'POST', body: formData })
       },
       precheckDraft: (draftId: string) => request<EcommercePrecheck>(`/tools/ecommerce-data-fill/drafts/${encodeURIComponent(draftId)}/precheck`),
