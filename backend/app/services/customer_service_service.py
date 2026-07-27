@@ -1766,6 +1766,73 @@ def _semantic_pairwise_missing_criterion_result(
     }
 
 
+def _semantic_pairwise_realtime_fields_result(
+    rows: list[dict[str, Any]],
+    entity_contracts: list[dict[str, Any]],
+    field_types: list[str],
+) -> dict[str, Any]:
+    """Preserve a sealed realtime comparison instead of choosing on unrelated data."""
+    canonical_fields = list(dict.fromkeys(
+        str(field or "").strip()
+        for field in field_types
+        if str(field or "").strip()
+    ))
+    candidate_skus = [
+        str(row.get("sku") or "").strip().upper()
+        for row in rows
+        if str(row.get("sku") or "").strip()
+    ]
+    labels = [
+        f"{str(row.get('product_name_cn') or row.get('product_name_en') or row.get('sku') or '').strip()}（{sku}）"
+        for row, sku in zip(rows, candidate_skus)
+    ]
+    products_text = "、".join(label for label in labels if label) or "这两款商品"
+    if canonical_fields == ["price"]:
+        answer = (
+            f"我已锁定你在比较的{products_text}，但当前资料没有维护这两款的实时价格，"
+            "因此不能判断哪款更便宜。请以同一平台、同一时间的实际售价和优惠为准。"
+        )
+    elif canonical_fields == ["inventory"]:
+        answer = (
+            f"我已锁定你在比较的{products_text}，但当前资料没有维护这两款的实时库存，"
+            "因此不能判断哪款现货更充足。请以平台或店铺页面为准。"
+        )
+    else:
+        field_labels = [
+            customer_field_contract.product_detail_field_label(field) or field
+            for field in canonical_fields
+        ]
+        answer = (
+            f"我已锁定你在比较的{products_text}，但当前资料没有维护可核验的"
+            f"{'、'.join(field_labels)}，因此不能据此指定其中一款。"
+        )
+    return {
+        "intent": "compare_products",
+        "answer_type": "comparison",
+        "answer": answer,
+        "results": rows,
+        "result_skus": candidate_skus,
+        "candidate_skus": candidate_skus,
+        "sources": [],
+        "answer_metadata": {
+            "source": "semantic_pairwise_realtime_field_boundary",
+            "contract_field_types": canonical_fields,
+            "evidence_status": "realtime_source_unavailable",
+            "final_choice_sku": None,
+        },
+        "debug": {
+            "agent_mode": "semantic_pairwise_realtime_field_boundary",
+            "field_contract": {
+                "field_type": canonical_fields[0] if len(canonical_fields) == 1 else "",
+                "canonical_fields": canonical_fields,
+                "source": "validated_semantic_preplan",
+            },
+            "entity_resolution_contracts": entity_contracts,
+        },
+        "skip_polish": True,
+    }
+
+
 def _invalid_semantic_pairwise_preplan_clarification_result(
     question: str,
     phase1_plan: dict[str, Any] | None,
@@ -6511,12 +6578,15 @@ def _comparison_adjudication_evidence(
     *,
     db: Session,
     bundles: list[tuple[Product | None, ProductSpecs | None, ProductBusiness | None, ProductContent | None]],
+    include_partial: bool = False,
 ) -> dict[str, list[dict[str, Any]]]:
     """Build an opaque, same-SKU evidence packet for semantic comparison.
 
-    Product identities never enter this packet.  A field is present only if
-    every sealed participant has a validated value for it, so the model cannot
-    fill a gap with product-name assumptions or partial-record inference.
+    Product identities never enter this packet. By default a field is present
+    only when every sealed participant has a validated value. A decision
+    adjudicator may explicitly request partial fields so an observed hard
+    contradiction is not discarded; absent participant rows remain unknown
+    and never become positive evidence.
     """
     candidates = sorted(
         field
@@ -6540,6 +6610,8 @@ def _comparison_adjudication_evidence(
                 content=content,
             )
             if not value:
+                if include_partial:
+                    continue
                 rows = []
                 break
             rows.append(
@@ -6550,7 +6622,7 @@ def _comparison_adjudication_evidence(
                     "source": str(source or "").strip(),
                 }
             )
-        if len(rows) == len(bundles):
+        if len(rows) == len(bundles) or (include_partial and rows):
             packet[field] = rows
     return packet
 
@@ -7296,6 +7368,8 @@ async def _semantic_comparison_adjudication(
                 "Return only JSON. You are a semantic comparison adjudicator, not a product-answer writer. "
                 "Use only the supplied sealed_evidence. Ignore product names, version labels, SKU-like text, and any facts outside that evidence. "
                 "Choose selected_index only when the evidence directly supports one participant for the user's stated need; otherwise use null. "
+                "A field may contain rows for only some participants: a missing participant row means unknown, never positive evidence. "
+                "A bounded relative choice is allowed when another participant is explicitly contradicted by a stated hard requirement and the selected participant has separate directly supportive evidence for the need; never choose merely because its requested field is missing. "
                 "evidence_fields must list only the minimal, directly sufficient evidence fields actually used; do not pad the list with merely related fields. Never return a SKU, product name, answer text, or copied evidence value. "
                 "Whether or not a winner is supported, evidence_fields must select one to four complete fields that most directly answer the requested comparison when such evidence exists; use an empty list only when no supplied field is directly relevant. Omit merely incidental differences. "
                 "Schema: {\"selected_index\":0|1|null,\"evidence_fields\":[\"canonical_field\"],\"reasoning_summary\":\"brief audit reason\"}."
@@ -7333,16 +7407,25 @@ async def _semantic_comparison_adjudication(
     )
     if decision is None or decision.get("selected_index") is None:
         return decision
+    review_packet = {
+        field: model_packet[field]
+        for field in decision["evidence_fields"]
+        if field in model_packet
+    }
     review_messages = [
         {
             "role": "system",
             "content": (
-                "Return only JSON. Independently verify a proposed product-comparison choice using only "
-                "the customer question and sealed_evidence. approved may be true only when the selected "
-                "participant is directly supported for the exact requested need and no supplied evidence "
-                "contradicts that choice. A larger number, more fields, or merely related usage text is not "
-                "sufficient by itself. Never use product names or facts outside the packet. "
-                "Schema: {\"approved\":boolean,\"reasoning_summary\":\"brief audit reason\"}."
+                "Return only JSON. Audit the grounding of a proposed semantic product-comparison choice using only "
+                "the customer question and sealed_evidence. Do not independently re-decide which participant is more suitable; "
+                "the preceding semantic adjudicator owns that decision. Reject only when the proposed evidence fields are absent, "
+                "irrelevant to the requested need, or directly contradict the proposed choice. A larger number, more fields, or "
+                "merely related usage text is not sufficient by itself. A missing participant row means unknown, never support. "
+                "A bounded relative choice may be approved when another participant is explicitly contradicted by a stated hard "
+                "requirement and the selected participant has separate directly supportive evidence; missing data alone can never "
+                "justify the choice. Do not require an exact requested-value row for the selected participant when those two "
+                "bounded-relative conditions are both satisfied. Never use product names or facts outside the packet. "
+                "Return only JSON: {\"approved\":boolean}. Do not explain."
             ),
         },
         {
@@ -7351,7 +7434,7 @@ async def _semantic_comparison_adjudication(
                 {
                     "question": question,
                     "participant_count": participant_count,
-                    "sealed_evidence": model_packet,
+                    "sealed_evidence": review_packet,
                     "proposed_decision": {
                         "selected_index": decision["selected_index"],
                         "evidence_fields": decision["evidence_fields"],
@@ -7366,7 +7449,7 @@ async def _semantic_comparison_adjudication(
             db,
             messages=review_messages,
             temperature=0,
-            max_tokens=160,
+            max_tokens=40,
             purpose="semantic_comparison_adjudication_grounding_review",
             api_model_override=str(settings.SEMANTIC_PREPLAN_MODEL or "").strip() or None,
             response_format={"type": "json_object"} if settings.SEMANTIC_PREPLAN_JSON_MODE else None,
@@ -7824,6 +7907,21 @@ async def _phase1_compare_choice_result(db: Session, plan: dict) -> dict | None:
             "debug": {"agent_mode": "semantic_pairwise_product_qa_contract" if complete else "semantic_pairwise_product_qa_insufficient", "field_contract": {"field_type": "product_qa", "canonical_fields": ["product_qa"], "source": "validated_semantic_preplan"}, "entity_resolution_contracts": plan.get("semantic_comparison_entity_contracts")},
             "skip_polish": True,
         }
+    semantic_requested_fields = list(dict.fromkeys(
+        customer_field_contract.semantic_preplan_field_type(field)
+        for field in (semantic_preplan.get("canonical_fields") or [])
+        if customer_field_contract.semantic_preplan_field_type(field)
+    ))
+    if (
+        plan.get("semantic_comparison_entity_contracts")
+        and semantic_requested_fields
+        and all(field in {"price", "inventory"} for field in semantic_requested_fields)
+    ):
+        return _semantic_pairwise_realtime_fields_result(
+            rows,
+            list(plan.get("semantic_comparison_entity_contracts") or []),
+            semantic_requested_fields,
+        )
     if (
         plan.get("semantic_comparison_entity_contracts")
         and plan.get("must_make_choice")
@@ -7862,15 +7960,43 @@ async def _phase1_compare_choice_result(db: Session, plan: dict) -> dict | None:
         plan.get("semantic_comparison_entity_contracts")
         and len(requested_comparison_fields) > 1
     ):
-        evidence_packet = _comparison_adjudication_evidence(db=db, bundles=bundles)
-        complete_fields = [field for field in requested_comparison_fields if field in evidence_packet]
+        evidence_packet = _comparison_adjudication_evidence(
+            db=db,
+            bundles=bundles,
+            include_partial=True,
+        )
+        complete_fields = [
+            field
+            for field in requested_comparison_fields
+            if len(evidence_packet.get(field) or []) == len(bundles)
+        ]
         sources: list[dict[str, Any]] = []
         lines: list[str] = []
         for field in requested_comparison_fields:
             label = customer_field_contract.product_detail_field_label(field) or field
             evidence_rows = evidence_packet.get(field) or []
             if len(evidence_rows) != len(bundles):
-                lines.append(f"- {label}：当前至少一款商品未维护可直接比较的同 SKU 资料，不能据此推断。")
+                values_by_index = {int(item["participant_index"]): item for item in evidence_rows}
+                rendered = []
+                for index, bundle in enumerate(bundles):
+                    product = bundle[0]
+                    if product is None:
+                        continue
+                    sku = str(product.sku or "").strip().upper()
+                    name = str(product.product_name_cn or product.product_name_en or sku).strip()
+                    item = values_by_index.get(index)
+                    if item is None:
+                        rendered.append(f"{name}（{sku}）：当前未维护该项资料。")
+                        continue
+                    rendered.append(f"{name}（{sku}）：{item['value']}。")
+                    sources.append({
+                        "type": "product_field",
+                        "sku": sku,
+                        "field": field,
+                        "source": item["source"],
+                        "value": item["value"],
+                    })
+                lines.append(f"- {label}：" + " ".join(rendered))
                 continue
             values_by_index = {int(item["participant_index"]): item for item in evidence_rows}
             rendered = []
@@ -7884,19 +8010,14 @@ async def _phase1_compare_choice_result(db: Session, plan: dict) -> dict | None:
                 rendered.append(f"{name}（{sku}）：{item['value']}。")
                 sources.append({"type": "product_field", "sku": sku, "field": field, "source": item["source"], "value": item["value"]})
             lines.append(f"- {label}：" + " ".join(rendered))
-        complete_evidence_packet = {
-            field: evidence_rows
-            for field, evidence_rows in evidence_packet.items()
-            if len(evidence_rows) == len(bundles)
-        }
         adjudication = (
             await _semantic_comparison_adjudication(
                 db,
                 question=str(plan.get("raw_question") or ""),
-                evidence_packet=complete_evidence_packet,
+                evidence_packet=evidence_packet,
                 participant_count=len(bundles),
             )
-            if plan.get("must_make_choice") and complete_evidence_packet
+            if plan.get("must_make_choice") and evidence_packet
             else None
         )
         selected_index = adjudication.get("selected_index") if isinstance(adjudication, dict) else None
@@ -7913,11 +8034,11 @@ async def _phase1_compare_choice_result(db: Session, plan: dict) -> dict | None:
                 else []
             )
             if str(item or "").strip() not in requested_comparison_fields
-            and str(item or "").strip() in complete_evidence_packet
+            and str(item or "").strip() in evidence_packet
         ]:
             label = customer_field_contract.product_detail_field_label(field) or field
             rendered = []
-            for item in complete_evidence_packet[field]:
+            for item in evidence_packet[field]:
                 participant_index = int(item["participant_index"])
                 product = bundles[participant_index][0]
                 if product is None:
@@ -7937,7 +8058,13 @@ async def _phase1_compare_choice_result(db: Session, plan: dict) -> dict | None:
         if selected_sku:
             selected_product = bundles[int(selected_index)][0]
             selected_name = str(selected_product.product_name_cn or selected_product.product_name_en or selected_sku).strip()
-            lines.append(f"基于上述已核验的同 SKU 资料，更适合该需求的是{selected_name}（{selected_sku}）。")
+            if len(complete_fields) == len(requested_comparison_fields):
+                lines.append(f"基于上述已核验的同 SKU 资料，更适合该需求的是{selected_name}（{selected_sku}）。")
+            else:
+                lines.append(
+                    f"在这两款现有可核验资料范围内，相对更符合该需求的是"
+                    f"{selected_name}（{selected_sku}）；未维护的字段仍按未知处理。"
+                )
         elif plan.get("must_make_choice"):
             lines.append("由于比较条件的同 SKU 资料不完整，当前不能据此指定其中一款更适合。")
         result_skus = [str(row.get("sku") or "").strip().upper() for row in rows if str(row.get("sku") or "").strip()]

@@ -1225,7 +1225,11 @@ def test_semantic_comparison_adjudication_uses_the_same_constrained_semantic_mod
                 "usage_scene": [
                     {"participant_index": 0, "value": "单人露营"},
                     {"participant_index": 1, "value": "家庭野餐"},
-                ]
+                ],
+                "capacity": [
+                    {"participant_index": 0, "value": "1L"},
+                    {"participant_index": 1, "value": "2L"},
+                ],
             },
         )
     )
@@ -1239,6 +1243,57 @@ def test_semantic_comparison_adjudication_uses_the_same_constrained_semantic_mod
     assert all(item["response_format"] == {"type": "json_object"} for item in captured)
     assert all(item["thinking"] == {"type": "disabled"} for item in captured)
     assert "minimal, directly sufficient evidence fields" in captured[0]["messages"][0]["content"]
+    assert "a missing participant row means unknown, never positive evidence" in captured[0]["messages"][0]["content"]
+    assert "another participant is explicitly contradicted by a stated hard requirement" in captured[0]["messages"][0]["content"]
+    assert "Return only JSON: {\"approved\":boolean}. Do not explain." in captured[1]["messages"][0]["content"]
+    assert "Do not require an exact requested-value row for the selected participant" in captured[1]["messages"][0]["content"]
+    assert "Do not independently re-decide which participant is more suitable" in captured[1]["messages"][0]["content"]
+    assert captured[1]["max_tokens"] == 40
+    review_payload = json.loads(captured[1]["messages"][1]["content"])
+    assert set(review_payload["sealed_evidence"]) == {"usage_scene"}
+
+
+def test_comparison_adjudication_can_include_partial_fields_without_treating_missing_as_a_value(monkeypatch):
+    first = SimpleNamespace(sku="SKU-A")
+    second = SimpleNamespace(sku="SKU-B")
+    bundles = [(first, None, None, None), (second, None, None, None)]
+
+    def structured(field, **kwargs):
+        sku = kwargs["product"].sku
+        if field == "people":
+            return ("", None) if sku == "SKU-A" else ("1-2人", "business.people")
+        if field == "usage_scene":
+            return (
+                ("家庭露营", "business.usage_scene")
+                if sku == "SKU-A"
+                else ("单人露营", "business.usage_scene")
+            )
+        return "", None
+
+    monkeypatch.setattr(
+        customer_service_service,
+        "_structured_product_field_evidence",
+        structured,
+    )
+
+    complete = customer_service_service._comparison_adjudication_evidence(
+        db=None,
+        bundles=bundles,
+    )
+    progressive = customer_service_service._comparison_adjudication_evidence(
+        db=None,
+        bundles=bundles,
+        include_partial=True,
+    )
+
+    assert "people" not in complete
+    assert progressive["people"] == [{
+        "participant_index": 1,
+        "sku": "SKU-B",
+        "value": "1-2人",
+        "source": "business.people",
+    }]
+    assert len(progressive["usage_scene"]) == 2
 
 
 def test_semantic_comparison_adjudication_removes_a_choice_rejected_by_independent_grounding_review(monkeypatch):
@@ -1305,6 +1360,26 @@ def test_semantic_comparison_without_sealed_participants_fails_closed_before_leg
         participant_count=2,
         allowed_evidence_fields={"usage_scene"},
     ) is None
+
+
+def test_semantic_pairwise_realtime_price_comparison_fails_closed_without_unrelated_choice():
+    result = customer_service_service._semantic_pairwise_realtime_fields_result(
+        [
+            {"sku": "SKU-A", "product_name_cn": "示例甲"},
+            {"sku": "SKU-B", "product_name_cn": "示例乙"},
+        ],
+        [{"status": "resolved", "resolved_sku": "SKU-A"}, {"status": "resolved", "resolved_sku": "SKU-B"}],
+        ["price"],
+    )
+
+    assert result["answer_type"] == "comparison"
+    assert result["result_skus"] == ["SKU-A", "SKU-B"]
+    assert result["answer_metadata"]["final_choice_sku"] is None
+    assert result["answer_metadata"]["contract_field_types"] == ["price"]
+    assert result["debug"]["agent_mode"] == "semantic_pairwise_realtime_field_boundary"
+    assert "实时价格" in result["answer"]
+    assert "不能判断哪款更便宜" in result["answer"]
+    assert "容量" not in result["answer"]
 
 
 def test_single_catalog_recommendation_is_not_misclassified_as_an_unsealed_comparison():
