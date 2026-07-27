@@ -20,6 +20,9 @@ const FileKnowledgeBase = lazy(() => import('./pages/FileKnowledgeBase'))
 const ProductCreate = lazy(() => import('./pages/ProductCreate'))
 const DraftBox = lazy(() => import('./pages/DraftBox'))
 const Profile = lazy(() => import('./pages/Profile'))
+const ToolCenter = lazy(() => import('./pages/ToolCenter'))
+const EcommerceDataFill = lazy(() => import('./pages/EcommerceDataFill'))
+const AdminTools = lazy(() => import('./pages/AdminTools'))
 
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
   const { token } = useAuthStore()
@@ -72,6 +75,26 @@ export default function App() {
             <PermissionRoute permissionKey="ai.generate">
               <Layout>
                 <Workspace />
+              </Layout>
+            </PermissionRoute>
+          }
+        />
+        <Route
+          path="/tools"
+          element={
+            <ProtectedRoute>
+              <Layout>
+                <ToolCenter />
+              </Layout>
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/tools/ecommerce-data-fill"
+          element={
+            <PermissionRoute permissionKey="finance.ecommerce_data_fill">
+              <Layout>
+                <EcommerceDataFill />
               </Layout>
             </PermissionRoute>
           }
@@ -194,6 +217,16 @@ export default function App() {
                 <DraftBox />
               </Layout>
             </PermissionRoute>
+          }
+        />
+        <Route
+          path="/admin/tools"
+          element={
+            <SuperAdminRoute>
+              <Layout>
+                <AdminTools />
+              </Layout>
+            </SuperAdminRoute>
           }
         />
         <Route

@@ -107,6 +107,33 @@ export interface CategoryItem {
   description?: string | null
 }
 
+export interface PlatformTool {
+  tool_key: string
+  name: string
+  description?: string | null
+  category: string
+  icon_key: string
+  route_path: string
+  permission_key: string
+  is_enabled: boolean
+  sort_order: number
+  created_at: string
+  updated_at: string
+}
+
+export interface ToolRun {
+  id: string
+  tool_key: string
+  status: 'queued' | 'running' | 'succeeded' | 'failed'
+  parameters: Record<string, unknown>
+  input_files: Array<{ display_name: string; relative_path: string; size: number }>
+  output_files: Array<{ display_name: string; relative_path: string; size: number }>
+  error_message?: string | null
+  created_at: string
+  started_at?: string | null
+  completed_at?: string | null
+}
+
 export interface AgentAction {
   id: string
   action_type: string
@@ -523,6 +550,38 @@ function parseStreamEvent(rawEvent: string): CustomerServiceStreamEvent | null {
 }
 
 export const api = {
+  tools: {
+    list: () => request<PlatformTool[]>('/tools'),
+    listManaged: () => request<PlatformTool[]>('/admin/tools'),
+    create: (data: Partial<PlatformTool> & { tool_key: string }) =>
+      request<PlatformTool>('/admin/tools', { method: 'POST', body: JSON.stringify(data) }),
+    update: (toolKey: string, data: Partial<PlatformTool>) =>
+      request<PlatformTool>(`/admin/tools/${encodeURIComponent(toolKey)}`, { method: 'PUT', body: JSON.stringify(data) }),
+    ecommerceDataFill: {
+      listRuns: () => request<ToolRun[]>('/tools/ecommerce-data-fill/runs'),
+      getRun: (runId: string) => request<ToolRun>(`/tools/ecommerce-data-fill/runs/${encodeURIComponent(runId)}`),
+      submit: (data: { mode: 'ecommerce' | 'kepule' | 'amazon'; files: File[]; parameters?: Record<string, unknown> }) => {
+        const formData = new FormData()
+        formData.append('mode', data.mode)
+        formData.append('parameters_json', JSON.stringify(data.parameters || {}))
+        for (const file of data.files) formData.append('files', file)
+        return request<ToolRun>('/tools/ecommerce-data-fill/runs', { method: 'POST', body: formData }, 300000)
+      },
+      download: async (runId: string, index: number, filename: string) => {
+        const token = localStorage.getItem('token')
+        const response = await fetch(`${BASE_URL}/tools/ecommerce-data-fill/runs/${encodeURIComponent(runId)}/files/${index}`, {
+          headers: token ? { Authorization: `Bearer ${token}` } : {},
+        })
+        if (!response.ok) throw new ApiRequestError('下载结果失败', response.status)
+        const url = URL.createObjectURL(await response.blob())
+        const anchor = document.createElement('a')
+        anchor.href = url
+        anchor.download = filename
+        anchor.click()
+        URL.revokeObjectURL(url)
+      },
+    },
+  },
   auth: {
     register: (data: { username: string; email: string; password: string }) =>
       request('/auth/register', { method: 'POST', body: JSON.stringify(data) }),
