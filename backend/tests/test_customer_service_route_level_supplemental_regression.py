@@ -3872,6 +3872,7 @@ def test_recommendation_post_filter_preserves_validated_deepseek_narrative_when_
     assert result["answer"] == answer
     assert result["result_skus"] == ["CW-S10-A"]
     assert result["debug"]["recommendation_post_filter_answer_rebuilt"] is False
+    assert result["debug"]["recommendation_post_filter_rebuild_reasons"] == []
 
 
 def test_semantic_preplan_treats_empty_optional_recommendation_containers_as_absent(monkeypatch):

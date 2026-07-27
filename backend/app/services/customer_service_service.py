@@ -10629,6 +10629,18 @@ def _post_filter_recommendation_result(db: Session, question: str, agent_result:
         or not answer_mentions_filtered
         or answer_mentions_outside
     )
+    debug["recommendation_post_filter_rebuild_reasons"] = [
+        reason
+        for reason, active in (
+            ("unvalidated_verification_answer", verification_enabled and not validated_semantic_narrative),
+            ("comparison_scope", comparison_scope),
+            ("visible_ranking_changed", ranking_changed),
+            ("empty_answer", not answer),
+            ("selected_identity_missing", not answer_mentions_filtered),
+            ("outside_identity_mentioned", answer_mentions_outside),
+        )
+        if active
+    ]
     if should_rebuild_answer:
         if verification_enabled:
             rebuilt_answer = customer_recommendation_verification_contract.build_verified_recommendation_answer(
