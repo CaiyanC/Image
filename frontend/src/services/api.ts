@@ -134,6 +134,16 @@ export interface ToolRun {
   completed_at?: string | null
 }
 
+export interface EcommercePrecheck {
+  mode: 'ecommerce' | 'kepule' | 'amazon'
+  can_run: boolean
+  required_roles: string[]
+  missing_required_roles: string[]
+  missing_optional_roles: string[]
+  recognized_roles: string[]
+  slots: Array<{ role: string; label: string; required: boolean; recognized: boolean }>
+}
+
 export interface AgentAction {
   id: string
   action_type: string
@@ -567,6 +577,22 @@ export const api = {
         for (const file of data.files) formData.append('files', file)
         return request<ToolRun>('/tools/ecommerce-data-fill/runs', { method: 'POST', body: formData }, 300000)
       },
+      createDraft: (mode: 'ecommerce' | 'kepule' | 'amazon', files: File[] = []) => {
+        const formData = new FormData()
+        formData.append('mode', mode)
+        for (const file of files) formData.append('files', file)
+        return request<ToolRun>('/tools/ecommerce-data-fill/drafts', { method: 'POST', body: formData })
+      },
+      addDraftFiles: (draftId: string, files: File[]) => {
+        const formData = new FormData()
+        for (const file of files) formData.append('files', file)
+        return request<ToolRun>(`/tools/ecommerce-data-fill/drafts/${encodeURIComponent(draftId)}/files`, { method: 'POST', body: formData })
+      },
+      precheckDraft: (draftId: string) => request<EcommercePrecheck>(`/tools/ecommerce-data-fill/drafts/${encodeURIComponent(draftId)}/precheck`),
+      confirmDraft: (draftId: string, parameters: Record<string, unknown>) => request<ToolRun>(
+        `/tools/ecommerce-data-fill/drafts/${encodeURIComponent(draftId)}/confirm`,
+        { method: 'POST', body: JSON.stringify({ parameters }) },
+      ),
       download: async (runId: string, index: number, filename: string) => {
         const token = localStorage.getItem('token')
         const response = await fetch(`${BASE_URL}/tools/ecommerce-data-fill/runs/${encodeURIComponent(runId)}/files/${index}`, {

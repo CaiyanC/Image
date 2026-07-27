@@ -29,12 +29,16 @@ def run_directory(run_id: str) -> Path:
     return root
 
 
-def create_run(db: Session, *, tool_key: str, created_by: str, parameters: dict) -> ToolRun:
-    run = ToolRun(tool_key=tool_key, created_by=created_by, parameters=parameters)
+def create_run(db: Session, *, tool_key: str, created_by: str, parameters: dict, status: str = "queued") -> ToolRun:
+    run = ToolRun(tool_key=tool_key, created_by=created_by, parameters=parameters, status=status)
     db.add(run)
     db.commit()
     db.refresh(run)
     return run
+
+
+def input_directory(run: ToolRun) -> Path:
+    return run_directory(run.id) / "input"
 
 
 def get_run(db: Session, run_id: str) -> ToolRun:

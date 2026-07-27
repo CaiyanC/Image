@@ -10,9 +10,10 @@ from ..core.security import get_current_user, get_user_groups, get_user_permissi
 from ..models.tool import Tool
 from ..models.tool_run import ToolRun
 from ..models.user import User
-from ..schemas.tool import ToolResponse, ToolRunResponse
-from ..services import operation_log_service, tool_registry_service, tool_run_service
+from ..schemas.tool import ToolResponse, ToolRunConfirmRequest, ToolRunResponse
+from ..services import ecommerce_precheck_service, operation_log_service, tool_registry_service, tool_run_service
 from ..tasks.tool_runs import run_ecommerce_data_fill_tool_run
+from ..tool_runtimes.ecommerce_data_fill.runner import ToolRuntimeError, recognize_ecommerce_input_files
 
 
 router = APIRouter(prefix="/api/tools", tags=["tools"])
@@ -29,6 +30,103 @@ def list_available_tools(
 
 def _is_management(db: Session, user_id: str) -> bool:
     return any(group["group_name"] in FULL_ACCESS_GROUP_NAMES for group in get_user_groups(db, user_id))
+
+
+def _get_ecommerce_tool(db: Session) -> Tool:
+    tool = db.query(Tool).filter_by(tool_key="ecommerce_data_fill", is_enabled=True).first()
+    if not tool:
+        raise HTTPException(status_code=404, detail="Tool is disabled")
+    return tool
+
+
+def _ensure_draft_access(db: Session, run_id: str, user_id: str) -> ToolRun:
+    run = tool_run_service.get_run(db, run_id)
+    tool_run_service.ensure_run_access(run, user_id=user_id, is_management=_is_management(db, user_id))
+    if run.tool_key != "ecommerce_data_fill" or run.status != "draft":
+        raise HTTPException(status_code=400, detail="Tool draft is not available")
+    return run
+
+
+def _precheck_draft(run: ToolRun) -> dict:
+    mode = str((run.parameters or {}).get("mode", ""))
+    try:
+        roles = recognize_ecommerce_input_files(tool_run_service.input_directory(run))
+    except ToolRuntimeError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    result = ecommerce_precheck_service.build_precheck(mode, roles)
+    result["recognized_roles"] = sorted(roles)
+    return result
+
+
+@router.post("/ecommerce-data-fill/drafts", response_model=ToolRunResponse)
+def create_ecommerce_data_fill_draft(
+    mode: str = Form(...),
+    files: list[UploadFile] = File(default=[]),
+    current_user: User = Depends(require_permission(ECOMMERCE_DATA_FILL_PERMISSION)),
+    db: Session = Depends(get_db),
+):
+    if mode not in {"ecommerce", "kepule", "amazon"}:
+        raise HTTPException(status_code=400, detail="Unsupported spreadsheet workflow")
+    if len(files) > tool_run_service.MAX_UPLOAD_FILES:
+        raise HTTPException(status_code=400, detail="Invalid number of Excel files")
+    tool = _get_ecommerce_tool(db)
+    draft = tool_run_service.create_run(db, tool_key=tool.tool_key, created_by=current_user.id, parameters={"mode": mode}, status="draft")
+    draft.input_files = [tool_run_service.save_input_file(draft, filename=file.filename, source=file.file) for file in files]
+    db.commit()
+    db.refresh(draft)
+    return draft
+
+
+@router.post("/ecommerce-data-fill/drafts/{draft_id}/files", response_model=ToolRunResponse)
+def add_ecommerce_data_fill_draft_files(
+    draft_id: str,
+    files: list[UploadFile] = File(...),
+    current_user: User = Depends(require_permission(ECOMMERCE_DATA_FILL_PERMISSION)),
+    db: Session = Depends(get_db),
+):
+    draft = _ensure_draft_access(db, draft_id, current_user.id)
+    if not files or len(draft.input_files or []) + len(files) > tool_run_service.MAX_UPLOAD_FILES:
+        raise HTTPException(status_code=400, detail="Invalid number of Excel files")
+    draft.input_files = [*list(draft.input_files or []), *[
+        tool_run_service.save_input_file(draft, filename=file.filename, source=file.file) for file in files
+    ]]
+    db.commit()
+    db.refresh(draft)
+    return draft
+
+
+@router.get("/ecommerce-data-fill/drafts/{draft_id}/precheck")
+def precheck_ecommerce_data_fill_draft(
+    draft_id: str,
+    current_user: User = Depends(require_permission(ECOMMERCE_DATA_FILL_PERMISSION)),
+    db: Session = Depends(get_db),
+):
+    return _precheck_draft(_ensure_draft_access(db, draft_id, current_user.id))
+
+
+@router.post("/ecommerce-data-fill/drafts/{draft_id}/confirm", response_model=ToolRunResponse)
+def confirm_ecommerce_data_fill_draft(
+    draft_id: str,
+    payload: ToolRunConfirmRequest,
+    request: Request,
+    current_user: User = Depends(require_permission(ECOMMERCE_DATA_FILL_PERMISSION)),
+    db: Session = Depends(get_db),
+):
+    draft = _ensure_draft_access(db, draft_id, current_user.id)
+    precheck = _precheck_draft(draft)
+    if not precheck["can_run"]:
+        raise HTTPException(status_code=400, detail="Precheck has missing required files")
+    draft.parameters = {**payload.parameters, "mode": precheck["mode"]}
+    draft.status = "queued"
+    db.commit()
+    db.refresh(draft)
+    operation_log_service.log_operation(
+        db, operator_id=current_user.id, action_type="tool_run", action_name="confirm_ecommerce_data_fill",
+        target_type="tool_run", target_id=draft.id, target_name="电商数据分析表自动填写",
+        request_data={"mode": precheck["mode"], "file_count": len(draft.input_files)}, response_data={"status": draft.status}, request=request,
+    )
+    run_ecommerce_data_fill_tool_run.delay(draft.id)
+    return draft
 
 
 @router.post("/ecommerce-data-fill/runs", response_model=ToolRunResponse)
@@ -50,9 +148,7 @@ def create_ecommerce_data_fill_run(
         raise HTTPException(status_code=400, detail="Invalid tool parameters") from exc
     if not isinstance(parameters, dict):
         raise HTTPException(status_code=400, detail="Invalid tool parameters")
-    tool = db.query(Tool).filter_by(tool_key="ecommerce_data_fill", is_enabled=True).first()
-    if not tool:
-        raise HTTPException(status_code=404, detail="Tool is disabled")
+    tool = _get_ecommerce_tool(db)
     run = tool_run_service.create_run(
         db,
         tool_key=tool.tool_key,

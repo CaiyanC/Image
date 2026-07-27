@@ -49,3 +49,15 @@ def run_ecommerce_data_fill(mode: str, input_dir: Path, output_dir: Path, parame
         for path in sorted(output_dir.iterdir())
         if path.is_file() and path.suffix.lower() in {".xlsx", ".txt"}
     ]
+
+
+def recognize_ecommerce_input_files(input_dir: Path) -> set[str]:
+    """Use the copied desktop runtime's role detector before a run is queued."""
+    if not input_dir.exists():
+        return set()
+    core_app = _load_core_app()
+    try:
+        detections = core_app._detect_files([path for path in input_dir.iterdir() if path.is_file()])
+    except (OSError, ValueError, KeyError) as exc:
+        raise ToolRuntimeError(str(exc)) from exc
+    return set(detections)

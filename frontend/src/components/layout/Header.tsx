@@ -44,6 +44,7 @@ export default function Header() {
   const homePath = navItems[0]?.path || '/no-access'
 
   const superAdminItems = [
+    { path: '/admin/department-workbench', label: '部门工作台' },
     { path: '/admin/tools', label: '工具管理' },
     { path: '/admin/users', label: '用户' },
     { path: '/admin/groups', label: '部门权限' },

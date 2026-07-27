@@ -51,3 +51,7 @@ class ToolRunResponse(BaseModel):
     completed_at: datetime | None
 
     model_config = {"from_attributes": True}
+
+
+class ToolRunConfirmRequest(BaseModel):
+    parameters: dict = Field(default_factory=dict)
