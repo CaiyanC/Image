@@ -4547,6 +4547,23 @@ def test_semantic_recommendation_narrative_rejects_product_name_outside_its_rank
     assert narrative is None
 
 
+def test_semantic_recommendation_narrative_requires_each_ranked_product_identity_in_customer_answer():
+    narrative = customer_service_service._validate_semantic_recommendation_narrative(
+        {
+            "ranked_candidate_indexes": [0],
+            "evidence_usage": [{"candidate_index": 0, "fields": ["heat_source"]}],
+            "answer": "这款锅支持酒精炉加热，可以按这个热源条件作为参考。",
+        },
+        candidate_count=1,
+        verified_fields_by_index={0: {"heat_source"}},
+        candidate_identity_tokens_by_index={
+            0: {"激川单锅", "CW-S10-A"},
+        },
+    )
+
+    assert narrative is None
+
+
 def test_semantic_recommendation_narrative_allows_ranked_name_that_contains_an_unranked_family_name():
     narrative = customer_service_service._validate_semantic_recommendation_narrative(
         {

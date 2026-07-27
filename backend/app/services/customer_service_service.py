@@ -6671,6 +6671,18 @@ def _validate_semantic_recommendation_narrative(
     # product-name routing rule.
     if candidate_identity_tokens_by_index:
         normalized_answer = re.sub(r"\s+", "", answer).casefold()
+        for index in ranked:
+            selected_tokens = {
+                re.sub(r"\s+", "", str(token or "")).casefold()
+                for token in candidate_identity_tokens_by_index.get(index, set())
+                if len(re.sub(r"\s+", "", str(token or ""))) >= 3
+            }
+            if selected_tokens and not any(token in normalized_answer for token in selected_tokens):
+                # A customer-facing recommendation must identify every
+                # product it ranks. Otherwise a later verifier cannot safely
+                # bind pronouns such as “这款” to the visible result SKU and
+                # may replace good semantic prose with an internal template.
+                return None
         ranked_tokens = {
             re.sub(r"\s+", "", str(token or "")).casefold()
             for index in ranked
