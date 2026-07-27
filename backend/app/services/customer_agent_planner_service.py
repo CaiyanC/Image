@@ -687,11 +687,15 @@ def _validate_semantic_preplan(data: dict[str, Any] | None, *, raw_content: str 
             entity_type = str(
                 raw_entity.get("entity_type") or raw_entity.get("type") or ""
             ).strip()
-            if entity_type != "product":
+            if entity_type and entity_type != "product":
                 continue
             candidate = raw_entity.get("entity_value")
             if candidate is None:
                 candidate = raw_entity.get("name")
+            if candidate is None:
+                candidate = raw_entity.get("entity_name")
+            if candidate is None:
+                candidate = raw_entity.get("entity")
         else:
             candidate = raw_entity
         if not isinstance(candidate, str):
@@ -782,6 +786,20 @@ def _validate_semantic_preplan(data: dict[str, Any] | None, *, raw_content: str 
     # the whole question as current purchasability/availability; retain the
     # safety route and normalize the non-answering source shape.
     if route_family == "unknown_realtime":
+        evidence_kind = "structured_field"
+    # A non-decisive comparison overview asks for recorded same-field
+    # differences. Some provider schemas label that retrieval as product_qa
+    # despite also returning the explicit overview subtype. Normalize this
+    # internal schema contradiction before it can suppress available
+    # structured evidence; no field or product fact is inferred here.
+    if (
+        route_family == "comparison"
+        and subtype == "comparison_overview"
+        and not bool(data.get("decision_requested"))
+        and not canonical_fields
+        and not field_type
+        and not field_hint
+    ):
         evidence_kind = "structured_field"
     # A formal field and product-QA evidence are mutually exclusive semantic
     # claims.  The allowlisted canonical field is the semantic decision about
@@ -1715,6 +1733,15 @@ async def _repair_semantic_preplan_output(
             " The prior JSON is internally invalid: it already selected subtype=relation_comparison, which means the customer requests a winner on its stated criterion, "
             "but it set decision_requested=false. Repair this exact inconsistency by returning decision_requested=true while preserving the semantic participants and requested canonical field. "
             "Do not choose a participant, SKU, value, evidence, or answer."
+        )
+    if failure_reason == "comparison_overview_requires_semantic_confirmation":
+        messages[0]["content"] += (
+            " Independently re-read the complete comparison question. Confirm comparison_overview with "
+            "decision_requested=false only when the customer asks to list general recorded differences and "
+            "does not ask which participant is better, more suitable, or should be chosen. If the customer "
+            "asks for a winner on a stated need, use relation_comparison with decision_requested=true and "
+            "represent that need through the permitted comparison evidence contract. Preserve the verbatim "
+            "participants; never choose a participant or invent a product fact."
         )
     if failure_reason == "invalid_comparison_participants":
         prior_data = _extract_json_object(raw_content)
@@ -2934,6 +2961,16 @@ async def plan_customer_question_semantic(
         and _semantic_subject_omits_explicit_numeric_version(text, str(result.get("subject_text") or ""))
     ):
         result["fallback_reason"] = "semantic_subject_omitted_identity_variant"
+    # A generic overview and a requested winner are materially different
+    # comparison contracts. Ask the semantic model for an independent second
+    # reading before an overview can suppress a customer-requested choice.
+    # This deliberately does not use keywords or deterministic intent rules.
+    if (
+        result.get("route_family") == "comparison"
+        and result.get("subtype") == "comparison_overview"
+        and not result.get("fallback_reason")
+    ):
+        result["fallback_reason"] = "comparison_overview_requires_semantic_confirmation"
     # A structurally valid preplan can still be unusable when its
     # recommendation schema violates the contract.  Repair that semantic
     # output with the same LLM before considering any legacy label fallback;
@@ -2970,6 +3007,7 @@ async def plan_customer_question_semantic(
         "pairwise_recommendation_requires_comparison_contract",
         "pairwise_factual_requires_comparison_contract",
         "invalid_comparison_subtype",
+        "comparison_overview_requires_semantic_confirmation",
     }
     if result.get("fallback_reason") in repairable_preplan_failures:
         semantic_repair_reason = str(result.get("fallback_reason") or "")

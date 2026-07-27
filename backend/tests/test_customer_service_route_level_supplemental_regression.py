@@ -3347,6 +3347,82 @@ def test_fieldless_pairwise_overview_is_built_from_same_sku_evidence_bundles(mon
     assert {source["sku"] for source in result["sources"]} == {"SKU-A", "SKU-B"}
 
 
+def test_overview_execution_lets_semantic_adjudicator_recover_requested_winner(monkeypatch):
+    first = SimpleNamespace(sku="SKU-A", product_name_cn="Alpha", product_name_en="")
+    second = SimpleNamespace(sku="SKU-B", product_name_cn="Beta", product_name_en="")
+    bundles = [(first, None, None, None), (second, None, None, None)]
+    monkeypatch.setattr(
+        customer_service_service,
+        "_phase1_product_bundle_by_ref",
+        lambda _db, ref: bundles[0] if ref == "SKU-A" else bundles[1],
+    )
+    monkeypatch.setattr(
+        customer_service_service,
+        "_product_row_from_model",
+        lambda product, *_args: {"sku": product.sku, "product_name_cn": product.product_name_cn},
+    )
+    monkeypatch.setattr(
+        customer_service_service,
+        "resolve_requested_field_contract",
+        lambda *_args, **_kwargs: {"field_type": None, "canonical_fields": []},
+    )
+    monkeypatch.setattr(
+        customer_service_service,
+        "_structured_product_field_evidence",
+        lambda field, **kwargs: (
+            (
+                "1L" if kwargs["product"].sku == "SKU-A" else "3L",
+                "specs.capacity",
+            )
+            if field == "capacity"
+            else ("", None)
+        ),
+    )
+    monkeypatch.setattr(
+        customer_service_service,
+        "_comparison_adjudication_evidence",
+        lambda **_kwargs: {
+            "capacity": [
+                {"participant_index": 0, "sku": "SKU-A", "value": "1L", "source": "specs.capacity"},
+                {"participant_index": 1, "sku": "SKU-B", "value": "3L", "source": "specs.capacity"},
+            ],
+        },
+    )
+
+    async def semantic_choice(*_args, **_kwargs):
+        return {
+            "selected_index": 1,
+            "evidence_fields": ["capacity"],
+            "reasoning_summary": "The question asks for the product suited to more people.",
+        }
+
+    monkeypatch.setattr(
+        customer_service_service,
+        "_semantic_comparison_adjudication",
+        semantic_choice,
+    )
+
+    result = asyncio.run(customer_service_service._phase1_compare_choice_result(None, {
+        "raw_question": "Alpha和Beta哪个更适合多人？",
+        "product_refs": ["SKU-A", "SKU-B"],
+        "must_make_choice": False,
+        "semantic_comparison_entity_contracts": [
+            {"status": "resolved", "resolved_sku": "SKU-A"},
+            {"status": "resolved", "resolved_sku": "SKU-B"},
+        ],
+        "semantic_preplan": {
+            "route_family": "comparison",
+            "subtype": "comparison_overview",
+            "evidence_kind": "structured_field",
+            "canonical_fields": [],
+            "decision_requested": False,
+        },
+    }))
+
+    assert result["answer_metadata"]["final_choice_sku"] == "SKU-B"
+    assert "Beta（SKU-B）" in result["answer"]
+
+
 def test_pairwise_choice_with_one_participant_missing_requested_field_never_calls_adjudicator(monkeypatch):
     """A semantic chooser cannot fill a requested-field evidence gap with another field."""
     first = SimpleNamespace(sku="SKU-A", product_name_cn="\u7532\u6b3e", product_name_en="")
@@ -11915,6 +11991,134 @@ def test_semantic_pairwise_qa_contract_preempts_incidental_product_name_field(mo
     assert result["answer_metadata"]["source"] == "semantic_pairwise_product_qa_contract", result
     assert result["answer_metadata"]["final_choice_sku"] is None, result
     assert result["debug"]["agent_mode"] == "semantic_pairwise_product_qa_insufficient", result
+
+
+def test_semantic_pairwise_qa_gap_can_use_sealed_structured_evidence_for_choice(monkeypatch):
+    """A judgement may use verified multi-field evidence without inventing a QA answer."""
+    first = SimpleNamespace(sku="SEM-CMP-11", product_name_cn="甲套锅", product_name_en="")
+    second = SimpleNamespace(sku="SEM-CMP-12", product_name_cn="乙套锅", product_name_en="")
+    bundles = [(first, None, None, None), (second, None, None, None)]
+    monkeypatch.setattr(
+        customer_service_service,
+        "_phase1_product_bundle_by_ref",
+        lambda _db, ref: bundles[0] if ref == "SEM-CMP-11" else bundles[1],
+    )
+    monkeypatch.setattr(
+        customer_service_service,
+        "_product_row_from_model",
+        lambda product, *_args: {"sku": product.sku, "product_name_cn": product.product_name_cn},
+    )
+    monkeypatch.setattr(
+        customer_service_service,
+        "resolve_requested_field_contract",
+        lambda *_args, **_kwargs: {"field_type": "", "canonical_fields": []},
+    )
+
+    async def no_semantic_qa_match(*_args, **_kwargs):
+        return None
+
+    monkeypatch.setattr(
+        customer_service_service,
+        "_select_same_sku_product_qa_with_semantic_selection",
+        no_semantic_qa_match,
+    )
+    monkeypatch.setattr(
+        customer_service_service,
+        "_comparison_adjudication_evidence",
+        lambda **_kwargs: {
+            "capacity": [
+                {"participant_index": 0, "sku": "SEM-CMP-11", "value": "1.2L", "source": "specs.capacity"},
+                {"participant_index": 1, "sku": "SEM-CMP-12", "value": "3L+1.7L", "source": "specs.capacity"},
+            ],
+            "usage_scene": [
+                {"participant_index": 0, "sku": "SEM-CMP-11", "value": "双人露营", "source": "business.usage_scene"},
+                {"participant_index": 1, "sku": "SEM-CMP-12", "value": "多人露营", "source": "business.usage_scene"},
+            ],
+        },
+    )
+
+    async def choose_from_evidence(*_args, **_kwargs):
+        return {
+            "selected_index": 1,
+            "evidence_fields": ["capacity", "usage_scene"],
+            "reasoning_summary": "The sealed evidence directly supports the stated need.",
+        }
+
+    monkeypatch.setattr(
+        customer_service_service,
+        "_semantic_comparison_adjudication",
+        choose_from_evidence,
+    )
+
+    result = asyncio.run(customer_service_service._phase1_compare_choice_result(None, {
+        "raw_question": "甲套锅和乙套锅哪个更适合多人露营？",
+        "product_refs": ["SEM-CMP-11", "SEM-CMP-12"],
+        "must_make_choice": True,
+        "semantic_comparison_entity_contracts": [
+            {"status": "resolved", "resolved_sku": "SEM-CMP-11"},
+            {"status": "resolved", "resolved_sku": "SEM-CMP-12"},
+        ],
+        "semantic_preplan": {
+            "evidence_kind": "product_qa",
+            "qa_evidence_query": "多人露营适用性",
+        },
+    }))
+
+    assert result["answer_metadata"]["final_choice_sku"] == "SEM-CMP-12", result
+    assert result["answer_metadata"]["source"] == "semantic_pairwise_structured_best_effort_contract"
+    assert "3L+1.7L" in result["answer"]
+    assert result["debug"]["agent_mode"] == "semantic_pairwise_structured_best_effort_contract"
+
+
+def test_validated_category_comparison_is_not_replaced_by_legacy_intro(monkeypatch):
+    first = SimpleNamespace(sku="SEM-CAT-01", product_name_cn="甲产品", product_name_en="")
+    second = SimpleNamespace(sku="SEM-CAT-02", product_name_cn="乙产品", product_name_en="")
+    bundles = [(first, None, None, None), (second, None, None, None)]
+    monkeypatch.setattr(
+        customer_service_service,
+        "_phase1_product_bundle_by_ref",
+        lambda _db, ref: bundles[0] if ref == "SEM-CAT-01" else bundles[1],
+    )
+    monkeypatch.setattr(
+        customer_service_service,
+        "_product_row_from_model",
+        lambda product, *_args: {"sku": product.sku, "product_name_cn": product.product_name_cn},
+    )
+    monkeypatch.setattr(
+        customer_service_service,
+        "resolve_requested_field_contract",
+        lambda *_args, **_kwargs: {"field_type": "", "canonical_fields": []},
+    )
+    monkeypatch.setattr(
+        customer_service_service,
+        "_structured_product_field_evidence",
+        lambda _field, **kwargs: (
+            ("炉具", "product.category")
+            if kwargs["product"].sku == "SEM-CAT-01"
+            else ("锅具", "product.category")
+        ),
+    )
+
+    result = asyncio.run(customer_service_service._phase1_compare_choice_result(None, {
+        "raw_question": "甲产品和乙产品分别是什么类型？",
+        "product_refs": ["SEM-CAT-01", "SEM-CAT-02"],
+        "comparison_kind": "multi_sku_intro",
+        "must_make_choice": False,
+        "semantic_comparison_entity_contracts": [
+            {"status": "resolved", "resolved_sku": "SEM-CAT-01"},
+            {"status": "resolved", "resolved_sku": "SEM-CAT-02"},
+        ],
+        "semantic_preplan": {
+            "route_family": "comparison",
+            "canonical_fields": ["category"],
+            "evidence_kind": "structured_field",
+        },
+    }))
+
+    assert result["debug"]["agent_mode"] == "planner_compare_formal_field_contract"
+    assert "炉具" in result["answer"]
+    assert "锅具" in result["answer"]
+    assert "容量" not in result["answer"]
 
 
 def test_semantic_pairwise_qa_contract_uses_bounded_same_sku_selector_after_direct_miss(monkeypatch):

@@ -517,6 +517,95 @@ def test_semantic_comparison_normalizes_provider_name_type_entity_objects():
     assert preplan["canonical_fields"] == ["material"]
 
 
+def test_semantic_comparison_normalizes_provider_entity_name_objects():
+    """The verbose provider schema must retain the same sealed participants."""
+    preplan = customer_agent_planner_service._validate_semantic_preplan(
+        {
+            "route_family": "comparison",
+            "route_hint": "comparison",
+            "question_type": "comparison",
+            "subtype": "comparison_overview",
+            "entities": [
+                {
+                    "entity_type": "product",
+                    "entity_name": "京享水壶",
+                    "entity_scope": "resolved_product",
+                },
+                {
+                    "entity_type": "product",
+                    "entity_name": "小方壶",
+                    "entity_scope": "resolved_product",
+                },
+            ],
+            "subject_text": "京享水壶和小方壶",
+            "canonical_fields": [],
+            "evidence_kind": "structured_field",
+            "decision_requested": False,
+            "confidence": "high",
+            "ambiguity": False,
+            "evidence_required": True,
+            "context_usage": "none",
+            "reasoning_summary": "Compare the two named products.",
+        }
+    )
+
+    assert preplan["fallback_reason"] == ""
+    assert preplan["entities"] == ["京享水壶", "小方壶"]
+
+
+def test_semantic_comparison_normalizes_provider_entity_key_objects():
+    preplan = customer_agent_planner_service._validate_semantic_preplan(
+        {
+            "route_family": "comparison",
+            "route_hint": "comparison",
+            "question_type": "comparison",
+            "subtype": "comparison_overview",
+            "entities": [
+                {"entity": "炊墨套锅", "entity_scope": "product_like"},
+                {"entity": "轻途套锅", "entity_scope": "product_like"},
+            ],
+            "subject_text": "炊墨套锅与轻途套锅",
+            "canonical_fields": [],
+            "evidence_kind": "structured_field",
+            "decision_requested": False,
+            "confidence": "high",
+            "ambiguity": False,
+            "evidence_required": True,
+            "context_usage": "none",
+            "reasoning_summary": "Compare the two named products.",
+        }
+    )
+
+    assert preplan["fallback_reason"] == ""
+    assert preplan["entities"] == ["炊墨套锅", "轻途套锅"]
+
+
+def test_comparison_overview_normalizes_incompatible_product_qa_evidence_kind():
+    preplan = customer_agent_planner_service._validate_semantic_preplan(
+        {
+            "route_family": "comparison",
+            "route_hint": "comparison",
+            "question_type": "comparison",
+            "subtype": "comparison_overview",
+            "entities": ["京享水壶", "小方壶"],
+            "subject_text": "京享水壶和小方壶",
+            "canonical_fields": [],
+            "evidence_kind": "product_qa",
+            "qa_evidence_query": "实际区别",
+            "decision_requested": False,
+            "confidence": "high",
+            "ambiguity": False,
+            "evidence_required": True,
+            "context_usage": "none",
+            "reasoning_summary": "Present recorded differences without choosing.",
+        }
+    )
+
+    assert preplan["fallback_reason"] == ""
+    assert preplan["evidence_kind"] == "structured_field"
+    assert preplan["qa_evidence_query"] == ""
+
+
 def test_semantic_comparison_preplan_rejects_missing_participants():
     preplan = customer_agent_planner_service._validate_semantic_preplan(
         {

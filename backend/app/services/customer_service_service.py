@@ -7064,6 +7064,23 @@ async def _phase1_compare_choice_result(db: Session, plan: dict) -> dict | None:
     )
     canonical_field = str(field_request.get("field_type") or "").strip()
     semantic_preplan = plan.get("semantic_preplan") if isinstance(plan.get("semantic_preplan"), dict) else {}
+    semantic_comparison_fields = [
+        str(field or "").strip()
+        for field in (semantic_preplan.get("canonical_fields") or [])
+        if customer_field_contract.is_supported_detail_field(str(field or "").strip())
+    ]
+    if (
+        plan.get("semantic_comparison_entity_contracts")
+        and not canonical_field
+        and len(semantic_comparison_fields) == 1
+    ):
+        canonical_field = semantic_comparison_fields[0]
+        field_request = {
+            **field_request,
+            "field_type": canonical_field,
+            "canonical_fields": [canonical_field],
+            "source": "validated_semantic_preplan",
+        }
     # Semantic planning has explicitly identified a non-decisive comparison
     # with no customer-specified criterion. This is an evidence presentation,
     # not a deterministic choice of a field route: show only recorded values
@@ -7142,8 +7159,51 @@ async def _phase1_compare_choice_result(db: Session, plan: dict) -> dict | None:
                 for sku, _name, value, source in values
             )
         result_skus = [str(row.get("sku") or "").strip().upper() for row in rows if str(row.get("sku") or "").strip()]
+        try:
+            overview_evidence_packet = _comparison_adjudication_evidence(
+                db=db,
+                bundles=bundles,
+            )
+        except Exception:
+            overview_evidence_packet = {}
+        overview_adjudication = (
+            await _semantic_comparison_adjudication(
+                db,
+                question=raw_question,
+                evidence_packet=overview_evidence_packet,
+                participant_count=len(bundles),
+            )
+            if overview_evidence_packet
+            else None
+        )
+        overview_selected_index = (
+            overview_adjudication.get("selected_index")
+            if isinstance(overview_adjudication, dict)
+            else None
+        )
+        overview_selected_sku = None
+        overview_choice_line = ""
+        if (
+            isinstance(overview_selected_index, int)
+            and 0 <= overview_selected_index < len(bundles)
+            and (overview_adjudication.get("evidence_fields") or [])
+            and bundles[overview_selected_index][0] is not None
+        ):
+            selected_product = bundles[overview_selected_index][0]
+            overview_selected_sku = str(selected_product.sku or "").strip().upper()
+            selected_name = str(
+                selected_product.product_name_cn
+                or selected_product.product_name_en
+                or overview_selected_sku
+            ).strip()
+            overview_choice_line = (
+                f"\n结合这些已核验资料，更符合你所述需求的是"
+                f"{selected_name}（{overview_selected_sku}）。"
+            )
         answer = (
-            "按两款商品当前已标注且可直接对照的资料，主要差异如下：\n" + "\n".join(lines)
+            "按两款商品当前已标注且可直接对照的资料，主要差异如下：\n"
+            + "\n".join(lines)
+            + overview_choice_line
             if lines
             else "两款商品已锁定，但当前没有找到可同时核验且存在差异的同字段资料；请告诉我更关心容量、重量、材质或使用场景，我会按该字段继续比较。"
         )
@@ -7155,7 +7215,8 @@ async def _phase1_compare_choice_result(db: Session, plan: dict) -> dict | None:
                 "source": "semantic_pairwise_structured_overview_contract",
                 "contract_field_types": [],
                 "evidence_status": "supported" if lines else "missing",
-                "final_choice_sku": None,
+                "final_choice_sku": overview_selected_sku,
+                "semantic_comparison_adjudication": overview_adjudication,
                 "evidence_bundle_skus": [bundle.sku for bundle in evidence_bundles],
             },
             "debug": {
@@ -7246,6 +7307,115 @@ async def _phase1_compare_choice_result(db: Session, plan: dict) -> dict | None:
             value = str(qa.answer or "").strip()
             lines.append(f"- {name}（{sku}）：{value}")
             sources.append({"type": "product_qa", "sku": sku, "source": f"product_qa:{qa.id}", "value": value})
+        if not complete and plan.get("must_make_choice"):
+            try:
+                evidence_packet = _comparison_adjudication_evidence(db=db, bundles=bundles)
+            except Exception:
+                evidence_packet = {}
+            adjudication = (
+                await _semantic_comparison_adjudication(
+                    db,
+                    question=raw_question,
+                    evidence_packet=evidence_packet,
+                    participant_count=len(bundles),
+                )
+                if evidence_packet
+                else None
+            )
+            selected_index = (
+                adjudication.get("selected_index")
+                if isinstance(adjudication, dict)
+                else None
+            )
+            evidence_fields = [
+                str(field or "").strip()
+                for field in (
+                    adjudication.get("evidence_fields") or []
+                    if isinstance(adjudication, dict)
+                    else []
+                )
+                if str(field or "").strip() in evidence_packet
+            ]
+            if (
+                isinstance(selected_index, int)
+                and 0 <= selected_index < len(bundles)
+                and evidence_fields
+            ):
+                structured_lines: list[str] = []
+                structured_sources: list[dict[str, Any]] = []
+                for field in evidence_fields:
+                    label = customer_field_contract.product_detail_field_label(field) or field
+                    rendered_values: list[str] = []
+                    for evidence_row in evidence_packet[field]:
+                        participant_index = int(evidence_row["participant_index"])
+                        product = bundles[participant_index][0]
+                        if product is None:
+                            continue
+                        participant_sku = str(product.sku or "").strip().upper()
+                        participant_name = str(
+                            product.product_name_cn
+                            or product.product_name_en
+                            or participant_sku
+                        ).strip()
+                        rendered_values.append(
+                            f"{participant_name}（{participant_sku}）为{evidence_row['value']}"
+                        )
+                        structured_sources.append({
+                            "type": "product_field",
+                            "sku": participant_sku,
+                            "field": field,
+                            "source": evidence_row["source"],
+                            "value": evidence_row["value"],
+                        })
+                    if rendered_values:
+                        structured_lines.append(
+                            f"- {label}：" + "；".join(rendered_values) + "。"
+                        )
+                selected_product = bundles[selected_index][0]
+                selected_sku = str(selected_product.sku or "").strip().upper()
+                selected_name = str(
+                    selected_product.product_name_cn
+                    or selected_product.product_name_en
+                    or selected_sku
+                ).strip()
+                structured_lines.append(
+                    f"结合以上已核验资料，更适合你所述需求的是"
+                    f"{selected_name}（{selected_sku}）。"
+                )
+                result_skus = [
+                    str(row.get("sku") or "").strip().upper()
+                    for row in rows
+                    if str(row.get("sku") or "").strip()
+                ]
+                return {
+                    "intent": "compare_products",
+                    "answer_type": "comparison",
+                    "answer": "按与你需求直接相关的已知资料对比：\n" + "\n".join(structured_lines),
+                    "results": rows,
+                    "result_skus": result_skus,
+                    "candidate_skus": result_skus,
+                    "sources": structured_sources,
+                    "answer_metadata": {
+                        "source": "semantic_pairwise_structured_best_effort_contract",
+                        "contract_field_types": evidence_fields,
+                        "evidence_status": "supported",
+                        "final_choice_sku": selected_sku,
+                        "semantic_comparison_adjudication": adjudication,
+                        "evidence_bundle_skus": result_skus,
+                    },
+                    "debug": {
+                        "agent_mode": "semantic_pairwise_structured_best_effort_contract",
+                        "field_contract": {
+                            "field_type": "product_qa",
+                            "canonical_fields": [],
+                            "source": "validated_semantic_preplan",
+                        },
+                        "entity_resolution_contracts": plan.get(
+                            "semantic_comparison_entity_contracts"
+                        ),
+                    },
+                    "skip_polish": True,
+                }
         if complete and plan.get("must_make_choice"):
             lines.append("以上为两款商品各自已核验的同 SKU 产品问答；如需我进一步替你做选择，请结合你更看重的火力、重量或收纳条件。")
         elif not complete:
@@ -7368,7 +7538,10 @@ async def _phase1_compare_choice_result(db: Session, plan: dict) -> dict | None:
         canonical_field
         and len(field_request.get("canonical_fields") or []) == 1
         and customer_field_contract.is_supported_detail_field(canonical_field)
-        and str(plan.get("comparison_kind") or "") != "multi_sku_intro"
+        and (
+            str(plan.get("comparison_kind") or "") != "multi_sku_intro"
+            or bool(plan.get("semantic_comparison_entity_contracts"))
+        )
         # In a compound comparison-plus-choice request, the field comparison
         # is evidence for the decision; it must not preempt the recommendation
         # task that the planner has retained in the same plan.
