@@ -18,6 +18,7 @@ from ..models.product import Product
 from ..models.product_qa import ProductQa, ProductQaNegative
 from ..internal.experience_layer.tone_shaping import shape_answer_tone
 from . import (
+    customer_answer_coverage_contract,
     customer_enterprise_guardrail_service,
     customer_agent_intent_service,
     customer_agent_planner_service,
@@ -99,6 +100,33 @@ _RESOLVED_ENTITY_UNKNOWN_FACT_TERMS: dict[str, tuple[str, ...]] = {
     "包邮": ("包邮", "免邮", "运费", "包邮地区"),
     "售后": ("售后", "售后怎么样", "售后政策", "售后服务", "退换货", "售后时效"),
 }
+
+
+def _apply_answer_coverage_contract(agent_result: dict) -> dict:
+    """Apply explicit evidence coverage without re-reading customer wording.
+
+    Semantic child requests are considered answered only when their retrieval
+    path recorded supporting evidence.  This final boundary may append a
+    missing-evidence statement for an unsupported request, but it must never
+    infer a gap merely because the generated answer paraphrased that request.
+    """
+    metadata = (
+        agent_result.get("answer_metadata")
+        if isinstance(agent_result.get("answer_metadata"), dict)
+        else {}
+    )
+    contract = customer_answer_coverage_contract.AnswerCoverageContract.from_dict(
+        metadata.get("answer_coverage_contract")
+    )
+    if contract is None:
+        return agent_result
+    agent_result["answer"] = (
+        customer_answer_coverage_contract.append_unsupported_boundaries(
+            str(agent_result.get("answer") or ""),
+            contract,
+        )
+    )
+    return agent_result
 
 _RESOLVED_ENTITY_REALTIME_COMMERCIAL_LABELS = {
     "库存",
@@ -362,6 +390,7 @@ async def _save_agent_result_and_return(
         # reinterpret the question here.
         child_answers: list[dict] = []
         missing_child_queries: list[str] = []
+        answered_child_requests: list[tuple[str, str]] = []
         child_evidence_ids: set[str] = set()
         for query in compound_queries:
             child_preplan = dict(effective_semantic_preplan)
@@ -393,6 +422,11 @@ async def _save_agent_result_and_return(
                     if child_evidence_id:
                         child_evidence_ids.add(child_evidence_id)
                     child_answers.append(child_result)
+                    answered_child_requests.append((
+                        query,
+                        child_evidence_id
+                        or str(child_meta.get("source") or "same_sku_child_evidence"),
+                    ))
             else:
                 missing_child_queries.append(query)
         if child_answers:
@@ -420,6 +454,13 @@ async def _save_agent_result_and_return(
             compound_metadata = agent_result.setdefault("answer_metadata", {})
             compound_metadata["compound_product_qa_queries"] = compound_queries
             compound_metadata["compound_missing_child_queries"] = missing_child_queries
+            compound_metadata["answer_coverage_contract"] = (
+                customer_answer_coverage_contract.build_answer_coverage_contract(
+                    compound_queries,
+                    answered_requests=answered_child_requests,
+                    unsupported_requests=missing_child_queries,
+                ).to_dict()
+            )
         elif len(compound_queries) > 1:
             # The parent answer may still be valid for the first child, but a
             # failed narrow retrieval must not make later semantic children
@@ -427,6 +468,18 @@ async def _save_agent_result_and_return(
             compound_metadata = agent_result.setdefault("answer_metadata", {})
             compound_metadata["compound_product_qa_queries"] = compound_queries
             compound_metadata["compound_missing_child_queries"] = compound_queries[1:]
+            parent_evidence_id = str(
+                compound_metadata.get("evidence_source")
+                or compound_metadata.get("source")
+                or "same_sku_parent_evidence"
+            )
+            compound_metadata["answer_coverage_contract"] = (
+                customer_answer_coverage_contract.build_answer_coverage_contract(
+                    compound_queries,
+                    answered_requests=[(compound_queries[0], parent_evidence_id)],
+                    unsupported_requests=compound_queries[1:],
+                ).to_dict()
+            )
     if supplemental_query and len(agent_result.get("result_skus") or []) == 1:
         supplemental, supplemental_query = await _resolve_sealed_supplemental_product_evidence(
             db,
@@ -451,26 +504,33 @@ async def _save_agent_result_and_return(
     # Preserve independently scoped child questions after customer polishing.
     # The polish model may shorten a safe-missing clause, but it must not erase
     # a requested sub-question that lacked same-SKU evidence.
-    missing_child_queries = [
-        str(item or "").strip()
-        for item in (answer_metadata.get("compound_missing_child_queries") or [])
-        if str(item or "").strip()
-    ]
-    if missing_child_queries:
-        answer_text = str(agent_result.get("answer") or "").strip()
-        missing_lines = [f"关于“{query}”：当前同 SKU 资料未直接确认，无法确认。" for query in missing_child_queries]
-        additions = [line for line in missing_lines if line not in answer_text]
-        if additions:
-            agent_result["answer"] = "\n".join([item for item in (answer_text, *additions) if item])
+    coverage_contract = customer_answer_coverage_contract.AnswerCoverageContract.from_dict(
+        answer_metadata.get("answer_coverage_contract")
+    )
+    if coverage_contract is not None:
+        agent_result = _apply_answer_coverage_contract(agent_result)
     else:
+        missing_child_queries = [
+            str(item or "").strip()
+            for item in (answer_metadata.get("compound_missing_child_queries") or [])
+            if str(item or "").strip()
+        ]
+        if missing_child_queries:
+            answer_text = str(agent_result.get("answer") or "").strip()
+            missing_lines = [f"关于“{query}”：当前同 SKU 资料未直接确认，无法确认。" for query in missing_child_queries]
+            additions = [line for line in missing_lines if line not in answer_text]
+            if additions:
+                agent_result["answer"] = "\n".join([item for item in (answer_text, *additions) if item])
+            compound_query_list = []
+        else:
+            compound_query_list = [
+                str(item or "").strip()
+                for item in (answer_metadata.get("compound_product_qa_queries") or [])
+                if str(item or "").strip()
+            ]
         # If a compound turn produced only one answer, do not silently drop
         # later independently requested children.  The child query itself is
         # the semantic source; absent an explicit answer for it, fail closed.
-        compound_query_list = [
-            str(item or "").strip()
-            for item in (answer_metadata.get("compound_product_qa_queries") or [])
-            if str(item or "").strip()
-        ]
         answer_text = str(agent_result.get("answer") or "").strip()
         if len(compound_query_list) > 1:
             additions = [
@@ -16671,6 +16731,7 @@ async def ask_customer_service(
     if compound_queries and (agent_result is not None or qa_safe_missing is not None):
         compound_answers: list[dict] = []
         compound_missing_queries: list[str] = []
+        compound_answered_requests: list[tuple[str, str]] = []
         compound_evidence_ids: set[str] = set()
         parent_preplan = compound_preplan
         for query in compound_queries:
@@ -16695,6 +16756,11 @@ async def ask_customer_service(
                     if evidence_id:
                         compound_evidence_ids.add(evidence_id)
                     compound_answers.append(candidate)
+                    compound_answered_requests.append((
+                        query,
+                        evidence_id
+                        or str(candidate_meta.get("source") or "same_sku_child_evidence"),
+                    ))
             else:
                 compound_missing_queries.append(query)
         if compound_answers:
@@ -16713,7 +16779,20 @@ async def ask_customer_service(
                     str(agent_result.get("answer") or "").strip(),
                     *(f"关于“{query}”：当前同 SKU 资料未直接确认，无法确认。" for query in compound_missing_queries),
                 ])
-            agent_result.setdefault("answer_metadata", {})["compound_product_qa_queries"] = compound_queries
+            compound_metadata = agent_result.setdefault("answer_metadata", {})
+            compound_metadata["compound_product_qa_queries"] = compound_queries
+            compound_metadata["compound_missing_child_queries"] = compound_missing_queries
+            missing_query_set = set(compound_missing_queries)
+            compound_metadata["answer_coverage_contract"] = (
+                customer_answer_coverage_contract.build_answer_coverage_contract(
+                    compound_queries,
+                    answered_requests=[
+                        item for item in compound_answered_requests
+                        if item[0] not in missing_query_set
+                    ],
+                    unsupported_requests=compound_missing_queries,
+                ).to_dict()
+            )
         elif qa_safe_missing is not None:
             # No child yielded distinct evidence. Preserve the already sealed
             # parent QA and explicitly fail closed for every remaining child
@@ -16723,7 +16802,21 @@ async def ask_customer_service(
                 str(agent_result.get("answer") or "").strip(),
                 *(f"关于“{query}”：当前同 SKU 资料未直接确认，无法确认。" for query in compound_queries[1:]),
             ])
-            agent_result.setdefault("answer_metadata", {})["compound_product_qa_queries"] = compound_queries
+            compound_metadata = agent_result.setdefault("answer_metadata", {})
+            compound_metadata["compound_product_qa_queries"] = compound_queries
+            compound_metadata["compound_missing_child_queries"] = compound_queries[1:]
+            parent_evidence_id = str(
+                compound_metadata.get("evidence_source")
+                or compound_metadata.get("source")
+                or "same_sku_parent_evidence"
+            )
+            compound_metadata["answer_coverage_contract"] = (
+                customer_answer_coverage_contract.build_answer_coverage_contract(
+                    compound_queries,
+                    answered_requests=[(compound_queries[0], parent_evidence_id)],
+                    unsupported_requests=compound_queries[1:],
+                ).to_dict()
+            )
         elif agent_result is not None and len(compound_queries) > 1:
             # The parent QA may be valid while every narrowed child misses.
             # Keep the parent answer, but never silently drop the remaining
@@ -16732,7 +16825,21 @@ async def ask_customer_service(
                 str(agent_result.get("answer") or "").strip(),
                 *(f"关于“{query}”：当前同 SKU 资料未直接确认，无法确认。" for query in compound_queries[1:]),
             ])
-            agent_result.setdefault("answer_metadata", {})["compound_product_qa_queries"] = compound_queries
+            compound_metadata = agent_result.setdefault("answer_metadata", {})
+            compound_metadata["compound_product_qa_queries"] = compound_queries
+            compound_metadata["compound_missing_child_queries"] = compound_queries[1:]
+            parent_evidence_id = str(
+                compound_metadata.get("evidence_source")
+                or compound_metadata.get("source")
+                or "same_sku_parent_evidence"
+            )
+            compound_metadata["answer_coverage_contract"] = (
+                customer_answer_coverage_contract.build_answer_coverage_contract(
+                    compound_queries,
+                    answered_requests=[(compound_queries[0], parent_evidence_id)],
+                    unsupported_requests=compound_queries[1:],
+                ).to_dict()
+            )
     for _sealed_attempt in range(3):
         if agent_result or not _semantic_prefers_sealed_product_qa(phase1_plan):
             break
@@ -16757,6 +16864,8 @@ async def ask_customer_service(
     # semantic sub-query and remains bound to the same resolved SKU.
     if _is_sealed_product_qa_safe_missing(agent_result) and compound_queries:
         compound_answers: list[dict] = []
+        compound_answered_requests: list[tuple[str, str]] = []
+        compound_missing_queries: list[str] = []
         for query in compound_queries:
             child_preplan = dict(compound_preplan)
             child_preplan.update({"qa_evidence_query": query, "qa_evidence_queries": [], "compound": False})
@@ -16774,12 +16883,36 @@ async def ask_customer_service(
                 candidate = await _try_sealed_same_sku_knowledge_answer(db, child_question, child_plan)
             if candidate:
                 compound_answers.append(candidate)
+                candidate_meta = (
+                    candidate.get("answer_metadata")
+                    if isinstance(candidate.get("answer_metadata"), dict)
+                    else {}
+                )
+                compound_answered_requests.append((
+                    query,
+                    str(
+                        candidate_meta.get("evidence_source")
+                        or candidate_meta.get("source")
+                        or "same_sku_child_evidence"
+                    ),
+                ))
+            else:
+                compound_missing_queries.append(query)
         if compound_answers:
             agent_result = compound_answers[0]
             extras = [str(item.get("answer") or "").strip() for item in compound_answers[1:] if str(item.get("answer") or "").strip()]
             if extras:
                 agent_result["answer"] = "\n".join([str(agent_result.get("answer") or "").strip(), *extras])
-            agent_result.setdefault("answer_metadata", {})["compound_product_qa_queries"] = compound_queries
+            compound_metadata = agent_result.setdefault("answer_metadata", {})
+            compound_metadata["compound_product_qa_queries"] = compound_queries
+            compound_metadata["compound_missing_child_queries"] = compound_missing_queries
+            compound_metadata["answer_coverage_contract"] = (
+                customer_answer_coverage_contract.build_answer_coverage_contract(
+                    compound_queries,
+                    answered_requests=compound_answered_requests,
+                    unsupported_requests=compound_missing_queries,
+                ).to_dict()
+            )
 
     shortcut_start = perf_counter()
     if (
@@ -17399,7 +17532,12 @@ async def ask_customer_service(
             for item in ((phase1_plan.get("semantic_preplan") or {}).get("qa_evidence_queries") or [])
             if str(item or "").strip()
         ]
-        if len(final_compound_queries) > 1:
+        coverage_contract = customer_answer_coverage_contract.AnswerCoverageContract.from_dict(
+            answer_metadata.get("answer_coverage_contract")
+        )
+        if coverage_contract is not None:
+            agent_result = _apply_answer_coverage_contract(agent_result)
+        elif len(final_compound_queries) > 1:
             answer_text = str(agent_result.get("answer") or "").strip()
             uncovered_queries = [
                 query for query in final_compound_queries[1:]
