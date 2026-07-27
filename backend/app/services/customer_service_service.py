@@ -130,6 +130,35 @@ def _apply_answer_coverage_contract(agent_result: dict) -> dict:
     )
     return agent_result
 
+
+def _uncovered_compound_queries_for_output(
+    answer: str,
+    queries: list[str],
+    answer_metadata: dict[str, Any] | None,
+) -> list[str]:
+    """Respect semantic coverage before falling back to textual checks.
+
+    A natural answer rarely repeats a whole child question verbatim. Literal
+    substring checks therefore cannot overrule a completed DeepSeek coverage
+    audit. They remain only as a conservative compatibility fallback when no
+    semantic coverage receipt exists.
+    """
+    cleaned_queries = [
+        str(item or "").strip()
+        for item in (queries or [])
+        if str(item or "").strip()
+    ]
+    metadata = answer_metadata if isinstance(answer_metadata, dict) else {}
+    if metadata.get("semantic_answer_coverage_complete") is True:
+        return []
+    normalized_answer = customer_agent_service.normalize_search_text(str(answer or ""))
+    return [
+        query
+        for query in cleaned_queries[1:]
+        if customer_agent_service.normalize_search_text(query) not in normalized_answer
+    ]
+
+
 _RESOLVED_ENTITY_REALTIME_COMMERCIAL_LABELS = {
     "库存",
     "销量",
@@ -712,10 +741,14 @@ async def _save_agent_result_and_return(
         # the semantic source; absent an explicit answer for it, fail closed.
         answer_text = str(agent_result.get("answer") or "").strip()
         if len(compound_query_list) > 1:
+            uncovered_queries = _uncovered_compound_queries_for_output(
+                answer_text,
+                compound_query_list,
+                answer_metadata,
+            )
             additions = [
                 f"关于“{query}”：当前同 SKU 资料未直接确认，无法确认。"
-                for query in compound_query_list[1:]
-                if query not in answer_text
+                for query in uncovered_queries
             ]
             if additions:
                 agent_result["answer"] = "\n".join([item for item in (answer_text, *additions) if item])
@@ -18220,10 +18253,11 @@ async def ask_customer_service(
             agent_result = _apply_answer_coverage_contract(agent_result)
         elif len(final_compound_queries) > 1:
             answer_text = str(agent_result.get("answer") or "").strip()
-            uncovered_queries = [
-                query for query in final_compound_queries[1:]
-                if customer_agent_service.normalize_search_text(query) not in customer_agent_service.normalize_search_text(answer_text)
-            ]
+            uncovered_queries = _uncovered_compound_queries_for_output(
+                answer_text,
+                final_compound_queries,
+                answer_metadata,
+            )
             if uncovered_queries:
                 agent_result["answer"] = "\n".join([
                     answer_text,
@@ -19780,6 +19814,7 @@ async def _try_sealed_same_sku_knowledge_answer(
             evidence_content,
         )
     )
+    semantic_answer_coverage_complete = bool(initial_complete)
     if not initial_grounded or not initial_complete:
         quote_repair_instruction = (
             "The prior evidence_quotes failed the provenance contract: every replacement quote must be a literal uninterrupted substring "
@@ -19863,6 +19898,7 @@ async def _try_sealed_same_sku_knowledge_answer(
                 evidence_content,
             )
         )
+        semantic_answer_coverage_complete = bool(repaired_complete)
         if not repaired_grounded or not repaired_complete:
             bounded_reference = (
                 _bounded_selected_evidence_reference_answer(repaired_payload, evidence_content)
@@ -19872,6 +19908,7 @@ async def _try_sealed_same_sku_knowledge_answer(
                 return None
             answer = bounded_reference
             safety_bounded = True
+            semantic_answer_coverage_complete = False
     safe_missing["answer"] = answer
     safe_missing["confidence"] = "high"
     safe_missing["uncertainty"] = "resolved"
@@ -19896,6 +19933,7 @@ async def _try_sealed_same_sku_knowledge_answer(
         "evidence_bundle_skus": [selected_bundle.sku],
         "evidence_ids": [item.evidence_id for item in selected_bundle.items],
         "evidence_source": "same_sku_knowledge",
+        "semantic_answer_coverage_complete": semantic_answer_coverage_complete,
     }
     safe_missing["debug"]["agent_mode"] = "sealed_same_sku_knowledge_rag"
     safe_missing["debug"]["knowledge_evidence_selector"] = {
@@ -20187,13 +20225,16 @@ def _same_sku_knowledge_strict_entailment_messages(
                 "A related property, specification, numeric range, or general benefit is not enough to prove a distinct condition or conclusion. "
                 "One narrow exception is transparent conservative boundary reasoning: when the evidence explicitly states a numeric operating range and the customer's "
                 "named condition unambiguously falls outside it, the draft may state the recorded range and say that condition is outside the recorded range or is not recommended. "
+                "When the named condition is a universally defined physical threshold (for example freshly boiling water), normalizing that threshold to the standard measurement needed for that boundary comparison is allowed. "
+                "This permits only the arithmetic comparison against the recorded range; it does not add a product fact, hidden tolerance, failure mode, or safety guarantee. "
+                "Example that must return grounded=true: evidence records 32°F to 140°F, the customer asks about freshly boiling water, and the draft says the recorded upper limit is 140°F (60°C), freshly boiling water exceeds it, so direct filling is not recommended. "
                 "This exception does not permit an unrecorded failure mode, hidden tolerance, safety guarantee, or stronger cannot/unsafe claim. "
                 "A supplied same-SKU QA statement that the product has official warranty directly entails the bounded claim that the record states official warranty. "
                 "It never entails a warranty duration, coverage term, or any policy detail absent from that statement. "
                 "For a semantic compound question, a statement that the supplied evidence does not directly confirm a separately requested condition is allowed "
                 "when it is plainly an evidence boundary, not a negative product fact or product conclusion. Such a bounded record-coverage statement "
                 "does not need separate product evidence and must not be rejected merely because the record is silent on that separate condition. "
-                "Do not rely on common knowledge or plausible inference. If any claim needs an inference beyond the evidence, return false."
+                "Do not rely on common knowledge or plausible inference beyond this narrow threshold normalization. If any other claim needs an inference beyond the evidence, return false."
             ),
         },
         {

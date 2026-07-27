@@ -1422,7 +1422,22 @@ def test_same_sku_rag_retrieval_keeps_semantically_relevant_lower_ranked_evidenc
     assert observed_limits == [12]
     assert result is not None
     assert "140\u00b0F" in result["answer"]
+    assert result["answer_metadata"]["semantic_answer_coverage_complete"] is True
     assert result["debug"]["agent_mode"] == "sealed_same_sku_knowledge_rag"
+
+
+def test_strict_rag_grounding_allows_standard_threshold_normalization_for_numeric_boundaries():
+    messages = customer_service_service._same_sku_knowledge_strict_entailment_messages(
+        "这个容器能直接装刚煮开的水吗？",
+        "资料记录的耐温上限为140°F（60°C），刚煮开的水超出该上限，因此不建议直接灌入。",
+        "Withstands 32°F to 140°F temperatures.",
+    )
+
+    system = messages[0]["content"]
+    assert "universally defined physical threshold" in system
+    assert "standard measurement needed for that boundary comparison" in system
+    assert "beyond this narrow threshold normalization" in system
+    assert "Example that must return grounded=true" in system
 
 
 def test_same_sku_rag_retries_a_transient_low_confidence_evidence_selection(monkeypatch):

@@ -113,3 +113,20 @@ def test_compound_child_retries_same_sku_rag_after_a_transient_semantic_rejectio
     assert rag_calls == 2
     assert result is not None
     assert "140\u00b0F" in result["answer"]
+
+
+def test_semantically_complete_parent_answer_is_not_marked_missing_by_literal_child_matching():
+    queries = [
+        "稳稳水袋平常耐不耐用",
+        "刚煮开的水能直接灌进去吗",
+    ]
+    answer = (
+        "正常使用非常耐用，但刚煮开的水温度超过140°F（60°C），"
+        "不建议直接灌入。"
+    )
+
+    assert customer_service_service._uncovered_compound_queries_for_output(
+        answer,
+        queries,
+        {"semantic_answer_coverage_complete": True},
+    ) == []
