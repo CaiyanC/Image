@@ -1,11 +1,18 @@
-from fastapi import APIRouter, Depends
+import json
+
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
+from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
 
 from ..core.database import get_db
-from ..core.security import get_current_user, get_user_permissions
+from ..core.permission_constants import ECOMMERCE_DATA_FILL_PERMISSION, FULL_ACCESS_GROUP_NAMES
+from ..core.security import get_current_user, get_user_groups, get_user_permissions, require_permission
+from ..models.tool import Tool
+from ..models.tool_run import ToolRun
 from ..models.user import User
-from ..schemas.tool import ToolResponse
-from ..services import tool_registry_service
+from ..schemas.tool import ToolResponse, ToolRunResponse
+from ..services import operation_log_service, tool_registry_service, tool_run_service
+from ..tasks.tool_runs import run_ecommerce_data_fill_tool_run
 
 
 router = APIRouter(prefix="/api/tools", tags=["tools"])
@@ -18,3 +25,98 @@ def list_available_tools(
 ):
     permissions = get_user_permissions(db, current_user.id)
     return tool_registry_service.list_visible_tools(db, permissions)
+
+
+def _is_management(db: Session, user_id: str) -> bool:
+    return any(group["group_name"] in FULL_ACCESS_GROUP_NAMES for group in get_user_groups(db, user_id))
+
+
+@router.post("/ecommerce-data-fill/runs", response_model=ToolRunResponse)
+def create_ecommerce_data_fill_run(
+    request: Request,
+    mode: str = Form(...),
+    parameters_json: str = Form("{}"),
+    files: list[UploadFile] = File(...),
+    current_user: User = Depends(require_permission(ECOMMERCE_DATA_FILL_PERMISSION)),
+    db: Session = Depends(get_db),
+):
+    if mode not in {"ecommerce", "kepule", "amazon"}:
+        raise HTTPException(status_code=400, detail="Unsupported spreadsheet workflow")
+    if not files or len(files) > tool_run_service.MAX_UPLOAD_FILES:
+        raise HTTPException(status_code=400, detail="Invalid number of Excel files")
+    try:
+        parameters = json.loads(parameters_json)
+    except json.JSONDecodeError as exc:
+        raise HTTPException(status_code=400, detail="Invalid tool parameters") from exc
+    if not isinstance(parameters, dict):
+        raise HTTPException(status_code=400, detail="Invalid tool parameters")
+    tool = db.query(Tool).filter_by(tool_key="ecommerce_data_fill", is_enabled=True).first()
+    if not tool:
+        raise HTTPException(status_code=404, detail="Tool is disabled")
+    run = tool_run_service.create_run(
+        db,
+        tool_key=tool.tool_key,
+        created_by=current_user.id,
+        parameters={**parameters, "mode": mode},
+    )
+    try:
+        run.input_files = [
+            tool_run_service.save_input_file(run, filename=file.filename, source=file.file)
+            for file in files
+        ]
+        db.commit()
+        db.refresh(run)
+    except Exception:
+        db.rollback()
+        raise
+    operation_log_service.log_operation(
+        db,
+        operator_id=current_user.id,
+        action_type="tool_run",
+        action_name="submit_ecommerce_data_fill",
+        target_type="tool_run",
+        target_id=run.id,
+        target_name=tool.name,
+        request_data={"mode": mode, "file_count": len(run.input_files)},
+        response_data={"status": run.status},
+        request=request,
+    )
+    run_ecommerce_data_fill_tool_run.delay(run.id)
+    return run
+
+
+@router.get("/ecommerce-data-fill/runs", response_model=list[ToolRunResponse])
+def list_ecommerce_data_fill_runs(
+    current_user: User = Depends(require_permission(ECOMMERCE_DATA_FILL_PERMISSION)),
+    db: Session = Depends(get_db),
+):
+    query = db.query(ToolRun).filter_by(tool_key="ecommerce_data_fill")
+    if not _is_management(db, current_user.id):
+        query = query.filter_by(created_by=current_user.id)
+    return query.order_by(ToolRun.created_at.desc()).all()
+
+
+@router.get("/ecommerce-data-fill/runs/{run_id}", response_model=ToolRunResponse)
+def get_ecommerce_data_fill_run(
+    run_id: str,
+    current_user: User = Depends(require_permission(ECOMMERCE_DATA_FILL_PERMISSION)),
+    db: Session = Depends(get_db),
+):
+    run = tool_run_service.get_run(db, run_id)
+    return tool_run_service.ensure_run_access(run, user_id=current_user.id, is_management=_is_management(db, current_user.id))
+
+
+@router.get("/ecommerce-data-fill/runs/{run_id}/files/{file_index}")
+def download_ecommerce_data_fill_file(
+    run_id: str,
+    file_index: int,
+    current_user: User = Depends(require_permission(ECOMMERCE_DATA_FILL_PERMISSION)),
+    db: Session = Depends(get_db),
+):
+    run = tool_run_service.get_run(db, run_id)
+    tool_run_service.ensure_run_access(run, user_id=current_user.id, is_management=_is_management(db, current_user.id))
+    if file_index < 0 or file_index >= len(run.output_files or []):
+        raise HTTPException(status_code=404, detail="Run file not found")
+    item = run.output_files[file_index]
+    path = tool_run_service.resolve_run_file(run, str(item.get("relative_path") or ""))
+    return FileResponse(path, filename=str(item.get("display_name") or path.name))

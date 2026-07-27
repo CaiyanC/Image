@@ -1,4 +1,7 @@
 import unittest
+import tempfile
+from io import BytesIO
+from unittest.mock import patch
 
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
@@ -16,6 +19,7 @@ from app.core.permission_constants import (
 from app.models import Group, GroupPermission, OperationLog, Permission, PermissionRoute, Route, Tool, ToolRun, User, UserGroup
 from app.core.security import get_current_user
 from app.core.security import get_current_super_admin
+from app.core.config import settings
 from app.main import app
 
 
@@ -157,9 +161,14 @@ class ToolDirectoryApiTest(unittest.TestCase):
         app.dependency_overrides[database.get_db] = override_db
         app.dependency_overrides[get_current_user] = finance_user
         self.client = TestClient(app)
+        self.tmpdir = tempfile.TemporaryDirectory()
+        self.original_upload_dir = settings.UPLOAD_DIR
+        settings.UPLOAD_DIR = self.tmpdir.name
 
     def tearDown(self):
         app.dependency_overrides.clear()
+        settings.UPLOAD_DIR = self.original_upload_dir
+        self.tmpdir.cleanup()
 
     def test_finance_user_sees_every_tool_backed_by_its_existing_permissions(self):
         response = self.client.get("/api/tools")
@@ -203,3 +212,24 @@ class ToolDirectoryApiTest(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json()["route_path"], "/customer-service")
         self.assertEqual(response.json()["permission_key"], "ai.customer_service")
+
+    def test_finance_user_can_submit_an_excel_run_without_exposing_the_task_queue(self):
+        with patch("app.api.tools.run_ecommerce_data_fill_tool_run.delay") as enqueue:
+            response = self.client.post(
+                "/api/tools/ecommerce-data-fill/runs",
+                data={"mode": "ecommerce", "parameters_json": "{}"},
+                files={
+                    "files": (
+                        "source.xlsx",
+                        BytesIO(b"test spreadsheet contents"),
+                        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    ),
+                },
+            )
+
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        self.assertEqual(body["status"], "queued")
+        self.assertEqual(body["tool_key"], "ecommerce_data_fill")
+        self.assertEqual(body["input_files"][0]["display_name"], "source.xlsx")
+        enqueue.assert_called_once_with(body["id"])

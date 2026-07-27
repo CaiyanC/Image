@@ -36,3 +36,18 @@ class ToolResponse(BaseModel):
     updated_at: datetime
 
     model_config = {"from_attributes": True}
+
+
+class ToolRunResponse(BaseModel):
+    id: str
+    tool_key: str
+    status: str
+    parameters: dict
+    input_files: list
+    output_files: list
+    error_message: str | None
+    created_at: datetime
+    started_at: datetime | None
+    completed_at: datetime | None
+
+    model_config = {"from_attributes": True}
