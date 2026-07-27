@@ -990,6 +990,57 @@ def test_semantic_comparison_keeps_each_participant_local_when_only_one_is_sku()
     assert [contract.resolved_sku for contract in contracts] == ["CW-C95", "CS-B15S"]
 
 
+def test_semantic_comparison_can_seal_one_prior_turn_anchor():
+    products = [
+        _product("SKU-A", "Alpha"),
+        _product("SKU-B", "Beta"),
+    ]
+    preplan = {
+        "called": True,
+        "route_family": "comparison",
+        "entities": ["SKU-B", "SKU-A"],
+        "canonical_fields": ["weight"],
+        "context_usage": "entity_anchor",
+        "confidence": 0.9,
+        "ambiguity": False,
+    }
+
+    contracts = customer_service_service._semantic_comparison_entity_contracts(
+        "Compared with SKU-B, which is lighter?",
+        preplan,
+        products,
+        context_anchor_sku="SKU-A",
+    )
+
+    assert [contract.resolved_sku for contract in contracts] == ["SKU-B", "SKU-A"]
+    assert contracts[1].status_reason == "trusted_context_anchor_exact"
+
+
+def test_semantic_comparison_rejects_non_current_participant_without_anchor_contract():
+    products = [
+        _product("SKU-A", "Alpha"),
+        _product("SKU-B", "Beta"),
+    ]
+    preplan = {
+        "called": True,
+        "route_family": "comparison",
+        "entities": ["SKU-B", "SKU-A"],
+        "canonical_fields": ["weight"],
+        "context_usage": "none",
+        "confidence": 0.9,
+        "ambiguity": False,
+    }
+
+    contracts = customer_service_service._semantic_comparison_entity_contracts(
+        "Compared with SKU-B, which is lighter?",
+        preplan,
+        products,
+        context_anchor_sku="SKU-A",
+    )
+
+    assert contracts == []
+
+
 def test_high_confidence_semantic_comparison_replaces_legacy_participant_extraction_with_sealed_contracts():
     products = [
         _product("SKU-A", "示例甲"),

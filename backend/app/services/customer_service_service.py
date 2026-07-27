@@ -1348,6 +1348,8 @@ def _semantic_comparison_entity_contracts(
     question: str,
     semantic_preplan: dict | None,
     products: list[Product],
+    *,
+    context_anchor_sku: str | None = None,
 ) -> list[customer_entity_resolution_contract.EntityResolutionContract]:
     """Validate semantic comparison participants without accepting an LLM SKU decision."""
     preplan = semantic_preplan if isinstance(semantic_preplan, dict) else {}
@@ -1358,16 +1360,39 @@ def _semantic_comparison_entity_contracts(
     ):
         return []
     normalized_question = customer_agent_service.normalize_search_text(question)
+    canonical_anchor_sku = str(context_anchor_sku or "").strip().upper()
+    anchor_product = next(
+        (
+            product
+            for product in products
+            if str(product.sku or "").strip().upper() == canonical_anchor_sku
+        ),
+        None,
+    )
+    allow_context_anchor = bool(
+        anchor_product is not None
+        and str(preplan.get("context_usage") or "").strip() == "entity_anchor"
+    )
     participants: list[str] = []
+    context_anchor_participants: set[str] = set()
     for raw_participant in preplan.get("entities") or []:
         participant = str(raw_participant or "").strip()
         normalized_participant = customer_agent_service.normalize_search_text(participant)
-        if (
-            not normalized_participant
-            or normalized_participant not in normalized_question
-            or participant in participants
-        ):
+        if not normalized_participant or participant in participants:
             return []
+        if normalized_participant not in normalized_question:
+            anchor_identity_values = {
+                customer_agent_service.normalize_search_text(value)
+                for value in (
+                    canonical_anchor_sku,
+                    getattr(anchor_product, "product_name_cn", "") if anchor_product else "",
+                    getattr(anchor_product, "product_name_en", "") if anchor_product else "",
+                )
+                if str(value or "").strip()
+            }
+            if not allow_context_anchor or normalized_participant not in anchor_identity_values:
+                return []
+            context_anchor_participants.add(participant)
         participants.append(participant)
     if len(participants) < 2:
         return []
@@ -1386,13 +1411,37 @@ def _semantic_comparison_entity_contracts(
     contracts: list[customer_entity_resolution_contract.EntityResolutionContract] = []
     resolved_skus: set[str] = set()
     for participant in participants:
-        contract = customer_entity_resolution_contract.build_entity_resolution_contract(
-            question,
-            products,
-            entity_text_override=participant,
-            field_type_override=field_type,
-            participant_local_identity=True,
-        )
+        if participant in context_anchor_participants and anchor_product is not None:
+            normalized_participant = customer_agent_service.normalize_search_text(participant)
+            matched_by = (
+                "sku_exact"
+                if normalized_participant
+                == customer_agent_service.normalize_search_text(canonical_anchor_sku)
+                else "canonical_name_exact"
+            )
+            contract = customer_entity_resolution_contract.EntityResolutionContract(
+                entity_text=participant,
+                normalized_entity_text=normalized_participant,
+                status="resolved",
+                resolved_sku=canonical_anchor_sku,
+                resolver_candidate_skus=[canonical_anchor_sku],
+                diagnostic_candidate_skus=[],
+                candidate_skus=[canonical_anchor_sku],
+                matched_by=matched_by,
+                confidence="high",
+                is_unique=True,
+                matched_span=None,
+                field_type=field_type,
+                status_reason="trusted_context_anchor_exact",
+            )
+        else:
+            contract = customer_entity_resolution_contract.build_entity_resolution_contract(
+                question,
+                products,
+                entity_text_override=participant,
+                field_type_override=field_type,
+                participant_local_identity=True,
+            )
         decision = customer_entity_resolution_contract.can_resolve_single_product(contract, products)
         if not decision.allowed or not decision.resolved_sku or decision.resolved_sku in resolved_skus:
             return []
@@ -1406,9 +1455,16 @@ def _apply_semantic_comparison_plan(
     phase1_plan: dict[str, Any],
     semantic_preplan: dict | None,
     products: list[Product],
+    *,
+    context_anchor_sku: str | None = None,
 ) -> list[customer_entity_resolution_contract.EntityResolutionContract]:
     """Adapt one validated semantic comparison into sealed multi-entity execution."""
-    contracts = _semantic_comparison_entity_contracts(question, semantic_preplan, products)
+    contracts = _semantic_comparison_entity_contracts(
+        question,
+        semantic_preplan,
+        products,
+        context_anchor_sku=context_anchor_sku,
+    )
     if not contracts:
         return []
     resolved_skus = [str(contract.resolved_sku or "").strip().upper() for contract in contracts]
@@ -14221,11 +14277,22 @@ async def ask_customer_service(
             # spans.  The catalogue is consulted only to validate each span
             # into its own EntityResolutionContract; it never receives an LLM
             # SKU choice or a lexical comparison rule.
+            comparison_context_skus = (
+                _latest_active_product_skus(db, conversation_id, user_id)
+                if conversation_id
+                else []
+            )
+            comparison_context_anchor_sku = (
+                comparison_context_skus[0]
+                if len(comparison_context_skus) == 1
+                else None
+            )
             comparison_contracts = _apply_semantic_comparison_plan(
                 question,
                 phase1_plan,
                 semantic_preplan,
                 db.query(Product).order_by(Product.sku.asc()).all(),
+                context_anchor_sku=comparison_context_anchor_sku,
             )
             if not comparison_contracts:
                 semantic_comparison_clarification = _semantic_comparison_fail_closed_result(semantic_preplan)
