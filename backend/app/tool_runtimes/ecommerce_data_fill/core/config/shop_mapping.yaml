@@ -1,0 +1,30 @@
+shops:
+  爱路客天猫店:
+    platform: 天猫
+    target_store_name: 爱路客旗舰店
+    channel_standard: 天猫
+
+  爱路客京东POP店:
+    platform: 京东POP
+    target_store_name: 京东POP旗舰店
+    channel_standard: 京东POP
+
+  爱路客京东POP旗舰店:
+    platform: 京东POP
+    target_store_name: 京东POP旗舰店
+    channel_standard: 京东POP
+
+  京东POP旗舰店:
+    platform: 京东POP
+    target_store_name: 京东POP旗舰店
+    channel_standard: 京东POP
+
+  爱路客拼多多店:
+    platform: 拼多多
+    target_store_name: 拼多多旗舰店
+    channel_standard: 拼多多
+
+  京东自营:
+    platform: 京东自营
+    target_store_name: 京东自营
+    channel_standard: 京东自营

@@ -1,0 +1,12 @@
+period:
+  cycle_type: "周"
+  cycle_code: "2026W27"
+  start_date: "2026-06-29"
+  end_date: "2026-07-05"
+
+inventory:
+  snapshot_date: "2026-06-29"
+
+kepule:
+  sales_date: "2026-07-05"
+  inventory_date: "2026-06-29"

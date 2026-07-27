@@ -1,0 +1,12 @@
+roles:
+  w27_target:
+    required_sheets:
+      - 2_平台总表
+      - 3_SKU明细
+      - 7_库存补货
+  kepule_target:
+    required_sheets:
+      - 源_销售明细
+      - 源_库存快照
+      - 周报输出
+      - 月报输出
