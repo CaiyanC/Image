@@ -6757,6 +6757,25 @@ def _recommendation_unproved_comparative_claims(answer: str) -> list[str]:
     return list(dict.fromkeys(match.group(0) for match in _RECOMMENDATION_UNPROVED_COMPARATIVE_CLAIM_RE.finditer(text)))
 
 
+_RECOMMENDATION_INTERNAL_PROCESS_CLAIM_RE = re.compile(
+    r"同\s*SKU\s*(?:来源字段|条件(?:资料)?(?:已经|已)?(?:通过)?(?:验证|核验))"
+    r"|(?:通过|经过|已通过).{0,12}(?:可验证|验证|核验|硬条件)"
+    r"|可验证的硬条件"
+    r"|本次仅采用"
+    r"|(?:候选|索引)\s*[#：:]?\s*\d+",
+    flags=re.IGNORECASE,
+)
+
+
+def _recommendation_internal_process_claims(answer: str) -> list[str]:
+    """Reject internal verification/process wording from customer prose."""
+    text = str(answer or "")
+    return list(dict.fromkeys(
+        match.group(0)
+        for match in _RECOMMENDATION_INTERNAL_PROCESS_CLAIM_RE.finditer(text)
+    ))
+
+
 def _recommendation_rewrite_candidates(candidates: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """Keep a rejected narrative's rewrite inside the same sealed SKU packet.
 
@@ -7283,6 +7302,7 @@ async def _semantic_recommendation_narrative(
         )
         local_unsupported_claims = list(dict.fromkeys([
             *_recommendation_unproved_comparative_claims(narrative["answer"]),
+            *_recommendation_internal_process_claims(narrative["answer"]),
         ]))
         if review and review["approved"] and not local_unsupported_claims:
             if diagnostics is not None:
@@ -7334,6 +7354,7 @@ async def _semantic_recommendation_narrative(
         )
         rewritten_local_unsupported_claims = list(dict.fromkeys([
             *_recommendation_unproved_comparative_claims(rewritten["answer"]),
+            *_recommendation_internal_process_claims(rewritten["answer"]),
         ]))
         if rewritten_review and rewritten_review["approved"] and not rewritten_local_unsupported_claims:
             if diagnostics is not None:
@@ -10283,6 +10304,11 @@ def _post_filter_recommendation_result(db: Session, question: str, agent_result:
     answer_type = str(agent_result.get("answer_type") or "").strip()
     metadata = dict(agent_result.get("answer_metadata") or {})
     metadata_source = str(metadata.get("source") or "").strip()
+    sealed_semantic_contract_data = metadata.get("recommendation_contract")
+    has_sealed_semantic_contract = bool(
+        metadata_source == "validated_semantic_preplan_then_same_sku_verification"
+        and isinstance(sealed_semantic_contract_data, dict)
+    )
     # A pairwise choice has already sealed its candidate domain and rendered
     # a recommendation from that ordered set.  Re-running global catalogue
     # filtering here can leave the result rows scoped while replacing the
@@ -10337,7 +10363,13 @@ def _post_filter_recommendation_result(db: Session, question: str, agent_result:
         debug["agent_mode"] = debug.get("agent_mode") or "recommendation_post_filter_no_match"
         agent_result["debug"] = debug
         return agent_result
-    verification_contract = customer_recommendation_verification_contract.build_recommendation_request_contract(question)
+    verification_contract = (
+        customer_recommendation_verification_contract.RecommendationRequestContract.from_dict(
+            sealed_semantic_contract_data
+        )
+        if has_sealed_semantic_contract
+        else customer_recommendation_verification_contract.build_recommendation_request_contract(question)
+    )
     eligibility_filters = dict(contract.get("filters") or {})
     eligibility_filters.pop("_contract.lightweight", None)
     if verification_contract.subject_kind == "stove" and not verification_contract.heat_sources:
@@ -10346,10 +10378,21 @@ def _post_filter_recommendation_result(db: Session, question: str, agent_result:
         "filters": eligibility_filters,
         "negative_filters": dict(contract.get("negative_filters") or {}),
     }
-    qualified_rows = [
-        row for row in rows
-        if _structured_row_matches_contract(row, eligibility_contract)
-    ]
+    # A semantic recommendation has already converted the complete request
+    # into a formal verification contract. Reapplying the older lexical
+    # eligibility filter can silently discard its verified candidates (for
+    # example, a DB people-range value that does not contain the exact words
+    # from the request). Reuse the sealed contract and let the central
+    # verifier evaluate the same rows. Legacy results still receive the
+    # deterministic eligibility filter.
+    qualified_rows = (
+        list(rows)
+        if has_sealed_semantic_contract
+        else [
+            row for row in rows
+            if _structured_row_matches_contract(row, eligibility_contract)
+        ]
+    )
     # Runtime ranking may return only a truncated candidate window. When the
     # formal verification contract has no hard factual constraint, an empty
     # intersection with that window is not evidence that the catalogue has no
@@ -10552,8 +10595,13 @@ def _post_filter_recommendation_result(db: Session, question: str, agent_result:
     # order: the visible lead must follow the sealed top result, not the old
     # ranker's first product.
     ranking_changed = filtered_skus != original_skus[:len(filtered_skus)]
+    recommendation_narrative = metadata.get("recommendation_narrative")
+    validated_semantic_narrative = bool(
+        isinstance(recommendation_narrative, dict)
+        and recommendation_narrative.get("source") == "validated_deepseek_grounded_narrative"
+    )
     should_rebuild_answer = (
-        verification_enabled
+        (verification_enabled and not validated_semantic_narrative)
         or comparison_scope
         or ranking_changed
         or not answer

@@ -3761,6 +3761,99 @@ def test_output_shaping_preserves_validated_semantic_recommendation_narrative():
     assert result["answer"] == "候选产品中，小方锅Pro套装（CW-C99）更适合明火煮面，因为方形锅面能平铺，收纳也更方便。"
 
 
+def test_recommendation_post_filter_preserves_validated_deepseek_narrative_when_verified_skus_are_unchanged(monkeypatch):
+    class FakeVerification:
+        sku = "CW-S10-A"
+        verification_level = "fully_verified"
+
+        def to_dict(self):
+            return {
+                "sku": self.sku,
+                "verification_level": self.verification_level,
+            }
+
+    fake_verification = FakeVerification()
+    monkeypatch.setattr(
+        customer_service_service.customer_recommendation_verification_contract,
+        "build_recommendation_request_contract",
+        lambda question: pytest.fail("validated semantic recommendation must reuse its sealed contract"),
+    )
+    monkeypatch.setattr(
+        customer_service_service.customer_recommendation_verification_contract,
+        "verify_recommendation_candidates",
+        lambda contract, rows: [fake_verification],
+    )
+    monkeypatch.setattr(
+        customer_service_service.customer_recommendation_verification_contract,
+        "select_recommendation_candidates",
+        lambda rows, verifications: list(rows),
+    )
+    monkeypatch.setattr(
+        customer_service_service.customer_recommendation_verification_contract,
+        "prepare_recommendation_return_rows",
+        lambda rows, limit=5: (list(rows), {"total_match_count": len(rows)}),
+    )
+    monkeypatch.setattr(
+        customer_service_service,
+        "_structured_row_matches_contract",
+        lambda row, contract: pytest.fail("legacy lexical eligibility must not re-filter a sealed semantic result"),
+    )
+    monkeypatch.setattr(
+        customer_service_service,
+        "_is_service_pot_or_cookware_set_candidate",
+        lambda row: True,
+    )
+    monkeypatch.setattr(
+        customer_service_service,
+        "_should_use_central_subject_recommendation",
+        lambda **kwargs: True,
+    )
+
+    answer = "如果您要搭配酒精炉，可以看看激川单锅；资料标注它支持酒精炉。"
+    result = customer_service_service._post_filter_recommendation_result(
+        None,
+        "适合酒精炉的锅具推荐一下。",
+        {
+            "intent": "recommendation",
+            "answer_type": "recommendation",
+            "answer": answer,
+            "results": [{
+                "sku": "CW-S10-A",
+                "product_name_cn": "激川单锅",
+                "category": "锅具",
+                "sub_category": "单锅",
+                "heat_source": "酒精炉；气炉",
+            }],
+            "result_skus": ["CW-S10-A"],
+            "candidate_skus": ["CW-S10-A"],
+            "answer_metadata": {
+                "source": "validated_semantic_preplan_then_same_sku_verification",
+                "recommendation_contract": {
+                    "subject_kind": "cookware",
+                    "subject_category": "锅具",
+                    "heat_sources": ["alcohol_stove"],
+                    "hard_constraints": ["heat_source"],
+                    "soft_preferences": [],
+                    "field_provenance": {
+                        "subject_category": {
+                            "source_turn": 1,
+                            "provenance": "validated_semantic_preplan",
+                        },
+                    },
+                },
+                "recommendation_narrative": {
+                    "source": "validated_deepseek_grounded_narrative",
+                },
+            },
+            "debug": {"agent_mode": "semantic_recommendation_contract"},
+        },
+    )
+
+    assert result["answer"] == answer
+    assert result["result_skus"] == ["CW-S10-A"]
+    assert result["debug"]["recommendation_post_filter_answer_rebuilt"] is False
+
+
 def test_semantic_preplan_treats_empty_optional_recommendation_containers_as_absent(monkeypatch):
     async def fake_chat_completion(db, messages, **kwargs):
         if kwargs.get("purpose") == "semantic_recommendation_constraint_grounding":
@@ -4955,7 +5048,7 @@ def test_semantic_recommendation_result_order_follows_validated_deepseek_ranking
                 {"candidate_index": 1, "fields": ["people", "scenario", "heat_source", "weight"]},
                 {"candidate_index": 0, "fields": ["people", "scenario", "heat_source", "weight"]},
             ],
-            "answer": "候选二更符合这次取舍，候选一作为备选；两项都经过同 SKU 条件核验后再给出排序。",
+            "answer": "优先推荐候选二，它适合2人露营并支持卡式炉；候选一也满足这些条件，可作为备选。",
         })
 
     monkeypatch.setattr(customer_service_service, "_phase1_catalog_rows", lambda db, ref: rows)
@@ -7340,6 +7433,65 @@ def test_recommendation_safety_gate_rejects_unproved_catalogue_wide_rankings():
     )
 
     assert "综合首选" in claims
+
+
+def test_recommendation_safety_gate_rejects_internal_verification_process_language():
+    claims = customer_service_service._recommendation_internal_process_claims(
+        "推荐优先考虑以下候选，均通过了可验证的硬条件。本次仅采用同 SKU 来源字段明确标注的内容。"
+    )
+
+    assert claims
+    assert customer_service_service._recommendation_internal_process_claims(
+        "如果您要搭配酒精炉，可以看看激川单锅；资料中标注它支持酒精炉。"
+    ) == []
+
+
+def test_semantic_recommendation_rewrites_internal_process_language_even_when_reviewer_approves(monkeypatch):
+    calls = []
+
+    async def fake_chat_completion(_db, messages=None, **kwargs):
+        purpose = kwargs.get("purpose")
+        calls.append(purpose)
+        if purpose == "semantic_recommendation_narrative":
+            return json.dumps({
+                "ranked_candidate_indexes": [0],
+                "evidence_usage": [{"candidate_index": 0, "fields": ["content.usage_scenarios"]}],
+                "answer": "推荐优先考虑以下候选，均通过了可验证的硬条件。本次仅采用同 SKU 来源字段明确标注的内容：激川单锅。",
+            })
+        if purpose == "semantic_recommendation_narrative_rewrite":
+            return json.dumps({
+                "ranked_candidate_indexes": [0],
+                "evidence_usage": [{"candidate_index": 0, "fields": ["content.usage_scenarios"]}],
+                "answer": "如果您准备带去露营，可以看看激川单锅；资料标注它的使用场景包括露营。",
+            })
+        assert purpose == "semantic_recommendation_narrative_grounding_review"
+        return json.dumps({"approved": True, "unsupported_claims": []})
+
+    class Verification:
+        sku = "CW-S10-A"
+        evidence_by_constraint = {
+            "subject": {"status": "verified", "raw_value": "锅具"},
+            "scenario": {"status": "verified", "raw_value": "露营"},
+        }
+        unsupported_constraints = []
+        unsupported_preferences = []
+
+    monkeypatch.setattr(customer_service_service.customer_llm_service, "chat_completion", fake_chat_completion)
+    narrative = asyncio.run(customer_service_service._semantic_recommendation_narrative(
+        db=None,
+        question="露营锅具推荐一下。",
+        rows=[{
+            "sku": "CW-S10-A",
+            "product_name_cn": "激川单锅",
+            "usage_scenarios": "露营",
+        }],
+        verifications=[Verification()],
+    ))
+
+    assert narrative is not None
+    assert "semantic_recommendation_narrative_rewrite" in calls
+    assert "同 SKU" not in narrative["answer"]
+    assert "硬条件" not in narrative["answer"]
 
 
 def test_recommendation_lexical_safety_gate_leaves_relative_weight_language_to_semantic_grounding():
