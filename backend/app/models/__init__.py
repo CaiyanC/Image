@@ -11,6 +11,8 @@ from .agent_trace import AgentTrace
 from .field_configs import FieldConfig
 from .entity_field_values import EntityFieldValue
 from .ai_tasks import AiTask
+from .tool import Tool
+from .tool_run import ToolRun
 from .product_draft import ProductDraft
 from .product_category import ProductCategory
 from .product_prompts import ProductPrompts
@@ -40,7 +42,7 @@ __all__ = [
     "User", "Generation", "SystemConfig", "Group", "UserGroup",
     "Permission", "GroupPermission",
     "Route", "PermissionRoute",
-    "OperationLog", "AgentAction", "AgentTrace", "FieldConfig", "EntityFieldValue", "AiTask",
+    "OperationLog", "AgentAction", "AgentTrace", "FieldConfig", "EntityFieldValue", "AiTask", "Tool", "ToolRun",
     "ProductDraft", "ProductCategory", "ProductPrompts",
     "Product", "ProductOperationSnapshot", "ProductSpecs", "ProductBusiness", "ProductContent", "ProductMedia", "ProductAsset",
     "ProductQa", "ProductQaNegative", "ProductQaAnswer",
