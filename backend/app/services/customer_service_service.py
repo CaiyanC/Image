@@ -20108,15 +20108,7 @@ async def _try_sealed_same_sku_knowledge_answer(
         )
         semantic_answer_coverage_complete = bool(repaired_complete)
         if not repaired_grounded or not repaired_complete:
-            bounded_reference = (
-                _bounded_selected_evidence_reference_answer(repaired_payload, evidence_content)
-                or _bounded_selected_evidence_reference_answer(answer_payload, evidence_content)
-            )
-            if not bounded_reference:
-                return None
-            answer = bounded_reference
-            safety_bounded = True
-            semantic_answer_coverage_complete = False
+            return None
     safe_missing["answer"] = answer
     safe_missing["confidence"] = "high"
     safe_missing["uncertainty"] = "resolved"
@@ -20281,11 +20273,15 @@ def _same_sku_knowledge_evidence_units(content: str) -> list[str]:
     text = str(content or "").strip()
     if not text:
         return []
-    blocks = [block.strip() for block in re.split(r"\n\s*\n+", text) if block.strip()]
+    blocks = [block for block in re.split(r"\n\s*\n+", text) if block.strip()]
     if not blocks:
         return [text]
     units: list[str] = []
-    for block in blocks:
+    for raw_block in blocks:
+        block = raw_block.strip()
+        if units and raw_block[:1].isspace():
+            units[-1] = f"{units[-1]}\n{block}"
+            continue
         # A malformed import can hold a whole document in one paragraph.
         # Preserve source text while exposing sentence-level evidence there.
         if len(block) > 900:

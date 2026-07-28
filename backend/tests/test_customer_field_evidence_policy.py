@@ -1049,6 +1049,21 @@ def test_same_sku_knowledge_evidence_units_keep_independent_listing_paragraphs_s
     ]
 
 
+def test_same_sku_knowledge_evidence_units_keep_indented_list_continuation_together():
+    """Blank lines inside one imported list item must not drop its safety details."""
+    content = (
+        "4. 燃料存放：未使用完的燃料要及时密封，以防挥发。\n\n"
+        "    同时存放在儿童不易接触的地方，远离火源，常温存放。"
+    )
+
+    units = customer_service_service._same_sku_knowledge_evidence_units(content)
+
+    assert units == [
+        "4. 燃料存放：未使用完的燃料要及时密封，以防挥发。\n"
+        "同时存放在儿童不易接触的地方，远离火源，常温存放。"
+    ]
+
+
 def test_semantic_heat_source_span_survives_literal_contract_validation():
     """A validated semantic ontology code must not be replaced by alias matching."""
     constraints, spans = customer_agent_planner_service._recommendation_literal_grounding_filter(
@@ -2057,7 +2072,7 @@ def test_same_sku_rag_rejects_one_false_grounding_verdict_after_quote_validation
     assert calls == 1
 
 
-def test_same_sku_rag_falls_back_to_literal_selected_facts_when_drafts_overclaim(monkeypatch):
+def test_same_sku_rag_fails_closed_when_grounded_delivery_cannot_cover_question(monkeypatch):
     sku = "RAG-BOUNDED-REFERENCE"
     safe_missing = {
         "sku": sku,
@@ -2108,11 +2123,7 @@ def test_same_sku_rag_falls_back_to_literal_selected_facts_when_drafts_overclaim
         )
     )
 
-    assert result is not None
-    assert "It is definitely ideal" not in result["answer"]
-    assert "Target audience: experienced campers." in result["answer"]
-    assert "\u53ef\u6838\u9a8c\u7684\u53c2\u8003\u4fe1\u606f" in result["answer"]
-    assert result["skip_polish"] is True
+    assert result is None
 
 
 def test_same_sku_rag_uses_strict_entailment_as_the_claim_delivery_gate(monkeypatch):
