@@ -13,7 +13,7 @@ from ..core.rate_limit import enforce_rate_limit
 from ..core.security import get_user_permissions, require_permission
 from ..models.knowledge_base import CustomerServiceConversation, CustomerServiceMessage
 from ..models.user import User
-from ..services import agent_action_service, customer_perf_service, customer_service_service, operation_log_service
+from ..services import agent_action_service, customer_llm_service, customer_perf_service, customer_service_service, operation_log_service
 
 router = APIRouter(prefix="/api/customer-service", tags=["customer-service"])
 logger = logging.getLogger("uvicorn")
@@ -125,13 +125,17 @@ async def ask(
     enforce_rate_limit(user_id=current_user.id, scope="customer_service.ask", limit=60, window_seconds=60)
     customer_perf_service.log_stage("ask_api.precheck", precheck_start, permission_checked=True, rate_limit_checked=True)
     service_start = perf_counter()
-    result = await customer_service_service.ask_customer_service(
-        db,
-        user_id=current_user.id,
-        question=body.question,
-        sku=body.sku,
-        conversation_id=body.conversation_id,
-    )
+    governance_token = customer_llm_service.set_governed_customer_user(current_user)
+    try:
+        result = await customer_service_service.ask_customer_service(
+            db,
+            user_id=current_user.id,
+            question=body.question,
+            sku=body.sku,
+            conversation_id=body.conversation_id,
+        )
+    finally:
+        customer_llm_service.reset_governed_customer_user(governance_token)
     customer_perf_service.log_stage(
         "ask_api.service_call",
         service_start,
@@ -171,6 +175,7 @@ async def ask_stream(
     enforce_rate_limit(user_id=current_user.id, scope="customer_service.ask_stream", limit=60, window_seconds=60)
     customer_perf_service.log_stage("ask_stream.precheck", precheck_start, permission_checked=True, rate_limit_checked=True)
     async def event_stream():
+        governance_token = customer_llm_service.set_governed_customer_user(current_user)
         try:
             yield _sse("status", {"message": "agent_planning", "label": "正在理解问题并选择工具"})
             planned_start = perf_counter()
@@ -269,6 +274,8 @@ async def ask_stream(
         except Exception:
             logger.exception("customer service stream failed")
             yield _sse("error", {"message": _public_error_message()})
+        finally:
+            customer_llm_service.reset_governed_customer_user(governance_token)
 
     return StreamingResponse(
         event_stream(),

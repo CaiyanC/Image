@@ -5,6 +5,7 @@ import logging
 from time import perf_counter
 from urllib.parse import urljoin, urlparse
 from sqlalchemy.orm import Session
+from .model_governance_service import ResolvedModel
 from ..models.system_config import SystemConfig
 from ..core.config import settings
 from ..core.database import release_session_connection
@@ -170,6 +171,18 @@ def _resolve_model_config(db: Session, model_id: str) -> dict:
     }
 
 
+def _resolved_model_config(resolved_model: ResolvedModel) -> dict:
+    """Adapt a governance decision for provider calls without legacy lookup."""
+    return {
+        "id": resolved_model.model.id,
+        "api_key": resolved_model.api_key,
+        "api_base_url": resolved_model.credential.api_base_url,
+        "api_model": resolved_model.model.request_model_name,
+        "api_format": resolved_model.model.api_format,
+        "api_endpoint": resolved_model.model.api_endpoint,
+    }
+
+
 def get_actual_embedding_config() -> dict:
     api_key = settings.DASHSCOPE_API_KEY.strip()
     return {
@@ -197,9 +210,10 @@ async def txt2img(
     model: str = "gpt-image-1",
     n: int = 1,
     size: str = "1024x1024",
+    resolved_model: ResolvedModel | None = None,
     **kwargs,
 ) -> dict:
-    cfg = _resolve_model_config(db, model)
+    cfg = _resolved_model_config(resolved_model) if resolved_model else _resolve_model_config(db, model)
     base_url = cfg["api_base_url"]
     api_key = cfg["api_key"]
 
@@ -230,7 +244,7 @@ async def txt2img(
     if kwargs.get("moderation"):
         body["moderation"] = kwargs["moderation"]
 
-    url = cfg.get("txt2img_url") or _make_url(base_url, "v1/images/generations")
+    url = cfg.get("api_endpoint") or cfg.get("txt2img_url") or _make_url(base_url, "v1/images/generations")
 
     body["n"] = 1
 
@@ -281,9 +295,10 @@ async def img2img(
     model: str = "gpt-image-1",
     n: int = 1,
     size: str = "1024x1024",
+    resolved_model: ResolvedModel | None = None,
     **kwargs,
 ) -> dict:
-    cfg = _resolve_model_config(db, model)
+    cfg = _resolved_model_config(resolved_model) if resolved_model else _resolve_model_config(db, model)
     base_url = cfg["api_base_url"]
     api_key = cfg["api_key"]
 
@@ -314,7 +329,7 @@ async def img2img(
 
     data["n"] = 1
 
-    url = cfg.get("img2img_url") or _make_url(base_url, "v1/images/edits")
+    url = cfg.get("api_endpoint") or cfg.get("img2img_url") or _make_url(base_url, "v1/images/edits")
     timeout = httpx.Timeout(connect=float(settings.DMXAPI_IMG2IMG_CONNECT_TIMEOUT), read=float(settings.DMXAPI_IMG2IMG_READ_TIMEOUT), write=300.0, pool=10.0)
 
     async def _do_request():
@@ -389,8 +404,9 @@ async def txt2img_gemini(
     n: int = 1,
     aspect_ratio: str = "1:1",
     image_size: str = "1K",
+    resolved_model: ResolvedModel | None = None,
 ) -> dict:
-    cfg = _resolve_model_config(db, model)
+    cfg = _resolved_model_config(resolved_model) if resolved_model else _resolve_model_config(db, model)
     base_url = cfg["api_base_url"]
     api_key = cfg["api_key"]
 
@@ -416,11 +432,11 @@ async def txt2img_gemini(
     }
 
     if n <= 1:
-        response = await _gemini_single_request(base_url, api_key, model, body, 300.0)
+        response = await _gemini_single_request(base_url, api_key, cfg.get("api_model") or model, body, 300.0)
         image_data = _extract_gemini_image(response)
         return {"data": image_data}
 
-    tasks = [_gemini_single_request(base_url, api_key, model, body, 300.0) for _ in range(n)]
+    tasks = [_gemini_single_request(base_url, api_key, cfg.get("api_model") or model, body, 300.0) for _ in range(n)]
     results = await asyncio.gather(*tasks, return_exceptions=True)
 
     image_list = []
@@ -430,7 +446,7 @@ async def txt2img_gemini(
             for retry in range(2):
                 await asyncio.sleep(3 * (retry + 1))
                 try:
-                    resp = await _gemini_single_request(base_url, api_key, model, body, 300.0)
+                    resp = await _gemini_single_request(base_url, api_key, cfg.get("api_model") or model, body, 300.0)
                     image_list.extend(_extract_gemini_image(resp))
                     break
                 except Exception as retry_err:
@@ -457,8 +473,9 @@ async def img2img_gemini(
     n: int = 1,
     aspect_ratio: str = "1:1",
     image_size: str = "1K",
+    resolved_model: ResolvedModel | None = None,
 ) -> dict:
-    cfg = _resolve_model_config(db, model)
+    cfg = _resolved_model_config(resolved_model) if resolved_model else _resolve_model_config(db, model)
     base_url = cfg["api_base_url"]
     api_key = cfg["api_key"]
 
@@ -491,11 +508,11 @@ async def img2img_gemini(
     }
 
     if n <= 1:
-        response = await _gemini_single_request(base_url, api_key, model, body, 1000.0)
+        response = await _gemini_single_request(base_url, api_key, cfg.get("api_model") or model, body, 1000.0)
         image_data = _extract_gemini_image(response)
         return {"data": image_data}
 
-    tasks = [_gemini_single_request(base_url, api_key, model, body, 1000.0) for _ in range(n)]
+    tasks = [_gemini_single_request(base_url, api_key, cfg.get("api_model") or model, body, 1000.0) for _ in range(n)]
     results = await asyncio.gather(*tasks, return_exceptions=True)
 
     image_list = []
@@ -505,7 +522,7 @@ async def img2img_gemini(
             for retry in range(2):
                 await asyncio.sleep(3 * (retry + 1))
                 try:
-                    resp = await _gemini_single_request(base_url, api_key, model, body, 1000.0)
+                    resp = await _gemini_single_request(base_url, api_key, cfg.get("api_model") or model, body, 1000.0)
                     image_list.extend(_extract_gemini_image(resp))
                     break
                 except Exception as retry_err:
@@ -627,19 +644,18 @@ async def chat_completion(
     response_format: dict | None = None,
     thinking: dict | None = None,
     response_metadata: dict | None = None,
+    resolved_model: ResolvedModel | None = None,
 ) -> str:
-    cfg = _resolve_model_config(db, model) if model else get_default_model_by_type(db, "chat")
+    cfg = _resolved_model_config(resolved_model) if resolved_model else (_resolve_model_config(db, model) if model else get_default_model_by_type(db, "chat"))
     if not cfg:
         raise ValueError("未配置聊天模型，请先在管理设置中添加 type=chat 的模型")
-    if cfg.get("api_format") != "openai":
-        raise ValueError("智能客服当前仅支持 OpenAI 格式的聊天模型")
-
     api_key = cfg.get("api_key", "").strip()
     if not api_key:
         raise ValueError(f"聊天模型 '{cfg['id']}' 未配置 API Key")
 
+    request_model = cfg.get("api_model") or cfg["id"] if resolved_model else (api_model_override or cfg.get("api_model") or cfg["id"])
     body = {
-        "model": api_model_override or cfg.get("api_model") or cfg["id"],
+        "model": request_model,
         "messages": messages,
         "temperature": temperature,
         "max_tokens": max_tokens,
@@ -652,7 +668,7 @@ async def chat_completion(
         "Authorization": f"Bearer {api_key}",
         "Content-Type": "application/json",
     }
-    url = cfg.get("chat_url") or _make_url(cfg.get("api_base_url") or DEFAULT_BASE_URL, "v1/chat/completions")
+    url = cfg.get("api_endpoint") or cfg.get("chat_url") or _make_url(cfg.get("api_base_url") or DEFAULT_BASE_URL, "v1/chat/completions")
     agent_trace_service.trace("AI_REQUEST", {"url": url, "body": body})
     release_session_connection(db)
 
@@ -704,8 +720,11 @@ async def chat_completion_stream(
     model: str | None = None,
     temperature: float = 0.2,
     max_tokens: int = 1200,
+    *,
+    api_model_override: str | None = None,
+    resolved_model: ResolvedModel | None = None,
 ):
-    cfg = _resolve_model_config(db, model) if model else get_default_model_by_type(db, "chat")
+    cfg = _resolved_model_config(resolved_model) if resolved_model else (_resolve_model_config(db, model) if model else get_default_model_by_type(db, "chat"))
     if not cfg:
         raise ValueError("chat model is not configured")
     if cfg.get("api_format") != "openai":
@@ -716,7 +735,7 @@ async def chat_completion_stream(
         raise ValueError(f"chat model '{cfg['id']}' has no API key")
 
     body = {
-        "model": cfg.get("api_model") or cfg["id"],
+        "model": cfg.get("api_model") or cfg["id"] if resolved_model else (api_model_override or cfg.get("api_model") or cfg["id"]),
         "messages": messages,
         "temperature": temperature,
         "max_tokens": max_tokens,
@@ -726,7 +745,7 @@ async def chat_completion_stream(
         "Authorization": f"Bearer {api_key}",
         "Content-Type": "application/json",
     }
-    url = cfg.get("chat_url") or _make_url(cfg.get("api_base_url") or DEFAULT_BASE_URL, "v1/chat/completions")
+    url = cfg.get("api_endpoint") or cfg.get("chat_url") or _make_url(cfg.get("api_base_url") or DEFAULT_BASE_URL, "v1/chat/completions")
     agent_trace_service.trace("AI_STREAM_REQUEST", {"url": url, "body": body})
     release_session_connection(db)
 

@@ -58,6 +58,7 @@ class Settings:
     DEBUG: bool = os.getenv("DEBUG", "false").lower() == "true"
 
     SECRET_KEY: str = os.getenv("SECRET_KEY", "")
+    MODEL_CREDENTIAL_ENCRYPTION_KEY: str = os.getenv("MODEL_CREDENTIAL_ENCRYPTION_KEY", "").strip()
     ALGORITHM: str = "HS256"
     ENABLE_PUBLIC_REGISTRATION: bool = os.getenv("ENABLE_PUBLIC_REGISTRATION", "false").lower() == "true"
     ACCESS_TOKEN_EXPIRE_MINUTES: int = int(os.getenv("ACCESS_TOKEN_EXPIRE_MINUTES", "1440"))

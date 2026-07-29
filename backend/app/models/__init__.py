@@ -27,6 +27,10 @@ from .product_qa import ProductQa, ProductQaNegative
 from .product_qa_answer import ProductQaAnswer
 from .qa_tags import QaTag, QaTagRelation
 from .ai_generated_asset import AiGeneratedAsset
+from .ai_governance import (
+    AIProviderCredential, AIModel, AIFeatureModel, AIModelAccessRule,
+    AIModelUsageLog,
+)
 from .product_associations import (
     ListingChannel, ProductListingChannel,
     SalesRegion, ProductSalesRegion,
@@ -47,6 +51,8 @@ __all__ = [
     "Product", "ProductOperationSnapshot", "ProductSpecs", "ProductBusiness", "ProductContent", "ProductMedia", "ProductAsset",
     "ProductQa", "ProductQaNegative", "ProductQaAnswer",
     "QaTag", "QaTagRelation", "AiGeneratedAsset",
+    "AIProviderCredential", "AIModel", "AIFeatureModel", "AIModelAccessRule",
+    "AIModelUsageLog",
     "ListingChannel", "ProductListingChannel",
     "SalesRegion", "ProductSalesRegion",
     "Certification", "ProductCertification",

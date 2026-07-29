@@ -19,7 +19,7 @@ from ..schemas.generation import (
     GenerationParams,
 )
 from ..services import generation_service
-from ..services.dmxapi_service import get_available_models
+from ..services.model_governance_service import list_selectable_models, resolve_authorized_model
 
 router = APIRouter(prefix="/api/generation", tags=["generation"])
 MAX_REFERENCE_IMAGE_BYTES = 10 * 1024 * 1024
@@ -35,7 +35,16 @@ def get_models(
     current_user: User = Depends(require_permission("ai.generate")),
     db: Session = Depends(get_db),
 ):
-    return get_available_models(db)
+    return [
+        {
+            "id": model.id,
+            "name": model.display_name,
+            "type": model.capability,
+            "description": "",
+            "api_format": model.api_format,
+        }
+        for model in list_selectable_models(db, current_user, "generation.image", "image")
+    ]
 
 
 @router.post("/txt2img", response_model=GenerationResponse)
@@ -45,7 +54,8 @@ async def txt2img(
     db: Session = Depends(get_db),
 ):
     _enforce_ai_generation_limit(current_user)
-    return await generation_service.create_txt2img(db, current_user, req)
+    resolved_model = resolve_authorized_model(db, current_user, "generation.image", req.model_name, "image")
+    return await generation_service.create_txt2img(db, current_user, req, resolved_model=resolved_model)
 
 
 @router.post("/img2img", response_model=GenerationResponse)
@@ -89,7 +99,8 @@ async def img2img(
     image_data = []
     for img in images:
         image_data.append((await _read_reference_upload(img), img.filename or "image.png"))
-    return await generation_service.create_img2img(db, current_user, req, image_data)
+    resolved_model = resolve_authorized_model(db, current_user, "generation.image", req.model_name, "image")
+    return await generation_service.create_img2img(db, current_user, req, image_data, resolved_model=resolved_model)
 
 
 @router.post("/img2img-gemini", response_model=GenerationResponse)
@@ -114,7 +125,8 @@ async def img2img_gemini(
     for idx, img in enumerate(req.images):
         img_bytes, ext = _decode_reference_payload(img)
         image_data.append((img_bytes, f"ref_{idx}.{ext}"))
-    return await generation_service.create_img2img(db, current_user, dto, image_data)
+    resolved_model = resolve_authorized_model(db, current_user, "generation.image", dto.model_name, "image")
+    return await generation_service.create_img2img(db, current_user, dto, image_data, resolved_model=resolved_model)
 
 
 @router.post("/txt2vid", response_model=GenerationResponse)
@@ -124,7 +136,8 @@ async def txt2vid(
     db: Session = Depends(get_db),
 ):
     _enforce_ai_generation_limit(current_user)
-    return await generation_service.create_txt2vid(db, current_user, req)
+    resolved_model = resolve_authorized_model(db, current_user, "generation.image", req.model_name, "image")
+    return await generation_service.create_txt2vid(db, current_user, req, resolved_model=resolved_model)
 
 
 @router.post("/upload")

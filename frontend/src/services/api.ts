@@ -121,6 +121,126 @@ export interface PlatformTool {
   updated_at: string
 }
 
+export interface GenerationModel {
+  id: string
+  name: string
+  type: string
+  description: string
+  api_format: 'openai' | 'gemini'
+}
+
+export interface CredentialSummary {
+  id: string
+  provider_name: string
+  api_base_url: string
+  scope_type: 'company' | 'group' | 'user'
+  scope_id: string | null
+  is_enabled: boolean
+  api_key_masked: string
+  created_at: string
+  updated_at: string
+}
+
+export interface ManagedModel {
+  id: string
+  display_name: string
+  provider_name: string
+  capability: string
+  request_model_name: string
+  api_format: 'openai' | 'gemini'
+  api_endpoint: string | null
+  is_enabled: boolean
+}
+
+export interface FeatureModel {
+  id: string
+  feature_key: string
+  model_id: string
+  is_default: boolean
+  sort_order: number
+  is_enabled: boolean
+}
+
+export interface ModelAccessRule {
+  id: string
+  feature_key: string
+  model_id: string
+  subject_type: 'group' | 'user'
+  subject_id: string
+  effect: 'allow' | 'deny'
+}
+
+export interface ModelUsageLog {
+  id: string
+  user_id: string | null
+  feature_key: string
+  model_id: string | null
+  credential_scope_type: string | null
+  result: string
+  latency_ms: number | null
+  input_tokens: number | null
+  output_tokens: number | null
+  total_tokens: number | null
+  created_at: string
+}
+
+export interface ModelUsageLogFilters {
+  skip?: number
+  limit?: number
+  user_id?: string
+  feature_key?: string
+  model_id?: string
+  result?: string
+  date_from?: string
+  date_to?: string
+}
+
+export interface AuthorizationOverviewModel {
+  model_id: string
+  display_name: string
+  permission_source: 'feature_default' | 'group_allow' | 'user_allow'
+  key_available: boolean
+  credential_scope_type: 'company' | 'group' | 'user' | null
+}
+
+export interface AuthorizationOverviewFeature {
+  feature_key: string
+  models: AuthorizationOverviewModel[]
+}
+
+export interface AuthorizationOverviewRow {
+  subject_type: 'group' | 'user'
+  subject_id: string
+  subject_name: string
+  has_personal_override: boolean
+  features: AuthorizationOverviewFeature[]
+}
+
+export interface AuthorizationOverviewCatalogModel {
+  model_id: string
+  display_name: string
+  provider_name: string
+}
+
+export interface AuthorizationOverviewFeatureCatalog {
+  feature_key: string
+  models: AuthorizationOverviewCatalogModel[]
+}
+
+export interface AuthorizationOverviewGroup {
+  subject_id: string
+  subject_name: string
+  features: AuthorizationOverviewFeature[]
+  members: AuthorizationOverviewRow[]
+}
+
+export interface AuthorizationOverviewResponse {
+  features: AuthorizationOverviewFeatureCatalog[]
+  groups: AuthorizationOverviewGroup[]
+}
+
+export type AuthorizationOverview = AuthorizationOverviewResponse
+
 export interface ToolRun {
   id: string
   tool_key: string
@@ -627,7 +747,7 @@ export const api = {
   },
 
   generation: {
-    models: () => request<any[]>('/generation/models'),
+    models: () => request<GenerationModel[]>('/generation/models'),
 
     txt2img: (data: {
       prompt: string
@@ -773,6 +893,48 @@ export const api = {
         `/products/operation-snapshots/${snapshotId}/restore`,
         { method: 'POST' },
       ),
+  },
+
+  modelGovernance: {
+    selectable: (featureKey: string, capability: string) =>
+      request<Array<{ id: string; name: string; capability: string }>>(
+        `/model-governance/features/${encodeURIComponent(featureKey)}/models?capability=${encodeURIComponent(capability)}`,
+    ),
+    authorizationOverview: () => request<AuthorizationOverview>('/admin/model-governance/authorization-overview'),
+    authorizationOverviewSelection: (subjectType: 'group' | 'user', subjectId: string, featureKey: string, modelIds: string[]) =>
+      request<ModelAccessRule[]>(
+        `/admin/model-governance/authorization-overview/${subjectType}/${encodeURIComponent(subjectId)}/features/${encodeURIComponent(featureKey)}`,
+        { method: 'PUT', body: JSON.stringify({ model_ids: modelIds }) },
+      ),
+    credentials: () => request<CredentialSummary[]>('/admin/model-governance/credentials'),
+    createCredential: (data: {
+      provider_name: string; api_base_url: string; api_key: string; scope_type: 'company' | 'group' | 'user'; scope_id?: string | null; is_enabled: boolean
+    }) => request<CredentialSummary>('/admin/model-governance/credentials', { method: 'POST', body: JSON.stringify(data) }),
+    updateCredential: (id: string, data: Partial<{
+      provider_name: string; api_base_url: string; api_key: string; scope_type: 'company' | 'group' | 'user'; scope_id: string | null; is_enabled: boolean
+    }>) => request<CredentialSummary>(`/admin/model-governance/credentials/${encodeURIComponent(id)}`, { method: 'PUT', body: JSON.stringify(data) }),
+    models: () => request<ManagedModel[]>('/admin/model-governance/models'),
+    createModel: (data: ManagedModel) =>
+      request<ManagedModel>('/admin/model-governance/models', { method: 'POST', body: JSON.stringify(data) }),
+    updateModel: (id: string, data: Partial<Omit<ManagedModel, 'id'>>) =>
+      request<ManagedModel>(`/admin/model-governance/models/${encodeURIComponent(id)}`, { method: 'PUT', body: JSON.stringify(data) }),
+    featureModels: (featureKey?: string) => request<FeatureModel[]>(
+      `/admin/model-governance/feature-models${featureKey ? `?feature_key=${encodeURIComponent(featureKey)}` : ''}`,
+    ),
+    setFeatureModel: (featureKey: string, modelId: string, data: Omit<FeatureModel, 'id' | 'feature_key' | 'model_id'>) =>
+      request<FeatureModel>(`/admin/model-governance/feature-models/${encodeURIComponent(featureKey)}/${encodeURIComponent(modelId)}`, { method: 'PUT', body: JSON.stringify(data) }),
+    accessRules: (featureKey?: string) => request<ModelAccessRule[]>(
+      `/admin/model-governance/access-rules${featureKey ? `?feature_key=${encodeURIComponent(featureKey)}` : ''}`,
+    ),
+    setAccessRule: (featureKey: string, data: Omit<ModelAccessRule, 'id' | 'feature_key'>) =>
+      request<ModelAccessRule>(`/admin/model-governance/access-rules/${encodeURIComponent(featureKey)}`, { method: 'PUT', body: JSON.stringify(data) }),
+    usageLogs: (params: ModelUsageLogFilters = {}) => {
+      const query = new URLSearchParams()
+      query.set('skip', String(params.skip ?? 0))
+      query.set('limit', String(params.limit ?? 50))
+      for (const [key, value] of Object.entries(params)) if (value !== undefined && value !== '') query.set(key, String(value))
+      return request<{ items: ModelUsageLog[]; total: number }>(`/admin/model-governance/usage-logs?${query.toString()}`)
+    },
   },
 
   groups: {

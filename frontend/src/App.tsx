@@ -24,6 +24,7 @@ const ToolCenter = lazy(() => import('./pages/ToolCenter'))
 const EcommerceDataFill = lazy(() => import('./pages/EcommerceDataFill'))
 const AdminTools = lazy(() => import('./pages/AdminTools'))
 const AdminDepartmentWorkbench = lazy(() => import('./pages/AdminDepartmentWorkbench'))
+const AdminModelGovernance = lazy(() => import('./pages/AdminModelGovernance'))
 
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
   const { token } = useAuthStore()
@@ -246,6 +247,16 @@ export default function App() {
             <SuperAdminRoute>
               <Layout>
                 <AdminUsers />
+              </Layout>
+            </SuperAdminRoute>
+          }
+        />
+        <Route
+          path="/admin/model-governance"
+          element={
+            <SuperAdminRoute>
+              <Layout>
+                <AdminModelGovernance />
               </Layout>
             </SuperAdminRoute>
           }
