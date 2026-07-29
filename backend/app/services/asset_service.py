@@ -21,6 +21,12 @@ DEFAULT_STATUS = "待审核"
 ARCHIVE_CATEGORY_CODE = "08"
 ARCHIVE_CATEGORY_NAME = "参考归档禁用图"
 
+EXPRESSION_REQUIREMENTS = {
+    "卖点图": "selling_point_tags",
+    "场景图": "scene_tags",
+    "氛围图": "mood_tags",
+}
+
 
 def today_tag() -> str:
     return datetime.now().strftime("%Y%m%d")
@@ -67,6 +73,14 @@ def parse_tags(tags: Any) -> dict[str, list[str]]:
     if not isinstance(parsed, dict):
         return {}
     return json.loads(normalize_tags(parsed))
+
+
+def validate_asset_tags(tags: Any) -> dict[str, list[str]]:
+    normalized = parse_tags(tags)
+    for expression, required_key in EXPRESSION_REQUIREMENTS.items():
+        if expression in normalized.get("expression_tags", []) and not normalized.get(required_key):
+            raise HTTPException(status_code=422, detail=f"{expression} 必须选择对应标签")
+    return normalized
 
 
 def model_to_dict(asset: ProductAsset) -> dict[str, Any]:
@@ -149,6 +163,51 @@ def list_assets(
         ProductAsset.seq.asc(),
         ProductAsset.created_at.asc(),
     ).all()
+
+
+def search_assets(
+    db: Session,
+    *,
+    sku: str | None = None,
+    category: str | None = None,
+    channel: str | None = None,
+    review_status: str | None = None,
+    authorization_status: str | None = None,
+    expression_tags: list[str] | None = None,
+    selling_point_tags: list[str] | None = None,
+    scene_tags: list[str] | None = None,
+    mood_tags: list[str] | None = None,
+    limit: int = 100,
+) -> list[ProductAsset]:
+    query = db.query(ProductAsset)
+    for column, value in (
+        (ProductAsset.sku, sku),
+        (ProductAsset.category_code, category),
+        (ProductAsset.channel, channel),
+        (ProductAsset.review_status, review_status),
+        (ProductAsset.authorization_status, authorization_status),
+    ):
+        if value:
+            query = query.filter(column == value)
+
+    requested_tags = {
+        "expression_tags": set(expression_tags or []),
+        "selling_point_tags": set(selling_point_tags or []),
+        "scene_tags": set(scene_tags or []),
+        "mood_tags": set(mood_tags or []),
+    }
+    candidates = query.order_by(
+        ProductAsset.sku.asc(),
+        ProductAsset.category_code.asc(),
+        ProductAsset.seq.asc(),
+    ).all()
+    return [
+        asset for asset in candidates
+        if all(
+            not values or values.intersection(parse_tags(asset.tags).get(key, []))
+            for key, values in requested_tags.items()
+        )
+    ][:limit]
 
 
 def group_assets(assets: list[ProductAsset]) -> list[dict[str, Any]]:
@@ -266,7 +325,7 @@ def create_asset(db: Session, sku: str, data: dict[str, Any]) -> ProductAsset:
         maintainer=payload.get("maintainer"),
         seq=int(seq),
         sort_order=int(payload.get("sort_order") or 0),
-        tags=normalize_tags(payload.get("tags")),
+        tags=normalize_tags(validate_asset_tags(payload.get("tags"))),
         notes=payload.get("notes"),
     )
     db.add(asset)
@@ -331,7 +390,7 @@ def update_asset(db: Session, sku: str, asset_id: str, data: dict[str, Any]) -> 
         if key not in allowed:
             continue
         if key == "tags":
-            setattr(asset, key, normalize_tags(value))
+            setattr(asset, key, normalize_tags(validate_asset_tags(value)))
         else:
             setattr(asset, key, value)
     db.commit()
@@ -342,7 +401,7 @@ def update_asset(db: Session, sku: str, asset_id: str, data: dict[str, Any]) -> 
 def update_asset_tags(db: Session, sku: str, asset_id: str, tags: dict[str, list[str]]) -> ProductAsset:
     ensure_product_exists(db, sku)
     asset = get_asset(db, sku, asset_id)
-    asset.tags = normalize_tags(tags)
+    asset.tags = normalize_tags(validate_asset_tags(tags))
     db.commit()
     db.refresh(asset)
     return asset

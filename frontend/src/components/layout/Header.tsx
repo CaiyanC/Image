@@ -39,6 +39,7 @@ export default function Header() {
     ...(has('history.view') ? [{ path: '/history', label: '历史' }] : []),
     ...(has('product.read') ? [{ path: '/products', label: '产品' }] : []),
     ...(has('product.read') ? [{ path: '/assets', label: '素材库' }] : []),
+    ...(has('product.read') ? [{ path: '/assets/search', label: '素材检索' }] : []),
   ]
   const homePath = navItems[0]?.path || '/no-access'
 

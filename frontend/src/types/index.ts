@@ -248,6 +248,10 @@ export interface ProductKeyword {
 }
 
 export interface AssetTags {
+  expression_tags?: string[]
+  selling_point_tags?: string[]
+  scene_tags?: string[]
+  mood_tags?: string[]
   product_tags?: string[]
   material_type_tags?: string[]
   usage_tags?: string[]

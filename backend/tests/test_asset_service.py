@@ -177,6 +177,17 @@ class AssetServiceTest(unittest.TestCase):
         self.assertFalse(asset.is_public)
         self.assertFalse(asset.ai_customer_usable)
 
+    def test_visual_expression_tags_require_their_supporting_tag(self):
+        with self.assertRaises(HTTPException) as ctx:
+            asset_service.validate_asset_tags({"expression_tags": ["卖点图"]})
+        self.assertEqual(ctx.exception.status_code, 422)
+
+        validated = asset_service.validate_asset_tags({
+            "expression_tags": ["场景图"],
+            "scene_tags": ["家庭露营"],
+        })
+        self.assertEqual(validated["scene_tags"], ["家庭露营"])
+
 
 if __name__ == "__main__":
     unittest.main()

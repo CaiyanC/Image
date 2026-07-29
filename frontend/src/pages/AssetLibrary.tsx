@@ -28,8 +28,9 @@ type EditForm = Partial<ProductAsset>
 export default function AssetLibrary() {
   const [products, setProducts] = useState<ProductListItem[]>([])
   const [searchResults, setSearchResults] = useState<ProductListItem[]>([])
-  const [searchSku, setSearchSku] = useState('')
-  const [selectedSku, setSelectedSku] = useState('')
+  const initialSku = new URLSearchParams(window.location.search).get('sku') || ''
+  const [searchSku, setSearchSku] = useState(initialSku)
+  const [selectedSku, setSelectedSku] = useState(initialSku)
   const [activeCategory, setActiveCategory] = useState('01')
   const [activeSubCategory, setActiveSubCategory] = useState<string | null>(null)
   const [assets, setAssets] = useState<ProductAsset[]>([])
