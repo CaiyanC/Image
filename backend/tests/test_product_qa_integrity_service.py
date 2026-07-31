@@ -217,7 +217,7 @@ def test_direct_conflict_qa_is_rejected(monkeypatch):
         db.commit()
 
         async def direct_conflict(*_args, **_kwargs):
-            return '{"status":"rejected","conflict_type":"direct_conflict","reason":"Evidence says no open flame."}'
+                return '{"status":"rejected","conflict_type":"direct_conflict","reason":"Evidence says no open flame.","evidence_quote":"Not suitable for open-flame stove use."}'
 
         monkeypatch.setattr(
             product_qa_integrity_service.customer_llm_service,
@@ -385,6 +385,23 @@ def test_classifier_reason_is_preserved_without_truncation():
     )
 
     assert verdict["reason"] == reason
+
+
+def test_unverifiable_direct_conflict_remains_review():
+    """A claimed conflict cannot reject supplemental QA without same-SKU evidence."""
+    verdict = product_qa_integrity_service._normalize_supplemental_verdict(
+        {
+            "status": "rejected",
+            "conflict_type": "direct_conflict",
+            "reason": "Claimed material conflict.",
+            "evidence_quote": "PTFE coating",
+        },
+        question="What is the surface finish?",
+        answer="It uses a matte finish.",
+        evidence={"specs": {"material": "aluminum"}},
+    )
+
+    assert verdict["status"] == "review"
 
 
 def test_rejected_qa_is_excluded_from_customer_matching_and_vector_documents():

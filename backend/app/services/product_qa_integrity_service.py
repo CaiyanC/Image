@@ -60,16 +60,20 @@ def _parse_verdict(raw: str) -> dict[str, str]:
     status = str(payload.get("status") or "").strip().lower()
     conflict_type = payload.get("conflict_type")
     reason = payload.get("reason")
+    evidence_quote = payload.get("evidence_quote", "")
     if status not in _ALLOWED_STATUSES:
         return {"status": "review", "reason": "语义审核返回了无效结论。"}
     if conflict_type not in _ALLOWED_CONFLICT_TYPES:
         return {"status": "review", "reason": "语义审核返回了无效冲突类型。"}
     if not isinstance(reason, str) or not reason.strip():
         return {"status": "review", "reason": "语义审核未提供可验证原因。"}
+    if conflict_type == "direct_conflict" and (not isinstance(evidence_quote, str) or not evidence_quote.strip()):
+        return {"status": "review", "reason": "语义审核未提供同SKU冲突证据。"}
     return {
         "status": status,
         "conflict_type": conflict_type,
         "reason": reason,
+        "evidence_quote": evidence_quote,
     }
 
 
@@ -78,6 +82,7 @@ def _normalize_supplemental_verdict(
     *,
     question: str | None,
     answer: str | None,
+    evidence: dict[str, Any] | None = None,
 ) -> dict[str, str]:
     """Normalize a valid classifier result around concrete conflict types."""
     if not str(question or "").strip() or not str(answer or "").strip():
@@ -85,6 +90,10 @@ def _normalize_supplemental_verdict(
     conflict_type = verdict.get("conflict_type")
     if conflict_type not in _ALLOWED_CONFLICT_TYPES:
         return {"status": "review", "reason": verdict["reason"]}
+    if conflict_type == "direct_conflict":
+        evidence_text = json.dumps(evidence or {}, ensure_ascii=False)
+        if str(verdict.get("evidence_quote") or "").strip() not in evidence_text:
+            return {"status": "review", "reason": "语义审核的冲突证据不可在同SKU资料中验证。"}
     if conflict_type in _REJECTING_CONFLICT_TYPES:
         return {"status": "rejected", "reason": verdict["reason"]}
     return {"status": "approved", "reason": verdict["reason"]}
@@ -103,12 +112,13 @@ async def audit_product_qa_item(db: Session, product: Product, qa: ProductQa) ->
                     {
                         "role": "system",
                         "content": (
-                            'Return only exact JSON with keys "status", "conflict_type", and "reason". '
+                            'Return only exact JSON with keys "status", "conflict_type", "reason", and "evidence_quote". '
                             '"status" must be "approved", "rejected", or "review". "conflict_type" must be '
                             '"none", "direct_conflict", "cross_category", or "invalid_qa". Audit whether the '
                             "supplied QA belongs to this same product. Treat same-SKU QA as a supplemental fact "
                             "source: absence of a field from product-master evidence is not disproof and must not "
-                            'cause rejection or review. Use "direct_conflict" only for a concrete value that '
+                            'cause rejection or review. For "direct_conflict", evidence_quote must be an exact nonempty '
+                            'quote copied from same-SKU evidence that states the opposite fact; missing evidence is never a conflict. Use "direct_conflict" only for a concrete value that '
                             'contradicts same-SKU evidence, "cross_category" only for a plainly incompatible '
                             'product category or contaminated template, and "invalid_qa" only when the question '
                             'or answer is empty or unusable. Otherwise use "none" and approve. Use review only '
@@ -138,6 +148,7 @@ async def audit_product_qa_item(db: Session, product: Product, qa: ProductQa) ->
                 _parse_verdict(raw),
                 question=qa.question,
                 answer=qa.answer,
+                evidence=evidence,
             )
         except Exception:
             verdict = {"status": "review", "reason": "语义审核暂时不可用。"}
