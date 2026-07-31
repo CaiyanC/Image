@@ -3912,6 +3912,36 @@ def test_semantic_preplan_treats_empty_optional_recommendation_containers_as_abs
     assert not result["fallback_reason"]
 
 
+def test_semantic_preplan_prompt_distinguishes_unbound_recommendation_from_product_qa():
+    messages = customer_agent_planner_service._semantic_preplan_messages(
+        question="有没有适合送人的户外产品？",
+        deterministic_plan={},
+        context={},
+    )
+    instructions = "\n".join(message["content"] for message in messages if message["role"] == "system")
+
+    assert "unbound customer request for actual catalogue candidates" in instructions
+    assert "must use route_family=recommendation" in instructions
+    assert "product_bound_qa requires one named product or an entity anchor" in instructions
+
+
+def test_empty_unbound_recommendation_contract_requests_category_not_sku():
+    result = customer_service_service._semantic_recommendation_constraint_clarification_result({
+        "called": True,
+        "route_family": "recommendation",
+        "confidence": 0.9,
+        "confidence_label": "high",
+        "fallback_reason": "",
+        "recommendation_constraints": {},
+        "ambiguity": False,
+    })
+
+    assert result is not None
+    assert result["intent"] == "recommendation"
+    assert "锅具、水具还是炉具" in result["answer"]
+    assert "SKU" not in result["answer"]
+
+
 def test_semantic_preplan_rejects_recommendation_identity_payload(monkeypatch):
     async def fake_chat_completion(db, messages, **kwargs):
         return json.dumps({
