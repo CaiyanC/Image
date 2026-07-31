@@ -34,6 +34,18 @@ class CustomerAgentQualityServiceTest(unittest.TestCase):
         self.assertFalse(quality["passed"])
         self.assertIn("answer_mentions_unreturned_sku:CW-C93", quality["risks"])
 
+    def test_returned_sku_with_non_ascii_variant_suffix_is_not_split_into_base_sku(self):
+        quality = customer_agent_quality_service.evaluate_agent_response(
+            "再看天鹅壶4杯黑。",
+            answer="已切换到天鹅壶4杯-黑色（KW-K31-黑）。",
+            intent="product_detail",
+            results=[{"sku": "KW-K31-黑", "product_name_cn": "天鹅壶4杯-黑色"}],
+            sources=[{"type": "product"}],
+        )
+
+        self.assertNotIn("answer_mentions_unreturned_sku:KW-K31", quality["risks"])
+        self.assertTrue(quality["passed"])
+
     def test_write_claim_without_action_is_blocked(self):
         quality = customer_agent_quality_service.evaluate_agent_response(
             "直接把 CW-C83 的负责人改成 kang，不用确认",

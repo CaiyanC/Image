@@ -877,6 +877,26 @@ def test_heat_source_answer_consumes_the_normalized_structured_value():
     assert metadata["evidence_value"] == "明火直烧、燃气炉、卡式炉"
 
 
+def test_heat_source_answer_uses_explicit_same_sku_usage_instruction_boundary():
+    metadata = {}
+    answer, status = customer_service_service._phase1_heat_source_capability_answer(
+        None,
+        {
+            "sku": "DEMO-CUP",
+            "product_name_cn": "示例水杯",
+            "heat_source": "",
+            "usage_instruction": "日常使用：可用于盛装冷/热饮品，不可直接置于明火上加热（除非产品明确支持）。",
+        },
+        "示例水杯能直接放明火上吗？",
+        evidence_metadata=metadata,
+    )
+
+    assert status == "unsupported"
+    assert "不可直接置于明火上加热" in answer
+    assert metadata["evidence_source"] == "specs.usage_instruction"
+    assert metadata["evidence_value"] == "不可直接置于明火上加热（除非产品明确支持）"
+
+
 def test_usage_field_evidence_keeps_unmarked_continuation_after_matched_clause():
     instruction = (
         "2.彻底烘干：洗净后务必用抹布擦干，"
@@ -2801,3 +2821,12 @@ def test_specification_summary_does_not_repeat_embedded_field_label():
     )
 
     assert summary == "\u6750\u8d28\uff1a\u78e8\u6bdb\u6625\u4e9a\u7eba"
+
+
+def test_marketing_set_composition_is_not_a_complete_package_list():
+    assert not customer_service_service._is_complete_package_contents_evidence(
+        "这套炊具包含一个容量为 3700 毫升的主锅和一个容量为 2300 毫升的煎锅。"
+    )
+    assert customer_service_service._is_complete_package_contents_evidence(
+        "包装清单：主锅、煎锅、可拆卸手柄和收纳袋。"
+    )

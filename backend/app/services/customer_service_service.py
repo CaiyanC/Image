@@ -2518,6 +2518,45 @@ def _phase1_alcohol_stove_compatibility_answer(
     return f"当前资料里没有找到{name}（{sku}）是否支持酒精炉的明确说明。", "missing"
 
 
+def _same_sku_usage_instruction_heat_source_boundary(
+    usage_instruction: Any,
+    *,
+    asked_capability: str,
+    asks_direct_heating: bool,
+) -> str:
+    """Return an explicit negative heat-source boundary from same-SKU instructions.
+
+    ``usage_instruction`` is not a general heat-source provider.  It is used
+    here only when one complete source sentence directly negates the specific
+    heat source or direct-heating operation in the customer's question.
+    """
+    text = str(usage_instruction or "").strip()
+    if not text or text in {"[]", "/", "暂无", "未标注"}:
+        return ""
+    capability_terms = {
+        "卡式炉": ("卡式炉",),
+        "燃气炉": ("燃气炉", "气炉", "卡式炉"),
+        "气炉": ("气炉", "燃气炉", "卡式炉"),
+        "明火直烧": ("明火直烧", "明火"),
+        "明火": ("明火", "明火直烧"),
+        "分体炉": ("分体炉",),
+        "一体炉": ("一体炉",),
+    }.get(asked_capability, ())
+    negative_markers = ("不可", "不能", "不建议", "严禁", "禁止")
+    for sentence in re.split(r"(?<=[。！？!?；;])\s*", text):
+        for clause in re.split(r"(?<=[，,])\s*", sentence):
+            candidate = re.sub(r"\s+", " ", clause).strip()
+            if not candidate or not any(marker in candidate for marker in negative_markers):
+                continue
+            directly_names_capability = bool(capability_terms and any(term in candidate for term in capability_terms))
+            directly_names_operation = asks_direct_heating and any(
+                term in candidate for term in ("直接加热", "直接置于", "直接放", "明火上加热")
+            )
+            if directly_names_capability or directly_names_operation:
+                return candidate.rstrip("。；; ")
+    return ""
+
+
 def _phase1_heat_source_capability_answer(
     db: Session,
     row: dict,
@@ -2543,7 +2582,9 @@ def _phase1_heat_source_capability_answer(
     prefix = f"{name}（{sku}）" if name else sku
     heat_source = _heat_source_field_evidence(row.get("heat_source"))
     normalized_heat_source = "" if heat_source in {"", "/", "[]", "暂无", "未标注"} else heat_source
-    asks_direct_heating = any(term in identity_free_text for term in ("直接加热", "明火加热", "上火加热"))
+    asks_direct_heating = any(term in identity_free_text for term in (
+        "直接加热", "明火加热", "上火加热", "直接放", "直接置于",
+    ))
     asks_heat_source = any(term in identity_free_text for term in ("热源", "燃料", "适用什么热源", "适用热源"))
     capability_aliases = {
         "卡式炉": ("卡式炉",),
@@ -2576,6 +2617,21 @@ def _phase1_heat_source_capability_answer(
         if asks_heat_source:
             return f"{prefix}：当前资料显示适用热源为{normalized_heat_source}。", "structured"
         return f"{prefix}：当前资料显示适用热源为{normalized_heat_source}。", "structured"
+
+    instruction_boundary = _same_sku_usage_instruction_heat_source_boundary(
+        row.get("usage_instruction"),
+        asked_capability=asked_capability,
+        asks_direct_heating=asks_direct_heating,
+    )
+    if instruction_boundary:
+        if evidence_metadata is not None:
+            evidence_metadata.update({
+                "evidence_value": instruction_boundary,
+                "evidence_source": "specs.usage_instruction",
+                "evidence_scope": "subject",
+                "evidence_sku": sku,
+            })
+        return f"{prefix}：{instruction_boundary}。", "unsupported"
 
     if asks_direct_heating:
         return f"{prefix}：当前资料未标注适用热源；是否可以直接加热，不能仅凭现有资料确认。", "missing"
@@ -16326,7 +16382,7 @@ async def ask_customer_service(
                     source_text = str((row or {}).get("content") or "")
                     for sentence in re.split(r"(?<=[。！？!?])\s*", source_text):
                         sentence = sentence.strip()
-                        if sentence and re.search(r"(?:包含|含有|由[^。！？!?]{1,80}组成)", sentence):
+                        if sentence and _is_complete_package_contents_evidence(sentence):
                             explicit_composition = sentence
                             break
                     if explicit_composition:
@@ -19732,6 +19788,25 @@ def _same_sku_knowledge_evidence_selection_messages(
     ]
 
 
+def _is_complete_package_contents_evidence(text: str) -> bool:
+    """Whether one source explicitly supports a complete in-box list.
+
+    A marketing claim that a cookware set "contains" its main pot and pan
+    describes product composition, but cannot establish the complete package
+    because it says nothing about handles, bags, manuals, or other standard
+    items.  This guard only bounds the claim made for package-list questions;
+    it does not infer products or select evidence.
+    """
+    value = re.sub(r"\s+", "", str(text or "")).casefold()
+    if not value:
+        return False
+    return bool(re.search(
+        r"(?:包装(?:清单|内|里|盒里|盒内)|开箱(?:清单|内容)|标配|随附|附带|随箱|"
+        r"标准配置|盒内清单|package(?:contents|includes)|whatcomesinthebox)",
+        value,
+    ))
+
+
 _UNSUPPORTED_SAFETY_GUARANTEE_RE = re.compile(
     r"(?:放心(?:使用)?|完全没问题|没有问题|绝对安全|安全可靠|无风险|零风险|保证安全|risk[- ]free|completely safe|no problem)",
     re.IGNORECASE,
@@ -19918,6 +19993,11 @@ async def _try_sealed_same_sku_knowledge_answer(
         selected_index_set = set(selected_indexes)
         selected_evidence = [item for item in candidates if item["index"] in selected_index_set]
         if len(selected_evidence) != len(selected_index_set):
+            return None
+        if (
+            customer_agent_intent_service._looks_like_contents_grounding_question(question)
+            and not any(_is_complete_package_contents_evidence(item["content"]) for item in selected_evidence)
+        ):
             return None
         selected_bundle = customer_evidence_bundle.build_customer_evidence_bundle(
             sku=sku,

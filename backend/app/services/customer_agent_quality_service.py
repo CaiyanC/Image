@@ -18,7 +18,10 @@ WRITE_TERMS = ("修改", "改成", "改为", "删除", "删掉", "清空", "不�
 DIRECT_WRITE_CLAIMS = ("已经修改完成", "已直接修改", "已经删除", "已删除完成", "已写入")
 CONTEXT_TERMS = ("这些", "这款", "这个", "那个", "刚才", "上面", "前面", "上一轮", "他", "它")
 CLARIFICATION_TERMS = ("请先", "需要明确", "告诉我", "SKU", "范围", "类目", "场景")
-SKU_RE = re.compile(r"\b[A-Z]{1,6}(?:-[A-Z0-9]{1,8}){1,4}\b", flags=re.IGNORECASE)
+# Product variants may use a Chinese colour suffix (for example ``KW-K31-黑``).
+# Keep that suffix in the same SKU token so the quality gate does not also
+# report the valid base prefix as an unrelated product.
+SKU_RE = re.compile(r"\b[A-Z]{1,6}(?:-[A-Z0-9\u4e00-\u9fff]{1,8}){1,4}\b", flags=re.IGNORECASE)
 
 
 def evaluate_agent_response(
