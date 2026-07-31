@@ -216,8 +216,14 @@ def test_direct_conflict_qa_is_rejected(monkeypatch):
         db.add_all([product, qa, specs])
         db.commit()
 
+        calls = 0
+
         async def direct_conflict(*_args, **_kwargs):
-                return '{"status":"rejected","conflict_type":"direct_conflict","reason":"Evidence says no open flame.","evidence_quote":"Not suitable for open-flame stove use."}'
+            nonlocal calls
+            calls += 1
+            if calls == 1:
+                return '{"status":"approved","conflict_type":"none","reason":"The QA belongs to the water cup."}'
+            return '{"status":"rejected","conflict_type":"direct_conflict","reason":"Evidence says no open flame.","evidence_quote":"Not suitable for open-flame stove use."}'
 
         monkeypatch.setattr(
             product_qa_integrity_service.customer_llm_service,
@@ -227,6 +233,7 @@ def test_direct_conflict_qa_is_rejected(monkeypatch):
         verdict = asyncio.run(product_qa_integrity_service.audit_product_qa_item(db, product, qa))
 
         assert verdict["status"] == "rejected"
+        assert calls == 2
         assert qa.integrity_status == "rejected"
     finally:
         db.close()
@@ -271,6 +278,65 @@ def test_cross_category_qa_is_rejected(monkeypatch):
 
         assert verdict["status"] == "rejected"
         assert qa.integrity_status == "rejected"
+    finally:
+        db.close()
+        engine.dispose()
+
+
+def test_cross_category_audit_prioritizes_product_identity_over_contaminated_detail(monkeypatch):
+    """A copied appliance instruction cannot override the product's identity evidence."""
+    engine = create_engine("sqlite:///:memory:", connect_args={"check_same_thread": False})
+    Base.metadata.create_all(engine, tables=[
+        Product.__table__, ProductQa.__table__, ProductSpecs.__table__,
+        ProductBusiness.__table__, ProductContent.__table__,
+    ])
+    db = sessionmaker(bind=engine)()
+    try:
+        product = Product(
+            id="qa-integrity-identity-priority-product",
+            sku="QA-INTEGRITY-IDENTITY-1",
+            barcode="000000000019",
+            product_name_cn="camping moka pot",
+            brand="alocs",
+            category="coffee equipment",
+        )
+        specs = ProductSpecs(
+            product_id=product.id,
+            usage_instruction="Adjust grind size and clean the grinder burrs after use.",
+        )
+        content = ProductContent(
+            product_id=product.id,
+            title_cn="camping moka pot for espresso coffee",
+        )
+        qa = ProductQa(
+            id="qa-integrity-identity-priority-qa",
+            product_id=product.id,
+            question="Can I adjust the grind size?",
+            answer="Yes, freely adjust the grind size for pour-over, French press, and espresso.",
+        )
+        db.add_all([product, specs, content, qa])
+        db.commit()
+
+        calls = []
+
+        async def cross_category(_db, messages, **_kwargs):
+            prompt = messages[0]["content"]
+            payload = __import__("json").loads(messages[1]["content"])
+            calls.append(payload)
+            assert "product identity only" in prompt
+            assert payload["product_identity"]["category"] == "coffee equipment"
+            assert "supplemental_context" not in payload
+            return '{"status":"rejected","conflict_type":"cross_category","reason":"A moka pot cannot provide grinder adjustment."}'
+
+        monkeypatch.setattr(
+            product_qa_integrity_service.customer_llm_service,
+            "chat_completion",
+            cross_category,
+        )
+        verdict = asyncio.run(product_qa_integrity_service.audit_product_qa_item(db, product, qa))
+
+        assert verdict["status"] == "rejected"
+        assert len(calls) == 1
     finally:
         db.close()
         engine.dispose()

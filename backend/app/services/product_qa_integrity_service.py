@@ -27,6 +27,31 @@ def _product_evidence(db: Session, product: Product) -> dict[str, Any]:
     business = db.query(ProductBusiness).filter(ProductBusiness.product_id == product.id).first()
     content = db.query(ProductContent).filter(ProductContent.product_id == product.id).first()
     return {
+        "product_identity": {
+            "sku": product.sku,
+            "name": product.product_name_cn or product.product_name_en,
+            "category": product.category,
+            "content_title": getattr(content, "title_cn", None),
+        },
+        "supplemental_context": {
+            "specs": {
+                "material": getattr(specs, "body_material", None),
+                "capacity": getattr(specs, "capacity", None),
+                "heat_source": getattr(specs, "heat_source", None),
+                "usage_instruction": getattr(specs, "usage_instruction", None),
+            },
+            "business": {
+                "selling_points": getattr(business, "top_selling_points", None),
+                "positioning": getattr(business, "positioning", None),
+                "usage_scenarios": getattr(business, "usage_scenarios", None),
+            },
+            "content": {
+                "description": getattr(content, "long_description_cn", None),
+                "listing": getattr(content, "listing_cn", None),
+            },
+        },
+        # Compatibility aliases for existing audit consumers; the model receives
+        # the explicit identity/context structure above as the semantic boundary.
         "sku": product.sku,
         "name": product.product_name_cn or product.product_name_en,
         "category": product.category,
@@ -106,31 +131,26 @@ async def audit_product_qa_item(db: Session, product: Product, qa: ProductQa) ->
     else:
         try:
             evidence = _product_evidence(db, product)
-            raw = await customer_llm_service.chat_completion(
+            identity_raw = await customer_llm_service.chat_completion(
                 db,
                 messages=[
                     {
                         "role": "system",
                         "content": (
                             'Return only exact JSON with keys "status", "conflict_type", "reason", and "evidence_quote". '
-                            '"status" must be "approved", "rejected", or "review". "conflict_type" must be '
-                            '"none", "direct_conflict", "cross_category", or "invalid_qa". Audit whether the '
-                            "supplied QA belongs to this same product. Treat same-SKU QA as a supplemental fact "
-                            "source: absence of a field from product-master evidence is not disproof and must not "
-                            'cause rejection or review. For "direct_conflict", evidence_quote must be an exact nonempty '
-                            'quote copied from same-SKU evidence that states the opposite fact; missing evidence is never a conflict. Use "direct_conflict" only for a concrete value that '
-                            'contradicts same-SKU evidence, "cross_category" only for a plainly incompatible '
-                            'product category or contaminated template, and "invalid_qa" only when the question '
-                            'or answer is empty or unusable. Otherwise use "none" and approve. Use review only '
-                            "when technically unable to classify. Preserve a concise, nonempty reason. Do not "
-                            "write a replacement answer or infer a conflict from missing master data."
+                            'Audit whether the supplied QA belongs to the product identity only. "conflict_type" must be '
+                            '"none", "cross_category", or "invalid_qa". product_identity is authoritative. Do not infer '
+                            "a distinct included component, mechanism, or appliance from a broad category. If the QA requires "
+                            "a distinct component, mechanism, or appliance that product_identity does not identify as this "
+                            "product or an included component, return rejected/cross_category. Do not use missing fields as a "
+                            "reason to reject ordinary supplemental facts."
                         ),
                     },
                     {
                         "role": "user",
                         "content": json.dumps(
                             {
-                                "same_sku_evidence": evidence,
+                                "product_identity": evidence["product_identity"],
                                 "qa": {"question": qa.question, "answer": qa.answer},
                             },
                             ensure_ascii=False,
@@ -144,12 +164,77 @@ async def audit_product_qa_item(db: Session, product: Product, qa: ProductQa) ->
                 response_format={"type": "json_object"} if settings.SEMANTIC_PREPLAN_JSON_MODE else None,
                 thinking={"type": "disabled"} if settings.SEMANTIC_PREPLAN_THINKING_DISABLED else None,
             )
-            verdict = _normalize_supplemental_verdict(
-                _parse_verdict(raw),
-                question=qa.question,
-                answer=qa.answer,
-                evidence=evidence,
+            identity_verdict = _parse_verdict(identity_raw)
+            identity_conflict = identity_verdict.get("conflict_type")
+            if identity_conflict == "cross_category":
+                verdict = _normalize_supplemental_verdict(
+                    identity_verdict,
+                    question=qa.question,
+                    answer=qa.answer,
+                    evidence=evidence,
+                )
+            elif identity_conflict == "invalid_qa":
+                verdict = _normalize_supplemental_verdict(
+                    identity_verdict,
+                    question=qa.question,
+                    answer=qa.answer,
+                    evidence=evidence,
+                )
+            elif identity_conflict != "none":
+                verdict = {"status": "review", "reason": identity_verdict["reason"]}
+            else:
+                raw = await customer_llm_service.chat_completion(
+                db,
+                messages=[
+                    {
+                        "role": "system",
+                        "content": (
+                            'Return only exact JSON with keys "status", "conflict_type", "reason", and "evidence_quote". '
+                            '"status" must be "approved", "rejected", or "review". "conflict_type" must be '
+                            '"none", "direct_conflict", "cross_category", or "invalid_qa". Audit whether the '
+                            "supplied QA belongs to this same product. Treat same-SKU QA as a supplemental fact "
+                            "source: absence of a field from product-master evidence is not disproof and must not "
+                            "product_identity is authoritative for product category and identity. supplemental_context "
+                            "may contain copied or contaminated detail and must never override product_identity when "
+                            "deciding whether QA is plainly cross-category. If the QA requires a distinct component, "
+                            "mechanism, or appliance that product_identity does not identify as this product or an "
+                            "included component, classify it as cross_category even when supplemental_context claims "
+                            "that capability. A broad parent category alone is not proof that the distinct capability "
+                            "exists. "
+                            'cause rejection or review. For "direct_conflict", evidence_quote must be an exact nonempty '
+                            'quote copied from same-SKU evidence that states the opposite fact; missing evidence is never a conflict. Use "direct_conflict" only for a concrete value that '
+                            'contradicts same-SKU evidence, "cross_category" only for a plainly incompatible '
+                            'product category or contaminated template, and "invalid_qa" only when the question '
+                            'or answer is empty or unusable. Otherwise use "none" and approve. Use review only '
+                            "when technically unable to classify. Preserve a concise, nonempty reason. Do not "
+                            "write a replacement answer or infer a conflict from missing master data."
+                        ),
+                    },
+                    {
+                        "role": "user",
+                        "content": json.dumps(
+                            {
+                                "product_identity": evidence["product_identity"],
+                                "supplemental_context": evidence["supplemental_context"],
+                                "qa": {"question": qa.question, "answer": qa.answer},
+                            },
+                            ensure_ascii=False,
+                        ),
+                    },
+                ],
+                temperature=0,
+                max_tokens=200,
+                purpose="product_qa_integrity_audit",
+                api_model_override=str(settings.SEMANTIC_PREPLAN_MODEL or "").strip() or None,
+                response_format={"type": "json_object"} if settings.SEMANTIC_PREPLAN_JSON_MODE else None,
+                thinking={"type": "disabled"} if settings.SEMANTIC_PREPLAN_THINKING_DISABLED else None,
             )
+                verdict = _normalize_supplemental_verdict(
+                    _parse_verdict(raw),
+                    question=qa.question,
+                    answer=qa.answer,
+                    evidence=evidence,
+                )
         except Exception:
             verdict = {"status": "review", "reason": "语义审核暂时不可用。"}
     qa.integrity_status = verdict["status"]
