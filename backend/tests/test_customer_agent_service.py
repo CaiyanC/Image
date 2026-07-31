@@ -1957,6 +1957,38 @@ class CustomerAgentRuntimeServiceTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(captured["payload"]["entity_stack"][0]["sku"], "CW-C93")
         self.assertEqual(captured["payload"]["route_hints"]["detected_skus"], ["CW-C93"])
 
+    async def test_finalize_answer_prompt_requires_actionable_customer_facing_answer(self):
+        captured = {}
+        original_chat = customer_agent_runtime_service.customer_llm_service.chat_completion
+
+        async def fake_chat_completion(db, messages, model=None, temperature=0.2, max_tokens=1200, purpose=None):
+            captured["messages"] = messages
+            return '{"answer":"当前资料不足以确认，建议联系产品负责人核实。","answer_policy":"insufficient_evidence","evidence_insufficient":true}'
+
+        customer_agent_runtime_service.customer_llm_service.chat_completion = fake_chat_completion
+        try:
+            await customer_agent_runtime_service._finalize_answer(
+                self.db,
+                "这款产品能否用于明火？",
+                "CW-C93",
+                [],
+                [],
+                user_id="user-1",
+                intent_hint="product_detail",
+                route_hints={"resolved_skus": ["CW-C93"]},
+            )
+        finally:
+            customer_agent_runtime_service.customer_llm_service.chat_completion = original_chat
+
+        system_instructions = "\n".join(
+            message["content"]
+            for message in captured["messages"]
+            if message["role"] == "system"
+        )
+        self.assertIn("directly resolve the customer's question", system_instructions)
+        self.assertIn("do not dump raw field labels", system_instructions)
+        self.assertIn("next step", system_instructions)
+
     async def test_finalize_answer_keeps_product_channels_in_prompt(self):
         captured = {}
         original_chat = customer_agent_runtime_service.customer_llm_service.chat_completion

@@ -2357,6 +2357,12 @@ async def _finalize_answer(
     messages.insert(1, {
         "role": "system",
         "content": (
+            "The final answer must directly resolve the customer's question. "
+            "Use only facts relevant to that question; do not dump raw field labels, retrieval counts, chunks, or internal evidence structures. "
+            "When the evidence is insufficient, state the evidence boundary clearly and give the customer a practical next step. "
+            "请使用自然、面向客户的中文，先给出用户需要的答案、判断或决定，再补充必要依据。"
+            "只保留与当前问题直接相关的事实，不要把内部字段名、检索数量、知识块或证据结构直接展示给用户。"
+            "证据不足时，要明确说明当前能确认与不能确认的边界，并给出可执行的下一步建议。"
             "回答时先直接回答用户原问题，再用证据补充。retrieved_products 和 tool_results 只是证据，不是最终答案。"
             "不要把“找到 N 条产品资料”当成最终回答，也不要只复述检索结果列表。"
             "如果资料里没有明确维护用户问到的信息，要明确说明“当前知识库没有维护/现有资料不足以确认”，不要编造。"
