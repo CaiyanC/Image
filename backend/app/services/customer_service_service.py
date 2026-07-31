@@ -19807,6 +19807,14 @@ def _is_complete_package_contents_evidence(text: str) -> bool:
     ))
 
 
+def _semantic_plan_requests_accessories(phase1_plan: dict[str, Any] | None) -> bool:
+    """Honor a sealed accessories field contract in RAG evidence validation."""
+    plan = phase1_plan if isinstance(phase1_plan, dict) else {}
+    semantic = plan.get("semantic_preplan") if isinstance(plan.get("semantic_preplan"), dict) else {}
+    fields = semantic.get("canonical_fields")
+    return isinstance(fields, list) and "accessories" in fields
+
+
 _UNSUPPORTED_SAFETY_GUARANTEE_RE = re.compile(
     r"(?:放心(?:使用)?|完全没问题|没有问题|绝对安全|安全可靠|无风险|零风险|保证安全|risk[- ]free|completely safe|no problem)",
     re.IGNORECASE,
@@ -19995,7 +20003,10 @@ async def _try_sealed_same_sku_knowledge_answer(
         if len(selected_evidence) != len(selected_index_set):
             return None
         if (
-            customer_agent_intent_service._looks_like_contents_grounding_question(question)
+            (
+                customer_agent_intent_service._looks_like_contents_grounding_question(question)
+                or _semantic_plan_requests_accessories(phase1_plan)
+            )
             and not any(_is_complete_package_contents_evidence(item["content"]) for item in selected_evidence)
         ):
             return None

@@ -1202,6 +1202,57 @@ def test_safe_missing_formal_field_hides_unrelated_product_row_evidence():
     assert shaped["evidence"] == []
 
 
+def test_same_sku_rag_accessories_contract_rejects_person_count_as_component_evidence(monkeypatch):
+    """An accessories plan cannot turn a serving-size claim into included cups."""
+    safe_missing = {
+        "sku": "RAG-ACCESSORIES-100",
+        "answer": "safe missing",
+        "debug": {"agent_mode": "sealed_product_qa_safe_missing"},
+    }
+    rows = [{
+        "sku": "RAG-ACCESSORIES-100",
+        "content": "Designed to meet coffee needs for up to 4 people.",
+    }]
+    monkeypatch.setattr(
+        customer_service_service,
+        "_sealed_semantic_product_qa_entity_guard",
+        lambda *_args, **_kwargs: safe_missing.copy(),
+    )
+
+    async def fake_retrieve(*_args, **_kwargs):
+        return rows
+
+    async def fake_completion(_db, *, messages, **_kwargs):
+        payload = json.loads(messages[-1]["content"])
+        if "candidates" in payload:
+            return '{"indexes":[0],"confidence":"high"}'
+        return '{"answer":"It includes four cups.","evidence_quotes":["up to 4 people"]}'
+
+    async def grounded(*_args, **_kwargs):
+        return True
+
+    async def covered(*_args, **_kwargs):
+        return True
+
+    monkeypatch.setattr(customer_service_service.knowledge_service, "semantic_retrieve", fake_retrieve)
+    monkeypatch.setattr(customer_service_service.knowledge_service, "same_sku_customer_context", lambda *_args, **_kwargs: [])
+    monkeypatch.setattr(customer_service_service.customer_llm_service, "chat_completion", fake_completion)
+    monkeypatch.setattr(customer_service_service, "_same_sku_evidence_answer_is_grounded", grounded)
+    monkeypatch.setattr(customer_service_service, "_same_sku_rag_answer_covers_question", covered)
+
+    import asyncio
+
+    result = asyncio.run(
+        customer_service_service._try_sealed_same_sku_knowledge_answer(
+            SimpleNamespace(),
+            "How many cups are included?",
+            {"semantic_preplan": {"canonical_fields": ["accessories"]}},
+        )
+    )
+
+    assert result is None
+
+
 def test_same_sku_rag_broad_product_question_merges_multiple_selected_evidence(monkeypatch):
     """A broad product-QA question must not be reduced to one related chunk."""
     safe_missing = {
