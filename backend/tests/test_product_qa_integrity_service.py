@@ -139,6 +139,135 @@ def test_policy_like_approval_without_same_sku_evidence_is_quarantined(monkeypat
         engine.dispose()
 
 
+def test_same_sku_supplemental_fact_is_approved_without_master_field(monkeypatch):
+    """A same-SKU QA may contribute facts absent from master product fields."""
+    engine = create_engine("sqlite:///:memory:", connect_args={"check_same_thread": False})
+    Base.metadata.create_all(engine, tables=[
+        Product.__table__, ProductQa.__table__, ProductSpecs.__table__,
+        ProductBusiness.__table__, ProductContent.__table__,
+    ])
+    db = sessionmaker(bind=engine)()
+    try:
+        product = Product(
+            id="qa-integrity-supplemental-product",
+            sku="QA-INTEGRITY-6",
+            barcode="000000000007",
+            product_name_cn="camp water cup",
+            brand="alocs",
+            category="water cup",
+        )
+        qa = ProductQa(
+            id="qa-integrity-supplemental-qa",
+            product_id=product.id,
+            question="有质保吗？",
+            answer="提供一年质保。",
+        )
+        db.add_all([product, qa])
+        db.commit()
+
+        async def no_conflict(*_args, **_kwargs):
+            return '{"status":"approved","conflict_type":"none","reason":"Supplemental QA fact."}'
+
+        monkeypatch.setattr(
+            product_qa_integrity_service.customer_llm_service,
+            "chat_completion",
+            no_conflict,
+        )
+        verdict = asyncio.run(product_qa_integrity_service.audit_product_qa_item(db, product, qa))
+
+        assert verdict["status"] == "approved"
+        assert qa.integrity_status == "approved"
+    finally:
+        db.close()
+        engine.dispose()
+
+
+def test_direct_conflict_qa_is_rejected(monkeypatch):
+    """Concrete same-SKU evidence rejects incompatible stove-use advice."""
+    engine = create_engine("sqlite:///:memory:", connect_args={"check_same_thread": False})
+    Base.metadata.create_all(engine, tables=[
+        Product.__table__, ProductQa.__table__, ProductSpecs.__table__,
+        ProductBusiness.__table__, ProductContent.__table__,
+    ])
+    db = sessionmaker(bind=engine)()
+    try:
+        product = Product(
+            id="qa-integrity-direct-conflict-product",
+            sku="QA-INTEGRITY-7",
+            barcode="000000000008",
+            product_name_cn="water cup",
+            brand="alocs",
+            category="water cup",
+        )
+        qa = ProductQa(
+            id="qa-integrity-direct-conflict-qa",
+            product_id=product.id,
+            question="Can I use it on a stove?",
+            answer="Yes, it is compatible with an open-flame stove.",
+        )
+        db.add_all([product, qa])
+        db.commit()
+
+        async def direct_conflict(*_args, **_kwargs):
+            return '{"status":"rejected","conflict_type":"direct_conflict","reason":"Evidence says no open flame."}'
+
+        monkeypatch.setattr(
+            product_qa_integrity_service.customer_llm_service,
+            "chat_completion",
+            direct_conflict,
+        )
+        verdict = asyncio.run(product_qa_integrity_service.audit_product_qa_item(db, product, qa))
+
+        assert verdict["status"] == "rejected"
+        assert qa.integrity_status == "rejected"
+    finally:
+        db.close()
+        engine.dispose()
+
+
+def test_cross_category_qa_is_rejected(monkeypatch):
+    """QA for another product category is rejected even when it sounds plausible."""
+    engine = create_engine("sqlite:///:memory:", connect_args={"check_same_thread": False})
+    Base.metadata.create_all(engine, tables=[
+        Product.__table__, ProductQa.__table__, ProductSpecs.__table__,
+        ProductBusiness.__table__, ProductContent.__table__,
+    ])
+    db = sessionmaker(bind=engine)()
+    try:
+        product = Product(
+            id="qa-integrity-cross-category-product",
+            sku="QA-INTEGRITY-8",
+            barcode="000000000009",
+            product_name_cn="water cup",
+            brand="alocs",
+            category="water cup",
+        )
+        qa = ProductQa(
+            id="qa-integrity-cross-category-qa",
+            product_id=product.id,
+            question="What pan coating does it use?",
+            answer="Its non-stick pan coating is easy to clean.",
+        )
+        db.add_all([product, qa])
+        db.commit()
+
+        async def cross_category(*_args, **_kwargs):
+            return '{"status":"rejected","conflict_type":"cross_category","reason":"QA describes a frying pan, not a water cup."}'
+
+        monkeypatch.setattr(
+            product_qa_integrity_service.customer_llm_service,
+            "chat_completion",
+            cross_category,
+        )
+        verdict = asyncio.run(product_qa_integrity_service.audit_product_qa_item(db, product, qa))
+
+        assert verdict["status"] == "rejected"
+        assert qa.integrity_status == "rejected"
+    finally:
+        db.close()
+        engine.dispose()
+
+
 def test_rejected_qa_is_excluded_from_customer_matching_and_vector_documents():
     """Rejected QA cannot re-enter customer evidence through a legacy reader."""
     engine = create_engine("sqlite:///:memory:", connect_args={"check_same_thread": False})
