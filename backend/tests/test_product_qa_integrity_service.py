@@ -1,6 +1,7 @@
 import asyncio
 from types import SimpleNamespace
 
+import pytest
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
@@ -80,7 +81,7 @@ def test_semantic_rejection_changes_only_audit_fields(monkeypatch):
         db.commit()
 
         async def rejected_by_model(*_args, **_kwargs):
-            return '{"status":"rejected","reason":"倒油指引不适用于水壶。"}'
+            return '{"status":"rejected","conflict_type":"invalid_qa","reason":"倒油指引不适用于水壶。"}'
 
         monkeypatch.setattr(
             product_qa_integrity_service.customer_llm_service,
@@ -97,8 +98,8 @@ def test_semantic_rejection_changes_only_audit_fields(monkeypatch):
         engine.dispose()
 
 
-def test_policy_like_approval_without_same_sku_evidence_is_quarantined(monkeypatch):
-    """A plausible policy is not enough to make a QA customer-visible."""
+def test_policy_like_supplemental_fact_is_approved_without_master_evidence(monkeypatch):
+    """A valid same-SKU policy QA may supplement otherwise silent master data."""
     engine = create_engine("sqlite:///:memory:", connect_args={"check_same_thread": False})
     Base.metadata.create_all(engine, tables=[
         Product.__table__, ProductQa.__table__, ProductSpecs.__table__,
@@ -122,18 +123,21 @@ def test_policy_like_approval_without_same_sku_evidence_is_quarantined(monkeypat
         db.add_all([product, qa])
         db.commit()
 
-        async def plausible_but_unsupported(*_args, **_kwargs):
-            return '{"status":"approved","reason":"This is a standard policy and does not conflict with evidence."}'
+        async def no_conflict(*_args, **_kwargs):
+            return '{"status":"review","conflict_type":"none","reason":"Master field is absent, but this is not a conflict."}'
 
         monkeypatch.setattr(
             product_qa_integrity_service.customer_llm_service,
             "chat_completion",
-            plausible_but_unsupported,
+            no_conflict,
         )
         verdict = asyncio.run(product_qa_integrity_service.audit_product_qa_item(db, product, qa))
 
-        assert verdict["status"] == "review"
-        assert qa.integrity_status == "review"
+        assert verdict == {
+            "status": "approved",
+            "reason": "Master field is absent, but this is not a conflict.",
+        }
+        assert qa.integrity_status == "approved"
     finally:
         db.close()
         engine.dispose()
@@ -205,7 +209,11 @@ def test_direct_conflict_qa_is_rejected(monkeypatch):
             question="Can I use it on a stove?",
             answer="Yes, it is compatible with an open-flame stove.",
         )
-        db.add_all([product, qa])
+        specs = ProductSpecs(
+            product_id=product.id,
+            heat_source="Not suitable for open-flame stove use.",
+        )
+        db.add_all([product, qa, specs])
         db.commit()
 
         async def direct_conflict(*_args, **_kwargs):
@@ -266,6 +274,117 @@ def test_cross_category_qa_is_rejected(monkeypatch):
     finally:
         db.close()
         engine.dispose()
+
+
+@pytest.mark.parametrize(
+    ("question", "answer"),
+    [
+        ("", "A nonempty answer."),
+        ("A nonempty question?", "  "),
+    ],
+)
+def test_empty_qa_is_rejected_without_model_call(monkeypatch, question, answer):
+    """Empty QA is invalid independent of provider availability."""
+    engine = create_engine("sqlite:///:memory:", connect_args={"check_same_thread": False})
+    Base.metadata.create_all(engine, tables=[
+        Product.__table__, ProductQa.__table__, ProductSpecs.__table__,
+        ProductBusiness.__table__, ProductContent.__table__,
+    ])
+    db = sessionmaker(bind=engine)()
+    try:
+        product = Product(
+            id=f"qa-integrity-empty-product-{len(question)}",
+            sku=f"QA-INTEGRITY-EMPTY-{len(question)}",
+            barcode=f"00000000001{len(question)}",
+            product_name_cn="water cup",
+            brand="alocs",
+            category="water cup",
+        )
+        qa = ProductQa(
+            id=f"qa-integrity-empty-qa-{len(question)}",
+            product_id=product.id,
+            question=question,
+            answer=answer,
+        )
+        db.add_all([product, qa])
+        db.commit()
+
+        async def should_not_run(*_args, **_kwargs):
+            raise AssertionError("empty QA must be rejected before calling the model")
+
+        monkeypatch.setattr(
+            product_qa_integrity_service.customer_llm_service,
+            "chat_completion",
+            should_not_run,
+        )
+        verdict = asyncio.run(product_qa_integrity_service.audit_product_qa_item(db, product, qa))
+
+        assert verdict == {"status": "rejected", "reason": "Question or answer is empty."}
+        assert qa.integrity_status == "rejected"
+    finally:
+        db.close()
+        engine.dispose()
+
+
+@pytest.mark.parametrize(
+    "raw",
+    [
+        '{"status":"review","conflict_type":"missing_master_data","reason":"Master field absent."}',
+        '{"status":"approved","conflict_type":"none","reason":{"detail":"not a string"}}',
+    ],
+)
+def test_unclassifiable_model_result_remains_review(monkeypatch, raw):
+    """A model result outside the exact JSON contract is a technical review."""
+    engine = create_engine("sqlite:///:memory:", connect_args={"check_same_thread": False})
+    Base.metadata.create_all(engine, tables=[
+        Product.__table__, ProductQa.__table__, ProductSpecs.__table__,
+        ProductBusiness.__table__, ProductContent.__table__,
+    ])
+    db = sessionmaker(bind=engine)()
+    try:
+        product = Product(
+            id="qa-integrity-invalid-contract-product",
+            sku="QA-INTEGRITY-INVALID-CONTRACT",
+            barcode="000000000011",
+            product_name_cn="water cup",
+            brand="alocs",
+            category="water cup",
+        )
+        qa = ProductQa(
+            id="qa-integrity-invalid-contract-qa",
+            product_id=product.id,
+            question="Does it have a warranty?",
+            answer="It has a one-year warranty.",
+        )
+        db.add_all([product, qa])
+        db.commit()
+
+        async def unclassifiable(*_args, **_kwargs):
+            return raw
+
+        monkeypatch.setattr(
+            product_qa_integrity_service.customer_llm_service,
+            "chat_completion",
+            unclassifiable,
+        )
+        verdict = asyncio.run(product_qa_integrity_service.audit_product_qa_item(db, product, qa))
+
+        assert verdict["status"] == "review"
+        assert qa.integrity_status == "review"
+    finally:
+        db.close()
+        engine.dispose()
+
+
+def test_classifier_reason_is_preserved_without_truncation():
+    """A valid nonempty classifier reason is retained exactly."""
+    reason = "r" * 1001
+
+    verdict = product_qa_integrity_service._parse_verdict(
+        f'{{"status":"approved","conflict_type":"none","reason":"{reason}"}}'
+    )
+
+    assert verdict["reason"] == reason
 
 
 def test_rejected_qa_is_excluded_from_customer_matching_and_vector_documents():

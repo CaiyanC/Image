@@ -17,15 +17,8 @@ from . import customer_llm_service
 
 
 _ALLOWED_STATUSES = {"approved", "rejected", "review"}
-_EXPLICIT_EVIDENCE_CLAIM_GROUPS = {
-    "warranty_or_after_sales": ("质保", "保修", "售后"),
-    "return_or_refund_policy": ("退货", "换货", "退款", "七天无理由"),
-    "sales_channel_or_authenticity": (
-        "旗舰店", "淘宝", "京东", "抖音", "授权经销", "官方店", "正品", "购买渠道",
-    ),
-    "shipping_or_delivery": ("发货", "快递", "物流", "配送"),
-    "certification_or_safety_claim": ("认证", "食品级认证", "安全认证"),
-}
+_ALLOWED_CONFLICT_TYPES = {"none", "direct_conflict", "cross_category", "invalid_qa"}
+_REJECTING_CONFLICT_TYPES = {"direct_conflict", "cross_category", "invalid_qa"}
 
 
 def _product_evidence(db: Session, product: Product) -> dict[str, Any]:
@@ -62,93 +55,92 @@ def _parse_verdict(raw: str) -> dict[str, str]:
         payload = json.loads(text)
     except (TypeError, ValueError):
         return {"status": "review", "reason": "语义审核未返回可验证结论。"}
+    if not isinstance(payload, dict):
+        return {"status": "review", "reason": "语义审核未返回可验证结论。"}
     status = str(payload.get("status") or "").strip().lower()
-    reason = str(payload.get("reason") or "").strip()
+    conflict_type = payload.get("conflict_type")
+    reason = payload.get("reason")
     if status not in _ALLOWED_STATUSES:
         return {"status": "review", "reason": "语义审核返回了无效结论。"}
-    return {"status": status, "reason": (reason or "语义审核未提供可验证原因。")[:1000]}
+    if conflict_type not in _ALLOWED_CONFLICT_TYPES:
+        return {"status": "review", "reason": "语义审核返回了无效冲突类型。"}
+    if not isinstance(reason, str) or not reason.strip():
+        return {"status": "review", "reason": "语义审核未提供可验证原因。"}
+    return {
+        "status": status,
+        "conflict_type": conflict_type,
+        "reason": reason,
+    }
 
 
-def _apply_fail_closed_guardrail(
+def _normalize_supplemental_verdict(
     verdict: dict[str, str],
     *,
-    evidence: dict[str, Any],
     question: str | None,
     answer: str | None,
 ) -> dict[str, str]:
-    """Do not let a model approve policy-like claims without explicit SKU evidence."""
-    if verdict["status"] != "approved":
-        return verdict
-
-    qa_text = f"{question or ''}\n{answer or ''}"
-    evidence_text = json.dumps(evidence, ensure_ascii=False)
-    for group, markers in _EXPLICIT_EVIDENCE_CLAIM_GROUPS.items():
-        if any(marker in qa_text for marker in markers) and not any(marker in evidence_text for marker in markers):
-            return {
-                "status": "review",
-                "reason": f"{group} requires explicit same-SKU evidence; no such evidence was supplied.",
-            }
-
-    unsupported_reason_markers = (
-        "plausible",
-        "does not conflict",
-        "standard business practice",
-        "standard policy",
-        "acceptable",
-    )
-    if any(marker in verdict["reason"].lower() for marker in unsupported_reason_markers):
-        return {
-            "status": "review",
-            "reason": "Approval lacked a direct-evidence rationale and was quarantined fail-closed.",
-        }
-    return verdict
+    """Normalize a valid classifier result around concrete conflict types."""
+    if not str(question or "").strip() or not str(answer or "").strip():
+        return {"status": "rejected", "reason": "Question or answer is empty."}
+    conflict_type = verdict.get("conflict_type")
+    if conflict_type not in _ALLOWED_CONFLICT_TYPES:
+        return {"status": "review", "reason": verdict["reason"]}
+    if conflict_type in _REJECTING_CONFLICT_TYPES:
+        return {"status": "rejected", "reason": verdict["reason"]}
+    return {"status": "approved", "reason": verdict["reason"]}
 
 
 async def audit_product_qa_item(db: Session, product: Product, qa: ProductQa) -> dict[str, str]:
-    """Persist a fail-closed semantic verdict for one sealed same-SKU QA item."""
-    try:
-        evidence = _product_evidence(db, product)
-        raw = await customer_llm_service.chat_completion(
-            db,
-            messages=[
-                {
-                    "role": "system",
-                    "content": (
-                        "Return only JSON: {status:string,reason:string}. Audit whether the supplied product QA "
-                        "is semantically supported and appropriate for the same-product evidence. status must be "
-                        "approved, rejected, or review. Approve only when every factual claim in the answer is "
-                        "directly supported by the supplied evidence. A generic warranty, policy, service, safety, "
-                        "or suitability statement is not approved merely because it is plausible or does not "
-                        "contradict the evidence. Reject conflicts or plainly inapplicable QA; use review whenever "
-                        "evidence is insufficient. Do not write a replacement answer or infer new facts."
-                    ),
-                },
-                {
-                    "role": "user",
-                    "content": json.dumps(
-                        {
-                            "same_sku_evidence": evidence,
-                            "qa": {"question": qa.question, "answer": qa.answer},
-                        },
-                        ensure_ascii=False,
-                    ),
-                },
-            ],
-            temperature=0,
-            max_tokens=200,
-            purpose="product_qa_integrity_audit",
-            api_model_override=str(settings.SEMANTIC_PREPLAN_MODEL or "").strip() or None,
-            response_format={"type": "json_object"} if settings.SEMANTIC_PREPLAN_JSON_MODE else None,
-            thinking={"type": "disabled"} if settings.SEMANTIC_PREPLAN_THINKING_DISABLED else None,
-        )
-        verdict = _apply_fail_closed_guardrail(
-            _parse_verdict(raw),
-            evidence=evidence,
-            question=qa.question,
-            answer=qa.answer,
-        )
-    except Exception:
-        verdict = {"status": "review", "reason": "语义审核暂时不可用。"}
+    """Persist a conflict-only semantic verdict for one sealed same-SKU QA item."""
+    if not str(qa.question or "").strip() or not str(qa.answer or "").strip():
+        verdict = {"status": "rejected", "reason": "Question or answer is empty."}
+    else:
+        try:
+            evidence = _product_evidence(db, product)
+            raw = await customer_llm_service.chat_completion(
+                db,
+                messages=[
+                    {
+                        "role": "system",
+                        "content": (
+                            'Return only exact JSON with keys "status", "conflict_type", and "reason". '
+                            '"status" must be "approved", "rejected", or "review". "conflict_type" must be '
+                            '"none", "direct_conflict", "cross_category", or "invalid_qa". Audit whether the '
+                            "supplied QA belongs to this same product. Treat same-SKU QA as a supplemental fact "
+                            "source: absence of a field from product-master evidence is not disproof and must not "
+                            'cause rejection or review. Use "direct_conflict" only for a concrete value that '
+                            'contradicts same-SKU evidence, "cross_category" only for a plainly incompatible '
+                            'product category or contaminated template, and "invalid_qa" only when the question '
+                            'or answer is empty or unusable. Otherwise use "none" and approve. Use review only '
+                            "when technically unable to classify. Preserve a concise, nonempty reason. Do not "
+                            "write a replacement answer or infer a conflict from missing master data."
+                        ),
+                    },
+                    {
+                        "role": "user",
+                        "content": json.dumps(
+                            {
+                                "same_sku_evidence": evidence,
+                                "qa": {"question": qa.question, "answer": qa.answer},
+                            },
+                            ensure_ascii=False,
+                        ),
+                    },
+                ],
+                temperature=0,
+                max_tokens=200,
+                purpose="product_qa_integrity_audit",
+                api_model_override=str(settings.SEMANTIC_PREPLAN_MODEL or "").strip() or None,
+                response_format={"type": "json_object"} if settings.SEMANTIC_PREPLAN_JSON_MODE else None,
+                thinking={"type": "disabled"} if settings.SEMANTIC_PREPLAN_THINKING_DISABLED else None,
+            )
+            verdict = _normalize_supplemental_verdict(
+                _parse_verdict(raw),
+                question=qa.question,
+                answer=qa.answer,
+            )
+        except Exception:
+            verdict = {"status": "review", "reason": "语义审核暂时不可用。"}
     qa.integrity_status = verdict["status"]
     qa.integrity_reason = verdict["reason"]
     qa.integrity_model = "deepseek"
