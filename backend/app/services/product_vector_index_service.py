@@ -92,6 +92,8 @@ def build_product_documents(detail: dict[str, Any]) -> list[dict[str, Any]]:
         docs.append(_doc(sku, "content", f"{sku} Listing 与内容", content_lines))
 
     for index, item in enumerate(detail.get("qa_items") or [], start=1):
+        if str(item.get("integrity_status") or "").strip().lower() != "approved":
+            continue
         question = _stringify(item.get("question"))
         answer = _stringify(item.get("answer"))
         if not question and not answer:

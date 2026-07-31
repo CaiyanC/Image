@@ -14,6 +14,10 @@ class ProductQa(Base):
     answer: Mapped[str] = mapped_column(Text, nullable=False)
     tags: Mapped[str] = mapped_column(Text, nullable=True)
     priority: Mapped[int] = mapped_column(Integer, nullable=True)
+    integrity_status: Mapped[str] = mapped_column(String(20), nullable=False, default="review")
+    integrity_reason: Mapped[str] = mapped_column(Text, nullable=True)
+    integrity_model: Mapped[str] = mapped_column(String(100), nullable=True)
+    integrity_audited_at: Mapped[datetime] = mapped_column(DateTime, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(timezone.utc))
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
 

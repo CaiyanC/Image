@@ -4791,13 +4791,7 @@ def _exact_same_sku_product_qa_matches(db: Session, product: Product | None, que
         return []
     normalized_question = _normalize_qa_question_text(question)
     matches: list[tuple[int, ProductQa]] = []
-    for qa in (
-        db.query(ProductQa)
-        .filter(ProductQa.product_id == product.id)
-        .order_by(ProductQa.priority.desc().nullslast(), ProductQa.updated_at.desc())
-        .limit(20)
-        .all()
-    ):
+    for qa in product_service.customer_visible_product_qas(db, product.id)[:20]:
         qa_question = _normalize_qa_question_text(str(qa.question or ""))
         answer = str(qa.answer or "").strip()
         if qa_question and answer and qa_question in normalized_question:
@@ -18733,7 +18727,7 @@ def build_product_context(db: Session, sku: str, question: str) -> tuple[str, li
                 lines.append(f"- {label}: {_stringify(value)}")
         sources.append({"type": "product_business", "label": "产品业务信息", "sku": sku})
 
-    qa_items = db.query(ProductQa).filter(ProductQa.product_id == detail["id"]).order_by(ProductQa.priority.asc().nullslast()).all()
+    qa_items = product_service.customer_visible_product_qas(db, detail["id"])
     if qa_items:
         lines.append("产品 QA:")
         for item in qa_items[:20]:
@@ -19149,7 +19143,10 @@ def _try_product_qa_shortcut(
     # unknown detail or a contents question.
     exact_qa_records = (
         db.query(ProductQa)
-        .filter(ProductQa.question == str(question or "").strip())
+        .filter(
+            ProductQa.question == str(question or "").strip(),
+            ProductQa.integrity_status == "approved",
+        )
         .all()
     )
     exact_qa_product_ids = {record.product_id for record in exact_qa_records if record.product_id}
@@ -19566,13 +19563,7 @@ async def _select_same_sku_product_qa_with_semantic_selection(
     strict_entailment: bool = False,
 ) -> ProductQa | None:
     """Let the semantic model choose one QA record from an already sealed SKU."""
-    qas = (
-        db.query(ProductQa)
-        .filter(ProductQa.product_id == product.id)
-        .order_by(ProductQa.priority.desc().nullslast(), ProductQa.updated_at.desc())
-        .limit(20)
-        .all()
-    )
+    qas = product_service.customer_visible_product_qas(db, product.id)[:20]
     candidates = [
         {
             "id": str(qa.id),
@@ -20675,13 +20666,18 @@ def _product_from_exact_qa_question(db: Session, question: str) -> Product | Non
     normalized_question = _normalize_qa_question_text(question)
     if not normalized_question:
         return None
-    exact_qa = db.query(ProductQa).filter(ProductQa.question == str(question or "").strip()).first()
+    exact_qa = db.query(ProductQa).filter(
+        ProductQa.question == str(question or "").strip(),
+        ProductQa.integrity_status == "approved",
+    ).first()
     if exact_qa and exact_qa.product_id:
         product = db.query(Product).filter(Product.id == exact_qa.product_id).first()
         if product:
             return product
     qa_matches: list[tuple[int, ProductQa]] = []
-    for qa in db.query(ProductQa).order_by(ProductQa.priority.desc().nullslast(), ProductQa.updated_at.desc()).all():
+    for qa in db.query(ProductQa).filter(
+        ProductQa.integrity_status == "approved",
+    ).order_by(ProductQa.priority.desc().nullslast(), ProductQa.updated_at.desc()).all():
         qa_question = _normalize_qa_question_text(qa.question or "")
         if qa_question and qa_question in normalized_question:
             qa_matches.append((len(qa_question), qa))
@@ -20702,13 +20698,7 @@ def _best_product_qa_match(
     requested_field_type: str | None = None,
     semantic_query: str | None = None,
 ) -> ProductQa | None:
-    qas = (
-        db.query(ProductQa)
-        .filter(ProductQa.product_id == product.id)
-        .order_by(ProductQa.priority.desc().nullslast(), ProductQa.updated_at.desc())
-        .limit(20)
-        .all()
-    )
+    qas = product_service.customer_visible_product_qas(db, product.id)[:20]
     if not qas:
         return None
     question_terms = _qa_match_terms(question)

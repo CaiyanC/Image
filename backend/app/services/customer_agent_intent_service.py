@@ -7009,13 +7009,7 @@ def _best_same_sku_evidence_text(
     candidates: list[tuple[int, str]] = []
     product = db.query(Product).filter(Product.sku.ilike(sku)).first()
     if product:
-        for qa in (
-            db.query(ProductQa)
-            .filter(ProductQa.product_id == product.id)
-            .order_by(ProductQa.priority.desc().nullslast(), ProductQa.id.desc())
-            .limit(20)
-            .all()
-        ):
+        for qa in product_service.customer_visible_product_qas(db, product.id)[:20]:
             combined = " ".join(str(part or "") for part in (qa.question, qa.answer, qa.tags))
             if not _matches_all_term_groups(combined, term_groups):
                 continue
@@ -7446,7 +7440,7 @@ def _same_product_evidence_answer(
     strong_cert_terms = ("认证", "fda", "lfgb", "food grade", "food-grade", "检测", "报告", "出口")
 
     candidates: list[tuple[int, str]] = []
-    for qa in db.query(ProductQa).filter(ProductQa.product_id == product.id).order_by(ProductQa.priority.desc().nullslast()).limit(20).all():
+    for qa in product_service.customer_visible_product_qas(db, product.id)[:20]:
         combined = " ".join(str(part or "") for part in (qa.question, qa.answer, qa.tags))
         if not _evidence_matches_requested_fields(combined, requested_fields):
             continue
@@ -7539,6 +7533,7 @@ def _search_product_qa(db: Session, sku: str, question: str, limit: int = 3) -> 
         conditions.append(ProductQa.answer.ilike(f"%{term}%"))
     qas = db.query(ProductQa).filter(
         ProductQa.product_id == product.id,
+        ProductQa.integrity_status == "approved",
         or_(*conditions)
     ).order_by(ProductQa.priority.desc().nullslast(), ProductQa.updated_at.desc()).limit(limit).all()
     results = []
@@ -8116,6 +8111,7 @@ async def _search_usage_care_qa(
 def _search_usage_care_product_qa(db: Session, question: str, target_skus: list[str], *, usage_subtype: str, limit: int = 3) -> list[dict]:
     terms = [term for term in _usage_care_query_terms(question) if term]
     query = db.query(ProductQa, Product).join(Product, Product.id == ProductQa.product_id)
+    query = query.filter(ProductQa.integrity_status == "approved")
     if target_skus:
         query = query.filter(Product.sku.in_(target_skus))
     conditions = []

@@ -401,6 +401,7 @@ def _build_detail(product: Product, db: Session) -> dict:
             "answer": q.answer,
             "tags": _serialize_json(q.tags),
             "priority": q.priority,
+            "integrity_status": q.integrity_status,
         } for q in qa_items],
         "qa_negative": {
             "id": qa_negative.id,
@@ -1056,6 +1057,19 @@ def get_qa_items(db: Session, sku: str) -> list:
     if not product:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Product not found")
     return db.query(ProductQa).filter(ProductQa.product_id == product.id).all()
+
+
+def customer_visible_product_qas(db: Session, product_id: str) -> list[ProductQa]:
+    """Return QA explicitly approved for use as customer evidence."""
+    return (
+        db.query(ProductQa)
+        .filter(
+            ProductQa.product_id == product_id,
+            ProductQa.integrity_status == "approved",
+        )
+        .order_by(ProductQa.priority.desc().nullslast(), ProductQa.updated_at.desc())
+        .all()
+    )
 
 
 def add_qa_item(db: Session, sku: str, data: dict):
