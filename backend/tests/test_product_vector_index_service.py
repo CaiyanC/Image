@@ -7,8 +7,10 @@ from sqlalchemy.orm import sessionmaker
 from app.core.database import Base
 from app.models.knowledge_base import KnowledgeChunk, KnowledgeDocument
 from app.models.product import Product
+from app.models.product_specs import ProductSpecs
 from app.services import product_vector_index_service
 from app.services.product_vector_index_service import build_product_documents, should_create_ivfflat_index
+from scripts.apply_product_specs_review_ledger import apply_ledger
 
 
 class ProductVectorIndexServiceTest(unittest.TestCase):
@@ -40,7 +42,7 @@ class ProductVectorIndexServiceTest(unittest.TestCase):
                 "search_keywords": ["露营炉", "咖啡"],
             },
             "qa_items": [
-                {"id": "qa-1", "question": "能泡咖啡吗？", "answer": "可以。", "priority": 1}
+                {"id": "qa-1", "question": "能泡咖啡吗？", "answer": "可以。", "priority": 1, "integrity_status": "approved"}
             ],
             "qa_negative": {
                 "id": "neg-1",
@@ -91,6 +93,45 @@ class ProductVectorIndexServiceTest(unittest.TestCase):
         self.assertEqual([doc["source_id"] for doc in docs], ["product:TW-141:profile"])
         self.assertIn("烽宴多功能聚能套锅", docs[0]["content"])
 
+    def test_build_product_documents_excludes_cross_category_usage_instruction(self):
+        detail = {
+            "sku": "POT-100",
+            "product_name_cn": "Camping moka pot",
+            "product_name_en": "Moka pot",
+            "category": "coffee equipment",
+            "specs": {
+                "usage_instruction": "Adjust grind size and clean grinder burrs after use.",
+            },
+            "business": {},
+            "content": {},
+            "qa_items": [],
+            "qa_negative": None,
+        }
+
+        docs = build_product_documents(detail)
+
+        self.assertNotIn("grind size", docs[0]["content"])
+        self.assertNotIn("grinder burrs", docs[0]["content"])
+
+    def test_build_product_documents_keeps_grinder_usage_instruction(self):
+        detail = {
+            "sku": "GRINDER-100",
+            "product_name_cn": "Travel coffee grinder",
+            "category": "coffee equipment",
+            "specs": {
+                "usage_instruction": "Adjust grind size and clean grinder burrs after use.",
+            },
+            "business": {},
+            "content": {},
+            "qa_items": [],
+            "qa_negative": None,
+        }
+
+        docs = build_product_documents(detail)
+
+        self.assertIn("grind size", docs[0]["content"])
+        self.assertIn("grinder burrs", docs[0]["content"])
+
     def test_index_product_marks_product_as_synced(self):
         engine = create_engine("sqlite:///:memory:")
         Base.metadata.create_all(engine, tables=[
@@ -128,6 +169,24 @@ class ProductVectorIndexServiceTest(unittest.TestCase):
             product = db.query(Product).filter(Product.sku == "CS-G25").first()
             self.assertEqual(result["chunks"], 1)
             self.assertTrue(product.sync_flag)
+        finally:
+            db.close()
+
+    def test_specs_review_ledger_rejects_duplicate_sku(self):
+        engine = create_engine("sqlite:///:memory:")
+        Base.metadata.create_all(engine, tables=[Product.__table__, ProductSpecs.__table__])
+        Session = sessionmaker(bind=engine)
+        db = Session()
+        try:
+            db.add(Product(id="ledger-product", sku="LEDGER-100", barcode="ledger-barcode", product_name_cn="test", brand="alocs"))
+            db.add(ProductSpecs(product_id="ledger-product", usage_instruction="original"))
+            db.commit()
+
+            with self.assertRaisesRegex(ValueError, "invalid"):
+                apply_ledger(db, [
+                    {"sku": "LEDGER-100", "field": "usage_instruction", "value": "", "reason": "reviewed"},
+                    {"sku": "LEDGER-100", "field": "usage_instruction", "value": "", "reason": "duplicate"},
+                ])
         finally:
             db.close()
 

@@ -14,6 +14,34 @@ from . import dmxapi_service, product_service
 PRODUCT_SOURCE_TYPE = "product"
 
 
+def customer_visible_usage_instruction(
+    *,
+    product_name_cn: Any,
+    product_name_en: Any,
+    category: Any,
+    sub_category: Any,
+    value: Any,
+) -> str:
+    """Exclude an instruction cell that clearly belongs to another product domain."""
+    instruction = str(value or "").strip()
+    identity = " ".join(
+        str(part or "")
+        for part in (product_name_cn, product_name_en, category, sub_category)
+    )
+    domain_rules = (
+        (("研磨粗细", "研磨器", "刀盘", "grind size", "grinder burr"), ("磨豆", "研磨机", "研磨器", "grinder")),
+        (("气罐对准炉头", "火力调节阀", "按下点火装置"), ("炉", "灶", "烤炉")),
+    )
+    for evidence_terms, identity_terms in domain_rules:
+        if any(term in instruction for term in evidence_terms) and not any(term in identity for term in identity_terms):
+            return ""
+    cup_only = "杯" in identity and not any(term in identity for term in ("壶", "锅", "炉", "灶"))
+    cookware_markers = ("锅身", "水壶置于灶具", "壶身", "壶底", "烹饪前", "小火预热", "严禁干烧")
+    if cup_only and sum(marker in instruction for marker in cookware_markers) >= 2:
+        return ""
+    return instruction
+
+
 def build_product_documents(detail: dict[str, Any]) -> list[dict[str, Any]]:
     sku = str(detail.get("sku") or "").strip()
     if not sku:
@@ -35,7 +63,14 @@ def build_product_documents(detail: dict[str, Any]) -> list[dict[str, Any]]:
         ("备注", detail.get("status_note")),
     ])
 
-    specs = detail.get("specs") or {}
+    specs = dict(detail.get("specs") or {})
+    specs["usage_instruction"] = customer_visible_usage_instruction(
+        product_name_cn=detail.get("product_name_cn"),
+        product_name_en=detail.get("product_name_en"),
+        category=detail.get("category"),
+        sub_category=detail.get("sub_category"),
+        value=specs.get("usage_instruction"),
+    )
     profile_lines.extend(_section_lines("规格信息", specs, [
         ("size_info", "尺寸"),
         ("capacity", "容量"),

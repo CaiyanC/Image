@@ -37,6 +37,7 @@ from . import (
     customer_recommendation_verification_contract,
     customer_structured_query_contract,
     knowledge_service,
+    product_vector_index_service,
     product_service,
 )
 from ..models.product_business import ProductBusiness
@@ -12740,28 +12741,13 @@ def _usage_instruction_field_evidence(value: Any, canonical_field: str | None) -
 
 def _usage_instruction_matches_product(product: Product, value: Any) -> bool:
     """Fail closed when an instruction cell clearly describes another domain."""
-    instruction = str(value or "")
-    identity = " ".join(
-        str(part or "")
-        for part in (
-            product.product_name_cn,
-            product.product_name_en,
-            product.category,
-            product.sub_category,
-        )
-    )
-    domain_rules = (
-        (("研磨粗细", "研磨器", "刀盘"), ("磨豆", "研磨机", "研磨器")),
-        (("气罐对准炉头", "火力调节阀", "按下点火装置"), ("炉", "灶", "烤炉")),
-    )
-    for evidence_terms, identity_terms in domain_rules:
-        if any(term in instruction for term in evidence_terms) and not any(term in identity for term in identity_terms):
-            return False
-    cup_only = "杯" in identity and not any(term in identity for term in ("壶", "锅", "炉", "灶"))
-    cookware_markers = ("锅身", "水壶置于灶具", "壶身", "壶底", "烹饪前", "小火预热", "严禁干烧")
-    if cup_only and sum(marker in instruction for marker in cookware_markers) >= 2:
-        return False
-    return True
+    return bool(product_vector_index_service.customer_visible_usage_instruction(
+        product_name_cn=product.product_name_cn,
+        product_name_en=product.product_name_en,
+        category=product.category,
+        sub_category=product.sub_category,
+        value=value,
+    ))
 
 
 def _capacity_evidence_conflict(product_name: Any, structured_value: Any) -> tuple[str, str] | None:
