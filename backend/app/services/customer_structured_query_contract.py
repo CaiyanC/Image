@@ -110,6 +110,8 @@ _SUBJECT_ALIASES = (
     ("商品", "all_products"),
 )
 
+_HEAT_SOURCE_SUBJECT_ALIASES = frozenset({"酒精炉"})
+
 # A deictic noun phrase needs an entity from conversation context; it is not
 # a catalogue category.  Keep these markers at the structured-query boundary
 # so “这个锅/那款水壶/该产品” cannot silently expand into an all-products
@@ -226,6 +228,19 @@ def _subject_match(text: str) -> tuple[str | None, tuple[int, int] | None, str |
         )
         if start >= 0 and start < condition_start and not is_deictic_reference:
             matches.append((start, -len(alias), alias, category))
+    # In wording such as ``适合酒精炉的锅`` the heat source appears before
+    # the requested product.  Prefer the later non-stove subject so the
+    # alcohol stove remains a compatibility condition rather than becoming
+    # the catalogue category being searched.
+    heat_source_matches = [item for item in matches if item[2] in _HEAT_SOURCE_SUBJECT_ALIASES]
+    non_stove_matches = [item for item in matches if item[3] != "炉具"]
+    if heat_source_matches and non_stove_matches:
+        earliest_non_stove_start = min(item[0] for item in non_stove_matches)
+        matches = [
+            item
+            for item in matches
+            if item[2] not in _HEAT_SOURCE_SUBJECT_ALIASES or item[0] >= earliest_non_stove_start
+        ]
     if not matches:
         return None, None, None, "subject"
     start, _, alias, category = sorted(matches)[0]
@@ -279,12 +294,12 @@ def _numeric_condition(text: str, field: str) -> tuple[str | None, Any, str | No
     value, unit = _normalize_numeric(value, match.group(2), field)
     prefix = text[:match.start()]
     suffix = text[match.end():]
-    if any(term in prefix[-6:] + suffix[:6] for term in ("至少", "不少于", "以上", "不低于")):
+    if any(term in prefix[-6:] + suffix[:6] for term in ("至少", "不少于", "不小于", "以上", "不低于")):
         operator = ">="
-    elif any(term in prefix[-6:] + suffix[:6] for term in ("超过", "大于", "高于")):
-        operator = ">"
     elif any(term in prefix[-6:] + suffix[:6] for term in ("不超过", "至多", "以下", "不高于")):
         operator = "<="
+    elif any(term in prefix[-6:] + suffix[:6] for term in ("超过", "大于", "高于")):
+        operator = ">"
     elif any(term in prefix[-6:] + suffix[:6] for term in ("小于", "低于", "不到")):
         operator = "<"
     else:
@@ -320,7 +335,7 @@ def build_structured_query_contract(question: str) -> StructuredQueryContract:
         term in text
         for term in (
             "适配", "支持", "能用", "可以配", "可以用", "可以烧", "烧酒精",
-            "可以在", "用于", "适用于",
+            "可以在", "用于", "适用于", "适合",
         )
     ):
         field = "heat_source"
@@ -334,7 +349,7 @@ def build_structured_query_contract(question: str) -> StructuredQueryContract:
     if field in {"capacity", "weight", "dimensions", "people"}:
         operator, value, unit, value_span = _numeric_condition(text, field)
     if field == "material":
-        for candidate, normalized in (("硬质氧化铝合金", "硬质氧化铝"), ("硬氧", "硬质氧化铝"), ("铝合金", "铝合金"), ("不锈钢", "不锈钢"), ("钛", "钛")):
+        for candidate, normalized in (("硬质氧化铝合金", "硬质氧化铝"), ("硬质氧化铝", "硬质氧化铝"), ("硬氧", "硬质氧化铝"), ("铝合金", "铝合金"), ("不锈钢", "不锈钢"), ("钛", "钛")):
             start = text.find(candidate)
             if start >= 0:
                 operator, value, value_span = "contains", normalized, (start, start + len(candidate))
@@ -358,7 +373,7 @@ def build_structured_query_contract(question: str) -> StructuredQueryContract:
         conditions.append({"field": field, "operator": operator, "value": value, "unit": unit, "relation": relation})
 
     material_condition = None
-    for candidate, normalized in (("硬质氧化铝合金", "硬质氧化铝"), ("硬氧", "硬质氧化铝"), ("铝合金", "铝合金"), ("不锈钢", "不锈钢"), ("钛", "钛")):
+    for candidate, normalized in (("硬质氧化铝合金", "硬质氧化铝"), ("硬质氧化铝", "硬质氧化铝"), ("硬氧", "硬质氧化铝"), ("铝合金", "铝合金"), ("不锈钢", "不锈钢"), ("钛", "钛")):
         if candidate in text:
             material_condition = {"field": "material", "operator": "contains", "value": normalized, "unit": None, "relation": None}
             break
@@ -366,11 +381,12 @@ def build_structured_query_contract(question: str) -> StructuredQueryContract:
         conditions.append(material_condition)
 
     compatibility_marked = negative_compatibility or any(
-        term in text for term in ("适配", "支持", "能用", "可以配", "可以用", "可以烧", "烧酒精", "可以在", "用于", "适用于", "明火直烧")
+        term in text for term in ("适配", "支持", "能用", "可以配", "可以用", "可以烧", "烧酒精", "可以在", "用于", "适用于", "适合", "明火直烧")
     )
     if compatibility_marked and not any(item["field"] == "heat_source" for item in conditions):
         for candidate in ("燃气炉", "卡式炉", "电磁炉", "电陶炉", "明火直烧", "明火", "酒精炉", "酒精"):
             if candidate in text:
+                start = text.find(candidate)
                 conditions.append({
                     "field": "heat_source",
                     "operator": "not_supports" if negative_compatibility else "supports",
@@ -378,7 +394,13 @@ def build_structured_query_contract(question: str) -> StructuredQueryContract:
                     "unit": None,
                     "relation": "compatible_with",
                 })
+                if "value" not in spans:
+                    spans["value"] = (start + prefix_offset, start + len(candidate) + prefix_offset)
                 break
+
+    if len(conditions) > 1:
+        condition_order = {"material": 0, "heat_source": 1}
+        conditions.sort(key=lambda item: condition_order.get(str(item.get("field") or ""), 10))
 
     if subject and conditions:
         primary = conditions[0]

@@ -40,6 +40,7 @@ def _semantic_preplan_out_of_scope_for_structured_executor_regressions(monkeypat
     ("question", "subject", "field", "operator", "value", "unit"),
     [
         ("哪些锅具适配燃气炉", "锅具", "heat_source", "supports", "燃气炉", None),
+        ("有没有适合酒精炉的锅？", "锅具", "heat_source", "supports", "酒精炉", None),
         ("有哪些杯子容量在600ml以上", "水杯", "capacity", ">=", 600, "ml"),
         ("哪些锅具的材质是铝合金", "锅具", "material", "contains", "铝合金", None),
         ("哪些锅是硬氧材质", "锅具", "material", "contains", "硬质氧化铝", None),
@@ -53,12 +54,33 @@ def test_structured_contract_parses_subject_condition_and_relation(question, sub
     assert (contract.subject_category, contract.field, contract.operator) == (subject, field, operator)
     assert contract.value == value
     assert contract.unit == unit
-    assert contract.source_spans["subject"][0] < contract.source_spans["value"][0]
+    assert "subject" in contract.source_spans and "value" in contract.source_spans
+    if question == "有没有适合酒精炉的锅？":
+        assert contract.source_spans["value"][0] < contract.source_spans["subject"][0]
+    else:
+        assert contract.source_spans["subject"][0] < contract.source_spans["value"][0]
 
 
 def test_structured_measurement_normalizes_ml_and_l_to_same_unit():
     assert normalize_measurement("600ml", "capacity") == (600.0, "ml")
     assert normalize_measurement("0.6L", "capacity") == (600.0, "ml")
+
+
+@pytest.mark.parametrize(
+    "question",
+    [
+        "容量不超过1升的水壶有哪些？",
+        "容量不高于1升的水壶有哪些？",
+    ],
+)
+def test_structured_contract_preserves_negated_upper_bound_phrases(question):
+    contract = build_structured_query_contract(question)
+
+    assert contract.status == "resolved"
+    assert contract.field == "capacity"
+    assert contract.operator == "<="
+    assert contract.value == 1000
+    assert contract.unit == "ml"
 
 
 def test_condition_object_does_not_replace_subject_category():
@@ -67,6 +89,19 @@ def test_condition_object_does_not_replace_subject_category():
     assert contract.subject_category == "锅具"
     assert contract.value == "燃气炉"
     assert contract.subject_category != "炉具"
+
+
+def test_structured_contract_preserves_material_and_compatible_stove_in_selection_wording():
+    contract = build_structured_query_contract(
+        "想买硬质氧化铝套锅，有哪些适合卡式炉的选择？"
+    )
+
+    assert contract.status == "resolved"
+    assert contract.subject_category == "锅具"
+    assert contract.conditions == [
+        {"field": "material", "operator": "contains", "value": "硬质氧化铝", "unit": None, "relation": None},
+        {"field": "heat_source", "operator": "supports", "value": "卡式炉", "unit": None, "relation": "compatible_with"},
+    ]
 
 
 @pytest.mark.parametrize(
@@ -705,6 +740,7 @@ def test_normalization_cannot_restore_prefilter_candidates(structured_client):
     ("question", "subject", "field", "operator", "value", "unit"),
     [
         ("帮我找容量不低于600毫升的水杯", "水杯", "capacity", ">=", 600, "ml"),
+        ("容量不小于1升的水壶有哪些？", "水壶", "capacity", ">=", 1000, "ml"),
         ("找一下容量在500到1000毫升之间的杯子", "水杯", "capacity", "between", [500, 1000], "ml"),
         ("找出容量大于300毫升的杯子", "水杯", "capacity", ">", 300, "ml"),
         ("哪些产品的重量小于1千克", "all_products", "weight", "<", 1000, "g"),
@@ -841,6 +877,10 @@ def test_compound_structured_contract_routes_through_center_and_requires_all_con
     assert payload["result_skus"] == payload["candidate_skus"] == ["CMP-1"]
     assert all(item["matched"] for item in payload["answer_metadata"]["structured_match_evidence"])
     assert len(payload["answer_metadata"]["structured_match_evidence"][0]["condition_proofs"]) == 2
+    assert payload["sources"]
+    structured_sources = [item for item in payload["sources"] if item.get("type") == "structured_query_contract"]
+    assert {item["sku"] for item in structured_sources} == {"CMP-1"}
+    assert "missing_sources" not in payload["warnings"]
 
 
 def test_structured_result_metadata_distinguishes_total_and_returned_rows(structured_client, monkeypatch):

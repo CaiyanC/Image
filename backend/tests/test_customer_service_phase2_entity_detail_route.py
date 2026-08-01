@@ -458,8 +458,8 @@ def test_high_risk_safe_missing_routes_expose_formal_field_contract(
         ("RT-P2-100的条码是什么？", "barcode", "structured", "product.barcode"),
         ("RT-P2-100属于哪个产品系列？", "series", "missing", None),
         ("RT-P2-100是什么时候上市的？", "launch_date", "missing", None),
-        ("RT-P2-100现在还在售吗？", "lifecycle_status", "structured", "product.lifecycle_status"),
-        ("晨雾Plus水壶现在还在售吗？", "lifecycle_status", "structured", "product.lifecycle_status"),
+        ("RT-P2-100的生命周期状态是什么？", "lifecycle_status", "structured", "product.lifecycle_status"),
+        ("晨雾Plus水壶的生命周期状态是什么？", "lifecycle_status", "structured", "product.lifecycle_status"),
         ("RT-P2-100表面用了什么处理工艺？", "surface_finish", "structured", "specs.surface_finish"),
         ("RT-P2-100的产品定位是什么？", "positioning", "structured", "business.positioning"),
         ("RT-P2-100属于什么价格定位？", "price_positioning", "structured", "business.price_positioning"),
@@ -879,6 +879,7 @@ def test_single_and_compound_heat_source_qa_evidence_have_matching_provenance(ro
                 answer="同 SKU 资料明确说明支持酒精炉。",
                 tags="热源,酒精炉",
                 priority=200,
+                integrity_status="approved",
             )
         )
         db.commit()

@@ -140,6 +140,9 @@ def product_name_aliases(value: Any) -> list[str]:
     while index < len(candidates):
         candidate = candidates[index]
         index += 1
+        compact_connector_variant = re.sub(r"[\s\-_]+", "", candidate).strip()
+        if compact_connector_variant and compact_connector_variant != candidate:
+            candidates.append(compact_connector_variant)
         hyphen_match = re.match(r"^(?P<prefix>.+?)[-—–－](?P<suffix>[^-—–－（）()]+)$", candidate)
         if hyphen_match:
             suffix = str(hyphen_match.group("suffix") or "").strip()

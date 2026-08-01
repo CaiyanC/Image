@@ -54,8 +54,8 @@ def evaluate_agent_response(
     risks: list[str] = []
     dimensions = {
         "intent_resolution": _score_intent_resolution(question, intent, results, actions, needs_clarification, answer),
-        "groundedness": _score_groundedness(question, answer, intent, results, sources, actions, direct_answer, risks),
-        "tool_use": _score_tool_use(question, intent, sources, actions, warnings, direct_answer, tool_results, risks),
+        "groundedness": _score_groundedness(question, answer, intent, results, sources, actions, direct_answer, needs_clarification, risks),
+        "tool_use": _score_tool_use(question, intent, sources, actions, warnings, direct_answer, tool_results, needs_clarification, risks),
         "task_adherence": _score_task_adherence(question, answer, intent, actions, risks),
         "context_handling": _score_context_handling(question, answer, results, actions, needs_clarification, risks),
         "answer_hygiene": _score_answer_hygiene(answer, intent, risks),
@@ -109,8 +109,11 @@ def _score_groundedness(
     sources: list[dict[str, Any]],
     actions: list[dict[str, Any]],
     direct_answer: bool,
+    needs_clarification: bool,
     risks: list[str],
 ) -> float:
+    if needs_clarification:
+        return 1.0
     if intent in WRITE_INTENTS:
         return 1.0 if actions else 0.35
     if intent not in FACT_INTENTS:
@@ -148,8 +151,11 @@ def _score_tool_use(
     warnings: list[str],
     direct_answer: bool,
     tool_results: list[dict[str, Any]],
+    needs_clarification: bool,
     risks: list[str],
 ) -> float:
+    if needs_clarification:
+        return 1.0
     failed_tools = [item for item in tool_results if isinstance(item, dict) and item.get("ok") is False]
     if failed_tools:
         risks.append("tool_call_failed")

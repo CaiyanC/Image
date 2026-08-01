@@ -314,7 +314,7 @@ def build_recommendation_request_contract(
         contract.capacity_requirement = "numeric"
         contract.source_spans["capacity"] = capacity_span
         _append_unique(contract.hard_constraints, "capacity")
-    elif any(term in text for term in ("容量大", "容量要大", "大容量", "容量宽裕", "容量别太小", "容量不要太小")):
+    elif any(term in text for term in ("容量大", "容量要大", "大容量", "容量宽裕", "容量够用", "容量别太小", "容量不要太小")):
         contract.capacity_requirement = "spacious"
         _append_unique(contract.soft_preferences, "capacity")
 
@@ -993,6 +993,13 @@ def build_verified_recommendation_answer(
     accepted = {item.sku: item for item in verifications if item.verification_level != "rejected"}
     rows = [row for row in verified_rows if str(row.get("sku") or "").strip().upper() in accepted]
     if not rows:
+        if contract.subject_category == "锅具" and contract.people_min is not None:
+            people_label = (
+                f"{contract.people_min} 人"
+                if contract.people_min == contract.people_max
+                else f"{contract.people_min}-{contract.people_max} 人"
+            )
+            return f"当前没有明确标注 {people_label} 适用且能验证所有硬性条件的锅具，现有资料证据不足。"
         return "当前未找到符合条件且能验证所有硬性条件的商品。"
     partial_result = any(accepted[str(row.get("sku") or "").strip().upper()].verification_level == "partially_verified" for row in rows)
     fully_verified_result = any(
@@ -1006,7 +1013,7 @@ def build_verified_recommendation_answer(
     )
     if fully_verified_result and partial_result:
         lines = [
-            "以下优先展示已通过当前可验证的硬性条件的候选；其余备选会明确标出尚未验证的条件，供你结合实际需求判断："
+            "以下推荐优先展示已通过当前可验证的硬性条件的候选；其余备选会明确标出尚未验证的条件，供你结合实际需求判断："
         ]
     if contract.subject_kind == "stove":
         subject_label = {

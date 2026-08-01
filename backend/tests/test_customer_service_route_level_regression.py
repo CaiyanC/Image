@@ -200,6 +200,7 @@ def _add_product_qa(db, sku, question, answer, *, tags="", priority=100):
             answer=answer,
             tags=tags,
             priority=priority,
+            integrity_status="approved",
         )
     )
 

@@ -13,12 +13,19 @@ assert SPEC and SPEC.loader
 sys.modules[SPEC.name] = MODULE
 SPEC.loader.exec_module(MODULE)
 
-SUPPLEMENTAL_PATH = Path(__file__).resolve().parents[2] / "tmp_supplemental_rerun.py"
-SUPPLEMENTAL_SPEC = importlib.util.spec_from_file_location("tmp_supplemental_rerun", SUPPLEMENTAL_PATH)
-SUPPLEMENTAL = importlib.util.module_from_spec(SUPPLEMENTAL_SPEC)
-assert SUPPLEMENTAL_SPEC and SUPPLEMENTAL_SPEC.loader
-sys.modules[SUPPLEMENTAL_SPEC.name] = SUPPLEMENTAL
-SUPPLEMENTAL_SPEC.loader.exec_module(SUPPLEMENTAL)
+def _multiturn_issue(sequence: dict, records: list[dict], _sku_lookup: dict) -> tuple[str, str]:
+    """Small, versioned oracle for the supplemental follow-up regression cases."""
+    if not records or any(record.get("status") != 200 for record in records):
+        return "fail", "request_error"
+    kind = str(sequence.get("kind") or "")
+    first_skus = list(records[0].get("result_skus") or [])
+    if kind == "single_followup":
+        if len(records) < 2 or not first_skus or first_skus[0] not in (records[1].get("result_skus") or []):
+            return "fail", "pronoun_error"
+    if kind == "ordinal_followup":
+        if len(records) < 2 or not first_skus or first_skus[0] not in (records[1].get("result_skus") or []):
+            return "fail", "ordinal_error"
+    return "pass", "ok"
 
 
 class FullRegressionRunnerTest(unittest.TestCase):
@@ -442,7 +449,7 @@ class FullRegressionRunnerTest(unittest.TestCase):
             "CW-C73": {"category": "锅具"},
         }
 
-        judgement, reason = SUPPLEMENTAL._multiturn_issue(sequence, records, sku_lookup)
+        judgement, reason = _multiturn_issue(sequence, records, sku_lookup)
 
         self.assertEqual((judgement, reason), ("pass", "ok"))
 
@@ -475,7 +482,7 @@ class FullRegressionRunnerTest(unittest.TestCase):
             },
         ]
 
-        judgement, reason = SUPPLEMENTAL._multiturn_issue(sequence, records, {})
+        judgement, reason = _multiturn_issue(sequence, records, {})
 
         self.assertEqual((judgement, reason), ("fail", "pronoun_error"))
 
@@ -508,7 +515,7 @@ class FullRegressionRunnerTest(unittest.TestCase):
             },
         ]
 
-        judgement, reason = SUPPLEMENTAL._multiturn_issue(sequence, records, {})
+        judgement, reason = _multiturn_issue(sequence, records, {})
 
         self.assertEqual((judgement, reason), ("fail", "ordinal_error"))
 

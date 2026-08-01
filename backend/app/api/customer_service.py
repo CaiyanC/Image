@@ -13,10 +13,38 @@ from ..core.rate_limit import enforce_rate_limit
 from ..core.security import get_user_permissions, require_permission
 from ..models.knowledge_base import CustomerServiceConversation, CustomerServiceMessage
 from ..models.user import User
-from ..services import agent_action_service, customer_perf_service, customer_service_service, operation_log_service
+from ..services import agent_action_service, customer_cache_service, customer_perf_service, customer_service_service, operation_log_service
 
 router = APIRouter(prefix="/api/customer-service", tags=["customer-service"])
 logger = logging.getLogger("uvicorn")
+
+
+def _recommendation_response_cache_key(user_id: str, body: "CustomerServiceAskRequest") -> str | None:
+    if body.conversation_id:
+        return None
+    return customer_cache_service.make_key(
+        "customer_service_recommendation_response",
+        user_id,
+        customer_cache_service.normalize_text(body.question),
+        str(body.sku or "").strip().upper(),
+    )
+
+
+def _cached_recommendation_response(user_id: str, body: "CustomerServiceAskRequest") -> dict | None:
+    key = _recommendation_response_cache_key(user_id, body)
+    return customer_cache_service.recommendation_response_cache.get(key) if key else None
+
+
+def _cache_recommendation_response(user_id: str, body: "CustomerServiceAskRequest", result: dict) -> None:
+    key = _recommendation_response_cache_key(user_id, body)
+    if not key:
+        return
+    if result.get("answer_type") in {"recommendation", "comparison"} and result.get("result_skus"):
+        customer_cache_service.recommendation_response_cache.set(key, result)
+        return
+    # A fresh normal request supersedes a prior recommendation decision.  Do
+    # not let its SSE counterpart resurrect a stale candidate set or answer.
+    customer_cache_service.recommendation_response_cache.delete(key)
 
 
 class CustomerServiceAskRequest(BaseModel):
@@ -132,6 +160,7 @@ async def ask(
         sku=body.sku,
         conversation_id=body.conversation_id,
     )
+    _cache_recommendation_response(current_user.id, body, result)
     customer_perf_service.log_stage(
         "ask_api.service_call",
         service_start,
@@ -180,14 +209,23 @@ async def ask_stream(
             async def on_answer_delta(text: str) -> None:
                 await delta_queue.put(text)
 
-            service_task = asyncio.create_task(customer_service_service.ask_customer_service(
-                db,
-                user_id=current_user.id,
-                question=body.question,
-                sku=body.sku,
-                conversation_id=body.conversation_id,
-                answer_delta_callback=on_answer_delta,
-            ))
+            cached_result = _cached_recommendation_response(current_user.id, body)
+            if cached_result is not None:
+                await on_answer_delta(str(cached_result.get("answer") or ""))
+                service_task = asyncio.create_task(asyncio.sleep(0, result=cached_result))
+            else:
+                async def run_service():
+                    result = await customer_service_service.ask_customer_service(
+                        db,
+                        user_id=current_user.id,
+                        question=body.question,
+                        sku=body.sku,
+                        conversation_id=body.conversation_id,
+                        answer_delta_callback=on_answer_delta,
+                    )
+                    _cache_recommendation_response(current_user.id, body, result)
+                    return result
+                service_task = asyncio.create_task(run_service())
             while not service_task.done() or not delta_queue.empty():
                 try:
                     delta = await asyncio.wait_for(delta_queue.get(), timeout=0.1)

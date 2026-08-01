@@ -112,6 +112,32 @@ def test_semantic_preplan_preserves_supplemental_same_sku_qa_for_mixed_product_f
     assert not result["fallback_reason"]
 
 
+def test_semantic_preplan_preserves_supplemental_same_sku_qa_for_mixed_comparison():
+    result = customer_agent_planner_service._validate_semantic_preplan(
+        {
+            "route_family": "comparison",
+            "route_hint": "comparison",
+            "question_type": "comparison",
+            "entities": ["Alpha", "Beta"],
+            "subject_text": "Alpha and Beta",
+            "canonical_fields": ["weight"],
+            "field_type": "weight",
+            "field_hint": "weight",
+            "evidence_kind": "structured_field",
+            "supplemental_qa_evidence_query": "packing and storage convenience",
+            "confidence": "high",
+            "ambiguity": False,
+            "evidence_required": True,
+            "context_usage": "none",
+            "reasoning_summary": "The comparison asks for weight and storage.",
+        }
+    )
+
+    assert result["canonical_fields"] == ["weight"]
+    assert result["supplemental_qa_evidence_query"] == "packing and storage convenience"
+    assert not result["fallback_reason"]
+
+
 def test_semantic_compound_adapter_separates_capability_from_safety_evaluation(monkeypatch):
     """A semantic subtask must retrieve compatibility, never manufacture safety."""
     prompts = []
@@ -966,6 +992,26 @@ def test_semantic_comparison_builds_an_entity_contract_for_each_verbatim_partici
     assert [contract.field_type for contract in contracts] == ["people", "people"]
 
 
+def test_explicit_sku_comparison_builds_two_sealed_contracts_without_a_semantic_plan():
+    products = [
+        _product("CW-C83", "炊墨套锅"),
+        _product("CW-C06PRO", "轻途套锅"),
+    ]
+    plan = {"primary_intent": "product_detail", "answer_type": "product_detail", "product_refs": []}
+
+    contracts = customer_service_service._apply_explicit_sku_comparison_plan(
+        "CW-C83 和 CW-C06PRO 的收纳和负重怎么比？",
+        plan,
+        products,
+    )
+
+    assert [contract.resolved_sku for contract in contracts] == ["CW-C83", "CW-C06PRO"]
+    assert all(contract.matched_by == "sku_exact" for contract in contracts)
+    assert plan["primary_intent"] == "comparison"
+    assert plan["product_refs"] == ["CW-C83", "CW-C06PRO"]
+    assert plan["semantic_comparison_entity_contracts"] == [contract.to_dict() for contract in contracts]
+
+
 def test_semantic_comparison_keeps_each_participant_local_when_only_one_is_sku():
     """One explicit SKU must not overwrite a second named comparison participant."""
     products = [
@@ -1135,6 +1181,25 @@ def test_invalid_semantic_pairwise_preplan_with_two_sealed_products_clarifies_be
     assert result["candidate_skus"] == ["SKU-A", "SKU-B"]
     assert result["debug"]["agent_mode"] == "semantic_pairwise_invalid_preplan_clarification"
     assert len(result["debug"]["entity_resolution_contracts"]) == 2
+
+
+def test_invalid_semantic_pairwise_preplan_does_not_override_explicit_sku_contracts():
+    products = [_product("SKU-A", "示例甲"), _product("SKU-B", "示例乙")]
+    plan = {"primary_intent": "comparison", "answer_type": "comparison"}
+
+    customer_service_service._apply_explicit_sku_comparison_plan(
+        "SKU-A 和 SKU-B 的重量怎么比？",
+        plan,
+        products,
+    )
+    result = customer_service_service._invalid_semantic_pairwise_preplan_clarification_result(
+        "SKU-A 和 SKU-B 的重量怎么比？",
+        plan,
+        {"called": True, "fallback_reason": "unexpected_keys:comparison_constraints"},
+        products,
+    )
+
+    assert result is None
 
 
 def test_semantic_comparison_owns_the_decision_request_not_the_legacy_question_parser():
@@ -1740,6 +1805,18 @@ def test_semantic_preplan_prompt_exposes_executable_recommendation_constraint_sc
     assert "weight_preference=lightweight" in system
 
 
+def test_semantic_preplan_prompt_preserves_formal_field_in_mixed_comparison():
+    messages = customer_agent_planner_service._semantic_preplan_messages(
+        question="Compare the weight and storage of Alpha and Beta.",
+        deterministic_plan={},
+        context={},
+    )
+
+    assert "put only that separate non-column intent in supplemental_qa_evidence_query" in "\n".join(
+        str(message.get("content") or "") for message in messages
+    )
+
+
 def test_semantic_preplan_prompt_keeps_current_purchase_availability_out_of_product_qa():
     messages = customer_agent_planner_service._semantic_preplan_messages(
         question="can I still buy this named product now?",
@@ -2098,6 +2175,23 @@ def test_entity_contract_resolves_leading_display_label_alias_with_formal_candid
     product = _product("CP-201", "（渠道专属）晨光户外杯", "水具")
     result = build_entity_resolution_contract("晨光户外杯的大小是多少", [product], resolver_candidates=[product])
     assert result.status == "resolved"
+    assert result.matched_by == "normalized_alias_exact"
+
+
+def test_entity_contract_resolves_unique_name_with_only_connector_difference():
+    products = [
+        _product("CS-B15S", "围雪炉-酒精版", "炉具"),
+        _product("CS-B15SPRO", "围雪炉-酒精汽炉版", "炉具"),
+    ]
+
+    result = build_entity_resolution_contract(
+        "围雪炉酒精版熏黑了怎么处理？",
+        products,
+        entity_text_override="围雪炉酒精版",
+    )
+
+    assert result.status == "resolved"
+    assert result.resolved_sku == "CS-B15S"
     assert result.matched_by == "normalized_alias_exact"
 
 

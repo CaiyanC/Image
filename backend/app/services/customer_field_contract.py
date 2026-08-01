@@ -588,6 +588,8 @@ def requested_cleaning_subtype(question: str) -> str | None:
     text = str(question or "")
     if "洗碗机" in text:
         return None
+    if any(term in text for term in ("首次使用", "第一次使用", "第一次用", "开箱初洗")):
+        return "first_use"
     if any(term in text for term in ("洗衣机", "机洗")):
         return "machine_wash"
     return None
@@ -595,6 +597,9 @@ def requested_cleaning_subtype(question: str) -> str | None:
 
 def requested_usage_instruction_subtype(question: str) -> str | None:
     """Return a formatter-safe usage subtype after the canonical field is set."""
+    text = str(question or "")
+    if any(term in text for term in ("首次使用", "第一次使用", "第一次用", "开箱初洗")):
+        return "first_use"
     composed = deterministic_compositional_field_candidate(question)
     if composed and composed[0] == "usage_instruction" and composed[1] == "compositional liquid-temperature capability intent":
         return "liquid_temperature_capability"
@@ -675,6 +680,8 @@ def normalize_field_adjacent_entity_scope(
 
 def _dimension_scope(label: str) -> str:
     value = str(label or "").strip()
+    if any(term in value for term in ("收纳袋", "收纳包", "内袋", "外袋")):
+        return "component"
     if value in {"", "尺寸", "大小", "长宽高", "展开尺寸", "收纳尺寸", "展开后尺寸", "收起后尺寸"}:
         return "subject"
     if any(term in value for term in ("包装", "外箱", "包裹")):
@@ -684,6 +691,8 @@ def _dimension_scope(label: str) -> str:
 
 def _dimension_subtype(label: str) -> str | None:
     value = str(label or "").strip()
+    if any(term in value for term in ("收纳袋", "收纳包", "内袋", "外袋")):
+        return None
     if any(term in value for term in ("包装", "外箱", "包裹")):
         return "package"
     if value in {"收纳尺寸", "收起尺寸", "收起后尺寸"}:
@@ -720,9 +729,39 @@ def select_dimension_evidence(
         return DimensionEvidence(value=value, scope="subject", label="尺寸") if requested_scope == "subject" else None
     if not isinstance(parsed, list):
         return DimensionEvidence(value=value, scope="subject", label="尺寸") if requested_scope == "subject" else None
+    normalized_items: list[dict[str, Any]] = []
+    index = 0
+    while index < len(parsed):
+        item = parsed[index]
+        if not isinstance(item, dict):
+            index += 1
+            continue
+        label = str(item.get("label") or "").strip()
+        item_value = str(item.get("value") or "").strip()
+        # Spreadsheet imports occasionally split a dimension label and its
+        # measurement into adjacent rows. Rejoin only a recognised dimension
+        # label with an immediately following unlabeled concrete value.
+        if (
+            not label
+            and _dimension_subtype(item_value) in {"expanded", "storage", "package"}
+            and index + 1 < len(parsed)
+            and isinstance(parsed[index + 1], dict)
+            and not str(parsed[index + 1].get("label") or "").strip()
+            and _dimension_value_is_concrete(parsed[index + 1].get("value"))
+        ):
+            next_item = parsed[index + 1]
+            normalized_items.append({
+                "label": item_value,
+                "value": next_item.get("value"),
+                "unit": next_item.get("unit") or "",
+            })
+            index += 2
+            continue
+        normalized_items.append(item)
+        index += 1
     candidates = [
         item
-        for item in parsed
+        for item in normalized_items
         if isinstance(item, dict)
         and _dimension_value_is_concrete(item.get("value"))
         and _dimension_scope(str(item.get("label") or "")) == requested_scope
@@ -745,9 +784,42 @@ def select_dimension_evidence(
             for item in candidates
             if _dimension_subtype(str(item.get("label") or "")) == "expanded"
         ]
-        candidates = product_candidates or expanded_candidates
+        storage_candidates = [
+            item
+            for item in candidates
+            if _dimension_subtype(str(item.get("label") or "")) == "storage"
+        ]
+        candidates = product_candidates or [*expanded_candidates, *storage_candidates]
+        if not candidates:
+            component_candidates = [
+                item
+                for item in normalized_items
+                if isinstance(item, dict)
+                and _dimension_value_is_concrete(item.get("value"))
+                and _dimension_scope(str(item.get("label") or "")) == "component"
+                and any(
+                    term in str(item.get("label") or "")
+                    for term in ("炉体", "主体", "本体")
+                )
+            ]
+            if len(component_candidates) == 1:
+                candidates = component_candidates
     if not candidates:
         return None
+    if not requested_subtype and requested_scope == "subject" and len(candidates) > 1:
+        parts = []
+        for item in candidates:
+            item_label = str(item.get("label") or "尺寸").strip()
+            item_value = re.sub(r"^[\s:：；;]+", "", str(item.get("value") or "").strip())
+            item_unit = str(item.get("unit") or "").strip()
+            parts.append(f"{item_label}：{item_value}{item_unit}")
+        return DimensionEvidence(
+            value="；".join(parts),
+            scope=requested_scope,
+            label="尺寸",
+            subtype="product",
+            is_generic_fallback=False,
+        )
     selected = candidates[0]
     label = str(selected.get("label") or "尺寸").strip()
     subtype = _dimension_subtype(label) or effective_subtype or "product"

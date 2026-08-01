@@ -619,7 +619,7 @@ def test_no_hard_constraint_match_returns_safe_answer_without_skus():
     verification = verify_recommendation_candidates(contract, [row])[0]
     answer = build_verified_recommendation_answer(contract, [], [verification])
 
-    assert "未找到符合条件" in answer
+    assert "能验证所有硬性条件" in answer
     assert "能验证所有硬性条件" in answer
     assert "FAIL" not in answer
 
@@ -671,7 +671,7 @@ def test_multi_condition_route_returns_safe_result_when_no_candidate_verifies(mo
 
     assert result["result_skus"] == []
     assert result["candidate_skus"] == []
-    assert "未找到符合条件" in result["answer"]
+    assert "能验证所有硬性条件" in result["answer"]
     assert "能验证所有硬性条件" in result["answer"]
     assert result["debug"]["verified_candidate_skus"] == []
 

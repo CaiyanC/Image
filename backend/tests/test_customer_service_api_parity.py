@@ -106,6 +106,7 @@ def client_and_token(monkeypatch):
 
     from app.api import customer_service as customer_service_api
 
+    customer_service_api.customer_cache_service.recommendation_response_cache.clear()
     monkeypatch.setattr(customer_service_api, "enforce_rate_limit", lambda **kwargs: None)
     monkeypatch.setattr(customer_service_api.operation_log_service, "log_operation", lambda *args, **kwargs: None)
 
@@ -151,7 +152,10 @@ def test_customer_service_ask_and_stream_share_single_turn_public_shape(client_a
         },
     }
 
+    calls = []
+
     async def fake_ask_customer_service(db, user_id, question, sku=None, conversation_id=None, answer_delta_callback=None):
+        calls.append(question)
         payload = responses[question]
         return {
             "conversation_id": f"conv-{abs(hash(question))}",
@@ -205,6 +209,11 @@ def test_customer_service_ask_and_stream_share_single_turn_public_shape(client_a
         assert ((stream_meta.get("debug") or {}).get("plan") or {}).get("primary_intent") == expected["intent"]
         assert stream_meta["result_skus"] == expected["result_skus"]
         assert stream_meta["answer_type"] != "knowledge_base_answer"
+
+    assert calls.count(Q04) == 1
+    assert calls.count(Q19) == 1
+    assert calls.count(Q06) == 2
+    assert calls.count(Q08) == 2
 
 
 def test_customer_service_ask_and_stream_share_multiturn_conversation_context(client_and_token, monkeypatch):
@@ -304,3 +313,133 @@ def test_customer_service_ask_and_stream_share_multiturn_conversation_context(cl
         assert meta["answer_type"] == expected_answer_type
         assert meta["answer_type"] != "knowledge_base_answer"
         assert meta["result_skus"]
+
+
+def test_repeated_stateless_recommendation_reuses_the_approved_result_for_stream(client_and_token, monkeypatch):
+    client, headers = client_and_token
+    from app.api import customer_service as customer_service_api
+    from app.services import customer_cache_service
+
+    customer_cache_service.recommendation_response_cache.clear()
+    calls = []
+
+    async def fake_ask_customer_service(_db, *, user_id, question, sku=None, conversation_id=None, answer_delta_callback=None):
+        calls.append((question, conversation_id, answer_delta_callback is not None))
+        return {
+            "conversation_id": "recommendation-parity",
+            "message_id": "recommendation-parity-message",
+            "intent": "recommendation",
+            "answer_type": "recommendation",
+            "answer": "推荐 CW-C69-1。",
+            "result_skus": ["CW-C69-1", "CW-C06PRO"],
+            "candidate_skus": ["CW-C69-1", "CW-C06PRO"],
+            "results": [], "sources": [], "actions": [], "steps": [], "warnings": [], "evidence": [],
+        }
+
+    monkeypatch.setattr(customer_service_api.customer_service_service, "ask_customer_service", fake_ask_customer_service)
+
+    normal = client.post("/api/customer-service/ask", json={"question": Q15_1}, headers=headers)
+    stream = client.post("/api/customer-service/ask-stream", json={"question": Q15_1}, headers=headers)
+
+    assert normal.status_code == 200
+    assert stream.status_code == 200
+    assert len(calls) == 1
+    assert _parse_sse(stream.text)["meta"]["result_skus"] == normal.json()["result_skus"]
+
+
+def test_repeated_normal_recommendation_creates_a_fresh_conversation(client_and_token, monkeypatch):
+    client, headers = client_and_token
+    from app.api import customer_service as customer_service_api
+    from app.services import customer_cache_service
+
+    customer_cache_service.recommendation_response_cache.clear()
+    calls = []
+
+    async def fake_ask_customer_service(_db, *, user_id, question, sku=None, conversation_id=None, answer_delta_callback=None):
+        calls.append((question, conversation_id))
+        sequence = len(calls)
+        return {
+            "conversation_id": f"fresh-conversation-{sequence}",
+            "message_id": f"fresh-message-{sequence}",
+            "intent": "recommendation", "answer_type": "recommendation",
+            "answer": "推荐 CW-C69-1。", "result_skus": ["CW-C69-1"],
+            "candidate_skus": ["CW-C69-1"], "results": [], "sources": [],
+            "actions": [], "steps": [], "warnings": [], "evidence": [],
+        }
+
+    monkeypatch.setattr(customer_service_api.customer_service_service, "ask_customer_service", fake_ask_customer_service)
+
+    first = client.post("/api/customer-service/ask", json={"question": Q15_1}, headers=headers)
+    second = client.post("/api/customer-service/ask", json={"question": Q15_1}, headers=headers)
+
+    assert first.status_code == 200
+    assert second.status_code == 200
+    assert len(calls) == 2
+    assert first.json()["conversation_id"] != second.json()["conversation_id"]
+
+
+def test_normal_non_recommendation_invalidates_a_stale_stream_recommendation_cache(client_and_token, monkeypatch):
+    client, headers = client_and_token
+    from app.api import customer_service as customer_service_api
+    from app.services import customer_cache_service
+
+    customer_cache_service.recommendation_response_cache.clear()
+    calls = []
+
+    async def fake_ask_customer_service(_db, *, user_id, question, sku=None, conversation_id=None, answer_delta_callback=None):
+        calls.append(question)
+        if len(calls) == 1:
+            return {
+                "conversation_id": "old-recommendation", "message_id": "old-message",
+                "intent": "recommendation", "answer_type": "recommendation",
+                "answer": "推荐 CW-C69-1。", "result_skus": ["CW-C69-1"],
+                "candidate_skus": ["CW-C69-1"], "results": [], "sources": [],
+                "actions": [], "steps": [], "warnings": [], "evidence": [],
+            }
+        return {
+            "conversation_id": "fresh-clarification", "message_id": "fresh-message",
+            "intent": "clarify", "answer_type": "clarification",
+            "answer": "请补充具体容量或重量偏好。", "result_skus": [],
+            "candidate_skus": [], "results": [], "sources": [],
+            "actions": [], "steps": [], "warnings": [], "evidence": [],
+        }
+
+    monkeypatch.setattr(customer_service_api.customer_service_service, "ask_customer_service", fake_ask_customer_service)
+
+    first = client.post("/api/customer-service/ask", json={"question": Q15_1}, headers=headers)
+    second = client.post("/api/customer-service/ask", json={"question": Q15_1}, headers=headers)
+    stream = client.post("/api/customer-service/ask-stream", json={"question": Q15_1}, headers=headers)
+
+    assert first.json()["answer_type"] == "recommendation"
+    assert second.json()["answer_type"] == "clarification"
+    assert _parse_sse(stream.text)["meta"]["answer_type"] == "clarification"
+    assert len(calls) == 3
+
+
+def test_stateless_comparison_reuses_the_normal_result_for_stream(client_and_token, monkeypatch):
+    client, headers = client_and_token
+    from app.api import customer_service as customer_service_api
+    from app.services import customer_cache_service
+
+    customer_cache_service.recommendation_response_cache.clear()
+    calls = []
+
+    async def fake_ask_customer_service(_db, *, user_id, question, sku=None, conversation_id=None, answer_delta_callback=None):
+        calls.append(question)
+        return {
+            "conversation_id": "comparison-parity", "message_id": "comparison-message",
+            "intent": "compare_products", "answer_type": "comparison",
+            "answer": "CW-C93 更适合两人徒步。", "result_skus": ["CW-C93", "CW-C83"],
+            "candidate_skus": ["CW-C93", "CW-C83"], "results": [], "sources": [],
+            "actions": [], "steps": [], "warnings": [], "evidence": [],
+        }
+
+    monkeypatch.setattr(customer_service_api.customer_service_service, "ask_customer_service", fake_ask_customer_service)
+
+    normal = client.post("/api/customer-service/ask", json={"question": Q15_1}, headers=headers)
+    stream = client.post("/api/customer-service/ask-stream", json={"question": Q15_1}, headers=headers)
+
+    assert normal.status_code == 200
+    assert stream.status_code == 200
+    assert len(calls) == 1
+    assert _parse_sse(stream.text)["meta"]["result_skus"] == normal.json()["result_skus"]

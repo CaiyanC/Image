@@ -140,6 +140,46 @@ def test_dimension_policy_keeps_package_scope_separate_from_subject_scope():
     assert package.scope == "package"
 
 
+def test_generic_subject_dimension_includes_all_non_package_product_measurements():
+    value = json.dumps(
+        [
+            {"label": "展开尺寸", "value": "36x25x20", "unit": "cm"},
+            {"label": "收纳尺寸", "value": "36x25x10", "unit": "cm"},
+            {"label": "包装尺寸", "value": "40x30x25", "unit": "cm"},
+        ],
+        ensure_ascii=False,
+    )
+
+    evidence = select_dimension_evidence(value, requested_scope="subject")
+
+    assert evidence is not None
+    assert evidence.value == "展开尺寸：36x25x20cm；收纳尺寸：36x25x10cm"
+    assert evidence.is_generic_fallback is False
+
+
+def test_generic_subject_dimension_recovers_a_label_only_row_and_component_measurement():
+    split_storage = json.dumps(
+        [
+            {"label": "展开尺寸", "value": "15.2x11.7", "unit": "cm"},
+            {"label": "", "value": "收纳尺寸", "unit": ""},
+            {"label": "", "value": ":9.5x6.7mm（炉体）", "unit": ""},
+        ],
+        ensure_ascii=False,
+    )
+    component_only = json.dumps(
+        [{"label": "炉体", "value": "9.5x6.7", "unit": "cm"}],
+        ensure_ascii=False,
+    )
+
+    recovered = select_dimension_evidence(split_storage, requested_scope="subject")
+    component = select_dimension_evidence(component_only, requested_scope="subject")
+
+    assert recovered is not None
+    assert recovered.value == "展开尺寸：15.2x11.7cm；收纳尺寸：9.5x6.7mm（炉体）"
+    assert component is not None
+    assert component.value == "9.5x6.7"
+
+
 def test_dimension_policy_rejects_label_without_measurement():
     assert select_dimension_evidence(
         json.dumps([{"label": "收纳尺寸", "value": "收纳尺寸", "unit": ""}], ensure_ascii=False),
@@ -809,6 +849,28 @@ def test_usage_field_evidence_keeps_complete_numbered_items():
     assert "展开产品" not in cleaning
 
 
+def test_usage_instruction_first_use_subtype_keeps_only_first_use_step():
+    instruction = (
+        "\u3010\u4f7f\u7528\u6b65\u9aa4\u3011\n"
+        "1.\u5f00\u7bb1\u521d\u6d17\uff1a\u9996\u6b21\u4f7f\u7528\u524d\uff0c\u7528\u6e29\u6c34\u548c\u8f6f\u5e03\u8f7b\u67d4\u51b2\u6d17\u9505\u8eab\uff0c\u65e0\u9700\u4f7f\u7528\u6d17\u6d01\u7cbe\u3002\n"
+        "2.\u53ca\u65f6\u6e05\u6d01\uff1a\u6bcf\u6b21\u4f7f\u7528\u540e\u7528\u6e29\u6c34\u51b2\u6d17\u5e72\u51c0\u3002\n"
+        "\u3010\u65e5\u5e38\u517b\u62a4\u3011\n"
+        "1.\u6d17\u51c0\u540e\u7528\u62b9\u5e03\u64e6\u5e72\uff0c\u907f\u514d\u6e7f\u6c34\u4e45\u653e\u3002"
+    )
+
+    assert customer_field_contract.requested_usage_instruction_subtype("\u7b2c\u4e00\u6b21\u4f7f\u7528\u524d\u600e\u4e48\u6e05\u6d01\uff1f") == "first_use"
+    assert customer_field_contract.requested_cleaning_subtype("\u7b2c\u4e00\u6b21\u4f7f\u7528\u524d\u600e\u4e48\u6e05\u6d01\uff1f") == "first_use"
+    evidence = customer_service_service._usage_instruction_field_evidence(
+        instruction,
+        "cleaning",
+        requested_subtype="first_use",
+    )
+
+    assert "\u5f00\u7bb1\u521d\u6d17" in evidence
+    assert "\u6bcf\u6b21\u4f7f\u7528\u540e" not in evidence
+    assert "\u907f\u514d\u6e7f\u6c34\u4e45\u653e" not in evidence
+
+
 def test_machine_wash_evidence_requires_an_explicit_laundry_machine_wash_clause():
     generic_cleaning = "首次使用前用湿布擦拭表面。使用后用湿布擦拭干净。"
     explicit_machine_wash = "本产品不可放入洗衣机机洗，请使用湿布擦拭。"
@@ -1094,6 +1156,18 @@ def test_semantic_heat_source_span_survives_literal_contract_validation():
 
     assert constraints == {"heat_sources": ["gas_stove"]}
     assert spans == {"heat_sources": ["气炉"]}
+
+
+def test_semantic_heat_source_literal_contract_rejects_wrong_ontology_code():
+    """An exact card-stove span must not license the gas-stove enum."""
+    constraints, spans = customer_agent_planner_service._recommendation_literal_grounding_filter(
+        {"heat_sources": ["gas_stove"]},
+        {"heat_sources": ["卡式炉"]},
+        preserve_semantic_heat_sources=True,
+    )
+
+    assert constraints == {}
+    assert spans == {}
 
 
 def test_weight_evidence_fails_closed_for_physically_conflicting_high_capacity_value():

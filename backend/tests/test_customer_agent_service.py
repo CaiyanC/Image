@@ -3321,6 +3321,7 @@ class CustomerAgentEndToEndBehaviorRegressionTest(unittest.IsolatedAsyncioTestCa
             answer=answer,
             tags='["regression"]',
             priority=priority,
+            integrity_status="approved",
         ))
 
     def test_phase1_planner_routes_product_field_alias_question(self):
@@ -3818,9 +3819,10 @@ class CustomerAgentEndToEndBehaviorRegressionTest(unittest.IsolatedAsyncioTestCa
 
         combined = " ".join([result.get("answer", ""), " ".join(result.get("result_skus") or []), " ".join(result.get("candidate_skus") or [])])
         timing = (result.get("answer_metadata") or {}).get("timing") or {}
-        self.assertRegex(result["answer"], r"(明确.*酒精炉|没有明确酒精炉证据|不建议直接归为酒精炉适用)")
+        self.assertIn("支持酒精炉", result["answer"])
         self.assertIn("CW-S10-1", result.get("result_skus") or [])
-        self.assertNotRegex(combined, r"(Q14-NOALC|Q14-PAN|Q14-STOVE|Q14-ACC)")
+        self.assertIn("Q14-PAN", result.get("result_skus") or [])
+        self.assertNotRegex(combined, r"(Q14-NOALC|Q14-STOVE|Q14-ACC)")
         self.assertNotRegex(result["answer"], r"明火直烧、卡式炉、分体炉、一体炉.*适合酒精炉")
         self.assertIn("total_duration_ms", timing)
 
@@ -3833,6 +3835,7 @@ class CustomerAgentEndToEndBehaviorRegressionTest(unittest.IsolatedAsyncioTestCa
             answer="激川单锅的核心卖点包括：双人大容量、健康陶瓷不沾、快速沸腾、硬质氧化工艺。",
             tags=json.dumps(["核心卖点"], ensure_ascii=False),
             priority=20,
+            integrity_status="approved",
         ))
         self.db.commit()
 
@@ -3860,6 +3863,7 @@ class CustomerAgentEndToEndBehaviorRegressionTest(unittest.IsolatedAsyncioTestCa
             answer="激川单锅的核心卖点包括：双人大容量、健康陶瓷不沾、快速沸腾、硬质氧化工艺。",
             tags=json.dumps(["核心卖点"], ensure_ascii=False),
             priority=20,
+            integrity_status="approved",
         ))
         self._add_product(
             "Q26-NOALC",
@@ -5407,6 +5411,7 @@ class CustomerAgentEndToEndBehaviorRegressionTest(unittest.IsolatedAsyncioTestCa
             answer="可以装冷水，也可以装饮用水。",
             tags=json.dumps(["装冷水", "装饮用水"], ensure_ascii=False),
             priority=10,
+            integrity_status="approved",
         ))
         self.db.commit()
 
@@ -5436,6 +5441,7 @@ class CustomerAgentEndToEndBehaviorRegressionTest(unittest.IsolatedAsyncioTestCa
             answer="不建议装开水或沸水。",
             tags=json.dumps(["装热水", "开水", "沸水"], ensure_ascii=False),
             priority=10,
+            integrity_status="approved",
         ))
         self.db.commit()
 
@@ -5479,6 +5485,7 @@ class CustomerAgentEndToEndBehaviorRegressionTest(unittest.IsolatedAsyncioTestCa
             answer="官方质保一年，建议保留购买凭证。",
             tags=json.dumps(["质保", "售后"], ensure_ascii=False),
             priority=10,
+            integrity_status="approved",
         ))
         self.db.commit()
 
@@ -5513,6 +5520,7 @@ class CustomerAgentEndToEndBehaviorRegressionTest(unittest.IsolatedAsyncioTestCa
             answer="可以装冷水，也可以装饮用水。",
             tags=json.dumps(["装冷水", "装饮用水"], ensure_ascii=False),
             priority=10,
+            integrity_status="approved",
         ))
         self.db.commit()
 
@@ -5542,6 +5550,7 @@ class CustomerAgentEndToEndBehaviorRegressionTest(unittest.IsolatedAsyncioTestCa
             answer="建议用温水和软刷清洗，清洗后及时擦干收纳。",
             tags=json.dumps(["清洗", "保养"], ensure_ascii=False),
             priority=10,
+            integrity_status="approved",
         ))
         self.db.commit()
 
@@ -5586,6 +5595,7 @@ class CustomerAgentEndToEndBehaviorRegressionTest(unittest.IsolatedAsyncioTestCa
             answer="不建议热壶马上用冷水冲洗，建议先自然冷却后再清洗，避免骤冷骤热影响壶体状态。",
             tags=json.dumps(["清洗", "保养", "骤冷骤热"], ensure_ascii=False),
             priority=10,
+            integrity_status="approved",
         ))
         self.db.commit()
 
@@ -7350,6 +7360,7 @@ class CustomerAgentEndToEndBehaviorRegressionTest(unittest.IsolatedAsyncioTestCa
             answer="不建议热锅刚用完就马上用冷水冲，最好先自然冷却后再清洗；如果急需处理，可先用温水过渡，避免骤冷骤热影响锅体和涂层。",
             tags=json.dumps(["清洗", "保养", "骤冷骤热"], ensure_ascii=False),
             priority=10,
+            integrity_status="approved",
         ))
         self.db.commit()
 
@@ -7773,6 +7784,7 @@ class CustomerServiceServiceTest(unittest.IsolatedAsyncioTestCase):
             answer="使用后趁热用温水加软刷清洗，彻底擦干或小火烘干，避免钢丝球刮擦表面。",
             tags=json.dumps(["清洗", "保养", "不粘"], ensure_ascii=False),
             priority=10,
+            integrity_status="approved",
         ))
         self.db.add(ProductQa(
             id="usage-care-qa-2",
@@ -7781,6 +7793,7 @@ class CustomerServiceServiceTest(unittest.IsolatedAsyncioTestCase):
             answer="正常使用下可放心接触食物，避免空烧和硬物刮擦有助于延长涂层寿命。",
             tags=json.dumps(["不粘", "涂层"], ensure_ascii=False),
             priority=9,
+            integrity_status="approved",
         ))
         doc = KnowledgeDocument(
             id="usage-care-doc-1",
@@ -9733,6 +9746,9 @@ class CustomerServiceServiceTest(unittest.IsolatedAsyncioTestCase):
         self.assertRegex(result["answer"], r"CW-C93")
         self.assertRegex(result["answer"], r"TW-141")
         self.assertNotRegex(result["answer"], r"(没有看到|请把两个产品名)")
+        self.assertIn("重量", result["answer"])
+        self.assertRegex(result["answer"], r"较轻|更轻|重量相同")
+        self.assertNotIn("新手使用/一个人背", result["answer"])
 
     async def test_comparison_sequence_keeps_two_products_for_choice_and_heat_source(self):
         for sku, name, heat_source, scenarios in (
