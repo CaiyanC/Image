@@ -5,6 +5,7 @@ from time import perf_counter
 from typing import Any
 
 from fastapi import HTTPException
+from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import Session
 
 from . import customer_perf_service, dmxapi_service
@@ -29,19 +30,36 @@ def _safe_error_summary(exc: Exception) -> str:
     return type(exc).__name__
 
 
+def _governance_table_is_missing(exc: OperationalError) -> bool:
+    message = str(getattr(exc, "orig", exc)).lower()
+    return (
+        "no such table: ai_feature_models" in message
+        or "relation \"ai_feature_models\" does not exist" in message
+    )
+
+
 def _resolve_customer_model_or_legacy(db: Session, user: User):
     """Use legacy system config only until customer-service governance is configured."""
     try:
         return resolve_default_authorized_model(db, user, "customer_service.chat", "chat")
+    except OperationalError as exc:
+        if _governance_table_is_missing(exc):
+            return None
+        raise
     except HTTPException:
-        governance_exists = (
-            db.query(AIFeatureModel.id)
-            .filter(
-                AIFeatureModel.feature_key == "customer_service.chat",
-                AIFeatureModel.is_enabled.is_(True),
+        try:
+            governance_exists = (
+                db.query(AIFeatureModel.id)
+                .filter(
+                    AIFeatureModel.feature_key == "customer_service.chat",
+                    AIFeatureModel.is_enabled.is_(True),
+                )
+                .first()
             )
-            .first()
-        )
+        except OperationalError as exc:
+            if _governance_table_is_missing(exc):
+                return None
+            raise
         if governance_exists:
             raise
         return None

@@ -57,7 +57,7 @@ async def _extract_and_save_b64(data: dict) -> list[str]:
     return paths
 
 
-async def create_txt2img(db: Session, user: User, req: Txt2ImgRequest, *, resolved_model: ResolvedModel):
+async def create_txt2img(db: Session, user: User, req: Txt2ImgRequest, *, resolved_model: ResolvedModel | None):
     params = req.params.model_dump(exclude_none=True) if req.params else {}
     generation = Generation(
         user_id=user.id,
@@ -76,7 +76,7 @@ async def create_txt2img(db: Session, user: User, req: Txt2ImgRequest, *, resolv
         size = params.get("size", "1024x1024")
         n = max(1, min(4, params.get("n", 1)))
 
-        api_format = resolved_model.model.api_format
+        api_format = resolved_model.model.api_format if resolved_model else "openai"
 
         if api_format == "gemini":
             aspect_ratio = params.get("aspect_ratio", "1:1")
@@ -147,7 +147,7 @@ async def create_txt2img(db: Session, user: User, req: Txt2ImgRequest, *, resolv
     return generation
 
 
-async def create_img2img(db: Session, user: User, req: Img2ImgRequest, image_data: list[tuple[bytes, str]], *, resolved_model: ResolvedModel):
+async def create_img2img(db: Session, user: User, req: Img2ImgRequest, image_data: list[tuple[bytes, str]], *, resolved_model: ResolvedModel | None):
     params = req.params.model_dump(exclude_none=True) if req.params else {}
     generation = Generation(
         user_id=user.id,
@@ -166,7 +166,7 @@ async def create_img2img(db: Session, user: User, req: Img2ImgRequest, image_dat
         size = params.get("size", "1024x1024")
         n = max(1, min(4, params.get("n", 1)))
 
-        api_format = resolved_model.model.api_format
+        api_format = resolved_model.model.api_format if resolved_model else "openai"
 
         if api_format == "gemini":
             import base64
@@ -253,7 +253,7 @@ async def create_img2img(db: Session, user: User, req: Img2ImgRequest, image_dat
     return generation
 
 
-async def create_txt2vid(db: Session, user: User, req: Txt2VidRequest, *, resolved_model: ResolvedModel):
+async def create_txt2vid(db: Session, user: User, req: Txt2VidRequest, *, resolved_model: ResolvedModel | None):
     generation = Generation(
         user_id=user.id,
         type="txt2vid",

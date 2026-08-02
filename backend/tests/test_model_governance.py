@@ -31,6 +31,7 @@ from app.services.model_governance_service import (
     resolve_authorized_model,
 )
 from app.services import customer_llm_service
+from app.api import generation as generation_api
 
 
 def _override_route_user(app, path, user):
@@ -84,6 +85,33 @@ def test_customer_chat_uses_existing_system_model_when_governance_is_unconfigure
     assert result == "legacy response"
     assert calls[0]["resolved_model"] is None
     assert calls[0]["api_model_override"] == "deepseek-v4-flash"
+
+
+def test_generation_uses_legacy_model_when_governance_is_unconfigured(db, monkeypatch):
+    user, _group = _seed_user_and_group(db)
+
+    def unavailable_governed_model(*_args, **_kwargs):
+        raise HTTPException(status_code=403, detail="Model is unavailable for this feature or capability")
+
+    monkeypatch.setattr(generation_api, "resolve_authorized_model", unavailable_governed_model)
+
+    assert generation_api._resolve_generation_model_or_legacy(
+        db, user, "legacy-image-model", "image",
+    ) is None
+
+
+def test_generation_rejects_legacy_model_when_governance_is_configured(db, monkeypatch):
+    user, _group = _seed_user_and_group(db)
+    db.add(AIFeatureModel(feature_key="generation.image", model_id="configured-model", is_enabled=True))
+    db.commit()
+
+    def unavailable_governed_model(*_args, **_kwargs):
+        raise HTTPException(status_code=403, detail="Model is unavailable for this feature or capability")
+
+    monkeypatch.setattr(generation_api, "resolve_authorized_model", unavailable_governed_model)
+
+    with pytest.raises(HTTPException, match="unavailable"):
+        generation_api._resolve_generation_model_or_legacy(db, user, "legacy-image-model", "image")
 
 
 def test_governance_models_define_migration_unique_constraints():

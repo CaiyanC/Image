@@ -18,7 +18,8 @@ from ..schemas.generation import (
     ModelInfo,
     GenerationParams,
 )
-from ..services import generation_service
+from ..services import dmxapi_service, generation_service
+from ..models.ai_governance import AIFeatureModel
 from ..services.model_governance_service import list_selectable_models, resolve_authorized_model
 
 router = APIRouter(prefix="/api/generation", tags=["generation"])
@@ -30,11 +31,43 @@ AI_GENERATION_LIMIT_PER_MINUTE = 15
 FILE_UPLOAD_LIMIT_PER_MINUTE = 45
 
 
+def _resolve_generation_model_or_legacy(db: Session, user: User, model_id: str, capability: str):
+    try:
+        return resolve_authorized_model(db, user, "generation.image", model_id, capability)
+    except HTTPException:
+        if not hasattr(db, "query"):
+            return None
+        governance_exists = (
+            db.query(AIFeatureModel.id)
+            .filter(
+                AIFeatureModel.feature_key == "generation.image",
+                AIFeatureModel.is_enabled.is_(True),
+            )
+            .first()
+        )
+        if governance_exists:
+            raise
+        return None
+
+
 @router.get("/models", response_model=List[ModelInfo])
 def get_models(
     current_user: User = Depends(require_permission("ai.generate")),
     db: Session = Depends(get_db),
 ):
+    governed_models = list_selectable_models(db, current_user, "generation.image", "image")
+    if not governed_models:
+        return [
+            {
+                "id": model["id"],
+                "name": model.get("name") or model["id"],
+                "type": model.get("type") or "image",
+                "description": model.get("description") or "",
+                "api_format": model.get("api_format") or "openai",
+            }
+            for model in dmxapi_service.get_available_models(db)
+            if model.get("type") == "image" and model.get("enabled", True)
+        ]
     return [
         {
             "id": model.id,
@@ -43,7 +76,7 @@ def get_models(
             "description": "",
             "api_format": model.api_format,
         }
-        for model in list_selectable_models(db, current_user, "generation.image", "image")
+        for model in governed_models
     ]
 
 
@@ -54,7 +87,7 @@ async def txt2img(
     db: Session = Depends(get_db),
 ):
     _enforce_ai_generation_limit(current_user)
-    resolved_model = resolve_authorized_model(db, current_user, "generation.image", req.model_name, "image")
+    resolved_model = _resolve_generation_model_or_legacy(db, current_user, req.model_name, "image")
     return await generation_service.create_txt2img(db, current_user, req, resolved_model=resolved_model)
 
 
@@ -99,7 +132,7 @@ async def img2img(
     image_data = []
     for img in images:
         image_data.append((await _read_reference_upload(img), img.filename or "image.png"))
-    resolved_model = resolve_authorized_model(db, current_user, "generation.image", req.model_name, "image")
+    resolved_model = _resolve_generation_model_or_legacy(db, current_user, req.model_name, "image")
     return await generation_service.create_img2img(db, current_user, req, image_data, resolved_model=resolved_model)
 
 
@@ -125,7 +158,7 @@ async def img2img_gemini(
     for idx, img in enumerate(req.images):
         img_bytes, ext = _decode_reference_payload(img)
         image_data.append((img_bytes, f"ref_{idx}.{ext}"))
-    resolved_model = resolve_authorized_model(db, current_user, "generation.image", dto.model_name, "image")
+    resolved_model = _resolve_generation_model_or_legacy(db, current_user, dto.model_name, "image")
     return await generation_service.create_img2img(db, current_user, dto, image_data, resolved_model=resolved_model)
 
 
@@ -136,7 +169,7 @@ async def txt2vid(
     db: Session = Depends(get_db),
 ):
     _enforce_ai_generation_limit(current_user)
-    resolved_model = resolve_authorized_model(db, current_user, "generation.image", req.model_name, "image")
+    resolved_model = _resolve_generation_model_or_legacy(db, current_user, req.model_name, "image")
     return await generation_service.create_txt2vid(db, current_user, req, resolved_model=resolved_model)
 
 

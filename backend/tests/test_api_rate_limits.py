@@ -63,7 +63,10 @@ class ApiRateLimitTest(unittest.IsolatedAsyncioTestCase):
 
     async def test_ai_generation_rate_limit_returns_429(self):
         service_mock = AsyncMock(return_value={"ok": True})
-        with patch.object(generation_api.generation_service, "create_txt2img", service_mock):
+        with (
+            patch.object(generation_api, "_resolve_generation_model_or_legacy", return_value=None),
+            patch.object(generation_api.generation_service, "create_txt2img", service_mock),
+        ):
             for _ in range(generation_api.AI_GENERATION_LIMIT_PER_MINUTE):
                 await generation_api.txt2img(
                     Txt2ImgRequest(prompt="test"),
