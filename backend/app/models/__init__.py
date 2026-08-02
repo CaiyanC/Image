@@ -11,6 +11,8 @@ from .agent_trace import AgentTrace
 from .field_configs import FieldConfig
 from .entity_field_values import EntityFieldValue
 from .ai_tasks import AiTask
+from .tool import Tool
+from .tool_run import ToolRun
 from .product_draft import ProductDraft
 from .product_category import ProductCategory
 from .product_prompts import ProductPrompts
@@ -25,6 +27,10 @@ from .product_qa import ProductQa, ProductQaNegative
 from .product_qa_answer import ProductQaAnswer
 from .qa_tags import QaTag, QaTagRelation
 from .ai_generated_asset import AiGeneratedAsset
+from .ai_governance import (
+    AIProviderCredential, AIModel, AIFeatureModel, AIModelAccessRule,
+    AIModelUsageLog,
+)
 from .product_associations import (
     ListingChannel, ProductListingChannel,
     SalesRegion, ProductSalesRegion,
@@ -40,11 +46,13 @@ __all__ = [
     "User", "Generation", "SystemConfig", "Group", "UserGroup",
     "Permission", "GroupPermission",
     "Route", "PermissionRoute",
-    "OperationLog", "AgentAction", "AgentTrace", "FieldConfig", "EntityFieldValue", "AiTask",
+    "OperationLog", "AgentAction", "AgentTrace", "FieldConfig", "EntityFieldValue", "AiTask", "Tool", "ToolRun",
     "ProductDraft", "ProductCategory", "ProductPrompts",
     "Product", "ProductOperationSnapshot", "ProductSpecs", "ProductBusiness", "ProductContent", "ProductMedia", "ProductAsset",
     "ProductQa", "ProductQaNegative", "ProductQaAnswer",
     "QaTag", "QaTagRelation", "AiGeneratedAsset",
+    "AIProviderCredential", "AIModel", "AIFeatureModel", "AIModelAccessRule",
+    "AIModelUsageLog",
     "ListingChannel", "ProductListingChannel",
     "SalesRegion", "ProductSalesRegion",
     "Certification", "ProductCertification",

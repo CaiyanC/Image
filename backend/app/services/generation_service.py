@@ -9,7 +9,8 @@ from ..models.generation import Generation
 from ..models.user import User
 from ..schemas.generation import Txt2ImgRequest, Img2ImgRequest, Txt2VidRequest, GenerationStats
 from ..utils.file_storage import save_generated_image
-from .dmxapi_service import txt2img, img2img, get_available_models, txt2img_gemini, img2img_gemini, _resolve_model_config
+from .dmxapi_service import txt2img, img2img, txt2img_gemini, img2img_gemini
+from .model_governance_service import ResolvedModel
 
 
 MAX_IMAGE_DIMENSION = 768
@@ -56,7 +57,7 @@ async def _extract_and_save_b64(data: dict) -> list[str]:
     return paths
 
 
-async def create_txt2img(db: Session, user: User, req: Txt2ImgRequest):
+async def create_txt2img(db: Session, user: User, req: Txt2ImgRequest, *, resolved_model: ResolvedModel):
     params = req.params.model_dump(exclude_none=True) if req.params else {}
     generation = Generation(
         user_id=user.id,
@@ -75,14 +76,13 @@ async def create_txt2img(db: Session, user: User, req: Txt2ImgRequest):
         size = params.get("size", "1024x1024")
         n = max(1, min(4, params.get("n", 1)))
 
-        cfg = _resolve_model_config(db, req.model_name)
-        api_format = cfg.get("api_format", "openai")
+        api_format = resolved_model.model.api_format
 
         if api_format == "gemini":
             aspect_ratio = params.get("aspect_ratio", "1:1")
             image_size = params.get("image_size", "1K")
             result = await txt2img_gemini(
-                db=db, prompt=req.prompt, model=req.model_name,
+                db=db, prompt=req.prompt, model=req.model_name, resolved_model=resolved_model,
                 n=n, aspect_ratio=aspect_ratio, image_size=image_size,
             )
             image_paths = await _extract_and_save_b64(result)
@@ -105,7 +105,7 @@ async def create_txt2img(db: Session, user: User, req: Txt2ImgRequest):
                     result = await txt2img(
                         db=db,
                         prompt=req.prompt,
-                        model=req.model_name,
+                        model=req.model_name, resolved_model=resolved_model,
                         n=n,
                         size=size,
                         **extra,
@@ -147,7 +147,7 @@ async def create_txt2img(db: Session, user: User, req: Txt2ImgRequest):
     return generation
 
 
-async def create_img2img(db: Session, user: User, req: Img2ImgRequest, image_data: list[tuple[bytes, str]]):
+async def create_img2img(db: Session, user: User, req: Img2ImgRequest, image_data: list[tuple[bytes, str]], *, resolved_model: ResolvedModel):
     params = req.params.model_dump(exclude_none=True) if req.params else {}
     generation = Generation(
         user_id=user.id,
@@ -166,8 +166,7 @@ async def create_img2img(db: Session, user: User, req: Img2ImgRequest, image_dat
         size = params.get("size", "1024x1024")
         n = max(1, min(4, params.get("n", 1)))
 
-        cfg = _resolve_model_config(db, req.model_name)
-        api_format = cfg.get("api_format", "openai")
+        api_format = resolved_model.model.api_format
 
         if api_format == "gemini":
             import base64
@@ -183,7 +182,7 @@ async def create_img2img(db: Session, user: User, req: Img2ImgRequest, image_dat
             image_size = params.get("image_size", "1K")
             result = await img2img_gemini(
                 db=db, prompt=req.prompt, images=images_base64,
-                model=req.model_name, n=n,
+                model=req.model_name, n=n, resolved_model=resolved_model,
                 aspect_ratio=aspect_ratio, image_size=image_size,
             )
             image_paths = await _extract_and_save_b64(result)
@@ -212,7 +211,7 @@ async def create_img2img(db: Session, user: User, req: Img2ImgRequest, image_dat
                         db=db,
                         prompt=req.prompt,
                         image_files=image_files,
-                        model=req.model_name,
+                        model=req.model_name, resolved_model=resolved_model,
                         n=n,
                         size=size,
                         **extra,
@@ -254,7 +253,7 @@ async def create_img2img(db: Session, user: User, req: Img2ImgRequest, image_dat
     return generation
 
 
-async def create_txt2vid(db: Session, user: User, req: Txt2VidRequest):
+async def create_txt2vid(db: Session, user: User, req: Txt2VidRequest, *, resolved_model: ResolvedModel):
     generation = Generation(
         user_id=user.id,
         type="txt2vid",

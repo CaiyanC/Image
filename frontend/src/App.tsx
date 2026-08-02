@@ -21,6 +21,11 @@ const FileKnowledgeBase = lazy(() => import('./pages/FileKnowledgeBase'))
 const ProductCreate = lazy(() => import('./pages/ProductCreate'))
 const DraftBox = lazy(() => import('./pages/DraftBox'))
 const Profile = lazy(() => import('./pages/Profile'))
+const ToolCenter = lazy(() => import('./pages/ToolCenter'))
+const EcommerceDataFill = lazy(() => import('./pages/EcommerceDataFill'))
+const AdminTools = lazy(() => import('./pages/AdminTools'))
+const AdminDepartmentWorkbench = lazy(() => import('./pages/AdminDepartmentWorkbench'))
+const AdminModelGovernance = lazy(() => import('./pages/AdminModelGovernance'))
 
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
   const { token } = useAuthStore()
@@ -73,6 +78,26 @@ export default function App() {
             <PermissionRoute permissionKey="ai.generate">
               <Layout>
                 <Workspace />
+              </Layout>
+            </PermissionRoute>
+          }
+        />
+        <Route
+          path="/tools"
+          element={
+            <ProtectedRoute>
+              <Layout>
+                <ToolCenter />
+              </Layout>
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/tools/ecommerce-data-fill"
+          element={
+            <PermissionRoute permissionKey="finance.ecommerce_data_fill">
+              <Layout>
+                <EcommerceDataFill />
               </Layout>
             </PermissionRoute>
           }
@@ -208,11 +233,41 @@ export default function App() {
           }
         />
         <Route
+          path="/admin/department-workbench"
+          element={
+            <SuperAdminRoute>
+              <Layout>
+                <AdminDepartmentWorkbench />
+              </Layout>
+            </SuperAdminRoute>
+          }
+        />
+        <Route
+          path="/admin/tools"
+          element={
+            <SuperAdminRoute>
+              <Layout>
+                <AdminTools />
+              </Layout>
+            </SuperAdminRoute>
+          }
+        />
+        <Route
           path="/admin/users"
           element={
             <SuperAdminRoute>
               <Layout>
                 <AdminUsers />
+              </Layout>
+            </SuperAdminRoute>
+          }
+        />
+        <Route
+          path="/admin/model-governance"
+          element={
+            <SuperAdminRoute>
+              <Layout>
+                <AdminModelGovernance />
               </Layout>
             </SuperAdminRoute>
           }

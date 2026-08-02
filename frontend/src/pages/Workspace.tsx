@@ -1,18 +1,10 @@
 import { useState, useEffect, useCallback } from 'react'
-import { api } from '../services/api'
+import { api, type GenerationModel } from '../services/api'
 import { ImagePreview } from '../components/ImageUploader/ImageUploader'
 import Lightbox from '../components/Lightbox'
 import { SecureImage, SecureVideo } from '../components/SecureFile'
 
 type GenerationMode = 'txt2img' | 'img2img' | 'txt2vid'
-
-interface ModelInfo {
-  id: string
-  name: string
-  type: string
-  description: string
-  api_format: string
-}
 
 export default function Workspace() {
   const [mode, setMode] = useState<GenerationMode>('txt2img')
@@ -25,8 +17,9 @@ export default function Workspace() {
   const [lightboxIndex, setLightboxIndex] = useState(-1)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
-  const [models, setModels] = useState<ModelInfo[]>([])
-  const [selectedModel, setSelectedModel] = useState('gpt-image-2-ssvip')
+  const [models, setModels] = useState<GenerationModel[]>([])
+  const [selectedModel, setSelectedModel] = useState('')
+  const [modelsLoaded, setModelsLoaded] = useState(false)
   const [showParams, setShowParams] = useState(true)
   const [params, setParams] = useState<Record<string, any>>({
     size: '1152x2048', n: 1, quality: 'medium', output_format: 'png', output_compression: 85, moderation: 'low', background: 'auto',
@@ -36,10 +29,13 @@ export default function Workspace() {
     try {
       const data = await api.generation.models()
       setModels(data)
-      if (data.length > 0 && !data.find((m: ModelInfo) => m.id === selectedModel)) {
-        setSelectedModel(data[0].id)
-      }
-    } catch { }
+      setSelectedModel((current) => data.some((model) => model.id === current) ? current : (data[0]?.id || ''))
+    } catch {
+      setModels([])
+      setSelectedModel('')
+    } finally {
+      setModelsLoaded(true)
+    }
   }, [])
 
   useEffect(() => {
@@ -49,6 +45,10 @@ export default function Workspace() {
   async function handleGenerate() {
     if (!prompt.trim()) {
       setError('请输入提示词')
+      return
+    }
+    if (!selectedModel) {
+      setError('管理员尚未为你配置可用模型')
       return
     }
     setError('')
@@ -210,7 +210,8 @@ export default function Workspace() {
           <select
             value={selectedModel}
             onChange={(e) => setSelectedModel(e.target.value)}
-            className="glass-input w-full px-4 py-2.5 text-sm text-apple-text appearance-none cursor-pointer"
+            disabled={filteredModels.length === 0}
+            className="glass-input w-full px-4 py-2.5 text-sm text-apple-text appearance-none cursor-pointer disabled:cursor-not-allowed disabled:opacity-60"
           >
             {filteredModels.length === 0 && (
               <option value="">加载中...</option>
@@ -221,6 +222,7 @@ export default function Workspace() {
               </option>
             ))}
           </select>
+          {modelsLoaded && filteredModels.length === 0 && <p className="mt-2 text-xs text-amber-700">管理员尚未为你配置可用模型</p>}
         </div>
 
         <div className="glass p-4 flex-1 flex flex-col">
@@ -403,7 +405,7 @@ export default function Workspace() {
 
         <button
           onClick={handleGenerate}
-          disabled={loading || !prompt.trim()}
+          disabled={loading || !prompt.trim() || !selectedModel || filteredModels.length === 0}
           className="btn-primary w-full py-3.5 text-base"
         >
           {loading ? (

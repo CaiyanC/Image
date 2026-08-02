@@ -6,6 +6,8 @@ from datetime import datetime, timezone
 from logging.handlers import TimedRotatingFileHandler
 
 from fastapi import FastAPI, HTTPException, Request
+from fastapi.encoders import jsonable_encoder
+from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from sqlalchemy import text
@@ -14,7 +16,7 @@ from .core.database import init_db, SessionLocal
 from .core.permission_constants import MANAGEMENT_GROUP_NAME, PRODUCT_TEAM_GROUP_NAME
 from .core.security import get_password_hash
 from .models.user import User
-from .api import auth, users, generation, history, admin, products, groups, categories, drafts, customer_service, knowledge_base, files, assets, asset_search
+from .api import auth, users, generation, history, admin, products, groups, categories, drafts, customer_service, knowledge_base, files, assets, asset_search, tools, admin_tools, model_governance
 from .services import knowledge_service
 
 def _configure_error_logging() -> None:
@@ -65,6 +67,32 @@ app.include_router(categories.router)
 app.include_router(customer_service.router)
 app.include_router(knowledge_base.router)
 app.include_router(files.router)
+app.include_router(tools.router)
+app.include_router(admin_tools.router)
+app.include_router(model_governance.router)
+app.include_router(model_governance.admin_router)
+
+
+def _redact_api_key_value(value):
+    if isinstance(value, dict):
+        return {key: "***" if key == "api_key" else _redact_api_key_value(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_redact_api_key_value(item) for item in value]
+    return value
+
+
+@app.exception_handler(RequestValidationError)
+async def request_validation_exception_handler(request: Request, exc: RequestValidationError):
+    errors = []
+    for error in exc.errors():
+        sanitized = dict(error)
+        if "input" in sanitized:
+            sanitized["input"] = (
+                "***" if "api_key" in sanitized.get("loc", ())
+                else _redact_api_key_value(sanitized["input"])
+            )
+        errors.append(sanitized)
+    return JSONResponse(status_code=422, content={"detail": jsonable_encoder(errors)})
 
 
 @app.exception_handler(Exception)

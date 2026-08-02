@@ -32,6 +32,7 @@ export default function Header() {
   }
 
   const navItems = [
+    { path: '/tools', label: '工具中心' },
     ...(has('ai.customer_service') ? [{ path: '/customer-service', label: '智能客服' }] : []),
     ...(isSuperAdmin ? [{ path: '/knowledge-base', label: '知识库运维' }] : []),
     ...(isSuperAdmin ? [{ path: '/file-knowledge', label: '文件知识库' }] : []),
@@ -44,6 +45,8 @@ export default function Header() {
   const homePath = navItems[0]?.path || '/no-access'
 
   const superAdminItems = [
+    { path: '/admin/department-workbench', label: '部门工作台' },
+    { path: '/admin/tools', label: '工具管理' },
     { path: '/admin/users', label: '用户' },
     { path: '/admin/groups', label: '部门权限' },
     { path: '/admin/settings', label: '设置' },

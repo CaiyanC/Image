@@ -12,6 +12,7 @@ from .permission_constants import (
     PERMISSION_DEFS,
     PERMISSION_ROUTE_MAP,
     ROUTE_DEFS,
+    DEFAULT_TOOL_DEFS,
 )
 
 engine = create_engine(
@@ -67,6 +68,7 @@ def init_db():
             # it for every TestClient/app startup races isolated test fixtures.
             _seed_default_groups(db, migrate_legacy=False)
             _seed_default_permissions(db)
+            seed_default_tools(db)
         finally:
             db.close()
     finally:
@@ -373,6 +375,7 @@ def _seed_default_permissions(db):
     if changed:
         db.commit()
 
+
     routes = {r.route_path: r for r in db.query(Route).all()}
     changed = False
     for path, name, route_type in ROUTE_DEFS:
@@ -391,7 +394,6 @@ def _seed_default_permissions(db):
                 changed = True
     if changed:
         db.commit()
-
     group_permission_map = {group_name: list(permission_keys) for group_name, permission_keys in GROUP_PERMISSION_KEYS.items()}
     for permission_keys in group_permission_map.values():
         permission_keys.extend(COMMON_PERMISSION_KEYS)
@@ -426,7 +428,6 @@ def _seed_default_permissions(db):
                 changed = True
     if changed:
         db.commit()
-
     routes = {r.route_path: r for r in db.query(Route).all()}
     existing_pairs = {
         (str(pr.permission_id), str(pr.route_id))
@@ -445,6 +446,25 @@ def _seed_default_permissions(db):
             if pair not in existing_pairs:
                 db.add(PermissionRoute(permission_id=permission.id, route_id=route.id))
                 existing_pairs.add(pair)
+                changed = True
+    if changed:
+        db.commit()
+
+
+def seed_default_tools(db):
+    from ..models.tool import Tool
+
+    existing = {tool.tool_key: tool for tool in db.query(Tool).all()}
+    changed = False
+    for definition in DEFAULT_TOOL_DEFS:
+        tool = existing.get(definition["tool_key"])
+        if tool is None:
+            db.add(Tool(**definition))
+            changed = True
+            continue
+        for field, value in definition.items():
+            if getattr(tool, field) != value:
+                setattr(tool, field, value)
                 changed = True
     if changed:
         db.commit()

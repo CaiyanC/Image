@@ -58,6 +58,7 @@ class Settings:
     DEBUG: bool = os.getenv("DEBUG", "false").lower() == "true"
 
     SECRET_KEY: str = os.getenv("SECRET_KEY", "")
+    MODEL_CREDENTIAL_ENCRYPTION_KEY: str = os.getenv("MODEL_CREDENTIAL_ENCRYPTION_KEY", "").strip()
     ALGORITHM: str = "HS256"
     ENABLE_PUBLIC_REGISTRATION: bool = os.getenv("ENABLE_PUBLIC_REGISTRATION", "false").lower() == "true"
     ACCESS_TOKEN_EXPIRE_MINUTES: int = int(os.getenv("ACCESS_TOKEN_EXPIRE_MINUTES", "1440"))
@@ -144,8 +145,8 @@ def _upload_dir_name(upload_dir: str) -> str:
 
 def validate_runtime_isolation(current_settings: Settings) -> None:
     app_env = current_settings.APP_ENV
-    if app_env not in {"prod", "dev"}:
-        raise RuntimeError("APP_ENV must be prod or dev")
+    if app_env not in {"prod", "dev", "preview"}:
+        raise RuntimeError("APP_ENV must be prod, dev, or preview")
 
     database_name = database_name_from_url(current_settings.DATABASE_URL)
     upload_name = _upload_dir_name(current_settings.UPLOAD_DIR)
@@ -158,9 +159,11 @@ def validate_runtime_isolation(current_settings: Settings) -> None:
         raise RuntimeError("Refusing to start dev environment with production UPLOAD_DIR=uploads")
     if app_env == "prod" and upload_name == "uploads_dev":
         raise RuntimeError("Refusing to start prod environment with development UPLOAD_DIR=uploads_dev")
+    if app_env == "preview" and (database_name in {"product_knowledge", "product_knowledge_dev"} or upload_name in {"uploads", "uploads_dev"}):
+        raise RuntimeError("Preview must use an isolated database and upload directory")
 
-    expected_celery_queue = {"prod": "celery_prod", "dev": "celery_dev"}[app_env]
-    expected_worker_name = {"prod": "worker_prod", "dev": "worker_dev"}[app_env]
+    expected_celery_queue = {"prod": "celery_prod", "dev": "celery_dev", "preview": "celery_toolpreview"}[app_env]
+    expected_worker_name = {"prod": "worker_prod", "dev": "worker_dev", "preview": "worker_toolpreview"}[app_env]
 
     if not current_settings.CELERY_QUEUE:
         raise RuntimeError("CELERY_QUEUE must be explicitly configured")
