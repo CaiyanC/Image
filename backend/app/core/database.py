@@ -59,6 +59,7 @@ def init_db():
         Base.metadata.create_all(bind=engine)
         _ensure_products_compat_columns()
         _ensure_product_assets_compat()
+        _ensure_product_qa_integrity_compat()
         _init_vector_storage()
 
         db = SessionLocal()
@@ -250,6 +251,36 @@ def _ensure_product_assets_compat():
                 ))
     except Exception as exc:
         logger.warning("failed to ensure product asset compatibility columns: %s", exc)
+
+
+def _ensure_product_qa_integrity_compat():
+    """Upgrade legacy product_qa tables before customer-service queries use audit fields."""
+    try:
+        inspector = inspect(engine)
+        if "product_qa" not in set(inspector.get_table_names()):
+            return
+        existing_columns = {column["name"] for column in inspector.get_columns("product_qa")}
+        audited_at_type = "TIMESTAMP" if settings.DATABASE_URL.startswith("postgresql") else "DATETIME"
+        expected_columns = {
+            "integrity_status": "VARCHAR(20) NOT NULL DEFAULT 'review'",
+            "integrity_reason": "TEXT",
+            "integrity_model": "VARCHAR(100)",
+            "integrity_audited_at": audited_at_type,
+        }
+        with engine.begin() as conn:
+            for name, definition in expected_columns.items():
+                if name not in existing_columns:
+                    conn.execute(text(f"ALTER TABLE product_qa ADD COLUMN {name} {definition}"))
+            conn.execute(text(
+                "UPDATE product_qa SET integrity_status = 'review' "
+                "WHERE integrity_status IS NULL"
+            ))
+            conn.execute(text(
+                "CREATE INDEX IF NOT EXISTS idx_product_qa_integrity "
+                "ON product_qa (product_id, integrity_status)"
+            ))
+    except Exception as exc:
+        logger.warning("failed to ensure product QA integrity compatibility columns: %s", exc)
 
 
 def _seed_default_groups(db, *, migrate_legacy: bool = True):

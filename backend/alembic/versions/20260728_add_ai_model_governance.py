@@ -7,6 +7,7 @@ Create Date: 2026-07-28
 
 from alembic import op
 import sqlalchemy as sa
+from sqlalchemy.dialects import postgresql
 
 
 revision = "20260728_add_ai_model_governance"
@@ -110,7 +111,11 @@ def upgrade() -> None:
     op.create_table(
         "ai_model_usage_logs",
         sa.Column("id", sa.String(length=36), primary_key=True),
-        sa.Column("user_id", sa.String(length=36), nullable=True),
+        sa.Column(
+            "user_id",
+            sa.String(length=36).with_variant(postgresql.UUID(as_uuid=False), "postgresql"),
+            nullable=True,
+        ),
         sa.Column("feature_key", sa.String(length=100), nullable=False),
         sa.Column("model_id", sa.String(length=64), nullable=True),
         sa.Column("credential_scope_type", sa.String(length=16), nullable=True),

@@ -2,6 +2,7 @@ import uuid
 from datetime import datetime, timezone
 
 from sqlalchemy import DateTime, ForeignKey, JSON, String, Text
+from sqlalchemy.dialects import postgresql
 from sqlalchemy.orm import Mapped, mapped_column
 
 from ..core.database import Base
@@ -18,7 +19,7 @@ class ToolRun(Base):
         index=True,
     )
     created_by: Mapped[str] = mapped_column(
-        String(36),
+        String(36).with_variant(postgresql.UUID(as_uuid=False), "postgresql"),
         ForeignKey("users.id", ondelete="CASCADE"),
         nullable=False,
         index=True,

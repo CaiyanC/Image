@@ -13,6 +13,7 @@ from sqlalchemy import (
     UniqueConstraint,
     text,
 )
+from sqlalchemy.dialects import postgresql
 from sqlalchemy.orm import Mapped, mapped_column
 
 from ..core.database import Base
@@ -142,7 +143,7 @@ class AIModelUsageLog(Base):
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
     user_id: Mapped[str | None] = mapped_column(
-        String(36),
+        String(36).with_variant(postgresql.UUID(as_uuid=False), "postgresql"),
         ForeignKey("users.id", ondelete="SET NULL"),
         nullable=True,
         index=True,

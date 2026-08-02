@@ -7,6 +7,7 @@ Create Date: 2026-07-27
 
 from alembic import op
 import sqlalchemy as sa
+from sqlalchemy.dialects import postgresql
 
 
 revision = "20260727_add_tools_and_tool_runs"
@@ -39,7 +40,11 @@ def upgrade() -> None:
         "tool_runs",
         sa.Column("id", sa.String(length=36), primary_key=True),
         sa.Column("tool_key", sa.String(length=64), nullable=False),
-        sa.Column("created_by", sa.String(length=36), nullable=False),
+        sa.Column(
+            "created_by",
+            sa.String(length=36).with_variant(postgresql.UUID(as_uuid=False), "postgresql"),
+            nullable=False,
+        ),
         sa.Column("status", sa.String(length=32), nullable=False, server_default="queued"),
         sa.Column("parameters", sa.JSON(), nullable=False),
         sa.Column("input_files", sa.JSON(), nullable=False),
