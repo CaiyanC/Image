@@ -4,10 +4,11 @@ from contextvars import ContextVar, Token
 from time import perf_counter
 from typing import Any
 
+from fastapi import HTTPException
 from sqlalchemy.orm import Session
 
 from . import customer_perf_service, dmxapi_service
-from ..models.ai_governance import AIModelUsageLog
+from ..models.ai_governance import AIFeatureModel, AIModelUsageLog
 from ..models.user import User
 from .model_governance_service import resolve_default_authorized_model
 
@@ -26,6 +27,24 @@ def reset_governed_customer_user(token: Token) -> None:
 def _safe_error_summary(exc: Exception) -> str:
     """Keep provider failures observable without persisting credentials or payloads."""
     return type(exc).__name__
+
+
+def _resolve_customer_model_or_legacy(db: Session, user: User):
+    """Use legacy system config only until customer-service governance is configured."""
+    try:
+        return resolve_default_authorized_model(db, user, "customer_service.chat", "chat")
+    except HTTPException:
+        governance_exists = (
+            db.query(AIFeatureModel.id)
+            .filter(
+                AIFeatureModel.feature_key == "customer_service.chat",
+                AIFeatureModel.is_enabled.is_(True),
+            )
+            .first()
+        )
+        if governance_exists:
+            raise
+        return None
 
 
 def _write_governance_usage(
@@ -69,10 +88,12 @@ async def chat_completion(
     user = user or _governed_customer_user.get()
     if user is None:
         raise ValueError("Customer chat requires a governed user context")
-    resolved_model = resolve_default_authorized_model(db, user, "customer_service.chat", "chat")
-    # The governance decision is authoritative.  Legacy callers may supply a
-    # runtime override, but it must never redirect a governed request.
-    model_name = str(resolved_model.model.request_model_name)
+    resolved_model = _resolve_customer_model_or_legacy(db, user)
+    # A governed decision is authoritative.  Before governance has any
+    # customer-service config, retain the pre-existing system model/API path.
+    model_name = str(resolved_model.model.request_model_name) if resolved_model else (
+        str(api_model_override or model or "legacy_system_default")
+    )
     response_metadata: dict[str, Any] = {}
     try:
         content = await dmxapi_service.chat_completion(
@@ -81,7 +102,7 @@ async def chat_completion(
             model=model,
             temperature=temperature,
             max_tokens=max_tokens,
-            api_model_override=None,
+            api_model_override=None if resolved_model else api_model_override,
             response_format=response_format,
             thinking=thinking,
             response_metadata=response_metadata,
@@ -102,7 +123,7 @@ async def chat_completion(
                     "purpose": purpose,
                     "model": str(response_metadata.get("model") or model_name),
                     "request_model": response_metadata.get("request_model"),
-                    "api_model_override": None,
+                    "api_model_override": None if resolved_model else api_model_override,
                     "temperature": temperature,
                     "max_tokens": max_tokens,
                     "response_format": response_format if isinstance(response_format, dict) and response_format else None,
@@ -115,10 +136,11 @@ async def chat_completion(
                     "completion_tokens_est": max(1, len(str(content)) // 4) if content else 0,
                 }
             )
-        _write_governance_usage(
-            db, user=user, resolved_model=resolved_model, result="success",
-            latency_ms=round(customer_perf_service.perf_ms(start_time)),
-        )
+        if resolved_model:
+            _write_governance_usage(
+                db, user=user, resolved_model=resolved_model, result="success",
+                latency_ms=round(customer_perf_service.perf_ms(start_time)),
+            )
         return content
     except Exception as exc:
         llm_record = customer_perf_service.record_llm_call(
@@ -138,7 +160,7 @@ async def chat_completion(
                     "purpose": purpose,
                     "model": str(response_metadata.get("model") or model_name),
                     "request_model": response_metadata.get("request_model"),
-                    "api_model_override": None,
+                    "api_model_override": None if resolved_model else api_model_override,
                     "temperature": temperature,
                     "max_tokens": max_tokens,
                     "response_format": response_format if isinstance(response_format, dict) and response_format else None,
@@ -154,14 +176,15 @@ async def chat_completion(
                 }
             )
         is_timeout = isinstance(exc, (TimeoutError, dmxapi_service.httpx.TimeoutException))
-        _write_governance_usage(
-            db,
-            user=user,
-            resolved_model=resolved_model,
-            result="timeout" if is_timeout else "failed",
-            latency_ms=round(customer_perf_service.perf_ms(start_time)),
-            error_summary=_safe_error_summary(exc),
-        )
+        if resolved_model:
+            _write_governance_usage(
+                db,
+                user=user,
+                resolved_model=resolved_model,
+                result="timeout" if is_timeout else "failed",
+                latency_ms=round(customer_perf_service.perf_ms(start_time)),
+                error_summary=_safe_error_summary(exc),
+            )
         raise
 
 
@@ -182,8 +205,10 @@ async def chat_completion_stream(
     user = user or _governed_customer_user.get()
     if user is None:
         raise ValueError("Customer chat requires a governed user context")
-    resolved_model = resolve_default_authorized_model(db, user, "customer_service.chat", "chat")
-    model_name = str(resolved_model.model.request_model_name)
+    resolved_model = _resolve_customer_model_or_legacy(db, user)
+    model_name = str(resolved_model.model.request_model_name) if resolved_model else (
+        str(api_model_override or model or "legacy_system_default")
+    )
     completion_parts: list[str] = []
     try:
         async for chunk in dmxapi_service.chat_completion_stream(
@@ -192,7 +217,7 @@ async def chat_completion_stream(
             model=model,
             temperature=temperature,
             max_tokens=max_tokens,
-            api_model_override=None,
+            api_model_override=None if resolved_model else api_model_override,
             resolved_model=resolved_model,
         ):
             completion_parts.append(str(chunk))
@@ -207,10 +232,11 @@ async def chat_completion_stream(
             prompt_tokens_est=prompt_tokens_est,
             completion_tokens_est=max(1, len(content) // 4) if content else 0,
         )
-        _write_governance_usage(
-            db, user=user, resolved_model=resolved_model, result="success",
-            latency_ms=round(customer_perf_service.perf_ms(start_time)),
-        )
+        if resolved_model:
+            _write_governance_usage(
+                db, user=user, resolved_model=resolved_model, result="success",
+                latency_ms=round(customer_perf_service.perf_ms(start_time)),
+            )
     except Exception as exc:
         customer_perf_service.record_llm_call(
             purpose=purpose,
@@ -224,12 +250,13 @@ async def chat_completion_stream(
             error=str(exc),
         )
         is_timeout = isinstance(exc, (TimeoutError, dmxapi_service.httpx.TimeoutException))
-        _write_governance_usage(
-            db,
-            user=user,
-            resolved_model=resolved_model,
-            result="timeout" if is_timeout else "failed",
-            latency_ms=round(customer_perf_service.perf_ms(start_time)),
-            error_summary=_safe_error_summary(exc),
-        )
+        if resolved_model:
+            _write_governance_usage(
+                db,
+                user=user,
+                resolved_model=resolved_model,
+                result="timeout" if is_timeout else "failed",
+                latency_ms=round(customer_perf_service.perf_ms(start_time)),
+                error_summary=_safe_error_summary(exc),
+            )
         raise

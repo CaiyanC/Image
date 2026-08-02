@@ -1,5 +1,7 @@
 from datetime import datetime, timezone
 
+import asyncio
+
 from app.schemas.model_governance import CredentialResponse
 import pytest
 from cryptography.fernet import Fernet
@@ -28,6 +30,7 @@ from app.services.model_governance_service import (
     list_selectable_models,
     resolve_authorized_model,
 )
+from app.services import customer_llm_service
 
 
 def _override_route_user(app, path, user):
@@ -55,6 +58,32 @@ def test_credential_response_does_not_expose_short_key_hint():
     response = CredentialResponse.model_validate({"key_hint": "abc"})
 
     assert response.api_key_masked == "****"
+
+
+def test_customer_chat_uses_existing_system_model_when_governance_is_unconfigured(db, monkeypatch):
+    user, _group = _seed_user_and_group(db)
+    calls = []
+
+    def unavailable_governed_model(*_args, **_kwargs):
+        raise HTTPException(status_code=403, detail="No governed default model is configured for this feature")
+
+    async def legacy_chat_completion(*_args, **kwargs):
+        calls.append(kwargs)
+        return "legacy response"
+
+    monkeypatch.setattr(customer_llm_service, "resolve_default_authorized_model", unavailable_governed_model)
+    monkeypatch.setattr(customer_llm_service.dmxapi_service, "chat_completion", legacy_chat_completion)
+
+    result = asyncio.run(customer_llm_service.chat_completion(
+        db,
+        [{"role": "user", "content": "recommend cookware"}],
+        user=user,
+        api_model_override="deepseek-v4-flash",
+    ))
+
+    assert result == "legacy response"
+    assert calls[0]["resolved_model"] is None
+    assert calls[0]["api_model_override"] == "deepseek-v4-flash"
 
 
 def test_governance_models_define_migration_unique_constraints():
