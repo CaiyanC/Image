@@ -34,7 +34,7 @@ def create_tool(db: Session, payload: dict) -> Tool:
     entry = ALLOWED_TOOL_ENTRIES.get(tool_key)
     if not entry:
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail="Tool key is not registered in the application",
         )
     if db.query(Tool).filter(Tool.tool_key == tool_key).first():
