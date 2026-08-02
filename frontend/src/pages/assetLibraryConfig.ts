@@ -101,6 +101,10 @@ export const STATUS_TO_EN: Record<string, string> = {
 export const STATUS_OPTIONS = Object.keys(STATUS_TO_EN)
 
 export const TAG_DIMENSIONS = [
+  { key: 'expression_tags', label: '表达', color: 'bg-indigo-100 text-indigo-700' },
+  { key: 'selling_point_tags', label: '卖点', color: 'bg-orange-100 text-orange-700' },
+  { key: 'scene_tags', label: '场景', color: 'bg-emerald-100 text-emerald-700' },
+  { key: 'mood_tags', label: '氛围', color: 'bg-pink-100 text-pink-700' },
   { key: 'product_tags', label: '产品', color: 'bg-amber-100 text-amber-700' },
   { key: 'material_type_tags', label: '类型', color: 'bg-blue-100 text-blue-700' },
   { key: 'usage_tags', label: '用途', color: 'bg-green-100 text-green-700' },
@@ -111,6 +115,10 @@ export const TAG_DIMENSIONS = [
 ] as const
 
 export const TAG_PRESETS: Record<string, string[]> = {
+  expression_tags: ['卖点图', '场景图', '氛围图'],
+  selling_point_tags: ['轻量便携', '易收纳', '耐用', '导热均匀', '保温', '易清洁', '安全', '容量大'],
+  scene_tags: ['徒步', '硬核露营', '车露', '家庭露营', '雪地', '森林', '湖边', '室内'],
+  mood_tags: ['硬核', '温暖', '自由', '专业', '精致', '极简'],
   product_tags: ['酒精炉', '套锅', '分体炉', '水壶', '水袋', '登山杖', '炉具', '餐具', '咖啡器具', '帐篷', '睡袋', '灯具', '椅子', '桌子'],
   material_type_tags: ['白底图', '场景图', '结构图', '爆炸图', '尺寸图', '功能图', '参数图', '视频', '短视频'],
   usage_tags: ['AI 客服', '电商主图', '详情页', '社媒帖文', '广告素材', '产品页', 'A+', '说明书'],

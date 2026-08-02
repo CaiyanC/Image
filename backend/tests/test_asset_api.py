@@ -57,6 +57,14 @@ class AssetApiTest(unittest.TestCase):
             product_name_en="API Asset Product",
             brand="alocs",
         ))
+        db.add(Product(
+            id="api-product-asset-2",
+            sku="API-ASSET-2",
+            barcode="api-barcode-2",
+            product_name_cn="second api asset product",
+            product_name_en="Second API Asset Product",
+            brand="alocs",
+        ))
         db.commit()
         db.close()
 
@@ -148,6 +156,36 @@ class AssetApiTest(unittest.TestCase):
         self.assertEqual(payload["items"][0]["asset_type"], "video")
         self.assertEqual(payload["items"][0]["sub_category"], "视频")
         self.assertEqual(payload["items"][0]["material_type"], "video")
+
+
+    def test_global_search_matches_tag_values_within_dimension(self):
+        for sku, channel, tags in [
+            ("API-ASSET-1", "Amazon", {"expression_tags": ["场景图"], "scene_tags": ["徒步"]}),
+            ("API-ASSET-2", "Amazon", {"expression_tags": ["场景图"], "scene_tags": ["家庭露营"]}),
+            ("API-ASSET-2", "eBay", {"expression_tags": ["场景图"], "scene_tags": ["家庭露营"]}),
+        ]:
+            response = self.client.post(
+                f"/api/products/{sku}/assets",
+                json={
+                    "category_code": "04",
+                    "category_name": "场景内容图",
+                    "sub_category": "家庭露营",
+                    "url": f"/uploads/assets/{sku}/{channel}.jpg",
+                    "channel": channel,
+                    "tags": tags,
+                },
+            )
+            self.assertEqual(response.status_code, 200, response.text)
+
+        response = self.client.get(
+            "/api/assets/search",
+            params=[("scene_tags", "家庭露营"), ("scene_tags", "徒步"), ("channel", "Amazon")],
+        )
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual([item["sku"] for item in response.json()["items"]], ["API-ASSET-1", "API-ASSET-2"])
+
+        invalid_limit = self.client.get("/api/assets/search", params={"limit": 101})
+        self.assertEqual(invalid_limit.status_code, 422)
 
 
 if __name__ == "__main__":

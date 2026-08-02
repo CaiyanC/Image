@@ -816,6 +816,25 @@ export const api = {
   },
 
   assets: {
+    search: (params: {
+      sku?: string
+      category?: string
+      channel?: string
+      review_status?: string
+      authorization_status?: string
+      expression_tags?: string[]
+      selling_point_tags?: string[]
+      scene_tags?: string[]
+      mood_tags?: string[]
+    } = {}) => {
+      const query = new URLSearchParams()
+      for (const [key, value] of Object.entries(params)) {
+        if (Array.isArray(value)) value.forEach(item => query.append(key, item))
+        else if (value) query.set(key, value)
+      }
+      const suffix = query.toString() ? `?${query.toString()}` : ''
+      return request<{ items: ProductAsset[] }>(`/assets/search${suffix}`)
+    },
     list: (sku: string, params: {
       category?: string
       sub_category?: string

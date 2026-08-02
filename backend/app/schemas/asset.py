@@ -116,6 +116,10 @@ class AssetUploadResponse(BaseModel):
 
 
 class AssetTagsUpdate(BaseModel):
+    expression_tags: Optional[list[str]] = None
+    selling_point_tags: Optional[list[str]] = None
+    scene_tags: Optional[list[str]] = None
+    mood_tags: Optional[list[str]] = None
     product_tags: Optional[list[str]] = None
     material_type_tags: Optional[list[str]] = None
     usage_tags: Optional[list[str]] = None
