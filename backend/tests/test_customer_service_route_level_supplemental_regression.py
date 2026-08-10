@@ -2685,11 +2685,220 @@ def test_semantic_preplan_general_advice_cannot_carry_product_facts():
         "entities": [],
         "canonical_fields": [],
         "evidence_required": True,
+        "evidence_kind": "general_knowledge",
     })
 
     assert result["fallback_reason"] == ""
     assert result["route_family"] == "general_chat"
     assert result["evidence_required"] is False
+
+
+def test_semantic_catalog_family_listing_uses_resolved_family_scope(
+    route_client_and_db,
+    monkeypatch,
+):
+    client, headers, Session = route_client_and_db
+    with Session() as db:
+        for sku, name in (
+            ("FAMILY-STOVE-1", "星火炉-酒精版"),
+            ("FAMILY-STOVE-2", "星火炉-气炉版"),
+            ("FAMILY-STOVE-3", "星火炉-组合版"),
+        ):
+            _add_product(
+                db,
+                sku,
+                name,
+                "炉具",
+                "",
+                "不锈钢",
+                "",
+                "户外炉具",
+                "露营",
+                500,
+            )
+        db.commit()
+
+    async def family_preplan(*_args, **_kwargs):
+        return {
+            "called": True,
+            "route_family": "recommendation",
+            "route_hint": "recommendation",
+            "question_type": "recommendation",
+            "subtype": "recommendation",
+            "entities": [],
+            "subject_text": "星火炉",
+            "canonical_fields": [],
+            "confidence": 0.95,
+            "ambiguity": False,
+            "evidence_required": True,
+            "evidence_kind": "structured_field",
+            "recommendation_constraints": {"subject_kind": "stove"},
+            "context_usage": "none",
+        }
+
+    monkeypatch.setattr(
+        customer_agent_planner_service,
+        "plan_customer_question_semantic",
+        family_preplan,
+    )
+    response = client.post(
+        "/api/customer-service/ask?debug=true",
+        json={"question": "星火炉有哪些款？"},
+        headers=headers,
+    )
+
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    assert set(payload.get("result_skus") or []) == {
+        "FAMILY-STOVE-1",
+        "FAMILY-STOVE-2",
+        "FAMILY-STOVE-3",
+    }, payload
+    assert (payload.get("debug") or {}).get("agent_mode") != "structured_catalog_count", payload
+    assert (payload.get("answer_metadata") or {}).get("source") == "product_catalog_family_query", payload
+
+    async def unavailable_preplan(*_args, **_kwargs):
+        return {
+            "called": True,
+            "fallback_reason": "llm_error:TimeoutError",
+            "confidence": 0.0,
+            "canonical_fields": [],
+        }
+
+    monkeypatch.setattr(
+        customer_agent_planner_service,
+        "plan_customer_question_semantic",
+        unavailable_preplan,
+    )
+    outage_response = client.post(
+        "/api/customer-service/ask?debug=true",
+        json={"question": "星火炉有哪些款？"},
+        headers=headers,
+    )
+    assert outage_response.status_code == 200, outage_response.text
+    outage_payload = outage_response.json()
+    assert set(outage_payload.get("result_skus") or []) == {
+        "FAMILY-STOVE-1",
+        "FAMILY-STOVE-2",
+        "FAMILY-STOVE-3",
+    }, outage_payload
+    assert (outage_payload.get("answer_metadata") or {}).get("source") == "semantic_outage_catalog_family_query"
+
+
+def test_structured_usage_answer_is_semantically_trimmed_and_verified(monkeypatch):
+    calls = []
+
+    async def fake_chat_completion(*_args, **kwargs):
+        calls.append(kwargs.get("purpose"))
+        if kwargs.get("purpose") == "structured_usage_relevance_render":
+            return json.dumps({
+                "confirmed_actions": [
+                    "首次使用前用温水冲洗各部件",
+                    "按冲煮方式调节研磨粗细",
+                ],
+                "missing_details": "具体调节档位和后续操作步骤",
+            }, ensure_ascii=False)
+        return json.dumps({"grounded": True, "relevant": True, "vague": False})
+
+    monkeypatch.setattr(customer_service_service.customer_llm_service, "chat_completion", fake_chat_completion)
+    monkeypatch.setattr(
+        customer_agent_planner_service,
+        "_semantic_preplan_runtime_settings",
+        lambda: {
+            "model": "deepseek-v4-flash",
+            "response_format": {"type": "json_object"},
+            "thinking": {"type": "disabled"},
+        },
+    )
+    result = {
+        "answer": "原始整段说明，包含玻璃器具提示。",
+        "result_skus": ["CW-K31"],
+        "results": [{"sku": "CW-K31", "product_name_cn": "转转磨豆器"}],
+        "answer_metadata": {
+            "contract_field_type": "usage_instruction",
+            "evidence_status": "structured",
+            "evidence_source": "specs.usage_instruction",
+            "evidence_value": "首次使用前用温水冲洗各部件。研磨粗细可按冲煮方式调节。使用后清理残粉。玻璃器具避免骤冷骤热。",
+        },
+        "debug": {},
+    }
+
+    rendered = asyncio.run(
+        customer_service_service._semantic_render_structured_usage_answer(
+            object(),
+            question="转转磨豆器第一次怎么用？",
+            agent_result=result,
+            semantic_preplan={"called": True, "confidence": 0.95},
+        )
+    )
+
+    assert "玻璃" not in rendered["answer"]
+    assert rendered["answer_metadata"]["semantic_usage_rendered"] is True
+    assert calls == ["structured_usage_relevance_render", "structured_usage_relevance_verify"]
+
+
+def test_structured_usage_answer_rejection_never_returns_unfiltered_evidence(monkeypatch):
+    async def fake_chat_completion(*_args, **kwargs):
+        if kwargs.get("purpose") == "structured_usage_relevance_render":
+            return json.dumps({
+                "confirmed_actions": ["根据相应方式操作器具"],
+                "missing_details": "具体操作步骤",
+            }, ensure_ascii=False)
+        return json.dumps({"grounded": True, "relevant": False, "vague": True})
+
+    monkeypatch.setattr(customer_service_service.customer_llm_service, "chat_completion", fake_chat_completion)
+    monkeypatch.setattr(
+        customer_agent_planner_service,
+        "_semantic_preplan_runtime_settings",
+        lambda: {
+            "model": "deepseek-v4-flash",
+            "response_format": {"type": "json_object"},
+            "thinking": {"type": "disabled"},
+        },
+    )
+    result = {
+        "answer": "原始说明包含玻璃器具避免骤冷骤热。",
+        "result_skus": ["CW-K31"],
+        "results": [{"sku": "CW-K31", "product_name_cn": "转转磨豆器"}],
+        "answer_metadata": {
+            "contract_field_type": "usage_instruction",
+            "evidence_status": "structured",
+            "evidence_source": "specs.usage_instruction",
+            "evidence_value": "根据相应方式操作器具。玻璃器具避免骤冷骤热。",
+        },
+        "debug": {},
+    }
+
+    rejected = asyncio.run(
+        customer_service_service._semantic_render_structured_usage_answer(
+            object(),
+            question="转转磨豆器第一次怎么用？",
+            agent_result=result,
+            semantic_preplan={"called": True, "confidence": 0.95},
+        )
+    )
+
+    assert "玻璃" not in rejected["answer"]
+    assert "无法形成" in rejected["answer"]
+    assert rejected["answer_metadata"]["semantic_usage_rejected"] is True
+
+
+def test_semantic_prompts_do_not_infer_package_quantity_from_serving_count():
+    planner_messages = customer_agent_planner_service._semantic_preplan_messages(
+        question="它有几个杯子？",
+        deterministic_plan={},
+        context={"active_product_anchor": {"sku": "EXAMPLE"}},
+    )
+    strict_messages = customer_service_service._same_sku_knowledge_strict_entailment_messages(
+        "它有几个杯子？",
+        "包含4个杯子。",
+        "满足4人使用需求。",
+    )
+
+    assert "how many physical units or items are included" in planner_messages[0]["content"]
+    assert "serving count" in planner_messages[0]["content"]
+    assert "included quantity or package composition" in strict_messages[0]["content"]
+    assert "number of users' needs" in strict_messages[0]["content"]
 
 
 def test_non_evidentiary_comparison_returns_to_semantic_general_advice_repair():

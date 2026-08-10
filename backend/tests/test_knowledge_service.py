@@ -100,6 +100,7 @@ class KnowledgeServiceTest(unittest.TestCase):
         self.assertEqual(result["mode"], "keyword")
         self.assertEqual(result["count"], 1)
         self.assertEqual(result["results"][0]["metadata"]["owner"], "qa")
+        self.assertEqual(result["results"][0]["metadata"]["source_id"], "manual:1")
 
     def test_keyword_retrieve_keeps_keyword_or_conditions_inside_sku_scope(self):
         docs = [

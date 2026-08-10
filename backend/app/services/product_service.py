@@ -1211,11 +1211,19 @@ def update_qa_item(db: Session, qa_id: str, data: dict):
     qa = db.query(ProductQa).filter(ProductQa.id == qa_id).first()
     if not qa:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="QA item not found")
+    evidence_changed = False
     for k in ("question", "answer", "priority"):
         if k in data and data[k] is not None:
+            if k in {"question", "answer"} and str(getattr(qa, k) or "") != str(data[k] or ""):
+                evidence_changed = True
             setattr(qa, k, data[k])
     if "tags" in data and data["tags"] is not None:
         qa.tags = _to_json_str(data["tags"])
+    if evidence_changed:
+        qa.integrity_status = "review"
+        qa.integrity_reason = None
+        qa.integrity_model = None
+        qa.integrity_audited_at = None
     product_id = qa.product_id
     db.commit()
     _invalidate_product_detail_cache_by_id(db, product_id)

@@ -54,6 +54,99 @@ def test_rejected_qa_keeps_original_text_but_is_not_customer_visible():
         engine.dispose()
 
 
+def test_stale_vector_qa_requires_live_approved_provenance():
+    """An old chunk cannot outlive the ProductQa integrity decision behind it."""
+    engine = create_engine("sqlite:///:memory:", connect_args={"check_same_thread": False})
+    Base.metadata.create_all(engine, tables=[Product.__table__, ProductQa.__table__])
+    db = sessionmaker(bind=engine)()
+    try:
+        product = Product(
+            id="qa-provenance-product",
+            sku="QA-PROVENANCE-1",
+            barcode="qa-provenance-barcode",
+            product_name_cn="测试水壶",
+            brand="alocs",
+        )
+        approved = ProductQa(
+            id="qa-approved",
+            product_id=product.id,
+            question="容量是多少？",
+            answer="容量为 1L。",
+            integrity_status="approved",
+        )
+        rejected = ProductQa(
+            id="qa-rejected",
+            product_id=product.id,
+            question="研磨粗细能调吗？",
+            answer="可以自由调节。",
+            integrity_status="rejected",
+        )
+        db.add_all([product, approved, rejected])
+        db.commit()
+
+        rows = [
+            {"content": "profile", "metadata": {"source_id": "product:QA-PROVENANCE-1:profile"}},
+            {"content": "approved", "metadata": {"source_id": "product:QA-PROVENANCE-1:qa:qa-approved"}},
+            {"content": "stale", "metadata": {"source_id": "product:QA-PROVENANCE-1:qa:qa-rejected"}},
+        ]
+
+        visible = customer_service_service._knowledge_rows_with_approved_qa_provenance(
+            db,
+            rows,
+            sku=product.sku,
+        )
+
+        assert [item["content"] for item in visible] == ["profile", "approved"]
+    finally:
+        db.close()
+        engine.dispose()
+
+
+def test_named_catalog_product_is_not_treated_as_unbound_usage():
+    assert customer_service_service._is_unbound_product_usage_question(
+        "转转磨豆器在出门冲咖啡时怎么用比较顺手？"
+    )
+    assert customer_service_service._dedicated_semantic_route(
+        "转转磨豆器在出门冲咖啡时怎么用比较顺手？",
+        has_named_product=True,
+    ) == "usage_care"
+
+
+def test_editing_qa_reopens_semantic_integrity_review():
+    engine = create_engine("sqlite:///:memory:", connect_args={"check_same_thread": False})
+    Base.metadata.create_all(engine, tables=[Product.__table__, ProductQa.__table__])
+    db = sessionmaker(bind=engine)()
+    try:
+        product = Product(
+            id="qa-edit-product",
+            sku="QA-EDIT-1",
+            barcode="qa-edit-barcode",
+            product_name_cn="测试产品",
+            brand="alocs",
+        )
+        qa = ProductQa(
+            id="qa-edit-item",
+            product_id=product.id,
+            question="原问题？",
+            answer="原答案。",
+            integrity_status="approved",
+            integrity_reason="previous audit",
+            integrity_model="deepseek-v4-flash",
+        )
+        db.add_all([product, qa])
+        db.commit()
+
+        updated = product_service.update_qa_item(db, qa.id, {"answer": "新答案。"})
+
+        assert updated.integrity_status == "review"
+        assert updated.integrity_reason is None
+        assert updated.integrity_model is None
+        assert updated.integrity_audited_at is None
+    finally:
+        db.close()
+        engine.dispose()
+
+
 def test_semantic_rejection_changes_only_audit_fields(monkeypatch):
     """An inapplicable QA is quarantined without rewriting its product text."""
     engine = create_engine("sqlite:///:memory:", connect_args={"check_same_thread": False})

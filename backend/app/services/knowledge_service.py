@@ -198,12 +198,24 @@ def keyword_retrieve(db: Session, query: str, sku: str | None = None, limit: int
         key=lambda item: (_keyword_score(query_text, tokens, item.content), item.updated_at),
         reverse=True,
     )[:limit]
+    document_source_ids = {
+        str(document_id): str(source_id or "")
+        for document_id, source_id in db.query(
+            KnowledgeDocument.id,
+            KnowledgeDocument.source_id,
+        ).filter(
+            KnowledgeDocument.id.in_([item.document_id for item in ranked])
+        ).all()
+    } if ranked else {}
     return [
         {
             "source_type": item.source_type,
             "sku": item.sku,
             "content": item.content,
-            "metadata": _safe_json(item.metadata_json),
+            "metadata": _metadata_with_source_id(
+                item.metadata_json,
+                document_source_ids.get(str(item.document_id)),
+            ),
             "score": _keyword_score(query_text, tokens, item.content),
         }
         for item in ranked
@@ -229,21 +241,22 @@ async def semantic_retrieve(db: Session, query: str, sku: str | None = None, lim
         if embedding is None:
             embedding, _model_id = await dmxapi_service.create_embedding(db, query)
             customer_cache_service.embedding_cache.set(embedding_key, embedding)
-        where = "embedding_status = 'synced' AND embedding IS NOT NULL"
+        where = "c.embedding_status = 'synced' AND c.embedding IS NOT NULL"
         params = {"embedding": _vector_literal(embedding), "limit": limit}
         if sku:
             where += (
-                " AND (sku = :sku "
-                "OR metadata_json LIKE :sku_json_quoted)"
+                " AND (c.sku = :sku "
+                "OR c.metadata_json LIKE :sku_json_quoted)"
             )
             params["sku"] = sku
             params["sku_json_quoted"] = f'%"{sku}"%'
         rows = db.execute(text(
-            "SELECT source_type, sku, content, metadata_json, "
-            "embedding <=> CAST(:embedding AS vector) AS distance "
-            "FROM knowledge_chunks "
+            "SELECT c.source_type, c.sku, c.content, c.metadata_json, d.source_id AS document_source_id, "
+            "c.embedding <=> CAST(:embedding AS vector) AS distance "
+            "FROM knowledge_chunks c "
+            "JOIN knowledge_documents d ON d.id = c.document_id "
             f"WHERE {where} "
-            "ORDER BY embedding <=> CAST(:embedding AS vector) "
+            "ORDER BY c.embedding <=> CAST(:embedding AS vector) "
             "LIMIT :limit"
         ), params).mappings().all()
         if not rows:
@@ -255,7 +268,10 @@ async def semantic_retrieve(db: Session, query: str, sku: str | None = None, lim
                 "source_type": row["source_type"],
                 "sku": row["sku"],
                 "content": row["content"],
-                "metadata": _safe_json(row["metadata_json"]),
+                "metadata": _metadata_with_source_id(
+                    row["metadata_json"],
+                    row["document_source_id"],
+                ),
                 "score": 1 - float(row["distance"] or 0),
             }
             for row in rows
@@ -284,6 +300,14 @@ def _safe_json(value: str | None) -> dict:
         return {}
 
 
+def _metadata_with_source_id(value: str | None, source_id: str | None) -> dict:
+    """Preserve document provenance on every retrieved knowledge chunk."""
+    metadata = _safe_json(value)
+    if source_id and not metadata.get("source_id"):
+        metadata["source_id"] = str(source_id)
+    return metadata
+
+
 def same_sku_customer_context(db: Session, sku: str, limit: int = 1) -> list[dict]:
     """Return a small authoritative same-SKU product context for semantic RAG.
 
@@ -310,15 +334,28 @@ def same_sku_customer_context(db: Session, sku: str, limit: int = 1) -> list[dic
         if priority is not None and str(row.content or "").strip():
             ranked.append((priority, row))
     ranked.sort(key=lambda item: (item[0], str(item[1].id or "")))
+    selected_rows = [row for _, row in ranked[:limit]]
+    document_source_ids = {
+        str(document_id): str(source_id or "")
+        for document_id, source_id in db.query(
+            KnowledgeDocument.id,
+            KnowledgeDocument.source_id,
+        ).filter(
+            KnowledgeDocument.id.in_([row.document_id for row in selected_rows])
+        ).all()
+    } if selected_rows else {}
     return [
         {
             "source_type": row.source_type,
             "sku": normalized_sku,
             "content": str(row.content or ""),
-            "metadata": _safe_json(row.metadata_json),
+            "metadata": _metadata_with_source_id(
+                row.metadata_json,
+                document_source_ids.get(str(row.document_id)),
+            ),
             "score": None,
         }
-        for _, row in ranked[:limit]
+        for row in selected_rows
     ]
 
 

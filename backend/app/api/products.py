@@ -17,7 +17,13 @@ from ..schemas.product import (
     QaBatchImportRequest,
     ProductPromptsCreate,
 )
-from ..services import operation_log_service, product_recovery_service, product_service, product_vector_index_service
+from ..services import (
+    operation_log_service,
+    product_qa_integrity_service,
+    product_recovery_service,
+    product_service,
+    product_vector_index_service,
+)
 from ..services.upload_validation_service import validate_image_content, validate_video_content
 
 router = APIRouter(prefix="/api/products", tags=["products"])
@@ -29,6 +35,23 @@ ALLOWED_PRODUCT_IMAGE_SUFFIXES = {".jpg", ".jpeg", ".png", ".webp", ".gif"}
 ALLOWED_PRODUCT_IMAGE_MIME_TYPES = {"image/jpeg", "image/png", "image/webp", "image/gif"}
 ALLOWED_PRODUCT_VIDEO_SUFFIXES = {".mp4", ".mov", ".webm"}
 ALLOWED_PRODUCT_VIDEO_MIME_TYPES = {"video/mp4", "video/quicktime", "video/webm"}
+
+
+async def _audit_review_product_qas(db: Session, product) -> list[dict[str, str]]:
+    """Semantically audit review-state QA before it can enter customer retrieval."""
+    qa_items = [
+        item
+        for item in product_service.get_qa_items(db, product.sku)
+        if str(item.integrity_status or "").strip().lower() == "review"
+    ]
+    verdicts = []
+    for qa in qa_items:
+        verdict = await product_qa_integrity_service.audit_product_qa_item(db, product, qa)
+        verdicts.append({"qa_id": str(qa.id), **verdict})
+    if qa_items:
+        db.commit()
+        product_service.invalidate_product_detail_cache(db, product.sku)
+    return verdicts
 
 # ?? Vector sync endpoints ??
 
@@ -150,7 +173,7 @@ def get_product(
 
 
 @router.post("")
-def create_product(
+async def create_product(
     product_data: ProductCreate,
     request: Request,
     current_user: User = Depends(require_product_permission("create")),
@@ -159,6 +182,7 @@ def create_product(
     product = product_service.create_product(
         db, product_data.model_dump(), creator_id=current_user.id
     )
+    await _audit_review_product_qas(db, product)
     after_data = product_service.get_product_detail(db, product.sku)
     log = operation_log_service.log_operation(
         db,
@@ -207,7 +231,7 @@ def update_product(
 
 
 @router.put("/{sku}/full")
-def update_product_full(
+async def update_product_full(
     sku: str,
     body: dict,
     request: Request,
@@ -228,6 +252,7 @@ def update_product_full(
         body,
         creator_id=current_user.id,
     )
+    await _audit_review_product_qas(db, product)
     after_data = product_service.get_product_detail(db, product.sku)
     log = operation_log_service.log_operation(
         db,
@@ -419,7 +444,7 @@ def list_qa(
 
 
 @router.post("/qa/batch-import")
-def import_qa_batch(
+async def import_qa_batch(
     body: QaBatchImportRequest,
     request: Request,
     current_user: User = Depends(require_product_permission("update")),
@@ -443,15 +468,18 @@ def import_qa_batch(
         response_data=result,
         request=request,
     )
-    # Auto-sync affected products to vector DB
+    # Audit first: only model-approved QA is eligible for customer retrieval.
     for item in result.get("results", []):
         if item.get("status") == "success":
+            product = product_service.get_product_by_sku(db, item["sku"])
+            if product is not None:
+                item["integrity_audit"] = await _audit_review_product_qas(db, product)
             product_service.sync_product_to_vector_db(db, item["sku"])
     return result
 
 
 @router.post("/{sku}/qa")
-def add_qa(
+async def add_qa(
     sku: str,
     body: ProductQaCreate,
     request: Request,
@@ -459,6 +487,10 @@ def add_qa(
     db: Session = Depends(get_db),
 ):
     qa = product_service.add_qa_item(db, sku, body.model_dump())
+    product = product_service.get_product_by_sku(db, sku)
+    await product_qa_integrity_service.audit_product_qa_item(db, product, qa)
+    db.commit()
+    product_service.invalidate_product_detail_cache(db, sku)
     operation_log_service.log_operation(
         db,
         operator_id=current_user.id,
@@ -475,7 +507,7 @@ def add_qa(
 
 
 @router.put("/{sku}/qa/{qa_id}")
-def update_qa(
+async def update_qa(
     sku: str,
     qa_id: str,
     body: dict,
@@ -483,7 +515,13 @@ def update_qa(
     current_user: User = Depends(require_product_permission("update")),
     db: Session = Depends(get_db),
 ):
+    product = product_service.get_product_by_sku(db, sku)
+    if product is None or not any(str(item.id) == str(qa_id) for item in product_service.get_qa_items(db, sku)):
+        raise HTTPException(status_code=404, detail="QA item not found for product")
     qa = product_service.update_qa_item(db, qa_id, body)
+    await product_qa_integrity_service.audit_product_qa_item(db, product, qa)
+    db.commit()
+    product_service.invalidate_product_detail_cache(db, sku)
     operation_log_service.log_operation(
         db,
         operator_id=current_user.id,

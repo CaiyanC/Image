@@ -786,6 +786,13 @@ def _validate_semantic_preplan(data: dict[str, Any] | None, *, raw_content: str 
     if route_family == "product_navigation":
         evidence_kind = "structured_field"
         data["evidence_required"] = False
+    # General guidance is explicitly non-evidentiary in the route ontology.
+    # Provider-specific labels such as "general_knowledge" describe how the
+    # model thought about the turn, but cannot turn a general-chat route into
+    # a catalogue fact request or invalidate the otherwise complete decision.
+    if route_family == "general_chat":
+        evidence_kind = "structured_field"
+        data["evidence_required"] = False
     if evidence_kind not in {"structured_field", "product_qa"}:
         result = _empty_semantic_preplan(called=True, fallback_reason="invalid_evidence_kind")
         result["raw_preview"] = _safe_preview(raw_content)
@@ -1472,6 +1479,8 @@ def _semantic_preplan_messages(
         "sales_region=geographic markets, countries, areas, territories, or launch regions; purchase_channel=official platforms, stores, or ordering channels. "
         "price is current selling price, price_positioning is a tier; inventory is current stock; lifecycle_status is only a catalogue label and cannot prove stock, durability, service life, or warranty. Current purchasability (whether a named product can still be bought now, is currently sold, or is available today) is unknown_realtime, never product_qa: static QA, listing-channel, or lifecycle text cannot prove it. "
         "manual is an official guide, not operating advice. accessories are included parts/package items; gift is selected only when the customer asks whether a purchase includes a promotional gift or giveaway. "
+        "A question asking how many physical units or items are included with the product is an accessories/package-contents request, including a pronoun follow-up. "
+        "A serving count, number of users, capacity descriptor, product-title number, or model name never proves that the package contains that many units. "
         "A request about whether the named product is suitable as a present, for gifting, or for someone else is a product-specific judgement: gifting suitability is product_qa, not gift. "
         "warranty is coverage or duration; shipping is delivery/dispatch/postage. "
         "waterware is for a vessel explicitly requested to carry or boil water. weight_preference is only an explicit physical-mass requirement; compactness, storage, or not taking space is not weight_preference. "
@@ -3028,6 +3037,7 @@ async def plan_customer_question_semantic(
     # back to the old planner.
     repairable_preplan_failures = {
         "invalid_json",
+        "invalid_evidence_kind",
         "invalid_recommendation_constraints",
         "invalid_unrepresented_recommendation_requirements",
         "invalid_recommendation_soft_preferences",

@@ -325,12 +325,13 @@ def run_embed_pending_chunks(
 
 
 def _doc(sku: str, section: str, title: str, lines: list[str]) -> dict[str, Any]:
+    source_id = f"product:{sku}:{section}"
     return {
-        "source_id": f"product:{sku}:{section}",
+        "source_id": source_id,
         "sku": sku,
         "title": title,
         "content": "\n".join(line for line in lines if line).strip(),
-        "metadata": {"sku": sku, "section": section, "title": title},
+        "metadata": {"sku": sku, "section": section, "title": title, "source_id": source_id},
     }
 
 
