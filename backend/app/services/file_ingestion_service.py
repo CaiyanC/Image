@@ -12,6 +12,11 @@ from ..models.knowledge_base import KnowledgeChunk, KnowledgeDocument
 
 CHUNK_SIZE = 500
 CHUNK_OVERLAP = 50
+MAX_EXTRACTED_SECTIONS = 5_000
+MAX_EXTRACTED_TEXT_CHARS = 5_000_000
+MAX_PDF_PAGES = 1_000
+MAX_SPREADSHEET_ROWS = 100_000
+MAX_SPREADSHEET_CELLS = 1_000_000
 
 
 @dataclass
@@ -89,6 +94,7 @@ async def ingest_file(
         sections = _extract_sections(path, file_type)
         if not sections:
             raise ValueError("No text extracted from file")
+        _validate_extracted_sections(sections)
         full_text = "\n\n".join(section.text for section in sections if section.text.strip()).strip()
         if not full_text:
             raise ValueError("No text extracted from file")
@@ -256,6 +262,8 @@ def _extract_pdf_sections(path: Path) -> list[ExtractedSection]:
 
     sections: list[ExtractedSection] = []
     with fitz.open(path) as doc:
+        if len(doc) > MAX_PDF_PAGES:
+            raise ValueError("PDF has too many pages")
         for index, page in enumerate(doc, start=1):
             text = (page.get_text("text") or "").strip()
             if not text:
@@ -349,10 +357,16 @@ def _extract_xlsx_sections(path: Path) -> list[ExtractedSection]:
 
     workbook = load_workbook(str(path), read_only=True, data_only=True)
     sections: list[ExtractedSection] = []
+    total_rows = 0
+    total_cells = 0
     try:
         for index, sheet in enumerate(workbook.worksheets, start=1):
             rows: list[str] = []
             for row in sheet.iter_rows(values_only=True):
+                total_rows += 1
+                total_cells += len(row)
+                if total_rows > MAX_SPREADSHEET_ROWS or total_cells > MAX_SPREADSHEET_CELLS:
+                    raise ValueError("Spreadsheet contains too many rows or cells")
                 values = [str(cell).strip() for cell in row if cell not in (None, "")]
                 if values:
                     rows.append("\t".join(values))
@@ -374,6 +388,14 @@ def _extract_xlsx_sections(path: Path) -> list[ExtractedSection]:
     finally:
         workbook.close()
     return sections
+
+
+def _validate_extracted_sections(sections: list[ExtractedSection]) -> None:
+    if len(sections) > MAX_EXTRACTED_SECTIONS:
+        raise ValueError("File contains too many extractable sections")
+    total_chars = sum(len(section.text or "") for section in sections)
+    if total_chars > MAX_EXTRACTED_TEXT_CHARS:
+        raise ValueError("Extracted text exceeds the allowed size")
 
 
 def _decode_text(raw: bytes) -> tuple[str, str]:

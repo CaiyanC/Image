@@ -19,6 +19,7 @@ from ..schemas.generation import (
     GenerationParams,
 )
 from ..services import dmxapi_service, generation_service
+from ..services.upload_validation_service import validate_image_content
 from ..models.ai_governance import AIFeatureModel
 from ..services.model_governance_service import list_selectable_models, resolve_authorized_model
 
@@ -169,8 +170,7 @@ async def txt2vid(
     db: Session = Depends(get_db),
 ):
     _enforce_ai_generation_limit(current_user)
-    resolved_model = _resolve_generation_model_or_legacy(db, current_user, req.model_name, "image")
-    return await generation_service.create_txt2vid(db, current_user, req, resolved_model=resolved_model)
+    return await generation_service.create_txt2vid(db, current_user, req, resolved_model=None)
 
 
 @router.post("/upload")
@@ -208,7 +208,8 @@ async def _read_reference_upload(file: UploadFile) -> bytes:
     _validate_reference_image_metadata(file.filename, file.content_type)
     content = await file.read(MAX_REFERENCE_IMAGE_BYTES + 1)
     if len(content) > MAX_REFERENCE_IMAGE_BYTES:
-        raise HTTPException(status_code=400, detail="参考图不能超过 10MB")
+        raise HTTPException(status_code=413, detail="参考图不能超过 10MB")
+    _validate_reference_image_content(content, _file_suffix(file.filename))
     return content
 
 
@@ -221,8 +222,10 @@ def _decode_reference_payload(img: ImagePayload) -> tuple[bytes, str]:
     except (binascii.Error, ValueError):
         raise HTTPException(status_code=400, detail="参考图数据不是有效的 base64")
     if len(content) > MAX_REFERENCE_IMAGE_BYTES:
-        raise HTTPException(status_code=400, detail="参考图不能超过 10MB")
-    return content, MIME_TO_EXTENSION[content_type]
+        raise HTTPException(status_code=413, detail="参考图不能超过 10MB")
+    extension = MIME_TO_EXTENSION[content_type]
+    _validate_reference_image_content(content, f".{extension}")
+    return content, extension
 
 
 def _validate_reference_image_metadata(filename: str | None, content_type: str | None) -> None:
@@ -242,3 +245,10 @@ def _file_suffix(filename: str | None) -> str:
 
 def _normalize_content_type(content_type: str | None) -> str:
     return (content_type or "").split(";", 1)[0].strip().lower()
+
+
+def _validate_reference_image_content(content: bytes, suffix: str) -> None:
+    try:
+        validate_image_content(content, suffix)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail="参考图内容无效或与文件类型不匹配") from exc

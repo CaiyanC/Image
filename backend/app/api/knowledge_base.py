@@ -24,6 +24,7 @@ from ..services.file_ingestion_service import (
     list_stuck_processing_documents,
     recover_stuck_processing_documents,
 )
+from ..services.upload_validation_service import validate_knowledge_file_content
 from ..tasks.parse_tasks import parse_document
 
 router = APIRouter(prefix="/api/knowledge-base", tags=["knowledge-base"])
@@ -38,6 +39,7 @@ ALLOWED_KNOWLEDGE_FILE_MIME_TYPES = {
     "application/octet-stream",
 }
 MAX_KNOWLEDGE_FILE_BYTES = 20 * 1024 * 1024
+MAX_KNOWLEDGE_FILES_PER_REQUEST = 20
 KNOWLEDGE_FILE_DIR = settings.KNOWLEDGE_FILE_DIR
 
 
@@ -126,40 +128,53 @@ async def reindex_products(
 def create_reindex_job(
     body: ProductReindexRequest,
     current_user: User = Depends(get_current_super_admin),
+    db: Session = Depends(get_db),
 ):
     enforce_rate_limit(user_id=current_user.id, scope="knowledge.reindex_job", limit=10, window_seconds=600)
-    return knowledge_job_service.create_reindex_job(
-        created_by=current_user.id,
-        mode=body.mode,
-        limit=body.limit,
-        embed=body.embed,
-    )
+    try:
+        return knowledge_job_service.create_reindex_job(
+            db,
+            created_by=current_user.id,
+            mode=body.mode,
+            limit=body.limit,
+            embed=body.embed,
+        )
+    except knowledge_job_service.KnowledgeJobEnqueueError as exc:
+        raise HTTPException(status_code=503, detail=f"任务队列暂不可用；任务 {exc.job_id} 已标记失败") from exc
 
 
 @router.post("/jobs/retry-embeddings")
 def create_embedding_retry_job(
     body: EmbeddingRetryRequest,
     current_user: User = Depends(get_current_super_admin),
+    db: Session = Depends(get_db),
 ):
     enforce_rate_limit(user_id=current_user.id, scope="knowledge.embedding_retry", limit=20, window_seconds=600)
     limit = min(max(body.limit or 20, 1), 500)
-    return knowledge_job_service.create_embedding_retry_job(created_by=current_user.id, limit=limit)
+    try:
+        return knowledge_job_service.create_embedding_retry_job(
+            db, created_by=current_user.id, limit=limit
+        )
+    except knowledge_job_service.KnowledgeJobEnqueueError as exc:
+        raise HTTPException(status_code=503, detail=f"任务队列暂不可用；任务 {exc.job_id} 已标记失败") from exc
 
 
 @router.get("/jobs")
 def list_jobs(
     limit: int = Query(20, ge=1, le=100),
     current_user: User = Depends(get_current_super_admin),
+    db: Session = Depends(get_db),
 ):
-    return knowledge_job_service.list_jobs(limit=limit)
+    return knowledge_job_service.list_jobs(db, limit=limit)
 
 
 @router.get("/jobs/{job_id}")
 def get_job(
     job_id: str,
     current_user: User = Depends(get_current_super_admin),
+    db: Session = Depends(get_db),
 ):
-    job = knowledge_job_service.get_job(job_id)
+    job = knowledge_job_service.get_job(db, job_id)
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
     return job
@@ -234,10 +249,7 @@ def download_knowledge_file(
         raise HTTPException(status_code=404, detail="Document not found")
     if not document.file_path:
         raise HTTPException(status_code=404, detail="File not found")
-    file_path = Path(document.file_path).resolve()
-    upload_root = Path(settings.UPLOAD_DIR).resolve()
-    if file_path != upload_root and upload_root not in file_path.parents:
-        raise HTTPException(status_code=400, detail="Invalid file path")
+    file_path = _resolve_knowledge_file_path(document.file_path)
     if not file_path.is_file():
         raise HTTPException(status_code=404, detail="File not found")
     return FileResponse(file_path, filename=document.file_name or file_path.name)
@@ -253,12 +265,13 @@ def delete_knowledge_file(
     if not document or document.source_type != "file":
         raise HTTPException(status_code=404, detail="Document not found")
     file_path = document.file_path
+    resolved_file_path = _resolve_knowledge_file_path(file_path) if file_path else None
     db.query(KnowledgeChunk).filter(KnowledgeChunk.document_id == document.id).delete(synchronize_session=False)
     db.query(KnowledgeParseTask).filter(KnowledgeParseTask.document_id == document.id).delete(synchronize_session=False)
     db.delete(document)
     db.commit()
-    if file_path:
-        _remove_file_safely(file_path)
+    if resolved_file_path:
+        _remove_file_safely(str(resolved_file_path))
     return {"ok": True, "document_id": document_id}
 
 
@@ -270,13 +283,24 @@ async def upload_files(
     db: Session = Depends(get_db),
 ):
     enforce_rate_limit(user_id=current_user.id, scope="knowledge.files.upload", limit=45, window_seconds=60)
+    if not files or len(files) > MAX_KNOWLEDGE_FILES_PER_REQUEST:
+        raise HTTPException(
+            status_code=413,
+            detail=f"每次最多上传 {MAX_KNOWLEDGE_FILES_PER_REQUEST} 个文件",
+        )
     os.makedirs(KNOWLEDGE_FILE_DIR, exist_ok=True)
     results: list[dict] = []
     normalized_related_skus = _normalize_related_skus(related_skus)
     for file in files:
+        document: KnowledgeDocument | None = None
         original_name = os.path.basename(file.filename or "").strip()
         suffix = _validate_knowledge_file(file)
         saved_path, stored_name, file_hash = await _save_knowledge_file(file, suffix)
+        try:
+            validate_knowledge_file_content(saved_path, suffix)
+        except ValueError as exc:
+            _remove_file_safely(saved_path)
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
         try:
             existing = _find_existing_file_document(db, file_hash)
             if existing:
@@ -346,7 +370,19 @@ async def upload_files(
             task = _create_parse_task(db, document.id)
             # BackgroundTasks fallback is retained in _run_file_parse_task for quick rollback.
             # P1.5 schedules parsing in the external Celery worker instead of the API process.
-            parse_document.delay(document.id, task.id)
+            try:
+                parse_document.apply_async(args=[document.id, task.id], task_id=task.id)
+            except Exception as exc:
+                task.status = "error"
+                task.error_message = "Task queue unavailable"
+                task.finished_at = datetime.now(timezone.utc)
+                document.parse_status = "error"
+                document.parse_error = "Task queue unavailable"
+                db.commit()
+                raise HTTPException(
+                    status_code=503,
+                    detail="文件已保存，但解析队列暂不可用；任务已标记失败",
+                ) from exc
             results.append(
                 {
                     "document_id": document.id,
@@ -365,7 +401,9 @@ async def upload_files(
             )
         except HTTPException:
             db.rollback()
-            _remove_file_safely(saved_path)
+            persisted = db.get(KnowledgeDocument, document.id) if document and document.id else None
+            if not persisted:
+                _remove_file_safely(saved_path)
             raise
         except IntegrityError:
             db.rollback()
@@ -611,7 +649,7 @@ async def _save_knowledge_file(file: UploadFile, suffix: str) -> tuple[str, str,
             if total_bytes > MAX_KNOWLEDGE_FILE_BYTES:
                 await handle.close()
                 _remove_file_safely(saved_path)
-                raise HTTPException(status_code=400, detail="文件不能超过 20MB")
+                raise HTTPException(status_code=413, detail="文件不能超过 20MB")
             digest.update(chunk)
             await handle.write(chunk)
     return saved_path, stored_name, digest.hexdigest()
@@ -757,7 +795,16 @@ def _load_related_skus(value: str | None) -> list[str]:
 
 def _remove_file_safely(path: str) -> None:
     try:
-        if os.path.exists(path):
-            os.remove(path)
+        candidate = _resolve_knowledge_file_path(path)
+        if candidate.exists():
+            candidate.unlink()
     except Exception:
         pass
+
+
+def _resolve_knowledge_file_path(path: str) -> Path:
+    root = Path(KNOWLEDGE_FILE_DIR).resolve()
+    candidate = Path(path).resolve()
+    if candidate != root and root not in candidate.parents:
+        raise HTTPException(status_code=400, detail="Invalid file path")
+    return candidate

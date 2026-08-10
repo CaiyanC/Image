@@ -29,7 +29,7 @@
 ## 环境要求
 
 - Python 3.10 或更高版本
-- Node.js 18 或更高版本
+- Node.js 20.19 或更高版本（也支持 22.12+）
 - npm 或 pnpm
 
 ## 快速开始
@@ -44,14 +44,22 @@ cd AItool
 ### 2. 配置环境变量
 
 ```bash
-# 复制模板文件
+# 生产配置模板
 cp backend/.env.example backend/.env
 
-# 编辑 backend/.env，填入你的真实配置：
+# 开发配置模板（Windows 可使用 copy 命令）
+cp backend/.env.dev.example backend/.env.dev
+
+# 编辑对应的本地 env 文件，填入你的真实配置：
 #   - SECRET_KEY：JWT 签名密钥（必填，任意随机字符串）
+#   - MODEL_CREDENTIAL_ENCRYPTION_KEY：模型 API Key 的独立 Fernet 密钥（推荐）
 #   - DEFAULT_ADMIN_PASSWORD：默认管理员密码（必填）
 #   - DMXAPI_API_KEY：dmxapi.cn 的 API Key（可选，可在后台设置中按模型配置）
 ```
+
+`backend/.env` 和 `backend/.env.dev` 都包含敏感信息，已被 Git 忽略；不要提交真实配置。
+后台模型密钥只以密文保存和掩码展示；若未配置独立 Fernet 密钥，后端会暂时从
+`SECRET_KEY` 派生加密密钥，因此轮换 `SECRET_KEY` 前应先配置并备份独立密钥。
 
 ### 3. 启动后端
 

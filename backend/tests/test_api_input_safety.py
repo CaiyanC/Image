@@ -4,6 +4,8 @@ import contextlib
 import io
 import unittest
 
+from PIL import Image
+
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 from fastapi import HTTPException
@@ -18,8 +20,8 @@ from app.api import products as products_api
 from app.api import users as users_api
 from app.models.product import Product
 from app.schemas.generation import ImagePayload
-from app.schemas.user import UserCreate
-from app.services import agent_trace_service, operation_log_service
+from app.schemas.user import LoginRequest, UserCreate, UserUpdate
+from app.services import agent_trace_service, generation_service, operation_log_service
 
 
 class FakeUpload:
@@ -42,6 +44,12 @@ class FakeProductUpload:
 
 
 class ApiInputSafetyTest(unittest.TestCase):
+    @staticmethod
+    def _image_bytes(image_format: str = "PNG") -> bytes:
+        buffer = io.BytesIO()
+        Image.new("RGB", (2, 2), color="red").save(buffer, format=image_format)
+        return buffer.getvalue()
+
     def test_public_registration_is_disabled_by_default(self):
         original = settings.ENABLE_PUBLIC_REGISTRATION
         settings.ENABLE_PUBLIC_REGISTRATION = False
@@ -58,6 +66,12 @@ class ApiInputSafetyTest(unittest.TestCase):
     def test_new_user_password_requires_minimum_length(self):
         with self.assertRaises(ValidationError):
             UserCreate(username="weak-user", email=None, password="1234567")
+
+    def test_login_and_admin_update_inputs_are_bounded(self):
+        with self.assertRaises(ValidationError):
+            LoginRequest(username="u", password="x" * 129)
+        with self.assertRaises(ValidationError):
+            UserUpdate(password="short")
 
     def test_trace_defaults_to_no_stdout_and_masks_sensitive_payload(self):
         original_stdout = agent_trace_service.TRACE_STDOUT
@@ -186,17 +200,34 @@ class ApiInputSafetyTest(unittest.TestCase):
         upload = FakeUpload(content, filename="ref.png", content_type="image/png")
         with self.assertRaises(HTTPException) as ctx:
             asyncio.run(generation_api._read_reference_upload(upload))
-        self.assertEqual(ctx.exception.status_code, 400)
+        self.assertEqual(ctx.exception.status_code, 413)
 
     def test_base64_reference_payload_validation(self):
+        image = self._image_bytes("PNG")
         content, ext = generation_api._decode_reference_payload(
-            ImagePayload(data=base64.b64encode(b"image").decode("ascii"), mimeType="image/webp")
+            ImagePayload(data=base64.b64encode(image).decode("ascii"), mimeType="image/png")
         )
-        self.assertEqual(content, b"image")
-        self.assertEqual(ext, "webp")
+        self.assertEqual(content, image)
+        self.assertEqual(ext, "png")
 
         with self.assertRaises(HTTPException):
             generation_api._decode_reference_payload(ImagePayload(data="not-base64", mimeType="image/png"))
+        with self.assertRaises(HTTPException):
+            generation_api._decode_reference_payload(
+                ImagePayload(data=base64.b64encode(b"not an image").decode("ascii"), mimeType="image/png")
+            )
+
+    def test_unimplemented_video_generation_fails_without_creating_a_record(self):
+        with self.assertRaises(HTTPException) as ctx:
+            asyncio.run(
+                generation_service.create_txt2vid(
+                    db=None,
+                    user=None,
+                    req=None,
+                    resolved_model=None,
+                )
+            )
+        self.assertEqual(ctx.exception.status_code, 501)
 
     def test_product_image_upload_rejects_type_and_size_abuse(self):
         bad_type = FakeProductUpload(b"hello", "shell.exe", "application/octet-stream")
@@ -210,7 +241,7 @@ class ApiInputSafetyTest(unittest.TestCase):
         oversized = FakeProductUpload(b"x" * (products_api.MAX_PRODUCT_IMAGE_BYTES + 1), "ref.png", "image/png")
         with self.assertRaises(HTTPException) as ctx:
             products_api._read_limited_upload(oversized, products_api.MAX_PRODUCT_IMAGE_BYTES, "图片不能超过 10MB")
-        self.assertEqual(ctx.exception.status_code, 400)
+        self.assertEqual(ctx.exception.status_code, 413)
 
 
 if __name__ == "__main__":

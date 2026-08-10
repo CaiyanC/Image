@@ -92,7 +92,7 @@ class ToolRegistryContractTest(unittest.TestCase):
             "/tools/ecommerce-data-fill",
         )
 
-    def test_registry_rejects_unregistered_entry_and_filters_visible_tools(self):
+    def test_registry_registers_external_entry_with_department_permission(self):
         from fastapi import HTTPException
         from app.services import tool_registry_service
 
@@ -107,11 +107,69 @@ class ToolRegistryContractTest(unittest.TestCase):
             )
         self.assertEqual(ctx.exception.status_code, 422)
 
+        external = tool_registry_service.create_tool(
+            self.db,
+            {
+                "tool_key": "inventory_dashboard",
+                "name": "库存看板",
+                "entry_type": "external",
+                "external_url": "http://localhost:5280/app",
+                "open_mode": "new_tab",
+            },
+        )
+        self.assertEqual(external.entry_type, "external")
+        self.assertEqual(external.external_url, "http://localhost:5280/app")
+        self.assertEqual(external.permission_key, "tool.inventory_dashboard.use")
+        permission = self.db.query(Permission).filter_by(
+            permission_key="tool.inventory_dashboard.use"
+        ).one()
+        management_group_names = {
+            name
+            for (name,) in self.db.query(Group.group_name)
+            .join(GroupPermission, GroupPermission.group_id == Group.id)
+            .filter(GroupPermission.permission_id == permission.id)
+            .all()
+        }
+        self.assertEqual(management_group_names, {"总经办", "IT部"})
+
         visible = tool_registry_service.list_visible_tools(
             self.db,
             [ECOMMERCE_DATA_FILL_PERMISSION],
         )
         self.assertEqual([tool.tool_key for tool in visible], ["ecommerce_data_fill"])
+
+    def test_external_entry_rejects_unsafe_url_and_delete_cleans_permission(self):
+        from fastapi import HTTPException
+        from app.services import tool_registry_service
+
+        _seed_default_groups(self.db)
+        _seed_default_permissions(self.db)
+
+        for unsafe_url in ("javascript:alert(1)", "http://user:pass@localhost:5280"):
+            with self.subTest(unsafe_url=unsafe_url), self.assertRaises(HTTPException) as ctx:
+                tool_registry_service.create_tool(
+                    self.db,
+                    {
+                        "tool_key": "unsafe_tool",
+                        "entry_type": "external",
+                        "external_url": unsafe_url,
+                    },
+                )
+            self.assertEqual(ctx.exception.status_code, 422)
+
+        tool_registry_service.create_tool(
+            self.db,
+            {
+                "tool_key": "temporary_tool",
+                "entry_type": "external",
+                "external_url": "http://127.0.0.1:5290",
+            },
+        )
+        tool_registry_service.delete_tool(self.db, "temporary_tool")
+        self.assertIsNone(self.db.query(Tool).filter_by(tool_key="temporary_tool").first())
+        self.assertIsNone(
+            self.db.query(Permission).filter_by(permission_key="tool.temporary_tool.use").first()
+        )
 
 
 if __name__ == "__main__":
@@ -213,8 +271,39 @@ class ToolDirectoryApiTest(unittest.TestCase):
         self.assertEqual(response.json()["route_path"], "/customer-service")
         self.assertEqual(response.json()["permission_key"], "ai.customer_service")
 
+    def test_management_can_register_update_and_delete_external_tool(self):
+        def manager_user():
+            return type("UserStub", (), {"id": "manager-user", "username": "manager"})()
+
+        app.dependency_overrides[get_current_super_admin] = manager_user
+        created = self.client.post(
+            "/api/admin/tools",
+            json={
+                "tool_key": "local_report",
+                "name": "本地报表",
+                "entry_type": "external",
+                "external_url": "http://localhost:5390",
+                "open_mode": "new_tab",
+            },
+        )
+        self.assertEqual(created.status_code, 200, created.text)
+        self.assertEqual(created.json()["entry_type"], "external")
+        self.assertEqual(created.json()["permission_key"], "tool.local_report.use")
+
+        updated = self.client.put(
+            "/api/admin/tools/local_report",
+            json={"external_url": "http://localhost:5391/reports", "open_mode": "same_tab"},
+        )
+        self.assertEqual(updated.status_code, 200, updated.text)
+        self.assertEqual(updated.json()["external_url"], "http://localhost:5391/reports")
+        self.assertEqual(updated.json()["open_mode"], "same_tab")
+
+        deleted = self.client.delete("/api/admin/tools/local_report")
+        self.assertEqual(deleted.status_code, 200, deleted.text)
+        self.assertEqual(deleted.json()["tool_key"], "local_report")
+
     def test_finance_user_can_submit_an_excel_run_without_exposing_the_task_queue(self):
-        with patch("app.api.tools.run_ecommerce_data_fill_tool_run.delay") as enqueue:
+        with patch("app.api.tools.run_ecommerce_data_fill_tool_run.apply_async") as enqueue:
             response = self.client.post(
                 "/api/tools/ecommerce-data-fill/runs",
                 data={"mode": "ecommerce", "parameters_json": "{}"},
@@ -232,4 +321,31 @@ class ToolDirectoryApiTest(unittest.TestCase):
         self.assertEqual(body["status"], "queued")
         self.assertEqual(body["tool_key"], "ecommerce_data_fill")
         self.assertEqual(body["input_files"][0]["display_name"], "source.xlsx")
-        enqueue.assert_called_once_with(body["id"])
+        enqueue.assert_called_once_with(args=[body["id"]], task_id=body["id"])
+
+    def test_tool_run_enqueue_failure_returns_503_and_marks_run_failed(self):
+        with patch(
+            "app.api.tools.run_ecommerce_data_fill_tool_run.apply_async",
+            side_effect=ConnectionError("redis down"),
+        ):
+            response = self.client.post(
+                "/api/tools/ecommerce-data-fill/runs",
+                data={"mode": "ecommerce", "parameters_json": "{}"},
+                files={
+                    "files": (
+                        "source.xlsx",
+                        BytesIO(b"test spreadsheet contents"),
+                        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    ),
+                },
+            )
+
+        self.assertEqual(response.status_code, 503, response.text)
+        db = self.Session()
+        try:
+            run = db.query(ToolRun).order_by(ToolRun.created_at.desc()).first()
+            self.assertIsNotNone(run)
+            self.assertEqual(run.status, "failed")
+            self.assertEqual(run.error_message, "Task queue unavailable")
+        finally:
+            db.close()

@@ -5,6 +5,7 @@ import logging
 from time import perf_counter
 from urllib.parse import urljoin, urlparse
 from sqlalchemy.orm import Session
+from . import model_governance_service
 from .model_governance_service import ResolvedModel
 from ..models.system_config import SystemConfig
 from ..core.config import settings
@@ -78,6 +79,10 @@ def _make_url(base: str, path: str) -> str:
     return urljoin(clean_base, path)
 
 
+def _validate_request_url(url: str) -> str:
+    return model_governance_service.validate_provider_url(url, resolve_dns=True)
+
+
 async def _run_ai_request(factory, *, timeout: float | None = None):
     queue_timeout = max(0.0, float(settings.AI_REQUEST_QUEUE_TIMEOUT_SECONDS))
     wait_start = perf_counter()
@@ -115,38 +120,67 @@ def _record_ai_semaphore_wait(wait_ms: float, *, acquired: bool, queue_timeout: 
     agent_trace_service.trace("AI_SEMAPHORE_WAIT", payload)
 
 
+def _parse_model_config_value(value: str, model_id: str) -> dict | None:
+    try:
+        data = json.loads(value)
+        if not isinstance(data, dict):
+            return None
+    except (json.JSONDecodeError, TypeError):
+        parts = value.split("|")
+        if len(parts) < 5:
+            return None
+        data = {
+            "id": model_id,
+            "name": parts[0],
+            "type": parts[1],
+            "description": parts[2],
+            "api_key": parts[3],
+            "api_base_url": parts[4] if parts[4] else DEFAULT_BASE_URL,
+            "api_format": parts[5] if len(parts) > 5 and parts[5] else "openai",
+            "api_model": model_id,
+            "enabled": True,
+        }
+
+    data.setdefault("id", model_id)
+    data.setdefault("name", model_id)
+    data.setdefault("type", "image")
+    data.setdefault("description", "")
+    data.setdefault("api_base_url", DEFAULT_BASE_URL)
+    data.setdefault("api_format", "openai")
+    data.setdefault("api_model", data.get("id", model_id))
+    data.setdefault("enabled", True)
+    return data
+
+
 def _get_model_config(db: Session, model_id: str) -> dict | None:
     row = db.query(SystemConfig).filter(SystemConfig.config_key == f"model_{model_id}").first()
     if not row:
         return None
-    try:
-        data = json.loads(row.config_value)
-        data.setdefault("id", model_id)
-        data.setdefault("name", model_id)
-        data.setdefault("type", "image")
-        data.setdefault("description", "")
-        data.setdefault("api_key", "")
-        data.setdefault("api_base_url", DEFAULT_BASE_URL)
-        data.setdefault("api_format", "openai")
-        data.setdefault("api_model", data.get("id", model_id))
-        data.setdefault("enabled", True)
-        return data
-    except (json.JSONDecodeError, TypeError):
-        pass
-    parts = row.config_value.split("|")
-    if len(parts) < 5:
+    data = _parse_model_config_value(row.config_value, model_id)
+    if data is None:
         return None
-    return {
-        "id": model_id,
-        "name": parts[0],
-        "type": parts[1],
-        "description": parts[2],
-        "api_key": parts[3],
-        "api_base_url": parts[4] if parts[4] else DEFAULT_BASE_URL,
-        "api_format": parts[5] if len(parts) > 5 and parts[5] else "openai",
-        "api_model": model_id,
-        "enabled": True,
-    }
+    ciphertext = str(data.pop("api_key_ciphertext", "") or "")
+    if ciphertext:
+        data["api_key"] = model_governance_service.decrypt_credential_value(ciphertext)
+    else:
+        # Compatibility for deployments that have not run the startup migration yet.
+        data["api_key"] = str(data.get("api_key") or "")
+    return data
+
+
+def _masked_api_key(api_key: str) -> str:
+    return f"****{api_key[-4:]}" if len(api_key) >= 4 else "****"
+
+
+def _public_model_config(model: dict) -> dict:
+    public = dict(model)
+    api_key = str(public.pop("api_key", "") or "")
+    public.pop("api_key_ciphertext", None)
+    public.pop("key_hint", None)
+    public["api_key"] = ""
+    public["api_key_configured"] = bool(api_key)
+    public["api_key_masked"] = _masked_api_key(api_key) if api_key else ""
+    return public
 
 
 def _resolve_model_config(db: Session, model_id: str) -> dict:
@@ -244,7 +278,9 @@ async def txt2img(
     if kwargs.get("moderation"):
         body["moderation"] = kwargs["moderation"]
 
-    url = cfg.get("api_endpoint") or cfg.get("txt2img_url") or _make_url(base_url, "v1/images/generations")
+    url = _validate_request_url(
+        cfg.get("api_endpoint") or cfg.get("txt2img_url") or _make_url(base_url, "v1/images/generations")
+    )
 
     body["n"] = 1
 
@@ -329,7 +365,9 @@ async def img2img(
 
     data["n"] = 1
 
-    url = cfg.get("api_endpoint") or cfg.get("img2img_url") or _make_url(base_url, "v1/images/edits")
+    url = _validate_request_url(
+        cfg.get("api_endpoint") or cfg.get("img2img_url") or _make_url(base_url, "v1/images/edits")
+    )
     timeout = httpx.Timeout(connect=float(settings.DMXAPI_IMG2IMG_CONNECT_TIMEOUT), read=float(settings.DMXAPI_IMG2IMG_READ_TIMEOUT), write=300.0, pool=10.0)
 
     async def _do_request():
@@ -385,7 +423,7 @@ async def _gemini_single_request(
         "Authorization": f"Bearer {api_key}",
         "Content-Type": "application/json",
     }
-    url = _make_url(base_url, f"v1beta/models/{model_id}:generateContent")
+    url = _validate_request_url(_make_url(base_url, f"v1beta/models/{model_id}:generateContent"))
     async with httpx.AsyncClient(timeout=httpx.Timeout(600.0, connect=30.0), trust_env=False) as client:
         response = await client.post(url, headers=headers, json=body)
         if response.status_code >= 400:
@@ -556,7 +594,7 @@ def _extract_gemini_image(response: dict) -> list[dict]:
     return image_list
 
 
-def get_available_models(db: Session) -> list[dict]:
+def _available_model_configs(db: Session) -> list[dict]:
     configured = (
         db.query(SystemConfig)
         .filter(SystemConfig.config_key.like("model_%", escape="\\"))
@@ -581,6 +619,20 @@ def get_available_models(db: Session) -> list[dict]:
     return [get_actual_embedding_config(), *[dict(m) for m in DEFAULT_MODELS]]
 
 
+def get_available_models(db: Session) -> list[dict]:
+    """Return legacy model metadata without ever exposing provider secrets."""
+    return [_public_model_config(model) for model in _available_model_configs(db)]
+
+
+def _validated_legacy_urls(model: dict) -> dict:
+    result = dict(model)
+    for field in ("api_base_url", "txt2img_url", "img2img_url", "chat_url", "embedding_url"):
+        value = str(result.get(field) or "").strip()
+        if value:
+            result[field] = model_governance_service.validate_provider_url(value)
+    return result
+
+
 def set_model_config(db: Session, models: list[dict]):
     existing_keys = db.query(SystemConfig.config_key).filter(
         SystemConfig.config_key.like("model_%", escape="\\")
@@ -589,13 +641,24 @@ def set_model_config(db: Session, models: list[dict]):
 
     new_keys = set()
     for m in models:
+        m = _validated_legacy_urls(m)
         key = f"model_{m['id']}"
+        existing = _get_model_config(db, m["id"])
+        existing_secret = str((existing or {}).get("api_key") or "")
+        supplied_secret = str(m.get("api_key") or "")
+        expected_mask = _masked_api_key(existing_secret) if existing_secret else ""
+        if not supplied_secret or (expected_mask and supplied_secret == expected_mask):
+            api_key = existing_secret
+        else:
+            api_key = supplied_secret
+        ciphertext = model_governance_service.encrypt_credential(api_key) if api_key else ""
         value = json.dumps({
             "id": m.get("id", ""),
             "name": m.get("name", ""),
             "type": m.get("type", "image"),
             "description": m.get("description", ""),
-            "api_key": m.get("api_key", ""),
+            "api_key_ciphertext": ciphertext,
+            "key_hint": api_key[-4:] if api_key else "",
             "api_base_url": m.get("api_base_url", DEFAULT_BASE_URL),
             "api_format": m.get("api_format", "openai"),
             "api_model": m.get("api_model") or m.get("id", ""),
@@ -620,10 +683,46 @@ def set_model_config(db: Session, models: list[dict]):
     db.commit()
 
 
+def migrate_legacy_model_credentials(db: Session) -> dict[str, int]:
+    """Replace plaintext legacy provider keys with Fernet ciphertext in place."""
+    migrated = 0
+    failed = 0
+    rows = db.query(SystemConfig).filter(SystemConfig.config_key.like("model_%", escape="\\")).all()
+    for row in rows:
+        model_id = row.config_key.replace("model_", "", 1)
+        try:
+            data = _parse_model_config_value(row.config_value, model_id)
+            if data is None:
+                continue
+            ciphertext = str(data.get("api_key_ciphertext") or "")
+            if ciphertext:
+                normalized, changed = model_governance_service.normalize_credential_ciphertext(ciphertext)
+                if changed:
+                    data["api_key_ciphertext"] = normalized
+                    row.config_value = json.dumps(data, ensure_ascii=False)
+                    migrated += 1
+                continue
+            api_key = str(data.pop("api_key", "") or "")
+            if not api_key:
+                continue
+            data["api_key_ciphertext"] = model_governance_service.encrypt_credential(api_key)
+            data["key_hint"] = api_key[-4:]
+            row.config_value = json.dumps(data, ensure_ascii=False)
+            migrated += 1
+        except Exception:
+            failed += 1
+            logger.exception("Failed to migrate legacy model credential %s", model_id)
+    if migrated:
+        db.commit()
+    elif failed:
+        db.rollback()
+    return {"migrated": migrated, "failed": failed}
+
+
 def get_default_model_by_type(db: Session, model_type: str) -> dict | None:
     if model_type == "embedding":
         return get_actual_embedding_config()
-    models = get_available_models(db)
+    models = _available_model_configs(db)
     for model in models:
         if model.get("type") == model_type and model.get("api_key") and model.get("enabled", True):
             return model
@@ -668,7 +767,9 @@ async def chat_completion(
         "Authorization": f"Bearer {api_key}",
         "Content-Type": "application/json",
     }
-    url = cfg.get("api_endpoint") or cfg.get("chat_url") or _make_url(cfg.get("api_base_url") or DEFAULT_BASE_URL, "v1/chat/completions")
+    url = _validate_request_url(
+        cfg.get("api_endpoint") or cfg.get("chat_url") or _make_url(cfg.get("api_base_url") or DEFAULT_BASE_URL, "v1/chat/completions")
+    )
     agent_trace_service.trace("AI_REQUEST", {"url": url, "body": body})
     release_session_connection(db)
 
@@ -745,7 +846,9 @@ async def chat_completion_stream(
         "Authorization": f"Bearer {api_key}",
         "Content-Type": "application/json",
     }
-    url = cfg.get("api_endpoint") or cfg.get("chat_url") or _make_url(cfg.get("api_base_url") or DEFAULT_BASE_URL, "v1/chat/completions")
+    url = _validate_request_url(
+        cfg.get("api_endpoint") or cfg.get("chat_url") or _make_url(cfg.get("api_base_url") or DEFAULT_BASE_URL, "v1/chat/completions")
+    )
     agent_trace_service.trace("AI_STREAM_REQUEST", {"url": url, "body": body})
     release_session_connection(db)
 
@@ -797,7 +900,7 @@ async def create_embedding(
         "Authorization": f"Bearer {api_key}",
         "Content-Type": "application/json",
     }
-    url = cfg["embedding_url"]
+    url = _validate_request_url(cfg["embedding_url"])
     release_session_connection(db)
 
     def _request_sync():

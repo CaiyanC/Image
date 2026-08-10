@@ -264,6 +264,7 @@ PONG
 ### 后端
 
 - `SECRET_KEY`：JWT 和签名文件 URL 的签名密钥。必须是高强度随机值。
+- `MODEL_CREDENTIAL_ENCRYPTION_KEY`：后台模型凭据的 Fernet 加密密钥。生产环境建议独立配置并安全备份；未配置时会从 `SECRET_KEY` 派生兼容密钥。
 - `DATABASE_URL`：后端连接 PostgreSQL 的 SQLAlchemy 连接串。
 - `REDIS_URL`：Celery broker/result backend，当前本地默认 `redis://localhost:6379/0`。
 - `DEBUG`：是否启用调试模式。
@@ -273,6 +274,10 @@ PONG
 - `AI_REQUEST_TIMEOUT_SECONDS`：通用 AI 请求超时。
 - `EMBEDDING_REQUEST_TIMEOUT_SECONDS`：embedding 请求超时。
 - `AI_MAX_CONCURRENT_REQUESTS`：AI 请求并发上限。
+- `KNOWLEDGE_JOB_STALE_MINUTES`：知识库维护任务进入排队/运行状态后允许的最长无更新时间；启动时超时任务会被标记为中断，默认 120 分钟。
+- `ALLOW_PRIVATE_MODEL_ENDPOINTS`：是否允许模型端点解析到私有网段，默认 `false`。即使开启，回环、链路本地和云元数据地址仍禁止。
+- `ALLOW_INSECURE_MODEL_ENDPOINTS`：是否允许模型端点使用 HTTP，默认 `false`。私有 HTTP 服务必须与上一项同时显式开启。
+- `CORS_ORIGINS`：允许携带凭据访问后端的前端来源，使用逗号分隔；生产环境只填写实际前端地址。
 - `DMXAPI_BASE_URL`：DMXAPI 服务地址。
 - `DMXAPI_API_KEY`：DMXAPI 图像/视频生成服务密钥。
 - `DMXAPI_TXT2IMG_TIMEOUT`：文生图读超时。
@@ -310,12 +315,14 @@ PONG
 
 - 登录 JWT 签名和验签。
 - 文件签名 URL 的 token 签名和验签。
+- 未设置 `MODEL_CREDENTIAL_ENCRYPTION_KEY` 时，派生后台模型凭据的兼容加密密钥。
 
 更换影响：
 
 - 所有已登录用户的 JWT 立即失效，需要重新登录。
 - 尚未过期的签名文件 URL 立即失效，需要前端重新请求签名 URL。
 - 不影响数据库中的用户、产品、历史记录、知识库文件。
+- 若仍在使用派生密钥，会影响数据库中模型凭据解密；应先设置并保留独立的 `MODEL_CREDENTIAL_ENCRYPTION_KEY`，重启一次让后端自动重加密旧凭据，确认模型调用正常后再轮换。
 
 轮换步骤：
 
@@ -605,6 +612,18 @@ Format-Hex frontend\src\pages\History.tsx -Count 64
 - 生产前端：`frontend\.env`
 - 开发前端：`frontend\.env.dev`
 
+首次配置开发环境时，从无敏感信息的模板复制：
+
+```bat
+copy backend\.env.dev.example backend\.env.dev
+```
+
+`.env` 和 `.env.dev` 只保存在本机，不得加入 Git；模板文件中只能保留占位值。
+
+`TRUSTED_PROXY_CIDRS` 只填写能够直接连接后端的反向代理网段。默认仅信任本机
+Nginx（`127.0.0.1/32,::1/128`）；如果代理运行在容器或独立主机，必须显式填写其
+实际网段，不能使用 `0.0.0.0/0` 或 `::/0`。
+
 启动/停止：
 
 ```bat
@@ -732,3 +751,25 @@ start-prod.bat
 ```
 
 并重新验证生产健康检查和核心业务流程。
+
+## 11. 外部应用接入
+
+管理员可以在“工具管理”中登记运行于独立仓库、域名或本机端口的外部应用，例如：
+
+```text
+http://localhost:5280
+http://127.0.0.1:8010/dashboard
+https://inventory.example.com
+```
+
+接入流程：
+
+1. 在独立项目中启动并验证外部应用。
+2. 进入 `/admin/tools`，填写工具标识、显示名称、HTTP(S) 地址和打开方式。
+3. 系统自动生成 `tool.<工具标识>.use` 权限，并默认授予总经办和 IT 部。
+4. 进入 `/admin/groups`，向其他部门分配新权限。
+5. 使用对应部门账号登录，在 `/tools` 确认工具可见并能正常打开。
+
+当前接入层负责统一入口和部门可见性，不会把主系统 JWT、Cookie 或其他登录凭据放入外部 URL。外部应用如果包含敏感数据，仍必须实现自己的后端鉴权；后续统一登录应使用短期、限定 audience 的票据交换，不得在查询字符串中传递主系统长期令牌。
+
+生产环境建议通过 Nginx 将外部服务反向代理到同一 HTTPS 域名的独立路径，而不是直接暴露本机端口。不同端口属于不同浏览器来源；如果外部应用需要调用主后端，还必须把它的精确来源加入 `CORS_ORIGINS`。

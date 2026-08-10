@@ -1,5 +1,7 @@
 import asyncio
+import socket
 import unittest
+from unittest.mock import patch
 
 import httpx
 
@@ -129,11 +131,17 @@ class ChatTransportRecoveryTest(unittest.IsolatedAsyncioTestCase):
             dmxapi_service.release_session_connection = lambda db: None
             dmxapi_service.agent_trace_service.trace = lambda *args, **kwargs: None
 
-            answer = await dmxapi_service.chat_completion(
-                object(),
-                [{"role": "user", "content": "ping"}],
-                model="test-chat",
-            )
+            with patch(
+                "app.services.outbound_url_service.socket.getaddrinfo",
+                return_value=[
+                    (socket.AF_INET, socket.SOCK_STREAM, socket.IPPROTO_TCP, "", ("93.184.216.34", 443))
+                ],
+            ):
+                answer = await dmxapi_service.chat_completion(
+                    object(),
+                    [{"role": "user", "content": "ping"}],
+                    model="test-chat",
+                )
         finally:
             dmxapi_service._resolve_model_config = original_resolve
             dmxapi_service._get_http_client = original_get_client

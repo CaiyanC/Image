@@ -51,8 +51,18 @@ def restore_product_snapshot(
 
     if target_data:
         if current_exists:
-            product_service.delete_product(db, snapshot.sku)
-        product = product_service.create_product(db, _payload_from_detail(target_data), creator_id=operator_id)
+            product = product_service.replace_product(
+                db,
+                snapshot.sku,
+                _payload_from_detail(target_data),
+                creator_id=operator_id,
+            )
+        else:
+            product = product_service.create_product(
+                db,
+                _payload_from_detail(target_data),
+                creator_id=operator_id,
+            )
         restored_sku = product.sku
         restored_to = "before"
     else:
@@ -105,13 +115,14 @@ def _clean_snapshot_data(data: dict | None) -> dict | None:
             cleaned[key].pop("product_id", None)
             cleaned[key].pop("created_at", None)
             cleaned[key].pop("updated_at", None)
-    for key in ("qa_items", "media", "prompts"):
+    for key in ("qa_items", "media", "assets", "prompts"):
         if isinstance(cleaned.get(key), list):
             items = []
             for item in cleaned[key]:
                 if isinstance(item, dict):
                     copy = dict(item)
                     copy.pop("id", None)
+                    copy.pop("sku", None)
                     copy.pop("product_id", None)
                     copy.pop("created_at", None)
                     copy.pop("updated_at", None)

@@ -1,3 +1,4 @@
+import ipaddress
 import logging
 import os
 import threading
@@ -55,12 +56,53 @@ def enforce_rate_limit(
 def get_request_identifier(request: Request | None) -> str:
     if request is None:
         return "unknown"
+    peer_host = request.client.host if request.client and request.client.host else ""
+    if not peer_host:
+        return "unknown"
+
+    trusted_networks = _trusted_proxy_networks()
+    peer_address = _parse_ip_address(peer_host)
+    if peer_address is None or not _is_trusted_proxy(peer_address, trusted_networks):
+        return peer_host
+
     forwarded_for = request.headers.get("x-forwarded-for")
-    if forwarded_for:
-        return forwarded_for.split(",", 1)[0].strip() or "unknown"
-    if request.client and request.client.host:
-        return request.client.host
-    return "unknown"
+    if not forwarded_for:
+        return peer_host
+
+    forwarded_addresses = [
+        address
+        for item in forwarded_for.split(",")
+        if (address := _parse_ip_address(item.strip())) is not None
+    ]
+    for address in reversed(forwarded_addresses):
+        if not _is_trusted_proxy(address, trusted_networks):
+            return str(address)
+    return peer_host
+
+
+def _trusted_proxy_networks() -> tuple[ipaddress.IPv4Network | ipaddress.IPv6Network, ...]:
+    raw = os.getenv("TRUSTED_PROXY_CIDRS", "127.0.0.1/32,::1/128")
+    networks = []
+    for item in raw.split(","):
+        value = item.strip()
+        if not value:
+            continue
+        try:
+            networks.append(ipaddress.ip_network(value, strict=False))
+        except ValueError:
+            _LOGGER.warning("Ignoring invalid trusted proxy CIDR: %s", value)
+    return tuple(networks)
+
+
+def _parse_ip_address(value: str):
+    try:
+        return ipaddress.ip_address(str(value or "").strip())
+    except ValueError:
+        return None
+
+
+def _is_trusted_proxy(address, networks) -> bool:
+    return any(address.version == network.version and address in network for network in networks)
 
 
 def reset_rate_limits() -> None:

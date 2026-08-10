@@ -2,9 +2,9 @@ import { useState, useEffect, useCallback } from 'react'
 import { api, type GenerationModel } from '../services/api'
 import { ImagePreview } from '../components/ImageUploader/ImageUploader'
 import Lightbox from '../components/Lightbox'
-import { SecureImage, SecureVideo } from '../components/SecureFile'
+import { SecureImage } from '../components/SecureFile'
 
-type GenerationMode = 'txt2img' | 'img2img' | 'txt2vid'
+type GenerationMode = 'txt2img' | 'img2img'
 
 export default function Workspace() {
   const [mode, setMode] = useState<GenerationMode>('txt2img')
@@ -65,7 +65,7 @@ export default function Workspace() {
           negative_prompt: negativePrompt.trim() || undefined,
           params,
         })
-      } else if (mode === 'img2img') {
+      } else {
         if (sourceFiles.length === 0) {
           setError('请上传参考图像')
           setLoading(false)
@@ -94,21 +94,12 @@ export default function Workspace() {
             background: params.background,
           })
         }
-      } else {
-        result = await api.generation.txt2vid({
-          prompt: prompt.trim(),
-          model_name: selectedModel,
-          negative_prompt: negativePrompt.trim() || undefined,
-          params,
-        })
       }
 
       if (result.result_images && result.result_images.length > 0) {
-      setResultUrls(result.result_images)
-    } else if (result.result_image_path) {
-      setResultUrls([result.result_image_path])
-    } else if (result.result_video_path) {
-      setResultUrls([result.result_video_path])
+        setResultUrls(result.result_images)
+      } else if (result.result_image_path) {
+        setResultUrls([result.result_image_path])
       } else if (result.status === 'failed') {
         setError(result.error_message || '生成失败')
       }
@@ -119,10 +110,7 @@ export default function Workspace() {
     }
   }
 
-  const filteredModels = models.filter((m) => {
-    if (mode === 'txt2vid') return m.type === 'video'
-    return m.type === 'image'
-  })
+  const filteredModels = models.filter((m) => m.type === 'image')
 
   const currentModel = models.find(m => m.id === selectedModel)
   const isGemini = currentModel?.api_format === 'gemini'
@@ -133,12 +121,11 @@ export default function Workspace() {
     } else {
       setParams({ size: '1152x2048', n: 1, quality: 'medium', output_format: 'png', output_compression: 85, moderation: 'low', background: 'auto' })
     }
-  }, [selectedModel, mode])
+  }, [selectedModel, mode, isGemini])
 
   const modes: { key: GenerationMode; label: string }[] = [
     { key: 'txt2img', label: '文生图' },
     { key: 'img2img', label: '图生图' },
-    { key: 'txt2vid', label: '文生视频' },
   ]
 
   function handleClearResult() {
@@ -501,10 +488,6 @@ export default function Workspace() {
                   ))}
                 </div>
               </div>
-            </div>
-          ) : mode === 'txt2vid' && resultUrls.length === 1 ? (
-            <div className="w-full h-full flex items-center justify-center">
-              <SecureVideo src={resultUrls[0]} controls className="max-w-full max-h-full rounded-xl" />
             </div>
           ) : (
             <ImagePreview imageUrl={resultUrls[0] || null} onClear={handleClearResult} />

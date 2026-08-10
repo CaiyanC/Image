@@ -2,6 +2,7 @@ import io
 import tempfile
 
 import pytest
+from PIL import Image
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
@@ -98,10 +99,11 @@ def client():
     app.dependency_overrides[get_db] = override_db
     app.dependency_overrides[get_current_user] = allow_user
 
+    test_client = TestClient(app)
     try:
-        with TestClient(app) as test_client:
-            yield test_client
+        yield test_client
     finally:
+        test_client.close()
         if original_upload_dir is None:
             app.dependency_overrides.pop(get_db, None)
         else:
@@ -147,6 +149,8 @@ def test_list_assets_returns_created_record(client: TestClient):
 
 
 def test_upload_asset_accepts_image_and_video(client: TestClient):
+    image_buffer = io.BytesIO()
+    Image.new("RGB", (2, 2), color="blue").save(image_buffer, format="PNG")
     image_response = client.post(
         f"/api/products/{TEST_SKU}/assets/upload",
         data={
@@ -155,7 +159,7 @@ def test_upload_asset_accepts_image_and_video(client: TestClient):
             "sub_category": IMAGE_SUB_CATEGORY,
             "material_type": "whiteBackground",
         },
-        files={"files": ("photo.png", io.BytesIO(b"fake image bytes"), "image/png")},
+        files={"files": ("photo.png", io.BytesIO(image_buffer.getvalue()), "image/png")},
     )
     assert image_response.status_code == 200, image_response.text
     image_payload = image_response.json()
@@ -170,7 +174,7 @@ def test_upload_asset_accepts_image_and_video(client: TestClient):
             "sub_category": VIDEO_SUB_CATEGORY,
             "material_type": "video",
         },
-        files={"files": ("clip.mp4", io.BytesIO(b"fake video bytes"), "video/mp4")},
+        files={"files": ("clip.mp4", io.BytesIO(b"\x00\x00\x00\x18ftypisom" + b"x" * 20), "video/mp4")},
     )
     assert video_response.status_code == 200, video_response.text
     video_payload = video_response.json()

@@ -1,6 +1,10 @@
 # Environment variables (contains secrets, passwords) — NEVER COMMIT
 .env
 backend/.env
+backend/.env.dev
+backend/.env.*.local
+frontend/.env
+frontend/.env.*.local
 
 # SQLite database (contains real API Keys) — NEVER COMMIT
 *.db

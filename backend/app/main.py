@@ -2,6 +2,7 @@ import logging
 import os
 import subprocess
 import sys
+from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from logging.handlers import TimedRotatingFileHandler
 
@@ -39,12 +40,19 @@ def _configure_error_logging() -> None:
 
 _configure_error_logging()
 
-app = FastAPI(title=settings.APP_NAME, version="1.0.0")
+
+@asynccontextmanager
+async def lifespan(_: FastAPI):
+    startup()
+    yield
+
+
+app = FastAPI(title=settings.APP_NAME, version="1.0.0", lifespan=lifespan)
 STARTED_AT = datetime.now(timezone.utc).isoformat()
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=settings.CORS_ORIGINS,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -154,7 +162,6 @@ def seed_default_admin():
         db.close()
 
 
-@app.on_event("startup")
 def startup():
     if not settings.SECRET_KEY:
         raise RuntimeError("SECRET_KEY is not set. Please configure it in backend/.env")
@@ -175,6 +182,27 @@ def startup():
     logging.getLogger("app").info(runtime_message)
     _log_version_check()
     init_db()
+    from .services import dmxapi_service
+    from .services import knowledge_job_service
+    from .services import model_governance_service
+    db = SessionLocal()
+    try:
+        legacy_migration = dmxapi_service.migrate_legacy_model_credentials(db)
+        credential_migration = model_governance_service.migrate_provider_credential_encryption(db)
+        if legacy_migration["failed"] or credential_migration["failed"]:
+            raise RuntimeError("One or more legacy model credentials could not be encrypted")
+        migrated_count = legacy_migration["migrated"] + credential_migration["migrated"]
+        if migrated_count:
+            logging.getLogger("app").info(
+                "Encrypted or rewrapped %s model credential(s)", migrated_count
+            )
+        recovered_jobs = knowledge_job_service.recover_stale_jobs(db)
+        if recovered_jobs:
+            logging.getLogger("app").warning(
+                "Marked %s stale knowledge job(s) as interrupted", recovered_jobs
+            )
+    finally:
+        db.close()
     seed_default_categories()
     seed_default_admin()
 

@@ -1,7 +1,6 @@
 import { useState, useEffect } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import { api, type CategoryItem } from '../services/api'
-import type { ProductDraft } from '../types'
 import { SecureImage } from '../components/SecureFile'
 
 interface DimensionLine {
@@ -461,30 +460,6 @@ export default function ProductCreate() {
     setBusiness({ ...business, usage_scenarios: current.filter((_, i) => i !== index) })
   }
 
-  function addUseScenario() {
-    const scenarios = business.usage_scenarios || []
-    setBusiness({
-      ...business,
-      usage_scenarios: [...scenarios, '']
-    })
-  }
-
-  function updateUseScenario(index: number, value: string) {
-    const scenarios = business.usage_scenarios || []
-    setBusiness({
-      ...business,
-      usage_scenarios: scenarios.map((s, i) => i === index ? value : s)
-    })
-  }
-
-  function removeUseScenario(index: number) {
-    const scenarios = business.usage_scenarios || []
-    setBusiness({
-      ...business,
-      usage_scenarios: scenarios.filter((_, i) => i !== index)
-    })
-  }
-
   function addCompetitor() {
     const competitors = business.competitor_benchmark || []
     setBusiness({
@@ -517,38 +492,6 @@ export default function ProductCreate() {
     })
   }
 
-  function addBullet() {
-    const bullets = content.bullet_points || []
-    setContent({
-      ...content,
-      bullet_points: [...bullets, '']
-    })
-  }
-
-  function updateBullet(index: number, value: string) {
-    const bullets = content.bullet_points || []
-    setContent({
-      ...content,
-      bullet_points: bullets.map((b, i) => i === index ? value : b)
-    })
-  }
-
-  function removeBullet(index: number) {
-    const bullets = content.bullet_points || []
-    setContent({
-      ...content,
-      bullet_points: bullets.filter((_, i) => i !== index)
-    })
-  }
-
-  function addSearchKeyword() {
-    const keywords = content.search_keywords || []
-    setContent({
-      ...content,
-      search_keywords: [...keywords, { keyword: '', priority: 'A' }]
-    })
-  }
-
   function addKeywordTag(priority: string) {
     const inputMap: Record<string, string> = { A: tagKeywordAInput, B: tagKeywordBInput, C: tagKeywordCInput }
     const setterMap: Record<string, (v: string) => void> = { A: setTagKeywordAInput, B: setTagKeywordBInput, C: setTagKeywordCInput }
@@ -567,11 +510,6 @@ export default function ProductCreate() {
 
   function getKeywordsByPriority(priority: string) {
     return (content.search_keywords || []).filter(k => k.priority === priority)
-  }
-
-  function parseMultiSelect(value: string | undefined, _default: string): string[] {
-    if (!value || !value.trim()) return []
-    return value.split(',').map(s => s.trim()).filter(Boolean)
   }
 
   function toggleArrayItem(arr: string[], setter: (v: string[]) => void, item: string) {
@@ -737,25 +675,8 @@ export default function ProductCreate() {
   }
 
   function getProductData() {
-    const dimLines = specs.size_info || []
-    const capLines = specs.capacity || []
-    const sellingPoints = (business.top_selling_points || []).filter(Boolean)
-    const scenarios = business.usage_scenarios || []
-    const competitors = business.competitor_benchmark || []
     const bullets = content.bullet_points || []
     const keywords = content.search_keywords || []
-    const specAdvs = specs.technical_advantages || []
-
-    const hasSpecs = (dimLines.length > 0 && dimLines.some((d: any) => d.label || d.value)) ||
-                     (capLines.length > 0 && capLines.some((c: any) => c.label || c.value)) ||
-                     specs.gross_weight_g || specs.body_material || specs.color ||
-                     specs.surface_finish || specs.heat_source || specs.power ||
-                     specAdvs.some((a: string) => a.trim()) || specs.usage_instruction ||
-                     certifications.length > 0
-    const hasBusiness = sellingPoints.length > 0 ||
-                        business.target_audience || business.positioning ||
-                        business.price_positioning || business.emotional_value ||
-                        scenarios.length > 0 || competitors.length > 0
     const hasContent = content.title_en || content.title_cn || bullets.length > 0 ||
                        content.listing_cn || content.listing_en || content.listing_ja ||
                        content.long_description_en || content.long_description_cn || content.long_description_ja ||

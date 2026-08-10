@@ -1,7 +1,10 @@
 import httpx
 import asyncio
+import base64
+import binascii
 from io import BytesIO
 from datetime import datetime, date
+from urllib.parse import urljoin
 from sqlalchemy import func, Date
 from sqlalchemy.orm import Session
 from fastapi import HTTPException, status
@@ -11,12 +14,16 @@ from ..schemas.generation import Txt2ImgRequest, Img2ImgRequest, Txt2VidRequest,
 from ..utils.file_storage import save_generated_image
 from .dmxapi_service import txt2img, img2img, txt2img_gemini, img2img_gemini
 from .model_governance_service import ResolvedModel
+from .model_governance_service import validate_provider_url
+from .upload_validation_service import normalize_generated_image
 
 
 MAX_IMAGE_DIMENSION = 768
 JPEG_QUALITY = 60
 IMG2IMG_MAX_RETRIES = 2
 TXT2IMG_MAX_RETRIES = 2
+MAX_GENERATED_IMAGE_BYTES = 50 * 1024 * 1024
+MAX_GENERATED_IMAGE_REDIRECTS = 3
 
 
 def _compress_image(img_bytes: bytes, filename: str) -> tuple[bytes, str, str]:
@@ -44,17 +51,50 @@ async def _extract_and_save_b64(data: dict) -> list[str]:
     if data.get("data"):
         for item in data["data"]:
             if item.get("b64_json"):
-                import base64
-                image_data = base64.b64decode(item["b64_json"])
-                path = await save_generated_image(image_data)
+                try:
+                    image_data = base64.b64decode(item["b64_json"], validate=True)
+                except (binascii.Error, ValueError) as exc:
+                    raise ValueError("Provider returned invalid base64 image data") from exc
+                if len(image_data) > MAX_GENERATED_IMAGE_BYTES:
+                    raise ValueError("Provider image exceeds the allowed size")
+                path = await save_generated_image(normalize_generated_image(image_data))
                 paths.append(path)
             elif item.get("url"):
-                async with httpx.AsyncClient() as client:
-                    img_response = await client.get(item["url"])
-                    img_response.raise_for_status()
-                    path = await save_generated_image(img_response.content)
-                    paths.append(path)
+                image_data = await _download_generated_image(str(item["url"]))
+                path = await save_generated_image(normalize_generated_image(image_data))
+                paths.append(path)
     return paths
+
+
+async def _download_generated_image(url: str) -> bytes:
+    current_url = url
+    timeout = httpx.Timeout(60.0, connect=15.0)
+    async with httpx.AsyncClient(timeout=timeout, trust_env=False, follow_redirects=False) as client:
+        for redirect_count in range(MAX_GENERATED_IMAGE_REDIRECTS + 1):
+            current_url = validate_provider_url(current_url, resolve_dns=True)
+            async with client.stream("GET", current_url) as response:
+                if response.is_redirect:
+                    location = response.headers.get("location")
+                    if not location or redirect_count >= MAX_GENERATED_IMAGE_REDIRECTS:
+                        raise ValueError("Provider image redirect chain is invalid")
+                    current_url = urljoin(current_url, location)
+                    continue
+                response.raise_for_status()
+                declared_size = response.headers.get("content-length")
+                if declared_size:
+                    try:
+                        declared_bytes = int(declared_size)
+                    except (TypeError, ValueError):
+                        declared_bytes = None
+                    if declared_bytes is not None and declared_bytes > MAX_GENERATED_IMAGE_BYTES:
+                        raise ValueError("Provider image exceeds the allowed size")
+                payload = bytearray()
+                async for chunk in response.aiter_bytes():
+                    payload.extend(chunk)
+                    if len(payload) > MAX_GENERATED_IMAGE_BYTES:
+                        raise ValueError("Provider image exceeds the allowed size")
+                return bytes(payload)
+    raise ValueError("Provider image could not be downloaded")
 
 
 async def create_txt2img(db: Session, user: User, req: Txt2ImgRequest, *, resolved_model: ResolvedModel | None):
@@ -254,20 +294,11 @@ async def create_img2img(db: Session, user: User, req: Img2ImgRequest, image_dat
 
 
 async def create_txt2vid(db: Session, user: User, req: Txt2VidRequest, *, resolved_model: ResolvedModel | None):
-    generation = Generation(
-        user_id=user.id,
-        type="txt2vid",
-        prompt=req.prompt,
-        negative_prompt=req.negative_prompt,
-        model_name=req.model_name,
-        parameters=req.params.model_dump() if req.params else None,
-        status="failed",
-        error_message="Video generation not yet implemented via dmxapi.cn",
+    del db, user, req, resolved_model
+    raise HTTPException(
+        status_code=status.HTTP_501_NOT_IMPLEMENTED,
+        detail="Video generation is not available in this deployment",
     )
-    db.add(generation)
-    db.commit()
-    db.refresh(generation)
-    return generation
 
 
 def get_user_generations(db: Session, user_id: str, skip: int = 0, limit: int = 20, search_query: str = None, date_from: date = None, date_to: date = None):

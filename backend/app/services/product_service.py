@@ -48,19 +48,9 @@ def _invalidate_product_detail_cache_by_id(db: Session, product_id: str | None) 
 def sync_product_to_vector_db(db: Session, sku: str) -> dict:
     """Sync a single product to the vector knowledge base."""
     try:
-        # Clear old chunks for this product
-        from ..models.knowledge_base import KnowledgeChunk, KnowledgeDocument
-        old_chunks = db.query(KnowledgeChunk).filter(KnowledgeChunk.sku == sku).all()
-        old_doc_ids = {c.document_id for c in old_chunks}
-        for chunk in old_chunks:
-            db.delete(chunk)
-        for doc_id in old_doc_ids:
-            doc = db.query(KnowledgeDocument).filter(KnowledgeDocument.id == doc_id).first()
-            if doc:
-                db.delete(doc)
-        db.flush()
-
-        # Rebuild chunks from current product data
+        # index_product owns the scoped replacement of source_type="product"
+        # documents.  Do not pre-delete by SKU: manually uploaded knowledge can
+        # legitimately use the same SKU and must survive a product re-index.
         result = product_vector_index_service.index_product(db, sku)
         product = get_product_by_sku(db, sku)
         if product:
@@ -71,19 +61,21 @@ def sync_product_to_vector_db(db: Session, sku: str) -> dict:
         # Try embedding (non-blocking; fails gracefully if API key expired)
         import asyncio
         try:
-            loop = asyncio.get_event_loop()
-            if loop.is_running():
+            try:
+                asyncio.get_running_loop()
+            except RuntimeError:
+                asyncio.run(product_vector_index_service.embed_pending_chunks(db))
+            else:
                 import concurrent.futures
                 with concurrent.futures.ThreadPoolExecutor() as executor:
                     future = executor.submit(asyncio.run, product_vector_index_service.embed_pending_chunks(db))
                     future.result(timeout=30)
-            else:
-                asyncio.run(product_vector_index_service.embed_pending_chunks(db))
         except Exception:
             pass  # Embedding failure is OK, keyword search still works
 
         return {"sku": sku, "documents": result["documents"], "chunks": result["chunks"]}
     except Exception as e:
+        db.rollback()
         return {"sku": sku, "error": str(e)}
 
 
@@ -113,18 +105,29 @@ def sync_pending_products_to_vector_db(db: Session, limit: int = 50) -> dict:
     return {"total": len(products), "synced": synced, "failed": failed, "results": results}
 
 
-def delete_product_from_vector_db(db: Session, sku: str) -> dict:
+def delete_product_from_vector_db(db: Session, sku: str, *, commit: bool = True) -> dict:
     """Remove a product from the vector knowledge base."""
     from ..models.knowledge_base import KnowledgeChunk, KnowledgeDocument
-    chunks = db.query(KnowledgeChunk).filter(KnowledgeChunk.sku == sku).all()
-    doc_ids = {c.document_id for c in chunks}
+    chunks = db.query(KnowledgeChunk).filter(
+        KnowledgeChunk.sku == sku,
+        KnowledgeChunk.source_type == "product",
+    ).all()
     for chunk in chunks:
         db.delete(chunk)
-    for doc_id in doc_ids:
-        doc = db.query(KnowledgeDocument).filter(KnowledgeDocument.id == doc_id).first()
-        if doc:
-            db.delete(doc)
-    db.commit()
+    documents = db.query(KnowledgeDocument).filter(
+        KnowledgeDocument.sku == sku,
+        KnowledgeDocument.source_type == "product",
+    ).all()
+    for document in documents:
+        db.delete(document)
+    if commit:
+        try:
+            db.commit()
+        except Exception:
+            db.rollback()
+            raise
+    else:
+        db.flush()
     return {"sku": sku, "deleted_chunks": len(chunks)}
 
 
@@ -760,7 +763,14 @@ def validate_product_payload(data: dict) -> None:
     _validate_product_data(data)
 
 
-def create_product(db: Session, data: dict, creator_id: str = None) -> Product:
+def create_product(
+    db: Session,
+    data: dict,
+    creator_id: str = None,
+    *,
+    commit: bool = True,
+    asset_table_available: bool | None = None,
+) -> Product:
     sku = data.get("sku", "").strip()
     if not sku:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="SKU is required")
@@ -768,6 +778,16 @@ def create_product(db: Session, data: dict, creator_id: str = None) -> Product:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="SKU already exists")
 
     _validate_product_data(data)
+
+    asset_snapshot_data = data.get("assets")
+    media_asset_data = data.get("media_data") or data.get("media")
+    needs_asset_table = isinstance(asset_snapshot_data, list) or isinstance(media_asset_data, dict)
+    if asset_table_available is None:
+        asset_table_available = (
+            inspect(db.get_bind()).has_table(ProductAsset.__tablename__)
+            if needs_asset_table
+            else False
+        )
 
     product_id = str(uuid.uuid4())
 
@@ -879,17 +899,31 @@ def create_product(db: Session, data: dict, creator_id: str = None) -> Product:
                 version=p.get("version"),
             ))
 
-    product_asset_sync_service.sync_product_assets_from_media_data(
-        db,
-        product,
-        data.get("media_data") or data.get("media"),
-    )
+    if asset_table_available and isinstance(asset_snapshot_data, list):
+        product_asset_sync_service.sync_product_assets_from_snapshot_data(
+            db,
+            product,
+            asset_snapshot_data,
+        )
+    elif asset_table_available:
+        product_asset_sync_service.sync_product_assets_from_media_data(
+            db,
+            product,
+            media_asset_data,
+        )
 
     # Sync M2M associations (channels, regions, certifications, keywords)
     sync_product_m2m(db, product_id, data)
 
-    db.commit()
-    db.refresh(product)
+    if commit:
+        try:
+            db.commit()
+        except Exception:
+            db.rollback()
+            raise
+        db.refresh(product)
+    else:
+        db.flush()
     invalidate_product_detail_cache(db, product.sku)
     return product
 
@@ -924,16 +958,16 @@ def update_product(db: Session, sku: str, update_data: dict) -> Product:
     return product
 
 
-def delete_product(db: Session, sku: str):
+def delete_product(db: Session, sku: str, *, commit: bool = True) -> list[str]:
     product = get_product_by_sku(db, sku)
     if not product:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Product not found")
 
-    delete_product_from_vector_db(db, sku)
+    has_asset_table = inspect(db.get_bind()).has_table(ProductAsset.__tablename__)
+    delete_product_from_vector_db(db, sku, commit=False)
     invalidate_product_detail_cache(db, sku)
 
     pid = product.id
-    has_asset_table = inspect(db.get_bind()).has_table(ProductAsset.__tablename__)
     asset_files = (
         [
             path
@@ -955,9 +989,92 @@ def delete_product(db: Session, sku: str):
         db.query(model).filter(model.product_id == pid).delete()
 
     db.delete(product)
-    db.commit()
-    for path in asset_files:
-        asset_service._delete_local_asset_file(path)
+    if commit:
+        try:
+            db.commit()
+        except Exception:
+            db.rollback()
+            raise
+        _delete_unreferenced_asset_files(asset_files, set())
+    else:
+        db.flush()
+    return asset_files
+
+
+def replace_product(
+    db: Session,
+    sku: str,
+    data: dict,
+    creator_id: str = None,
+) -> Product:
+    """Atomically replace a product while keeping reusable asset files intact."""
+    if not get_product_by_sku(db, sku):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Product not found")
+    replacement_sku = str(data.get("sku") or sku).strip()
+    if replacement_sku != sku:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Request SKU must match product SKU")
+
+    payload = {**data, "sku": sku}
+    validate_product_payload(payload)
+    has_asset_table = inspect(db.get_bind()).has_table(ProductAsset.__tablename__)
+    old_asset_records = (
+        [
+            asset_service.model_to_dict(asset)
+            for asset in db.query(ProductAsset).filter(ProductAsset.sku == sku).all()
+        ]
+        if has_asset_table
+        else []
+    )
+    preserve_manual_assets = not isinstance(payload.get("assets"), list)
+    manual_asset_records = [item for item in old_asset_records if not item.get("source_key")]
+
+    try:
+        old_asset_files = delete_product(db, sku, commit=False)
+        product = create_product(
+            db,
+            payload,
+            creator_id=creator_id,
+            commit=False,
+            asset_table_available=has_asset_table,
+        )
+        if preserve_manual_assets and manual_asset_records:
+            product_asset_sync_service.sync_product_assets_from_snapshot_data(
+                db,
+                product,
+                manual_asset_records,
+                replace=False,
+            )
+        db.commit()
+        db.refresh(product)
+    except Exception:
+        db.rollback()
+        invalidate_product_detail_cache(db, sku)
+        raise
+
+    retained_asset_files = (
+        {
+            path
+            for asset in db.query(ProductAsset).filter(ProductAsset.sku == sku).all()
+            for path in (asset.url, asset.thumbnail_url)
+            if path
+        }
+        if has_asset_table
+        else set()
+    )
+    _delete_unreferenced_asset_files(old_asset_files, retained_asset_files)
+    invalidate_product_detail_cache(db, sku)
+    return product
+
+
+def _delete_unreferenced_asset_files(paths: list[str], retained_paths: set[str]) -> None:
+    retained = {_asset_path_identity(path) for path in retained_paths if path}
+    for path in dict.fromkeys(paths):
+        if _asset_path_identity(path) not in retained:
+            asset_service._delete_local_asset_file(path)
+
+
+def _asset_path_identity(path: str) -> str:
+    return str(path or "").split("?", 1)[0].replace("\\", "/")
 
 
 # ── Sub-table updaters ──

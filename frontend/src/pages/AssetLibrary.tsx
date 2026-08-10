@@ -234,7 +234,9 @@ export default function AssetLibrary() {
   }
 
   const lightboxListRef = useRef(categoryAssets)
-  lightboxListRef.current = categoryAssets
+  useEffect(() => {
+    lightboxListRef.current = categoryAssets
+  }, [categoryAssets])
   useEffect(() => {
     if (!lightboxAsset) return
     const handleKey = (event: KeyboardEvent) => {

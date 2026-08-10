@@ -298,7 +298,9 @@ def _seed_default_groups(db, *, migrate_legacy: bool = True):
                     group.description = desc
                     changed = True
             else:
-                db.add(Group(group_name=name, description=desc))
+                group = Group(group_name=name, description=desc)
+                setattr(group, "_seed_permissions_pending", True)
+                db.add(group)
                 changed = True
         if changed:
             db.commit()
@@ -358,7 +360,9 @@ def _seed_default_groups(db, *, migrate_legacy: bool = True):
                 group.description = desc
                 changed = True
         else:
-            db.add(Group(group_name=name, description=desc))
+            group = Group(group_name=name, description=desc)
+            setattr(group, "_seed_permissions_pending", True)
+            db.add(group)
             changed = True
     if changed:
         db.commit()
@@ -432,22 +436,22 @@ def _seed_default_permissions(db):
             permission_keys.append("category.read")
     groups = {g.group_name: g for g in db.query(Group).all()}
     permissions = {p.permission_key: p for p in db.query(Permission).all()}
-    permission_keys_by_id = {str(p.id): p.permission_key for p in permissions.values()}
     existing_pairs = {
         (str(gp.group_id), str(gp.permission_id))
         for gp in db.query(GroupPermission).all()
     }
+    has_any_group_permissions = bool(existing_pairs)
     changed = False
     for group_name, permission_keys in group_permission_map.items():
         group = groups.get(group_name)
         if not group:
             continue
-        desired_keys = set(permission_keys)
-        for group_permission in db.query(GroupPermission).filter(GroupPermission.group_id == group.id).all():
-            if permission_keys_by_id.get(str(group_permission.permission_id)) not in desired_keys:
-                db.delete(group_permission)
-                existing_pairs.discard((str(group.id), str(group_permission.permission_id)))
-                changed = True
+        should_initialize = (
+            not has_any_group_permissions
+            or bool(getattr(group, "_seed_permissions_pending", False))
+        )
+        if not should_initialize:
+            continue
         for permission_key in permission_keys:
             permission = permissions.get(permission_key)
             if not permission:

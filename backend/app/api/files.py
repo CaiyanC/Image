@@ -3,7 +3,8 @@ from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.responses import FileResponse
-from jose import JWTError, jwt
+import jwt
+from jwt import InvalidTokenError
 from pydantic import BaseModel, Field
 from sqlalchemy import String, cast
 from sqlalchemy.orm import Session
@@ -121,7 +122,7 @@ def _decode_file_token(token: str) -> str:
             algorithms=[_SIGNED_FILE_ALGORITHM],
             audience=_SIGNED_FILE_AUDIENCE,
         )
-    except JWTError:
+    except InvalidTokenError:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Invalid or expired file token")
     return _normalize_upload_url(str(payload.get("sub") or ""))
 

@@ -32,7 +32,7 @@ class FileAccessTest(unittest.TestCase):
         self.image_dir = self.upload_dir / "images"
         self.generated_dir = self.upload_dir / "generated"
         self.asset_dir = self.upload_dir / "assets" / "ASSET-1"
-        self.knowledge_dir = self.upload_dir / "knowledge-files"
+        self.knowledge_dir = self.temp_path / "knowledge-files"
         for path in (self.image_dir, self.generated_dir, self.asset_dir, self.knowledge_dir):
             path.mkdir(parents=True, exist_ok=True)
         (self.image_dir / "sample.png").write_bytes(b"image")
@@ -42,7 +42,9 @@ class FileAccessTest(unittest.TestCase):
         self.knowledge_file.write_text("knowledge", encoding="utf-8")
 
         self.original_upload_dir = settings.UPLOAD_DIR
+        self.original_knowledge_dir = kb_api.KNOWLEDGE_FILE_DIR
         settings.UPLOAD_DIR = str(self.upload_dir)
+        kb_api.KNOWLEDGE_FILE_DIR = str(self.knowledge_dir)
 
         self.engine = create_engine("sqlite:///:memory:")
         Base.metadata.create_all(
@@ -94,6 +96,7 @@ class FileAccessTest(unittest.TestCase):
         reset_rate_limits()
         set_rate_limit_redis_client(None)
         settings.UPLOAD_DIR = self.original_upload_dir
+        kb_api.KNOWLEDGE_FILE_DIR = self.original_knowledge_dir
         self.db.close()
         self.engine.dispose()
         self.temp_dir.cleanup()
@@ -200,6 +203,11 @@ class FileAccessTest(unittest.TestCase):
         with self.assertRaises(HTTPException) as ctx:
             kb_api.download_knowledge_file("doc-bad", current_user=self.manager, db=self.db)
         self.assertEqual(ctx.exception.status_code, 400)
+
+        with self.assertRaises(HTTPException) as ctx:
+            kb_api.delete_knowledge_file("doc-bad", current_user=self.manager, db=self.db)
+        self.assertEqual(ctx.exception.status_code, 400)
+        self.assertIsNotNone(self.db.get(KnowledgeDocument, "doc-bad"))
 
     def test_file_sign_rate_limit_returns_429(self):
         for _ in range(files_api.FILE_SIGN_LIMIT_PER_MINUTE):

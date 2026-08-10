@@ -30,16 +30,28 @@ from app.services.model_governance_service import (
     list_selectable_models,
     resolve_authorized_model,
 )
-from app.services import customer_llm_service
+from app.services import customer_llm_service, model_governance_service
 from app.api import generation as generation_api
 
 
 def _override_route_user(app, path, user):
     """Bypass only the permission dependency; route behavior remains real."""
-    for route in app.routes:
+    def iter_routes(router):
+        for route in router.routes:
+            yield route
+            original_router = getattr(route, "original_router", None)
+            if original_router is not None:
+                yield from iter_routes(original_router)
+
+    def iter_dependencies(dependant):
+        for dependency in dependant.dependencies:
+            yield dependency
+            yield from iter_dependencies(dependency)
+
+    for route in iter_routes(app):
         if getattr(route, "path", None) != path:
             continue
-        for dependency in route.dependant.dependencies:
+        for dependency in iter_dependencies(route.dependant):
             if dependency.call and getattr(dependency.call, "__name__", "") == "checker":
                 app.dependency_overrides[dependency.call] = lambda: user
                 return
@@ -315,14 +327,39 @@ def test_resolve_rejects_missing_credential_and_capability_mismatch(db, encrypti
     assert mismatch.value.detail == "Model is unavailable for this feature or capability"
 
 
-def test_create_credential_rejects_missing_or_invalid_fernet_key(db, monkeypatch):
+def test_create_credential_derives_fallback_key_but_rejects_invalid_explicit_key(db, monkeypatch):
     monkeypatch.setattr("app.services.model_governance_service.settings.MODEL_CREDENTIAL_ENCRYPTION_KEY", "")
-    with pytest.raises(ValueError, match="required"):
-        create_credential(db, "provider-a", "https://example.test", "secret", "company")
+    monkeypatch.setattr("app.services.model_governance_service.settings.SECRET_KEY", "fallback-secret-key")
+    credential = create_credential(db, "provider-a", "https://example.test", "secret", "company")
+    assert credential.api_key_ciphertext != "secret"
 
+    db.rollback()
     monkeypatch.setattr("app.services.model_governance_service.settings.MODEL_CREDENTIAL_ENCRYPTION_KEY", "invalid")
     with pytest.raises(ValueError, match="invalid"):
-        create_credential(db, "provider-a", "https://example.test", "secret", "company")
+        create_credential(db, "provider-b", "https://example.test", "secret", "company")
+
+
+def test_dedicated_key_rewraps_credentials_before_secret_key_rotation(db, monkeypatch):
+    monkeypatch.setattr(model_governance_service.settings, "MODEL_CREDENTIAL_ENCRYPTION_KEY", "")
+    monkeypatch.setattr(model_governance_service.settings, "SECRET_KEY", "old-signing-secret")
+    credential = create_credential(
+        db, "provider-a", "https://example.test", "provider-secret", "company"
+    )
+    derived_ciphertext = credential.api_key_ciphertext
+
+    dedicated_key = Fernet.generate_key().decode()
+    monkeypatch.setattr(
+        model_governance_service.settings,
+        "MODEL_CREDENTIAL_ENCRYPTION_KEY",
+        dedicated_key,
+    )
+    migrated = model_governance_service.migrate_provider_credential_encryption(db)
+
+    db.refresh(credential)
+    assert migrated == {"migrated": 1, "failed": 0}
+    assert credential.api_key_ciphertext != derived_ciphertext
+    monkeypatch.setattr(model_governance_service.settings, "SECRET_KEY", "rotated-signing-secret")
+    assert model_governance_service.decrypt_credential(credential) == "provider-secret"
 
 
 def test_group_credential_beats_company_and_falls_back_when_unusable(db, encryption_key):

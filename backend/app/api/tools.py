@@ -136,7 +136,7 @@ def confirm_ecommerce_data_fill_draft(
         target_type="tool_run", target_id=draft.id, target_name="电商数据分析表自动填写",
         request_data={"mode": precheck["mode"], "file_count": len(draft.input_files)}, response_data={"status": draft.status}, request=request,
     )
-    run_ecommerce_data_fill_tool_run.delay(draft.id)
+    _enqueue_tool_run(db, draft)
     return draft
 
 
@@ -188,8 +188,19 @@ def create_ecommerce_data_fill_run(
         response_data={"status": run.status},
         request=request,
     )
-    run_ecommerce_data_fill_tool_run.delay(run.id)
+    _enqueue_tool_run(db, run)
     return run
+
+
+def _enqueue_tool_run(db: Session, run: ToolRun) -> None:
+    try:
+        run_ecommerce_data_fill_tool_run.apply_async(args=[run.id], task_id=run.id)
+    except Exception as exc:
+        db.rollback()
+        persisted = db.get(ToolRun, run.id)
+        if persisted and persisted.status in {"queued", "running"}:
+            tool_run_service.mark_failed(db, persisted, "Task queue unavailable")
+        raise HTTPException(status_code=503, detail="任务队列暂不可用，运行记录已标记失败") from exc
 
 
 @router.get("/ecommerce-data-fill/runs", response_model=list[ToolRunResponse])

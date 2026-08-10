@@ -45,7 +45,10 @@ def _active_management_count(db: Session) -> int:
 
 
 def create_user(db: Session, user_data: UserCreate):
-    if get_user_by_username(db, user_data.username):
+    username = user_data.username.strip()
+    if not username:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Username cannot be empty")
+    if get_user_by_username(db, username):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Username already registered",
@@ -57,11 +60,11 @@ def create_user(db: Session, user_data: UserCreate):
         )
 
     user = User(
-        username=user_data.username,
+        username=username,
         email=user_data.email,
         password_hash=get_password_hash(user_data.password),
         user_type="human",
-        display_name=user_data.display_name or user_data.username,
+        display_name=user_data.display_name or username,
     )
     db.add(user)
     db.commit()
@@ -77,7 +80,10 @@ def create_user_with_group(
 ):
     if group_role not in {"member", "admin"}:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid group role")
-    if get_user_by_username(db, user_data.username):
+    username = user_data.username.strip()
+    if not username:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Username cannot be empty")
+    if get_user_by_username(db, username):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Username already registered",
@@ -95,11 +101,11 @@ def create_user_with_group(
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Group not found")
 
     user = User(
-        username=user_data.username,
+        username=username,
         email=user_data.email,
         password_hash=get_password_hash(user_data.password),
         user_type="human",
-        display_name=user_data.display_name or user_data.username,
+        display_name=user_data.display_name or username,
     )
     db.add(user)
     db.flush()
@@ -126,6 +132,22 @@ def update_user(db: Session, user_id: str, user_data: UserUpdate):
             )
     if "password" in update_dict:
         update_dict["password_hash"] = get_password_hash(update_dict.pop("password"))
+    if "username" in update_dict:
+        username = str(update_dict["username"] or "").strip()
+        if not username:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Username cannot be empty")
+        existing = get_user_by_username(db, username)
+        if existing and str(existing.id) != str(user_id):
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Username already registered")
+        update_dict["username"] = username
+    if "email" in update_dict:
+        email = update_dict["email"]
+        existing = get_user_by_email(db, email) if email else None
+        if existing and str(existing.id) != str(user_id):
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Email already registered")
+    if "display_name" in update_dict:
+        display_name = update_dict["display_name"]
+        update_dict["display_name"] = display_name.strip() if display_name else None
 
     for key, value in update_dict.items():
         setattr(user, key, value)
@@ -173,8 +195,8 @@ def change_own_password(db: Session, user_id: str, current_password: str, new_pa
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
     if not verify_password(current_password, user.password_hash):
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Current password is incorrect")
-    if len(new_password) < 6:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="New password must be at least 6 characters")
+    if not 8 <= len(new_password) <= 128:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="New password must be 8 to 128 characters")
 
     user.password_hash = get_password_hash(new_password)
     db.commit()
@@ -185,8 +207,8 @@ def reset_user_password(db: Session, user_id: str, new_password: str):
     user = get_user_by_id(db, user_id)
     if not user:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
-    if len(new_password) < 6:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="New password must be at least 6 characters")
+    if not 8 <= len(new_password) <= 128:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="New password must be 8 to 128 characters")
 
     user.password_hash = get_password_hash(new_password)
     db.commit()

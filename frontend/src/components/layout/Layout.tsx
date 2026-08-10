@@ -11,7 +11,7 @@ export default function Layout({ children }: LayoutProps) {
 
   useEffect(() => {
     loadFromStorage()
-  }, [])
+  }, [loadFromStorage])
 
   return (
     <div className="min-h-screen bg-gradient-subtle text-apple-text">

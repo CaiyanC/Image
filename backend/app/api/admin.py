@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy.orm import Session
 from pydantic import BaseModel
 from ..core.database import get_db
@@ -46,7 +46,10 @@ def update_models_config(
     current_user: User = Depends(get_current_super_admin),
     db: Session = Depends(get_db),
 ):
-    dmxapi_service.set_model_config(db, [m.model_dump() for m in req.models])
+    try:
+        dmxapi_service.set_model_config(db, [m.model_dump() for m in req.models])
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
     operation_log_service.log_operation(
         db,
         operator_id=current_user.id,

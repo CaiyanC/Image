@@ -9,7 +9,7 @@ export default function History() {
   const [records, setRecords] = useState<GenerationRecord[]>([])
   const [stats, setStats] = useState<GenerationStats | null>(null)
   const [loading, setLoading] = useState(true)
-  const [statsLoading, setStatsLoading] = useState(true)
+  const [, setStatsLoading] = useState(true)
   const [selected, setSelected] = useState<GenerationRecord | null>(null)
   const [searchQuery, setSearchQuery] = useState('')
   const [dateFrom, setDateFrom] = useState('')
@@ -17,7 +17,6 @@ export default function History() {
   const [isAdminView, setIsAdminView] = useState(false)
   const [lightboxImages, setLightboxImages] = useState<string[]>([])
   const [lightboxIndex, setLightboxIndex] = useState(-1)
-  const user = useAuthStore((state) => state.user)
   const isAdmin = useAuthStore((s) => s.isManagement)
 
   const loadHistory = useCallback(async () => {

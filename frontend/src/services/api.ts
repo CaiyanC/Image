@@ -114,6 +114,9 @@ export interface PlatformTool {
   category: string
   icon_key: string
   route_path: string
+  entry_type: 'internal' | 'external'
+  external_url?: string | null
+  open_mode: 'same_tab' | 'new_tab'
   permission_key: string
   is_enabled: boolean
   sort_order: number
@@ -687,6 +690,8 @@ export const api = {
       request<PlatformTool>('/admin/tools', { method: 'POST', body: JSON.stringify(data) }),
     update: (toolKey: string, data: Partial<PlatformTool>) =>
       request<PlatformTool>(`/admin/tools/${encodeURIComponent(toolKey)}`, { method: 'PUT', body: JSON.stringify(data) }),
+    delete: (toolKey: string) =>
+      request<{ detail: string; tool_key: string }>(`/admin/tools/${encodeURIComponent(toolKey)}`, { method: 'DELETE' }),
     ecommerceDataFill: {
       listRuns: () => request<ToolRun[]>('/tools/ecommerce-data-fill/runs'),
       getRun: (runId: string) => request<ToolRun>(`/tools/ecommerce-data-fill/runs/${encodeURIComponent(runId)}`),

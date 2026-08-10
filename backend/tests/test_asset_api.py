@@ -147,7 +147,7 @@ class AssetApiTest(unittest.TestCase):
                 "sub_category": "视频",
                 "material_type": "video",
             },
-            files={"files": ("clip.mp4", io.BytesIO(b"fake video bytes"), "video/mp4")},
+            files={"files": ("clip.mp4", io.BytesIO(b"\x00\x00\x00\x18ftypisom" + b"x" * 20), "video/mp4")},
         )
 
         self.assertEqual(response.status_code, 200)

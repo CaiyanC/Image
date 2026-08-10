@@ -1,3 +1,5 @@
+import base64
+import hashlib
 from dataclasses import dataclass
 from typing import Literal
 
@@ -16,6 +18,7 @@ from ..models.ai_governance import (
 from ..models.user import User
 from ..models.group import Group
 from ..models.user_group import UserGroup
+from .outbound_url_service import validate_outbound_url
 
 
 @dataclass(frozen=True)
@@ -76,10 +79,19 @@ class AuthorizationOverview:
     groups: list[AuthorizationOverviewGroup]
 
 
+def _derived_fernet() -> Fernet:
+    if not settings.SECRET_KEY:
+        raise ValueError("MODEL_CREDENTIAL_ENCRYPTION_KEY or SECRET_KEY is required")
+    digest = hashlib.sha256(
+        f"caiyan:model-credential:v1:{settings.SECRET_KEY}".encode()
+    ).digest()
+    return Fernet(base64.urlsafe_b64encode(digest))
+
+
 def _fernet() -> Fernet:
     key = settings.MODEL_CREDENTIAL_ENCRYPTION_KEY
     if not key:
-        raise ValueError("MODEL_CREDENTIAL_ENCRYPTION_KEY is required")
+        return _derived_fernet()
     try:
         return Fernet(key.encode())
     except (TypeError, ValueError) as exc:
@@ -93,10 +105,66 @@ def encrypt_credential(api_key: str) -> str:
 
 
 def decrypt_credential(credential: AIProviderCredential) -> str:
+    return decrypt_credential_value(credential.api_key_ciphertext)
+
+
+def decrypt_credential_value(ciphertext: str) -> str:
     try:
-        return _fernet().decrypt(credential.api_key_ciphertext.encode()).decode()
+        return _fernet().decrypt(ciphertext.encode()).decode()
     except InvalidToken as exc:
+        # A deployment can introduce a dedicated key after initially using the
+        # SECRET_KEY-derived fallback. Keep those existing rows readable while
+        # all new writes use the dedicated key.
+        if settings.MODEL_CREDENTIAL_ENCRYPTION_KEY and settings.SECRET_KEY:
+            try:
+                return _derived_fernet().decrypt(ciphertext.encode()).decode()
+            except InvalidToken:
+                pass
         raise ValueError("Credential ciphertext cannot be decrypted") from exc
+
+
+def normalize_credential_ciphertext(ciphertext: str) -> tuple[str, bool]:
+    """Rewrap a fallback-encrypted value with the configured dedicated key."""
+    primary = _fernet()
+    try:
+        primary.decrypt(ciphertext.encode())
+        return ciphertext, False
+    except InvalidToken as exc:
+        if not settings.MODEL_CREDENTIAL_ENCRYPTION_KEY or not settings.SECRET_KEY:
+            raise ValueError("Credential ciphertext cannot be decrypted") from exc
+        try:
+            plaintext = _derived_fernet().decrypt(ciphertext.encode()).decode()
+        except InvalidToken as fallback_exc:
+            raise ValueError("Credential ciphertext cannot be decrypted") from fallback_exc
+        return encrypt_credential(plaintext), True
+
+
+def migrate_provider_credential_encryption(db: Session) -> dict[str, int]:
+    migrated = 0
+    failed = 0
+    credentials = db.query(AIProviderCredential).all()
+    for credential in credentials:
+        try:
+            normalized, changed = normalize_credential_ciphertext(credential.api_key_ciphertext)
+            if changed:
+                credential.api_key_ciphertext = normalized
+                migrated += 1
+        except Exception:
+            failed += 1
+    if migrated:
+        db.commit()
+    elif failed:
+        db.rollback()
+    return {"migrated": migrated, "failed": failed}
+
+
+def validate_provider_url(url: str, *, resolve_dns: bool = False) -> str:
+    return validate_outbound_url(
+        url,
+        resolve_dns=resolve_dns,
+        allow_private=settings.ALLOW_PRIVATE_MODEL_ENDPOINTS,
+        allow_insecure_http=settings.ALLOW_INSECURE_MODEL_ENDPOINTS,
+    )
 
 
 def create_credential(
@@ -115,6 +183,7 @@ def create_credential(
         raise ValueError("Company credentials must not have a scope id")
     if scope_type != "company" and not scope_id:
         raise ValueError("User and group credentials require a scope id")
+    api_base_url = validate_provider_url(api_base_url)
 
     credential = AIProviderCredential(
         provider_name=provider_name,

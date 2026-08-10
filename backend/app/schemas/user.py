@@ -5,9 +5,10 @@ from .common import UuidStr
 
 
 def empty_to_none(v: Optional[str]) -> Optional[str]:
-    if v is None or v == "":
+    if v is None:
         return None
-    return v
+    normalized = v.strip()
+    return normalized or None
 
 
 OptionalEmail = Annotated[Optional[str], BeforeValidator(empty_to_none)]
@@ -22,32 +23,32 @@ class UserGroupInfo(BaseModel):
 
 
 class UserBase(BaseModel):
-    username: str
-    email: OptionalEmail = None
+    username: str = Field(..., min_length=1, max_length=100)
+    email: OptionalEmail = Field(default=None, max_length=255)
 
 
 class UserCreate(UserBase):
     password: str = Field(..., min_length=8, max_length=128)
-    display_name: Optional[str] = None
+    display_name: Optional[str] = Field(default=None, max_length=100)
 
 
 class UserUpdate(BaseModel):
-    username: Optional[str] = None
-    email: OptionalEmail = None
-    password: Optional[str] = None
-    display_name: Optional[str] = None
-    user_type: Optional[str] = None
+    username: Optional[str] = Field(default=None, min_length=1, max_length=100)
+    email: OptionalEmail = Field(default=None, max_length=255)
+    password: Optional[str] = Field(default=None, min_length=8, max_length=128)
+    display_name: Optional[str] = Field(default=None, max_length=100)
+    user_type: Optional[str] = Field(default=None, min_length=1, max_length=50)
     is_active: Optional[bool] = None
 
 
 class UserProfileUpdate(BaseModel):
-    username: Optional[str] = None
-    email: OptionalEmail = None
-    display_name: Optional[str] = None
+    username: Optional[str] = Field(default=None, min_length=1, max_length=100)
+    email: OptionalEmail = Field(default=None, max_length=255)
+    display_name: Optional[str] = Field(default=None, max_length=100)
 
 
 class PasswordChange(BaseModel):
-    current_password: str
+    current_password: str = Field(..., min_length=1, max_length=128)
     new_password: str = Field(..., min_length=8, max_length=128)
 
 
@@ -68,8 +69,8 @@ class UserResponse(UserBase):
 
 
 class LoginRequest(BaseModel):
-    username: str
-    password: str
+    username: str = Field(..., min_length=1, max_length=100)
+    password: str = Field(..., min_length=1, max_length=128)
 
 
 class Token(BaseModel):

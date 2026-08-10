@@ -1,8 +1,15 @@
 import unittest
+from types import SimpleNamespace
+from unittest.mock import patch
 
 from fastapi import HTTPException
 
-from app.core.rate_limit import enforce_rate_limit, reset_rate_limits, set_rate_limit_redis_client
+from app.core.rate_limit import (
+    enforce_rate_limit,
+    get_request_identifier,
+    reset_rate_limits,
+    set_rate_limit_redis_client,
+)
 from tests.rate_limit_fakes import FailingRedis, FakeRedis
 
 
@@ -83,6 +90,36 @@ class RateLimitTest(unittest.TestCase):
         self.assertEqual(self.redis.values[key], 9)
         self.assertEqual(self.redis.ttl(key), 60)
         self.assertEqual(self.redis.expire_calls, [(key, 60)])
+
+    def test_untrusted_peer_cannot_override_identifier_with_forwarded_header(self):
+        request = SimpleNamespace(
+            headers={"x-forwarded-for": "198.51.100.77"},
+            client=SimpleNamespace(host="203.0.113.10"),
+        )
+
+        with patch.dict("os.environ", {"TRUSTED_PROXY_CIDRS": "127.0.0.1/32"}):
+            self.assertEqual(get_request_identifier(request), "203.0.113.10")
+
+    def test_trusted_proxy_uses_rightmost_untrusted_forwarded_address(self):
+        request = SimpleNamespace(
+            headers={"x-forwarded-for": "198.51.100.77, 203.0.113.10"},
+            client=SimpleNamespace(host="127.0.0.1"),
+        )
+
+        with patch.dict("os.environ", {"TRUSTED_PROXY_CIDRS": "127.0.0.1/32"}):
+            self.assertEqual(get_request_identifier(request), "203.0.113.10")
+
+    def test_trusted_multi_proxy_chain_skips_every_trusted_hop(self):
+        request = SimpleNamespace(
+            headers={"x-forwarded-for": "198.51.100.77, 10.0.0.8"},
+            client=SimpleNamespace(host="127.0.0.1"),
+        )
+
+        with patch.dict(
+            "os.environ",
+            {"TRUSTED_PROXY_CIDRS": "127.0.0.1/32,10.0.0.0/24"},
+        ):
+            self.assertEqual(get_request_identifier(request), "198.51.100.77")
 
 
 if __name__ == "__main__":

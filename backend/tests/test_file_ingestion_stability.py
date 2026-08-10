@@ -50,10 +50,11 @@ class FileIngestionStabilityTest(unittest.TestCase):
         self.dispatched_parse_tasks = []
         self.parse_delay_patcher = patch.object(
             kb_api.parse_document,
-            "delay",
-            side_effect=lambda document_id, task_id: self.dispatched_parse_tasks.append((document_id, task_id)),
+            "apply_async",
+            side_effect=lambda *, args, task_id: self.dispatched_parse_tasks.append(tuple(args)),
         )
         self.parse_delay_patcher.start()
+        self.client = TestClient(app)
         app.router.on_startup.clear()
         app.router.on_shutdown.clear()
 
@@ -66,6 +67,7 @@ class FileIngestionStabilityTest(unittest.TestCase):
         kb_api.SessionLocal = self.original_session_local
         parse_tasks.SessionLocal = self.original_task_session_local
         self.parse_delay_patcher.stop()
+        self.client.close()
         self.db.close()
         self.engine.dispose()
         self.temp_dir.cleanup()
@@ -201,6 +203,25 @@ class FileIngestionStabilityTest(unittest.TestCase):
         self.assertEqual(task_payload["status"], "error")
         self.assertTrue(task_payload["error_message"])
 
+    def test_parse_enqueue_failure_marks_database_records_failed(self):
+        file_path = self._write_txt("queue-down.txt", "queue failure content\n" * 20)
+        with patch.object(
+            kb_api.parse_document,
+            "apply_async",
+            side_effect=ConnectionError("redis down"),
+        ):
+            response = self._upload_via_api(
+                file_path, "queue-down.txt", "text/plain", ["SKU-QUEUE"]
+            )
+
+        self.assertEqual(response.status_code, 503, response.text)
+        document = self.db.query(KnowledgeDocument).filter_by(file_name="queue-down.txt").one()
+        task = self.db.query(KnowledgeParseTask).filter_by(document_id=document.id).one()
+        self.assertEqual(document.parse_status, "error")
+        self.assertEqual(task.status, "error")
+        self.assertIn("queue", (task.error_message or "").lower())
+        self.assertTrue(Path(document.file_path).is_file())
+
     def test_duplicate_processing_upload_returns_existing_task_id(self):
         file_path = self._write_txt("processing-duplicate.txt", "processing duplicate content\n" * 20)
         file_hash = hashlib.sha256(file_path.read_bytes()).hexdigest()
@@ -327,28 +348,27 @@ class FileIngestionStabilityTest(unittest.TestCase):
 
         app.dependency_overrides[get_db] = override_get_db
         try:
-            with TestClient(app) as client:
-                dry_run = client.post(
-                    "/api/knowledge-base/files/recover-stuck",
-                    json={"timeout_minutes": 30, "dry_run": True},
-                )
-                self.assertEqual(dry_run.status_code, 200, dry_run.text)
-                dry_run_payload = dry_run.json()
-                self.assertEqual(dry_run_payload["recovered_count"], 0)
-                self.assertEqual(dry_run_payload["candidates_count"], 1)
-                self.assertEqual(dry_run_payload["documents"][0]["id"], doc.id)
-                self.db.expire_all()
-                self.assertEqual(self._get_document(doc.id).parse_status, "processing")
+            dry_run = self.client.post(
+                "/api/knowledge-base/files/recover-stuck",
+                json={"timeout_minutes": 30, "dry_run": True},
+            )
+            self.assertEqual(dry_run.status_code, 200, dry_run.text)
+            dry_run_payload = dry_run.json()
+            self.assertEqual(dry_run_payload["recovered_count"], 0)
+            self.assertEqual(dry_run_payload["candidates_count"], 1)
+            self.assertEqual(dry_run_payload["documents"][0]["id"], doc.id)
+            self.db.expire_all()
+            self.assertEqual(self._get_document(doc.id).parse_status, "processing")
 
-                applied = client.post(
-                    "/api/knowledge-base/files/recover-stuck",
-                    json={"timeout_minutes": 30, "dry_run": False},
-                )
-                self.assertEqual(applied.status_code, 200, applied.text)
-                applied_payload = applied.json()
-                self.assertEqual(applied_payload["recovered_count"], 1)
-                self.assertEqual(applied_payload["candidates_count"], 1)
-                self.assertEqual(applied_payload["documents"][0]["parse_status"], "error")
+            applied = self.client.post(
+                "/api/knowledge-base/files/recover-stuck",
+                json={"timeout_minutes": 30, "dry_run": False},
+            )
+            self.assertEqual(applied.status_code, 200, applied.text)
+            applied_payload = applied.json()
+            self.assertEqual(applied_payload["recovered_count"], 1)
+            self.assertEqual(applied_payload["candidates_count"], 1)
+            self.assertEqual(applied_payload["documents"][0]["parse_status"], "error")
         finally:
             app.dependency_overrides.pop(get_db, None)
             app.dependency_overrides.pop(get_current_super_admin, None)
@@ -451,8 +471,7 @@ class FileIngestionStabilityTest(unittest.TestCase):
 
         app.dependency_overrides[get_db] = override_get_db
         try:
-            with TestClient(app) as client:
-                response = client.get("/api/knowledge-base/files")
+            response = self.client.get("/api/knowledge-base/files")
         finally:
             app.dependency_overrides.pop(get_db, None)
             app.dependency_overrides.pop(get_current_super_admin, None)
@@ -479,21 +498,20 @@ class FileIngestionStabilityTest(unittest.TestCase):
 
         app.dependency_overrides[get_db] = override_get_db
         try:
-            with TestClient(app) as client:
-                return client.post(
-                    "/api/knowledge-base/files/upload",
-                    data={"related_skus": json.dumps(related_skus)},
-                    files=[
+            return self.client.post(
+                "/api/knowledge-base/files/upload",
+                data={"related_skus": json.dumps(related_skus)},
+                files=[
+                    (
+                        "files",
                         (
-                            "files",
-                            (
-                                filename,
-                                file_path.read_bytes(),
-                                content_type,
-                            ),
-                        )
-                    ],
-                )
+                            filename,
+                            file_path.read_bytes(),
+                            content_type,
+                        ),
+                    )
+                ],
+            )
         finally:
             app.dependency_overrides.pop(get_db, None)
             app.dependency_overrides.pop(get_current_super_admin, None)
@@ -509,8 +527,7 @@ class FileIngestionStabilityTest(unittest.TestCase):
 
         app.dependency_overrides[get_db] = override_get_db
         try:
-            with TestClient(app) as client:
-                return client.get(f"/api/knowledge-base/tasks/{task_id}")
+            return self.client.get(f"/api/knowledge-base/tasks/{task_id}")
         finally:
             app.dependency_overrides.pop(get_db, None)
             app.dependency_overrides.pop(get_current_super_admin, None)

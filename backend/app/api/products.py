@@ -18,10 +18,13 @@ from ..schemas.product import (
     ProductPromptsCreate,
 )
 from ..services import operation_log_service, product_recovery_service, product_service, product_vector_index_service
+from ..services.upload_validation_service import validate_image_content, validate_video_content
 
 router = APIRouter(prefix="/api/products", tags=["products"])
 MAX_PRODUCT_IMAGE_BYTES = 10 * 1024 * 1024
 MAX_PRODUCT_VIDEO_BYTES = 100 * 1024 * 1024
+MAX_PRODUCT_IMAGES_PER_REQUEST = 20
+MAX_PRODUCT_VIDEOS_PER_REQUEST = 5
 ALLOWED_PRODUCT_IMAGE_SUFFIXES = {".jpg", ".jpeg", ".png", ".webp", ".gif"}
 ALLOWED_PRODUCT_IMAGE_MIME_TYPES = {"image/jpeg", "image/png", "image/webp", "image/gif"}
 ALLOWED_PRODUCT_VIDEO_SUFFIXES = {".mp4", ".mov", ".webm"}
@@ -219,9 +222,11 @@ def update_product_full(
         raise HTTPException(status_code=400, detail="Request SKU must match product SKU")
     body = {**body, "sku": sku}
     product_service.validate_product_payload(body)
-    product_service.delete_product(db, sku)
-    product = product_service.create_product(
-        db, body, creator_id=current_user.id
+    product = product_service.replace_product(
+        db,
+        sku,
+        body,
+        creator_id=current_user.id,
     )
     after_data = product_service.get_product_detail(db, product.sku)
     log = operation_log_service.log_operation(
@@ -736,6 +741,7 @@ def upload_product_images(
     db: Session = Depends(get_db),
 ):
     _enforce_product_upload_limit(current_user, "products.images.upload")
+    _validate_upload_count(files, MAX_PRODUCT_IMAGES_PER_REQUEST, "图片")
     os.makedirs(settings.IMAGE_UPLOAD_DIR, exist_ok=True)
     urls: List[str] = []
     for file in files:
@@ -744,7 +750,17 @@ def upload_product_images(
             allowed_suffixes=ALLOWED_PRODUCT_IMAGE_SUFFIXES,
             allowed_mime_types=ALLOWED_PRODUCT_IMAGE_MIME_TYPES,
         )
+        content = _read_limited_upload(file, MAX_PRODUCT_IMAGE_BYTES, "图片不能超过 10MB")
+        _validate_media_content(content, ext, "image")
+        file.file.seek(0)
+    for file in files:
+        ext = _validate_media_upload(
+            file,
+            allowed_suffixes=ALLOWED_PRODUCT_IMAGE_SUFFIXES,
+            allowed_mime_types=ALLOWED_PRODUCT_IMAGE_MIME_TYPES,
+        )
         content = _read_limited_upload(file, MAX_PRODUCT_IMAGE_BYTES, "鍥剧墖涓嶈兘瓒呰繃 10MB")
+        _validate_media_content(content, ext, "image")
         name = f"{uuid.uuid4().hex}{ext}"
         path = os.path.join(settings.IMAGE_UPLOAD_DIR, name)
         with open(path, "wb") as f:
@@ -772,6 +788,7 @@ def upload_product_videos(
     db: Session = Depends(get_db),
 ):
     _enforce_product_upload_limit(current_user, "products.videos.upload")
+    _validate_upload_count(files, MAX_PRODUCT_VIDEOS_PER_REQUEST, "视频")
     os.makedirs(settings.VIDEO_UPLOAD_DIR, exist_ok=True)
     urls: List[str] = []
     for file in files:
@@ -780,7 +797,17 @@ def upload_product_videos(
             allowed_suffixes=ALLOWED_PRODUCT_VIDEO_SUFFIXES,
             allowed_mime_types=ALLOWED_PRODUCT_VIDEO_MIME_TYPES,
         )
+        content = _read_limited_upload(file, MAX_PRODUCT_VIDEO_BYTES, "视频不能超过 100MB")
+        _validate_media_content(content, ext, "video")
+        file.file.seek(0)
+    for file in files:
+        ext = _validate_media_upload(
+            file,
+            allowed_suffixes=ALLOWED_PRODUCT_VIDEO_SUFFIXES,
+            allowed_mime_types=ALLOWED_PRODUCT_VIDEO_MIME_TYPES,
+        )
         content = _read_limited_upload(file, MAX_PRODUCT_VIDEO_BYTES, "瑙嗛涓嶈兘瓒呰繃 100MB")
+        _validate_media_content(content, ext, "video")
         name = f"{uuid.uuid4().hex}{ext}"
         path = os.path.join(settings.VIDEO_UPLOAD_DIR, name)
         with open(path, "wb") as f:
@@ -827,6 +854,21 @@ def _validate_media_upload(
 def _read_limited_upload(file: UploadFile, max_bytes: int, message: str) -> bytes:
     content = file.file.read(max_bytes + 1)
     if len(content) > max_bytes:
-        raise HTTPException(status_code=400, detail=message)
+        raise HTTPException(status_code=413, detail=message)
     return content
+
+
+def _validate_upload_count(files: list[UploadFile], maximum: int, label: str) -> None:
+    if not files or len(files) > maximum:
+        raise HTTPException(status_code=413, detail=f"每次最多上传 {maximum} 个{label}文件")
+
+
+def _validate_media_content(content: bytes, ext: str, media_type: str) -> None:
+    try:
+        if media_type == "image":
+            validate_image_content(content, ext)
+        else:
+            validate_video_content(content, ext)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 

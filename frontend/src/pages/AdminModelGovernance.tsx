@@ -83,7 +83,6 @@ export default function AdminModelGovernance() {
   }
 
   // Initial loading intentionally runs once; subsequent refreshes are explicit to avoid replacing in-progress edits.
-  // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => { void loadAll() }, [])
 
   async function perform(action: () => Promise<void>, success: string) {

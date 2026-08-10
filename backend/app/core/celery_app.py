@@ -7,7 +7,7 @@ celery_app = Celery(
     "caiyan_backend",
     broker=settings.REDIS_URL,
     backend=settings.REDIS_URL,
-    include=["app.tasks.parse_tasks", "app.tasks.tool_runs"],
+    include=["app.tasks.parse_tasks", "app.tasks.tool_runs", "app.tasks.knowledge_jobs"],
 )
 
 celery_app.conf.update(

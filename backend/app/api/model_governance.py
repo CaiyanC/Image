@@ -41,6 +41,13 @@ def _not_found(resource: str) -> HTTPException:
     return HTTPException(status_code=404, detail=f"{resource} not found")
 
 
+def _validate_provider_url(url: str) -> str:
+    try:
+        return model_governance_service.validate_provider_url(url)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
 @admin_router.get("/authorization-overview", response_model=AuthorizationOverviewResponse)
 def authorization_overview(
     _: User = Depends(get_current_super_admin),
@@ -158,6 +165,7 @@ def create_credential(
 ):
     data = payload.model_dump()
     _validate_credential_scope(data["scope_type"], data["scope_id"])
+    data["api_base_url"] = _validate_provider_url(data["api_base_url"])
     credential = model_governance_service.create_credential(db, **data)
     response = CredentialResponse.model_validate(credential)
     _write_audit(
@@ -184,6 +192,8 @@ def update_credential(
     scope_type = changes.get("scope_type", credential.scope_type)
     scope_id = changes.get("scope_id", credential.scope_id)
     _validate_credential_scope(scope_type, scope_id)
+    if "api_base_url" in changes:
+        changes["api_base_url"] = _validate_provider_url(changes["api_base_url"])
     for key, value in changes.items():
         if key == "api_key":
             credential.api_key_ciphertext = model_governance_service.encrypt_credential(value)
@@ -213,7 +223,10 @@ def create_model(
     current_user: User = Depends(get_current_super_admin),
     db: Session = Depends(get_db),
 ):
-    model = AIModel(**payload.model_dump())
+    data = payload.model_dump()
+    if data.get("api_endpoint"):
+        data["api_endpoint"] = _validate_provider_url(data["api_endpoint"])
+    model = AIModel(**data)
     db.add(model)
     db.flush()
     _write_audit(
@@ -237,6 +250,8 @@ def update_model(
     if model is None:
         raise _not_found("Model")
     changes = payload.model_dump(exclude_unset=True)
+    if changes.get("api_endpoint"):
+        changes["api_endpoint"] = _validate_provider_url(changes["api_endpoint"])
     for key, value in changes.items():
         setattr(model, key, value)
     db.flush()

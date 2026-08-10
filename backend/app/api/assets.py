@@ -11,11 +11,14 @@ from ..core.security import has_permission, require_permission, require_product_
 from ..models.user import User
 from ..schemas.asset import AssetTagsUpdate, ProductAssetCreate, ProductAssetUpdate
 from ..services import asset_service
+from ..services.upload_validation_service import validate_image_content, validate_video_content
 
 router = APIRouter(prefix="/api/products/{sku}/assets", tags=["assets"])
 
 MAX_ASSET_IMAGE_BYTES = 20 * 1024 * 1024
 MAX_ASSET_VIDEO_BYTES = 200 * 1024 * 1024
+MAX_ASSET_IMAGES_PER_REQUEST = 20
+MAX_ASSET_VIDEOS_PER_REQUEST = 5
 ALLOWED_IMAGE_SUFFIXES = {".jpg", ".jpeg", ".png", ".webp", ".gif"}
 ALLOWED_IMAGE_MIME_TYPES = {"image/jpeg", "image/png", "image/webp", "image/gif"}
 ALLOWED_VIDEO_SUFFIXES = {".mp4", ".mov", ".webm"}
@@ -175,6 +178,11 @@ def upload_assets(
 ):
     del current_user, upload_user
     asset_service.ensure_product_exists(db, sku)
+    maximum = MAX_ASSET_VIDEOS_PER_REQUEST if category_code == "06" else MAX_ASSET_IMAGES_PER_REQUEST
+    if not files or len(files) > maximum:
+        raise HTTPException(status_code=413, detail=f"每次最多上传 {maximum} 个文件")
+    for upload in files:
+        _prevalidate_asset_upload(upload, is_video=category_code == "06")
     created = []
     for upload in files:
         payload = _save_upload_file(
@@ -227,10 +235,12 @@ def _save_upload_file(
     if is_video_category:
         _validate_file_type(ext, content_type, ALLOWED_VIDEO_SUFFIXES, ALLOWED_VIDEO_MIME_TYPES)
         content = _read_limited_upload(upload, MAX_ASSET_VIDEO_BYTES, "视频不能超过 200MB")
+        _validate_media_content(content, ext, "video")
         asset_type = "video"
     else:
         _validate_file_type(ext, content_type, ALLOWED_IMAGE_SUFFIXES, ALLOWED_IMAGE_MIME_TYPES)
         content = _read_limited_upload(upload, MAX_ASSET_IMAGE_BYTES, "图片不能超过 20MB")
+        _validate_media_content(content, ext, "image")
         asset_type = "image"
 
     safe_sku = "".join(ch if ch.isalnum() or ch in ("-", "_") else "_" for ch in sku)
@@ -263,8 +273,32 @@ def _validate_file_type(
 def _read_limited_upload(upload: UploadFile, max_bytes: int, message: str) -> bytes:
     content = upload.file.read(max_bytes + 1)
     if len(content) > max_bytes:
-        raise HTTPException(status_code=400, detail=message)
+        raise HTTPException(status_code=413, detail=message)
     return content
+
+
+def _prevalidate_asset_upload(upload: UploadFile, *, is_video: bool) -> None:
+    ext = os.path.splitext(upload.filename or "")[1].lower()
+    content_type = (upload.content_type or "").split(";", 1)[0].strip().lower()
+    if is_video:
+        _validate_file_type(ext, content_type, ALLOWED_VIDEO_SUFFIXES, ALLOWED_VIDEO_MIME_TYPES)
+        content = _read_limited_upload(upload, MAX_ASSET_VIDEO_BYTES, "视频不能超过 200MB")
+        _validate_media_content(content, ext, "video")
+    else:
+        _validate_file_type(ext, content_type, ALLOWED_IMAGE_SUFFIXES, ALLOWED_IMAGE_MIME_TYPES)
+        content = _read_limited_upload(upload, MAX_ASSET_IMAGE_BYTES, "图片不能超过 20MB")
+        _validate_media_content(content, ext, "image")
+    upload.file.seek(0)
+
+
+def _validate_media_content(content: bytes, ext: str, media_type: str) -> None:
+    try:
+        if media_type == "image":
+            validate_image_content(content, ext)
+        else:
+            validate_video_content(content, ext)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 def _try_make_thumbnail(path: str, safe_sku: str, filename: str) -> str | None:

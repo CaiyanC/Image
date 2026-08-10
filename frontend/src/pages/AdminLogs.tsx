@@ -49,6 +49,8 @@ export default function AdminLogs() {
 
   useEffect(() => {
     loadLogs()
+    // Text and date fields are applied explicitly by handleSearch; select filters and paging reload automatically.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [page, actionType, targetType, status, operatorId])
 
   async function loadUsers() {

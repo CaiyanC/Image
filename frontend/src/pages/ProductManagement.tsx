@@ -51,12 +51,16 @@ export default function ProductManagement() {
 
   useEffect(() => {
     loadProducts(1)
+    // The initial catalogue fetch runs once; later refreshes are explicit user actions.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
   useEffect(() => {
     const skuFromUrl = searchParams.get('sku')
     if (!skuFromUrl) return
     selectProductBySku(skuFromUrl)
+    // URL changes own this effect; product state updates performed by the lookup must not retrigger it.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [searchParams])
 
   useEffect(() => {

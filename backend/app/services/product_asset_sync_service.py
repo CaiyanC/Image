@@ -38,6 +38,12 @@ MEDIA_FIELD_MAP: dict[str, tuple[str, str, str, str]] = {
     "ref_banned": ("08", "参考归档禁用图", "禁用素材", "banned"),
 }
 
+ASSET_SNAPSHOT_FIELDS = {
+    column.name
+    for column in ProductAsset.__table__.columns
+    if column.name not in {"id", "sku", "created_at", "updated_at"}
+}
+
 
 def sync_product_assets_from_media_data(
     db: Session,
@@ -90,6 +96,53 @@ def sync_product_assets_from_media_data(
                             version_tag=version_tag,
                             notes=str(version.get("label") or "") or None,
                         )
+
+
+def sync_product_assets_from_snapshot_data(
+    db: Session,
+    product: Product,
+    assets: Any,
+    *,
+    replace: bool = True,
+) -> None:
+    """Restore asset rows from a product snapshot without touching asset files."""
+    if not isinstance(assets, list):
+        return
+    if replace:
+        db.query(ProductAsset).filter(ProductAsset.sku == product.sku).delete(
+            synchronize_session=False
+        )
+
+    for item in assets:
+        if not isinstance(item, dict):
+            continue
+        category_code = str(item.get("category_code") or "").strip()
+        category_name = str(item.get("category_name") or "").strip()
+        url = str(item.get("url") or "").strip()
+        if not category_code or not category_name or not url:
+            continue
+
+        payload = {
+            key: value
+            for key, value in item.items()
+            if key in ASSET_SNAPSHOT_FIELDS and value is not None
+        }
+        payload["category_code"] = category_code
+        payload["category_name"] = category_name
+        payload["url"] = url
+        tags = payload.get("tags")
+        if isinstance(tags, (dict, list)):
+            payload["tags"] = json.dumps(tags, ensure_ascii=False)
+        elif tags is None:
+            payload["tags"] = "{}"
+        else:
+            payload["tags"] = str(tags)
+
+        db.add(ProductAsset(
+            id=str(uuid.uuid4()),
+            sku=product.sku,
+            **payload,
+        ))
 
 
 def media_data_from_assets(assets: list[ProductAsset]) -> dict[str, Any]:

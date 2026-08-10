@@ -8,6 +8,7 @@ from app.core.permission_constants import (
     BRAND_GROUP_NAME,
     DEFAULT_GROUPS,
     EXECUTIVE_OFFICE_GROUP_NAME,
+    FINANCE_GROUP_NAME,
     IT_GROUP_NAME,
     PERMISSION_DEFS,
 )
@@ -61,6 +62,39 @@ class DepartmentSeedTest(unittest.TestCase):
                 .all()
             }
             self.assertEqual(permission_keys, all_permission_keys)
+
+    def test_restart_preserves_custom_permissions_for_preset_department(self):
+        _seed_default_groups(self.db)
+        _seed_default_permissions(self.db)
+        finance = self.db.query(Group).filter(Group.group_name == FINANCE_GROUP_NAME).one()
+        chosen = self.db.query(Permission).filter(Permission.permission_key == "history.view").one()
+        self.db.query(GroupPermission).filter(GroupPermission.group_id == finance.id).delete()
+        self.db.add(GroupPermission(group_id=finance.id, permission_id=chosen.id))
+        self.db.commit()
+
+        _seed_default_permissions(self.db)
+
+        permission_keys = {
+            key for (key,) in self.db.query(Permission.permission_key)
+            .join(GroupPermission, GroupPermission.permission_id == Permission.id)
+            .filter(GroupPermission.group_id == finance.id)
+            .all()
+        }
+        self.assertEqual(permission_keys, {"history.view"})
+
+    def test_restart_preserves_intentionally_empty_preset_permissions(self):
+        _seed_default_groups(self.db)
+        _seed_default_permissions(self.db)
+        finance = self.db.query(Group).filter(Group.group_name == FINANCE_GROUP_NAME).one()
+        self.db.query(GroupPermission).filter(GroupPermission.group_id == finance.id).delete()
+        self.db.commit()
+
+        _seed_default_permissions(self.db)
+
+        self.assertEqual(
+            self.db.query(GroupPermission).filter(GroupPermission.group_id == finance.id).count(),
+            0,
+        )
 
 
 if __name__ == "__main__":

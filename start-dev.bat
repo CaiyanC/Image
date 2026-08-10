@@ -8,6 +8,7 @@ if /i "%~1"=="frontend" goto :frontend
 title CaiYan Dev Services Launcher
 cd /d "%~dp0"
 call :load_env_dev
+if errorlevel 1 exit /b 1
 set "LOG_DIR_WIN=%LOG_DIR:/=\%"
 if not exist "%LOG_DIR_WIN%" mkdir "%LOG_DIR_WIN%"
 
@@ -74,6 +75,11 @@ exit /b 0
 
 :load_env_dev
 set "CAIYAN_ENV_FILE=%~dp0backend\.env.dev"
+if not exist "%CAIYAN_ENV_FILE%" (
+    echo Missing development configuration: %CAIYAN_ENV_FILE%
+    echo Copy backend\.env.dev.example to backend\.env.dev and fill in local values.
+    exit /b 1
+)
 for /f "usebackq eol=# tokens=1,* delims==" %%a in ("%~dp0backend\.env.dev") do (
     if not "%%a"=="" set "%%a=%%b"
 )
@@ -83,6 +89,7 @@ exit /b 0
 title CaiYan Dev Backend - 8001
 cd /d "%~dp0backend"
 call :load_env_dev
+if errorlevel 1 exit /b 1
 set "LOG_DIR_WIN=%LOG_DIR:/=\%"
 if "%COMPUTERNAME%"=="" set "COMPUTERNAME=localhost"
 if not exist "..\%LOG_DIR_WIN%" mkdir "..\%LOG_DIR_WIN%"
@@ -99,6 +106,7 @@ exit /b %errorlevel%
 title CaiYan Dev Celery Worker
 cd /d "%~dp0backend"
 call :load_env_dev
+if errorlevel 1 exit /b 1
 set "LOG_DIR_WIN=%LOG_DIR:/=\%"
 if "%COMPUTERNAME%"=="" set "COMPUTERNAME=localhost"
 if not exist "..\%LOG_DIR_WIN%" mkdir "..\%LOG_DIR_WIN%"

@@ -1,12 +1,13 @@
 import unittest
 from types import SimpleNamespace
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
 from app.core.database import Base
 from app.models.product import Product
+from app.models.knowledge_base import KnowledgeChunk, KnowledgeDocument
 from app.models.product_associations import (
     Certification,
     Keyword,
@@ -91,7 +92,14 @@ class ProductServiceVectorSyncTest(unittest.TestCase):
     def setUp(self):
         customer_cache_service.product_detail_cache.clear()
         engine = create_engine("sqlite:///:memory:")
-        Base.metadata.create_all(engine, tables=[Product.__table__])
+        Base.metadata.create_all(
+            engine,
+            tables=[
+                Product.__table__,
+                KnowledgeDocument.__table__,
+                KnowledgeChunk.__table__,
+            ],
+        )
         self.Session = sessionmaker(bind=engine)
         self.db = self.Session()
         self.db.add(Product(
@@ -155,6 +163,91 @@ class ProductServiceVectorSyncTest(unittest.TestCase):
         self.assertEqual(result["failed"], 1)
         self.assertTrue(product_service.get_product_by_sku(self.db, "PENDING-1").sync_flag)
         self.assertFalse(product_service.get_product_by_sku(self.db, "FAILED-1").sync_flag)
+
+    def test_sync_product_preserves_file_knowledge_for_same_sku(self):
+        file_document = KnowledgeDocument(
+            id="file-document",
+            source_type="file",
+            source_id="manual-upload",
+            sku="PENDING-1",
+            title="Manual knowledge",
+            content="Keep this content",
+        )
+        file_chunk = KnowledgeChunk(
+            id="file-chunk",
+            document_id=file_document.id,
+            sku="PENDING-1",
+            source_type="file",
+            chunk_index=0,
+            content="Keep this content",
+        )
+        self.db.add_all([file_document, file_chunk])
+        self.db.commit()
+
+        with (
+            patch.object(
+                product_service.product_vector_index_service,
+                "index_product",
+                return_value={"documents": 1, "chunks": 1},
+            ),
+            patch.object(
+                product_service.product_vector_index_service,
+                "embed_pending_chunks",
+                new=AsyncMock(return_value={"total": 0, "embedded": 0, "failed": 0}),
+            ),
+        ):
+            result = product_service.sync_product_to_vector_db(self.db, "PENDING-1")
+
+        self.assertNotIn("error", result)
+        self.assertIsNotNone(self.db.get(KnowledgeDocument, file_document.id))
+        self.assertIsNotNone(self.db.get(KnowledgeChunk, file_chunk.id))
+
+    def test_delete_product_vector_data_preserves_file_knowledge_for_same_sku(self):
+        file_document = KnowledgeDocument(
+            id="file-document-delete",
+            source_type="file",
+            source_id="manual-upload-delete",
+            sku="PENDING-1",
+            title="Manual knowledge",
+            content="Keep this content",
+        )
+        product_document = KnowledgeDocument(
+            id="product-document-delete",
+            source_type="product",
+            source_id="product:PENDING-1:profile",
+            sku="PENDING-1",
+            title="Generated product knowledge",
+            content="Delete this content",
+        )
+        self.db.add_all([
+            file_document,
+            product_document,
+            KnowledgeChunk(
+                id="file-chunk-delete",
+                document_id=file_document.id,
+                sku="PENDING-1",
+                source_type="file",
+                chunk_index=0,
+                content="Keep this content",
+            ),
+            KnowledgeChunk(
+                id="product-chunk-delete",
+                document_id=product_document.id,
+                sku="PENDING-1",
+                source_type="product",
+                chunk_index=0,
+                content="Delete this content",
+            ),
+        ])
+        self.db.commit()
+
+        result = product_service.delete_product_from_vector_db(self.db, "PENDING-1")
+
+        self.assertEqual(result["deleted_chunks"], 1)
+        self.assertIsNotNone(self.db.get(KnowledgeDocument, file_document.id))
+        self.assertIsNotNone(self.db.get(KnowledgeChunk, "file-chunk-delete"))
+        self.assertIsNone(self.db.get(KnowledgeDocument, product_document.id))
+        self.assertIsNone(self.db.get(KnowledgeChunk, "product-chunk-delete"))
 
 
 class ProductServiceSpecsUpdateTest(unittest.TestCase):

@@ -48,6 +48,17 @@ def _load_runtime_env() -> str:
 LOADED_ENV_FILE = _load_runtime_env()
 
 
+def _csv_setting(name: str, default: str) -> list[str]:
+    return [item.strip().rstrip("/") for item in os.getenv(name, default).split(",") if item.strip()]
+
+
+def _cors_origins(default: str) -> list[str]:
+    origins = _csv_setting("CORS_ORIGINS", default)
+    if "*" in origins:
+        raise ValueError("CORS_ORIGINS cannot contain '*' when credentials are enabled")
+    return origins
+
+
 class Settings:
     APP_NAME: str = "AI Image & Video Generation Platform"
     APP_ENV: str = os.getenv("APP_ENV", "").strip().lower()
@@ -59,6 +70,8 @@ class Settings:
 
     SECRET_KEY: str = os.getenv("SECRET_KEY", "")
     MODEL_CREDENTIAL_ENCRYPTION_KEY: str = os.getenv("MODEL_CREDENTIAL_ENCRYPTION_KEY", "").strip()
+    ALLOW_PRIVATE_MODEL_ENDPOINTS: bool = os.getenv("ALLOW_PRIVATE_MODEL_ENDPOINTS", "false").lower() == "true"
+    ALLOW_INSECURE_MODEL_ENDPOINTS: bool = os.getenv("ALLOW_INSECURE_MODEL_ENDPOINTS", "false").lower() == "true"
     ALGORITHM: str = "HS256"
     ENABLE_PUBLIC_REGISTRATION: bool = os.getenv("ENABLE_PUBLIC_REGISTRATION", "false").lower() == "true"
     ACCESS_TOKEN_EXPIRE_MINUTES: int = int(os.getenv("ACCESS_TOKEN_EXPIRE_MINUTES", "1440"))
@@ -66,6 +79,7 @@ class Settings:
     AI_REQUEST_QUEUE_TIMEOUT_SECONDS: float = float(os.getenv("AI_REQUEST_QUEUE_TIMEOUT_SECONDS", "8"))
     EMBEDDING_REQUEST_TIMEOUT_SECONDS: int = int(os.getenv("EMBEDDING_REQUEST_TIMEOUT_SECONDS", "8"))
     AI_MAX_CONCURRENT_REQUESTS: int = int(os.getenv("AI_MAX_CONCURRENT_REQUESTS", "10"))
+    KNOWLEDGE_JOB_STALE_MINUTES: int = int(os.getenv("KNOWLEDGE_JOB_STALE_MINUTES", "120"))
     SEMANTIC_PREPLAN_MODEL: str = os.getenv("SEMANTIC_PREPLAN_MODEL", "deepseek-v4-flash").strip()
     # The semantic contract contains route, entity, field, provenance, and
     # recommendation dimensions.  256 tokens can truncate valid JSON into a
@@ -108,21 +122,18 @@ class Settings:
     DEFAULT_ADMIN_EMAIL: str = os.getenv("DEFAULT_ADMIN_EMAIL", "admin@example.com")
     DEFAULT_ADMIN_PASSWORD: str = os.getenv("DEFAULT_ADMIN_PASSWORD", "")
 
-    CORS_ORIGINS: list = [
-        "http://localhost:3000", "http://127.0.0.1:3000", "http://192.168.3.216:3000",
-        "http://localhost:3001", "http://127.0.0.1:3001",
-        "http://localhost:5173", "http://127.0.0.1:5173",
-        "http://localhost:5174", "http://127.0.0.1:5174",
-        "http://192.168.3.109:5174",
-        "http://localhost:5175", "http://127.0.0.1:5175",
-        "http://192.168.3.109:5175",
-        "http://localhost:5275", "http://127.0.0.1:5275",
-        "http://192.168.3.216:5275",
-        "http://192.168.3.109:5275",
-        "http://localhost:5176", "http://127.0.0.1:5176",
-        "http://192.168.3.216:5276",
-        "http://192.168.3.109:5176",
-    ]
+    CORS_ORIGINS: list[str] = _cors_origins(
+        ",".join((
+            "http://localhost:3000", "http://127.0.0.1:3000",
+            "http://localhost:3001", "http://127.0.0.1:3001",
+            "http://localhost:5173", "http://127.0.0.1:5173",
+            "http://localhost:5174", "http://127.0.0.1:5174",
+            "http://localhost:5175", "http://127.0.0.1:5175",
+            "http://localhost:5176", "http://127.0.0.1:5176",
+            "http://localhost:5275", "http://127.0.0.1:5275",
+            "http://localhost:5276", "http://127.0.0.1:5276",
+        )),
+    )
 
 
 def resolve_project_path(path: str) -> str:
