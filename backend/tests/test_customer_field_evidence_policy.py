@@ -1385,6 +1385,77 @@ def test_same_sku_rag_broad_product_question_merges_multiple_selected_evidence(m
     assert result["debug"]["knowledge_evidence_selector"]["selected_count"] == 2
 
 
+def test_same_sku_rag_marketing_claim_is_downgraded_to_safe_missing(monkeypatch):
+    """A grounded same-SKU chunk cannot authorize unsupported gifting claims."""
+    sku = "RAG-GIFT-100"
+    safe_missing = {
+        "sku": sku,
+        "answer": "safe missing",
+        "evidence": [],
+        "sources": [],
+        "answer_metadata": {
+            "contract_field_type": "product_qa",
+            "evidence_status": "missing",
+            "field_evidence_missing": True,
+            "evidence_skus": [],
+        },
+        "debug": {"agent_mode": "sealed_product_qa_safe_missing"},
+        "skip_polish": True,
+    }
+    rows = [{
+        "sku": sku,
+        "content": "产品资料：包装精美、品质出众，是送给户外露营爱好者的绝佳礼物。",
+    }]
+
+    monkeypatch.setattr(
+        customer_service_service,
+        "_sealed_semantic_product_qa_entity_guard",
+        lambda *_args, **_kwargs: safe_missing.copy(),
+    )
+
+    async def fake_retrieve(*_args, **_kwargs):
+        return rows
+
+    async def fake_completion(_db, *, messages, **_kwargs):
+        return json.dumps({
+            "answer": "品质出众、包装精美，非常适合作为礼物。",
+            "evidence_quotes": ["包装精美、品质出众，是送给户外露营爱好者的绝佳礼物"],
+        }, ensure_ascii=False)
+
+    async def grounded(*_args, **_kwargs):
+        return True
+
+    async def covered(*_args, **_kwargs):
+        return True
+
+    monkeypatch.setattr(customer_service_service.knowledge_service, "semantic_retrieve", fake_retrieve)
+    monkeypatch.setattr(customer_service_service.knowledge_service, "same_sku_customer_context", lambda *_args, **_kwargs: [])
+    monkeypatch.setattr(customer_service_service.customer_llm_service, "chat_completion", fake_completion)
+    monkeypatch.setattr(customer_service_service, "_same_sku_rag_answer_is_grounded_after_quote_validation", grounded)
+    monkeypatch.setattr(customer_service_service, "_same_sku_rag_answer_covers_question", covered)
+
+    import asyncio
+
+    result = asyncio.run(
+        customer_service_service._try_sealed_same_sku_knowledge_answer(
+            SimpleNamespace(),
+            "饭盒（黑色盖子+硬质氧化铝身）品质出众吗？",
+            {"semantic_preplan": {}},
+        )
+    )
+
+    assert result is not None
+    assert "品质出众" not in result["answer"]
+    assert "包装精美" not in result["answer"]
+    assert "适合作为礼物" not in result["answer"]
+    assert result["evidence"] == []
+    assert result["sources"] == []
+    assert result["answer_metadata"]["evidence_status"] == "missing"
+    assert result["answer_metadata"]["field_evidence_missing"] is True
+    assert result["debug"]["agent_mode"] == "sealed_product_qa_safe_missing"
+    assert result["skip_polish"] is True
+
+
 def test_same_sku_rag_uses_medium_semantic_selection_only_after_grounding(monkeypatch):
     """A cautious semantic selector must not turn relevant same-SKU evidence
     into a false missing answer when the downstream grounding gate approves it.

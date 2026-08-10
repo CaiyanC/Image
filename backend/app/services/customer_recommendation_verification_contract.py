@@ -13,6 +13,7 @@ class RecommendationRequestContract:
     subject_category: str | None = None
     subject_kind: str | None = None
     subject_subtype: str | None = None
+    excluded_categories: list[str] = field(default_factory=list)
     scenario: list[str] = field(default_factory=list)
     people_min: int | None = None
     people_max: int | None = None
@@ -25,8 +26,19 @@ class RecommendationRequestContract:
     relative_price_preference: str | None = None
     price_anchor_sku: str | None = None
     heat_sources: list[str] = field(default_factory=list)
+    # An explicit solid/liquid alcohol requirement is narrower than the broad
+    # ``酒精炉`` heat-source label.  Keep it as a separate contract field so a
+    # generic alcohol-stove row cannot silently satisfy the customer's fuel
+    # subtype.
+    fuel_subtype: str | None = None
+    fuel_subtypes: list[str] = field(default_factory=list)
+    # Explicit structural exclusions (for example “不要分体”) are hard
+    # evidence constraints, not product/SKU rules.
+    structure_preference: str | None = None
     materials: list[str] = field(default_factory=list)
+    accessory_requirements: list[str] = field(default_factory=list)
     stability_required: bool = False
+    windproof_required: bool = False
     portability_required: bool = False
     storage_required: bool = False
     dishwasher_safe_required: bool = False
@@ -71,9 +83,154 @@ def _span(text: str, pattern: str) -> tuple[int, int] | None:
     return match.span() if match else None
 
 
+def _is_negated_category_term(text: str, span: tuple[int, int]) -> bool:
+    prefix = str(text or "")[max(0, span[0] - 10):span[0]]
+    return any(marker in prefix for marker in (
+        "不要", "不想要", "不需要", "不含", "不包括", "排除", "去掉", "别要", "不买",
+    ))
+
+
+def _literal_category_exclusions(text: str) -> tuple[list[str], dict[str, list[tuple[int, int]]]]:
+    category_terms = {
+        "炉具": ("燃气炉", "卡式炉", "酒精炉", "气炉", "炉具", "炉子"),
+        "配件": ("配件", "附件"),
+    }
+    excluded: list[str] = []
+    spans: dict[str, list[tuple[int, int]]] = {}
+    for category, terms in category_terms.items():
+        for term in terms:
+            for match in re.finditer(re.escape(term), str(text or "")):
+                span = match.span()
+                if not _is_negated_category_term(text, span):
+                    continue
+                _append_unique(excluded, category)
+                spans.setdefault(category, []).append(span)
+    return excluded, spans
+
+
 def _append_unique(values: list[str], value: str) -> None:
     if value not in values:
         values.append(value)
+
+
+def _apply_literal_use_requirements(
+    contract: RecommendationRequestContract,
+    text: str,
+) -> None:
+    for label, terms in (
+        ("hiking", ("徒步",)),
+        ("self_drive", ("自驾",)),
+        ("camping", ("露营", "营地")),
+        ("seaside", ("海边",)),
+        ("soup", ("煮汤",)),
+        ("hotpot", ("火锅", "涮锅")),
+    ):
+        if any(term in text for term in terms):
+            added = label not in contract.scenario
+            _append_unique(contract.scenario, label)
+            if added and "scenario" not in contract.field_provenance:
+                contract.field_provenance["scenario"] = {
+                    "source_turn": 1,
+                    "provenance": "current_turn",
+                }
+    if "hotpot" in contract.scenario:
+        _append_unique(contract.hard_constraints, "scenario")
+
+    if any(term in text for term in ("咖啡", "泡咖啡", "冲咖啡", "手冲")):
+        added = "coffee_brewing" not in contract.soft_preferences
+        _append_unique(contract.soft_preferences, "coffee_brewing")
+        if added and "coffee_brewing" not in contract.field_provenance:
+            contract.field_provenance["coffee_brewing"] = {
+                "source_turn": 1,
+                "provenance": "current_turn",
+            }
+
+    requirements = (
+        ("stability_required", "stability", ("稳定性", "稳定", "稳一点", "又稳", "稳固")),
+        ("windproof_required", "windproof", ("防风", "抗风")),
+        ("portability_required", "portability", ("便携", "好带", "轻便")),
+        ("storage_required", "storage", ("收纳", "套娃")),
+    )
+    for field_name, label, terms in requirements:
+        if any(term in text for term in terms):
+            added = not getattr(contract, field_name)
+            setattr(contract, field_name, True)
+            if added and label not in contract.field_provenance:
+                contract.field_provenance[label] = {
+                    "source_turn": 1,
+                    "provenance": "current_turn",
+                }
+        if getattr(contract, field_name):
+            _append_unique(contract.soft_preferences, label)
+
+
+def _explicit_alcohol_fuel_subtypes(text: str) -> list[str]:
+    value = str(text or "")
+    aliases = (
+        ("\u56fa\u4f53\u9152\u7cbe", "\u56fa\u4f53\u9152\u7cbe"),
+        ("\u56fa\u6001\u9152\u7cbe", "\u56fa\u4f53\u9152\u7cbe"),
+        ("\u9152\u7cbe\u5757", "\u56fa\u4f53\u9152\u7cbe"),
+        ("\u56fa\u4f53\u71c3\u6599", "\u56fa\u4f53\u9152\u7cbe"),
+        ("\u6db2\u4f53\u9152\u7cbe", "\u6db2\u4f53\u9152\u7cbe"),
+    )
+    return list(dict.fromkeys(label for phrase, label in aliases if phrase in value))
+
+
+def _explicit_structure_preference(text: str) -> str | None:
+    """Parse a generic negative split-burner preference from the current turn."""
+    value = str(text or "")
+    if any(term in value for term in (
+        "不要分体", "不想要分体", "不需要分体", "不选分体", "排除分体", "不考虑分体",
+        "不要分体式", "不想要分体式", "不需要分体式", "不选分体式", "排除分体式",
+    )):
+        return "non_split"
+    return None
+
+
+def _exact_stainless_grade(text: str) -> str | None:
+    """Return an explicitly requested stainless-steel grade, if present.
+
+    A grade such as ``316L`` is a hard material constraint.  It must be
+    captured before the broader ``不锈钢`` token so a 304 SKU cannot satisfy a
+    316L request merely by sharing the generic material word.
+    """
+    value = str(text or "")
+    match = re.search(r"(?i)(?:(316L|304|430)\s*不锈钢|不锈钢\s*(316L|304|430))", value)
+    if not match:
+        return None
+    grade = (match.group(1) or match.group(2) or "").upper()
+    return f"{grade}不锈钢" if grade else None
+
+
+def _stainless_grade_options(text: str) -> list[str]:
+    """Parse an explicit OR-list such as ``304或316的锅``.
+
+    The customer is asking for either grade, not for a product whose material
+    cell literally contains both grades.  Keep the alternatives as one
+    verifiable contract token; the candidate verifier expands it back to an
+    ``any`` match against the same-SKU material field.
+    """
+    value = str(text or "")
+    if _exact_stainless_grade(value):
+        return []
+    match = re.search(
+        r"(?i)(?P<grades>304|316)(?:\s*(?:或|或者|和|/|、|及)\s*(?:304|316))+",
+        value,
+    )
+    if not match:
+        return []
+    grades = list(dict.fromkeys(re.findall(r"(?i)304|316", match.group(0))))
+    return [f"{grade.upper()}不锈钢" for grade in grades]
+
+
+def _material_token_matches(raw_material: str, requested: str) -> bool:
+    """Match one material requirement, supporting an explicit OR token."""
+    value = str(raw_material or "")
+    token = str(requested or "").strip()
+    if not token:
+        return False
+    options = [part.strip() for part in re.split(r"(?:或|或者|/|、|和)", token) if part.strip()]
+    return any(option.lower() in value.lower() for option in (options or [token]))
 
 
 def _parse_people(text: str) -> tuple[int | None, int | None, tuple[int, int] | None]:
@@ -108,7 +265,7 @@ def _parse_people(text: str) -> tuple[int | None, int | None, tuple[int, int] | 
         upper = parse_number(match.group(2))
         if lower is not None and upper is not None:
             candidates.append((min(lower, upper), max(lower, upper), match.span()))
-    for match in re.finditer(rf"({number})\s*(?:个)?人", normalized):
+    for match in re.finditer(rf"({number})\s*(?:个)?(?:年轻)?人", normalized):
         if is_negated(match.span()):
             continue
         value = parse_number(match.group(1))
@@ -142,6 +299,39 @@ def _parse_numeric_limit(text: str, field_name: str) -> tuple[float | None, floa
         re.IGNORECASE,
     )
     if not match:
+        # Recommendation requests often put the unit range next to the
+        # product noun ("0.6 到 0.8 升水壶") instead of saying "容量".
+        # The repeated unit keeps this parser scoped to capacity and the
+        # verifier still requires the same SKU to expose a numeric value.
+        if field_name == "capacity":
+            bounded = re.search(
+                r"(?P<low>\d+(?:\.\d+)?)(?:\s*(?:ml|\u6beb\u5347|l|\u5347))?\s*(?:\u5230|\u81f3|-|~|\uff5e)\s*"
+                r"(?P<high>\d+(?:\.\d+)?)\s*(?P<unit>ml|\u6beb\u5347|l|\u5347)",
+                text,
+                re.IGNORECASE,
+            )
+            if bounded:
+                low = float(bounded.group("low"))
+                high = float(bounded.group("high"))
+                if bounded.group("unit").lower() in {"l", "\u5347"}:
+                    low *= 1000
+                    high *= 1000
+                return low, high, bounded.span()
+        # A bare unit with an explicit approximation word is still an
+        # unambiguous capacity request (for example, "1L 左右的小锅").
+        # Keep the tolerance bounded so it remains usable by the existing
+        # same-SKU numeric verifier rather than becoming a vague preference.
+        if field_name == "capacity":
+            approximate = re.search(
+                r"(\d+(?:\.\d+)?)\s*(ml|毫升|l|升)\s*(?:左右|上下|约|大约)",
+                text,
+                re.IGNORECASE,
+            )
+            if approximate:
+                value = float(approximate.group(1))
+                if approximate.group(2).lower() in {"l", "升"}:
+                    value *= 1000
+                return value * 0.8, value * 1.2, approximate.span()
         return None, None, None
     operator = match.group(1) or "="
     value = float(match.group(2))
@@ -160,12 +350,39 @@ def _parse_numeric_limit(text: str, field_name: str) -> tuple[float | None, floa
 def _recommendation_stove_subject(text: str) -> tuple[tuple[int, int], str | None] | None:
     stove_terms = r"卡式炉|酒精炉|气炉|炉具"
     action_terms = r"推荐|买|购买|选|挑"
+    named_subject = re.search(rf"(?:这|那|哪)(?:一)?(?:款|个)?\s*({stove_terms})", text)
+    if named_subject:
+        value = named_subject.group(1)
+        subtype = "card_stove" if value == "卡式炉" else "alcohol_stove" if value == "酒精炉" else None
+        return named_subject.span(1), subtype
     match = re.search(
         rf"(?:{action_terms})[^，。；;]{{0,8}}?({stove_terms})|({stove_terms})[^，。；;]{{0,4}}?(?:推荐|怎么选|选哪个)",
         text,
     )
     if not match:
-        return None
+        # Longer natural phrases often put the product noun after several
+        # constraints (for example “支持固体酒精的酒精炉”), beyond the
+        # short action window above. The trailing noun is a recommendation
+        # subject only when an action governs the same punctuation-bounded
+        # clause; compatibility wording alone is not a recommendation.
+        trailing = re.search(
+            r"(?:\u5361\u5f0f\u7089|\u9152\u7cbe\u7089|\u71c3\u6c14\u7089|\u7089\u5177)\s*(?:\u63a8\u8350|\u54ea\u4e2a\u597d|\u4e70\u54ea\u4e2a|\u9009\u54ea\u4e2a)?[?？!！。]*$",
+            text,
+        )
+        if not trailing:
+            return None
+        governing_text = text[:trailing.start()]
+        if not re.search(rf"(?:{action_terms})[^，。；;]*$", governing_text):
+            return None
+        value = trailing.group(0).strip(" ?？!！。")
+        subtype = (
+            "card_stove"
+            if "\u5361\u5f0f\u7089" in value
+            else "alcohol_stove"
+            if "\u9152\u7cbe\u7089" in value
+            else None
+        )
+        return (trailing.start(), trailing.start() + len(value)), subtype
     for group_index in (1, 2):
         if match.group(group_index):
             value = match.group(group_index)
@@ -186,7 +403,7 @@ def _recommendation_contract_from_validated_semantic_constraints(
     """
     if not isinstance(constraints, dict):
         return None
-    allowed = {"subject_kind", "people", "heat_sources", "scenarios", "weight_preference", "price_preference", "storage_preference", "dishwasher_safe"}
+    allowed = {"subject_kind", "people", "heat_sources", "scenarios", "weight_preference", "price_preference", "storage_preference", "dishwasher_safe", "structure_preference"}
     if not constraints or any(key not in allowed for key in constraints):
         return None
     contract = RecommendationRequestContract()
@@ -212,6 +429,7 @@ def _recommendation_contract_from_validated_semantic_constraints(
         "gas_stove": "燃气炉",
         "alcohol_stove": "酒精炉",
         "open_flame": "明火",
+        "charcoal": "炭火",
         "induction": "电磁炉",
     }
     if heat_sources is not None:
@@ -222,7 +440,7 @@ def _recommendation_contract_from_validated_semantic_constraints(
         contract.heat_sources = list(dict.fromkeys(heat_map[item] for item in heat_sources))
         _append_unique(contract.hard_constraints, "heat_source")
     scenarios = constraints.get("scenarios")
-    allowed_scenarios = {"camping", "hiking", "self_drive", "seaside", "soup"}
+    allowed_scenarios = {"camping", "hiking", "self_drive", "seaside", "soup", "hotpot"}
     if scenarios is not None:
         if not isinstance(scenarios, list) or not scenarios or len(scenarios) > 5:
             return None
@@ -253,7 +471,13 @@ def _recommendation_contract_from_validated_semantic_constraints(
             return None
         contract.dishwasher_safe_required = True
         _append_unique(contract.hard_constraints, "dishwasher")
-    for key in ("subject_category", "people", "heat_sources", "scenario", "weight", "price_positioning", "storage", "dishwasher"):
+    structure_preference = constraints.get("structure_preference")
+    if structure_preference is not None:
+        if structure_preference != "non_split":
+            return None
+        contract.structure_preference = structure_preference
+        _append_unique(contract.hard_constraints, "structure")
+    for key in ("subject_category", "people", "heat_sources", "scenario", "weight", "price_positioning", "storage", "dishwasher", "structure"):
         present = {
             "subject_category": bool(contract.subject_category),
             "people": contract.people_min is not None,
@@ -263,6 +487,7 @@ def _recommendation_contract_from_validated_semantic_constraints(
             "price_positioning": bool(contract.budget_level),
             "storage": bool(contract.storage_required),
             "dishwasher": bool(contract.dishwasher_safe_required),
+            "structure": bool(contract.structure_preference),
         }[key]
         if present:
             contract.field_provenance[key] = {"source_turn": 1, "provenance": "validated_semantic_preplan"}
@@ -278,21 +503,211 @@ def build_recommendation_request_contract(
     *,
     semantic_constraints: dict[str, Any] | None = None,
 ) -> RecommendationRequestContract:
+    text = str(question or "").strip()
+    # This is a catalogue-scope boundary, not a product recommendation rule:
+    # an explicit bag/accessory noun must not be widened to cookware because a
+    # bundle happens to mention storage in its marketing copy.
+    accessory_terms = (
+        "收纳包", "收纳袋", "配件", "附件", "锅夹", "点火器",
+        "炉子内胆", "炉具内胆", "炉芯", "炉心", "内胆",
+    )
+    category_exclusions, category_exclusion_spans = _literal_category_exclusions(text)
+    accessory_occurrences = [
+        match.span()
+        for term in accessory_terms
+        for match in re.finditer(re.escape(term), text)
+    ]
+    explicit_accessory_subject = any(
+        not _is_negated_category_term(text, span)
+        for span in accessory_occurrences
+    )
+    storage_bag_subtype = (
+        "storage_bag"
+        if any(term in text for term in ("收纳包", "收纳袋", "装备包", "野炊包", "餐具包", "厨具包"))
+        else None
+    )
+    waterware_subtype = (
+        "kettle"
+        if any(term in text for term in ("水壶", "烧水壶", "茶壶"))
+        else "cup" if any(term in text for term in ("水杯", "杯子", "保温杯")) else None
+    )
+    explicit_accessory_requirements = []
+    if any(term in text for term in ("蒸屉", "蒸笼", "蒸米饭", "蒸饭")):
+        explicit_accessory_requirements.append("蒸屉兼容")
+    cookware_subject_text = re.sub(r"火锅|涮锅", "", text)
+    has_cookware_subject = any(term in text for term in ("锅具", "套锅", "炊具")) or (
+        "锅" in cookware_subject_text
+    )
+    stove_subject = _recommendation_stove_subject(text)
     semantic_contract = _recommendation_contract_from_validated_semantic_constraints(semantic_constraints)
     if semantic_contract is not None:
+        if explicit_accessory_subject:
+            semantic_contract.subject_category = "配件"
+            semantic_contract.subject_kind = "accessories"
+            semantic_contract.subject_subtype = storage_bag_subtype
+            semantic_contract.source_spans["subject"] = next(
+                term for term in accessory_terms if term in text
+            )
+            semantic_contract.field_provenance["subject_category"] = {
+                "source_turn": 1,
+                "provenance": "current_turn_explicit_subject",
+            }
+        elif stove_subject and not has_cookware_subject:
+            semantic_contract.subject_category = "炉具"
+            semantic_contract.subject_kind = "stove"
+            semantic_contract.subject_subtype = stove_subject[1]
+            semantic_contract.source_spans["subject"] = stove_subject[0]
+            semantic_contract.field_provenance["subject_category"] = {
+                "source_turn": 1,
+                "provenance": "current_turn_explicit_subject",
+            }
+        if explicit_accessory_requirements:
+            semantic_contract.accessory_requirements = list(explicit_accessory_requirements)
+            _append_unique(semantic_contract.hard_constraints, "accessory")
+            semantic_contract.field_provenance["accessory"] = {
+                "source_turn": 1,
+                "provenance": "current_turn_explicit_accessory_requirement",
+            }
+        elif semantic_contract.subject_kind == "waterware" and waterware_subtype:
+            semantic_contract.subject_subtype = waterware_subtype
+            semantic_contract.source_spans["subject"] = next(
+                term
+                for term in (("水壶", "烧水壶", "茶壶") if waterware_subtype == "kettle" else ("水杯", "杯子", "保温杯"))
+                if term in text
+            )
+        elif semantic_contract.subject_kind == "stove":
+            # The semantic preplan often keeps only the broad stove kind.
+            # Preserve an explicit current-turn subtype (酒精炉/卡式炉)
+            # before verification so a neighbouring gas-stove result cannot
+            # consume the request merely because the provider omitted that
+            # narrower field.
+            stove_subject = _recommendation_stove_subject(text)
+            if stove_subject and stove_subject[1]:
+                semantic_contract.subject_subtype = stove_subject[1]
+                semantic_contract.source_spans["subject"] = stove_subject[0]
+        structure_preference = _explicit_structure_preference(text)
+        if category_exclusions:
+            semantic_contract.excluded_categories = list(dict.fromkeys([
+                *semantic_contract.excluded_categories,
+                *category_exclusions,
+            ]))
+            semantic_contract.source_spans["excluded_categories"] = category_exclusion_spans
+        if structure_preference:
+            semantic_contract.structure_preference = structure_preference
+            _append_unique(semantic_contract.hard_constraints, "structure")
+            semantic_contract.source_spans["structure"] = _span(
+                text,
+                r"不要分体(?:式)?|不想要分体(?:式)?|不需要分体(?:式)?|不选分体(?:式)?|排除分体(?:式)?|不考虑分体(?:式)?",
+            )
+            semantic_contract.field_provenance["structure"] = {
+                "source_turn": 1,
+                "provenance": "current_turn_explicit_requirement",
+            }
+        # Retain explicit literal capacity ranges for same-SKU verification.
+        capacity_min, capacity_max, capacity_span = _parse_numeric_limit(text, "capacity")
+        if capacity_span:
+            semantic_contract.capacity_requirement = "numeric"
+            semantic_contract.capacity_min_ml = capacity_min
+            semantic_contract.capacity_max_ml = capacity_max
+            semantic_contract.source_spans["capacity"] = capacity_span
+            _append_unique(semantic_contract.hard_constraints, "capacity")
+            semantic_contract.field_provenance["capacity"] = {
+                "source_turn": 1,
+                "provenance": "current_turn",
+            }
+        # A semantic preplan may describe only the product category.  Retain
+        # explicit heat-source language from the customer turn as a hard
+        # boundary instead of treating that omission as permission to widen
+        # the recommendation to a nearby heat source.
+        explicit_heat_aliases = (
+            ("燃气炉", ("燃气炉",)),
+            ("卡式炉", ("卡式炉",)),
+            ("明火", ("明火直烧", "直接明火", "明火加热", "适配明火", "明火")),
+            ("炭火", ("炭火", "炭烧", "烧炭", "碳火", "碳烧", "木炭", "炭炉", "碳炉")),
+        )
+        explicit_heat_added = False
+        for normalized, terms in explicit_heat_aliases:
+            if semantic_contract.subject_kind == "stove" and any(term in text for term in terms):
+                continue
+            if any(term in text for term in terms):
+                _append_unique(semantic_contract.heat_sources, normalized)
+                explicit_heat_added = True
+        if semantic_contract.subject_kind != "stove":
+            from app.services import customer_agent_intent_service
+
+            normalized_heat = customer_agent_intent_service._normalize_structured_filter_value(
+                "specs.heat_source",
+                text,
+            )
+            if normalized_heat == "酒精炉":
+                _append_unique(semantic_contract.heat_sources, normalized_heat)
+                explicit_heat_added = True
+        if semantic_contract.heat_sources:
+            _append_unique(semantic_contract.hard_constraints, "heat_source")
+        if explicit_heat_added:
+            semantic_contract.field_provenance["heat_sources"] = {
+                "source_turn": 1,
+                "provenance": "current_turn_explicit_requirement",
+            }
+        explicit_fuel_subtypes = _explicit_alcohol_fuel_subtypes(text)
+        if explicit_fuel_subtypes and semantic_contract.subject_kind != "cookware":
+            semantic_contract.fuel_subtypes = list(dict.fromkeys(explicit_fuel_subtypes))
+            semantic_contract.fuel_subtype = (
+                semantic_contract.fuel_subtypes[0]
+                if len(semantic_contract.fuel_subtypes) == 1
+                else None
+            )
+            _append_unique(semantic_contract.hard_constraints, "fuel_subtype")
+            semantic_contract.source_spans["fuel_subtype"] = _span(
+                text,
+                "\u56fa\u4f53\u9152\u7cbe|\u56fa\u6001\u9152\u7cbe|\u9152\u7cbe\u5757|\u56fa\u4f53\u71c3\u6599|\u6db2\u4f53\u9152\u7cbe",
+            )
+            semantic_contract.field_provenance["fuel_subtype"] = {
+                "source_turn": 1,
+                "provenance": "current_turn_explicit_requirement",
+            }
+        exact_grade = _exact_stainless_grade(text)
+        if exact_grade:
+            semantic_contract.materials = [exact_grade]
+            _append_unique(semantic_contract.hard_constraints, "material")
+            semantic_contract.source_spans["material"] = _span(text, r"(?i)(?:316L|304|430)\s*不锈钢|不锈钢\s*(?:316L|304|430)")
+            semantic_contract.field_provenance["material"] = {
+                "source_turn": 1,
+                "provenance": "current_turn_exact_material_grade",
+            }
+        else:
+            grade_options = _stainless_grade_options(text)
+            if grade_options:
+                semantic_contract.materials = ["或".join(grade_options)]
+                _append_unique(semantic_contract.hard_constraints, "material")
+                semantic_contract.source_spans["material"] = _span(text, r"(?i)304\s*(?:或|或者|和|/|、|及)\s*316|316\s*(?:或|或者|和|/|、|及)\s*304")
+                semantic_contract.field_provenance["material"] = {
+                    "source_turn": 1,
+                    "provenance": "current_turn_material_grade_options",
+                }
+        # Once the semantic planner has supplied a scenario contract, literal
+        # workflow words such as “煮汤” must not expand that validated hard
+        # condition and reject otherwise matching candidates.
+        semantic_scenarios = list(semantic_contract.scenario)
+        _apply_literal_use_requirements(semantic_contract, text)
+        if semantic_scenarios:
+            semantic_contract.scenario = semantic_scenarios
         return semantic_contract
-    text = str(question or "").strip()
     contract = RecommendationRequestContract()
-    has_cookware_subject = any(term in text for term in ("锅具", "套锅", "炊具", "锅"))
     has_waterware_subject = any(term in text for term in ("水壶", "水杯", "水具", "杯子"))
-    stove_subject = _recommendation_stove_subject(text)
-    if has_cookware_subject:
+    if explicit_accessory_subject:
+        contract.subject_category = "配件"
+        contract.subject_kind = "accessories"
+        contract.subject_subtype = storage_bag_subtype
+        contract.source_spans["subject"] = next(term for term in accessory_terms if term in text)
+    elif has_cookware_subject:
         contract.subject_category = "锅具"
         contract.subject_kind = "cookware"
         contract.source_spans["subject"] = _span(text, r"锅具|套锅|炊具|锅")
     elif has_waterware_subject:
         contract.subject_category = "水具"
         contract.subject_kind = "waterware"
+        contract.subject_subtype = waterware_subtype
     elif stove_subject:
         contract.subject_category = "炉具"
         contract.subject_kind = "stove"
@@ -301,6 +716,10 @@ def build_recommendation_request_contract(
     elif any(term in text for term in ("咖啡", "磨豆", "磨豆器", "手冲")):
         contract.subject_category = "咖啡器具"
         contract.subject_kind = "coffee_gear"
+
+    if category_exclusions:
+        contract.excluded_categories = list(dict.fromkeys(category_exclusions))
+        contract.source_spans["excluded_categories"] = category_exclusion_spans
 
     contract.people_min, contract.people_max, people_span = _parse_people(text)
     if people_span:
@@ -332,6 +751,7 @@ def build_recommendation_request_contract(
         ("燃气炉", ("燃气炉",)),
         ("卡式炉", ("卡式炉",)),
         ("明火", ("明火直烧", "直接明火", "明火加热", "适配明火", "明火")),
+        ("炭火", ("炭火", "炭烧", "烧炭", "碳火", "碳烧", "木炭", "炭炉", "碳炉")),
     )
     for normalized, terms in heat_aliases:
         if contract.subject_kind == "stove" and any(term in text for term in terms):
@@ -351,9 +771,42 @@ def build_recommendation_request_contract(
     if contract.heat_sources:
         _append_unique(contract.hard_constraints, "heat_source")
 
-    for material in ("不锈钢", "硬质氧化铝", "铝合金", "钛"):
-        if material in text:
-            contract.materials.append(material)
+    explicit_fuel_subtypes = _explicit_alcohol_fuel_subtypes(text)
+    if explicit_fuel_subtypes and contract.subject_kind != "cookware":
+        contract.fuel_subtypes = list(dict.fromkeys(explicit_fuel_subtypes))
+        contract.fuel_subtype = contract.fuel_subtypes[0] if len(contract.fuel_subtypes) == 1 else None
+        _append_unique(contract.hard_constraints, "fuel_subtype")
+        contract.source_spans["fuel_subtype"] = _span(
+            text,
+            "\u56fa\u4f53\u9152\u7cbe|\u56fa\u6001\u9152\u7cbe|\u9152\u7cbe\u5757|\u56fa\u4f53\u71c3\u6599|\u6db2\u4f53\u9152\u7cbe",
+        )
+
+    structure_preference = _explicit_structure_preference(text)
+    if structure_preference:
+        contract.structure_preference = structure_preference
+        _append_unique(contract.hard_constraints, "structure")
+        contract.source_spans["structure"] = _span(
+            text,
+            r"不要分体(?:式)?|不想要分体(?:式)?|不需要分体(?:式)?|不选分体(?:式)?|排除分体(?:式)?|不考虑分体(?:式)?",
+        )
+
+    if explicit_accessory_requirements:
+        contract.accessory_requirements = list(explicit_accessory_requirements)
+        _append_unique(contract.hard_constraints, "accessory")
+
+    exact_grade = _exact_stainless_grade(text)
+    grade_options = _stainless_grade_options(text)
+    material_terms = (
+        (exact_grade,)
+        if exact_grade
+        else (("或".join(grade_options),) if grade_options else ("不锈钢", "硬质氧化铝", "铝合金", "钛"))
+    )
+    if grade_options:
+        contract.materials.append("或".join(grade_options))
+    else:
+        for material in material_terms:
+            if material in text:
+                contract.materials.append(material)
     if contract.materials:
         _append_unique(contract.hard_constraints, "material")
 
@@ -367,26 +820,7 @@ def build_recommendation_request_contract(
     if contract.budget_level:
         _append_unique(contract.soft_preferences, "budget")
 
-    contract.stability_required = any(term in text for term in ("稳定性", "稳定", "稳一点"))
-    contract.portability_required = any(term in text for term in ("便携", "好带", "轻便"))
-    contract.storage_required = any(term in text for term in ("收纳", "套娃"))
-    for enabled, label in (
-        (contract.stability_required, "stability"),
-        (contract.portability_required, "portability"),
-        (contract.storage_required, "storage"),
-    ):
-        if enabled:
-            _append_unique(contract.soft_preferences, label)
-
-    for label, terms in (
-        ("hiking", ("徒步",)),
-        ("self_drive", ("自驾",)),
-        ("camping", ("露营", "营地")),
-        ("seaside", ("海边",)),
-        ("soup", ("煮汤",)),
-    ):
-        if any(term in text for term in terms):
-            contract.scenario.append(label)
+    _apply_literal_use_requirements(contract, text)
 
     signal_count = len(contract.hard_constraints) + len(contract.soft_preferences)
     contract.confidence = "high" if contract.subject_category and signal_count >= 2 else "medium"
@@ -400,6 +834,7 @@ def build_recommendation_request_contract(
         "heat_sources",
         "materials",
         "stability",
+        "windproof",
         "portability",
         "storage",
     ):
@@ -413,6 +848,7 @@ def build_recommendation_request_contract(
             "heat_sources": bool(contract.heat_sources),
             "materials": bool(contract.materials),
             "stability": contract.stability_required,
+            "windproof": contract.windproof_required,
             "portability": contract.portability_required,
             "storage": contract.storage_required,
         }[key]
@@ -487,6 +923,7 @@ def merge_recommendation_request_contracts(
         ("materials", "materials"),
         ("hard_constraints", "hard_constraints"),
         ("soft_preferences", "soft_preferences"),
+        ("excluded_categories", "excluded_categories"),
     ):
         current_values = list(getattr(current_contract, field_name) or [])
         if not current_values:
@@ -494,12 +931,21 @@ def merge_recommendation_request_contracts(
         inherited_values = list(getattr(effective, field_name) or [])
         setattr(effective, field_name, list(dict.fromkeys([*inherited_values, *current_values])))
         provenance[provenance_key] = {"source_turn": current_turn, "provenance": "current_turn_addition"}
-    for field_name in ("stability_required", "portability_required", "storage_required"):
+    for field_name in ("stability_required", "windproof_required", "portability_required", "storage_required"):
         if getattr(current_contract, field_name):
             setattr(effective, field_name, True)
             provenance[field_name.removesuffix("_required")] = {"source_turn": current_turn, "provenance": "current_turn_addition"}
 
     effective.source_spans = {**inherited_contract.source_spans, **current_contract.source_spans}
+    effective.excluded_categories = list(dict.fromkeys([
+        *inherited_contract.excluded_categories,
+        *current_contract.excluded_categories,
+    ]))
+    if effective.excluded_categories:
+        provenance["excluded_categories"] = {
+            "source_turn": current_turn,
+            "provenance": "current_turn_addition",
+        }
     exclusions = [str(sku or "").strip().upper() for sku in inherited_contract.exclusions if str(sku or "").strip()]
     current_exclusions = [str(sku or "").strip().upper() for sku in current_contract.exclusions if str(sku or "").strip()]
     exclusions.extend(current_exclusions)
@@ -522,6 +968,24 @@ def _usable(value: Any) -> bool:
 def _row_scope(row: dict[str, Any]) -> str:
     text = " ".join(str(row.get(key) or "") for key in ("category", "sub_category", "product_name_cn"))
     return "accessory" if any(term in text for term in ("配件", "附件", "锅盖", "手柄", "收纳袋", "替换件")) else "subject"
+
+
+def _row_matches_excluded_category(row: dict[str, Any], excluded_categories: list[str]) -> bool:
+    category_text = " ".join(
+        str(row.get(key) or "")
+        for key in ("category", "sub_category", "product_name_cn", "product_name_en")
+    )
+    aliases = {
+        "炉具": ("炉具", "炉子", "燃气炉", "卡式炉", "酒精炉", "气炉"),
+        "配件": ("配件", "附件", "锅夹", "点火器", "炉芯", "内胆"),
+        "锅具": ("锅具", "套锅", "炊具"),
+        "水具": ("水具", "水壶", "水杯"),
+    }
+    for excluded in excluded_categories or []:
+        terms = aliases.get(str(excluded or "").strip(), (str(excluded or "").strip(),))
+        if any(term and term in category_text for term in terms):
+            return True
+    return False
 
 
 def _cookware_subject_identity_is_valid(row: dict[str, Any]) -> bool:
@@ -561,12 +1025,60 @@ def _cookware_subject_identity_is_valid(row: dict[str, Any]) -> bool:
     )
 
 
+def _waterware_subject_identity_is_valid(contract: RecommendationRequestContract, row: dict[str, Any]) -> bool:
+    """Keep an explicit kettle/cup request inside its named container type."""
+    if not contract.subject_subtype:
+        return True
+    identity = " ".join(
+        str(row.get(key) or "")
+        for key in ("product_name_cn", "product_name_en", "name", "title")
+    ).lower()
+    if contract.subject_subtype == "kettle":
+        return any(term in identity for term in ("水壶", "烧水壶", "茶壶", "kettle"))
+    if contract.subject_subtype == "cup":
+        return any(term in identity for term in ("水杯", "杯子", "保温杯", "cup"))
+    return False
+
+
+def _waterware_subtype_evidence(
+    contract: RecommendationRequestContract,
+    row: dict[str, Any],
+) -> tuple[bool, dict[str, Any] | None, str | None]:
+    if contract.subject_kind != "waterware" or not contract.subject_subtype:
+        return True, None, None
+    identity = " ".join(
+        str(row.get(key) or "")
+        for key in ("product_name_cn", "product_name_en", "name", "title")
+    ).strip()
+    matched = _waterware_subject_identity_is_valid(contract, row)
+    evidence = _condition(
+        "verified" if matched else "conflict",
+        "product_name_cn",
+        identity,
+        subject_subtype=contract.subject_subtype,
+    )
+    return matched, evidence, None if matched else "subject_subtype_mismatch"
+
+
 def _subject_evidence(contract: RecommendationRequestContract, row: dict[str, Any]) -> tuple[bool, dict[str, Any], str | None]:
     category = str(row.get("category") or "").strip()
     scope = _row_scope(row)
     evidence = {"status": "verified", "field_source": "product.category", "raw_value": category, "scope": scope}
+    if _row_matches_excluded_category(row, contract.excluded_categories):
+        evidence["status"] = "conflict"
+        evidence["excluded_category"] = list(contract.excluded_categories)
+        return False, evidence, "excluded_category"
     if contract.subject_category == "配件":
         if scope == "accessory" or "配件" in category:
+            if contract.subject_subtype == "storage_bag":
+                identity = " ".join(
+                    str(row.get(key) or "")
+                    for key in ("product_name_cn", "product_name_en", "title_cn", "website_title")
+                ).lower()
+                storage_terms = ("收纳包", "收纳袋", "装备包", "野炊包", "餐具包", "厨具包")
+                if not any(term in identity for term in storage_terms):
+                    evidence.update({"status": "conflict", "field_source": "product_identity"})
+                    return False, evidence, "subject_subtype_mismatch"
             return True, evidence, None
         evidence["status"] = "conflict"
         return False, evidence, "subject_category_mismatch"
@@ -581,6 +1093,9 @@ def _subject_evidence(contract: RecommendationRequestContract, row: dict[str, An
         return False, evidence, "subject_category_mismatch"
     if contract.subject_category == "水具" and not any(term in category for term in ("水具", "水壶", "水杯")):
         evidence["status"] = "conflict"
+        return False, evidence, "subject_category_mismatch"
+    if contract.subject_kind == "waterware" and not _waterware_subject_identity_is_valid(contract, row):
+        evidence.update({"status": "conflict", "field_source": "product_identity"})
         return False, evidence, "subject_category_mismatch"
     if contract.subject_category == "咖啡器具" and "咖啡器具" not in category:
         evidence["status"] = "conflict"
@@ -600,7 +1115,7 @@ def _stove_subtype_evidence(
     contract: RecommendationRequestContract,
     row: dict[str, Any],
 ) -> tuple[bool, dict[str, Any] | None, str | None]:
-    if not contract.subject_subtype:
+    if contract.subject_kind != "stove" or not contract.subject_subtype:
         return True, None, None
     product_name = str(row.get("product_name_cn") or "").strip()
     if contract.subject_subtype == "card_stove":
@@ -708,6 +1223,39 @@ def verify_recommendation_candidates(
         if subtype_reason:
             rejection_reasons.append(subtype_reason)
         subject_ok = subject_ok and subtype_ok
+        waterware_subtype_ok, waterware_subtype_evidence, waterware_subtype_reason = _waterware_subtype_evidence(contract, row)
+        if waterware_subtype_evidence is not None:
+            evidence["subject_subtype"] = waterware_subtype_evidence
+        if waterware_subtype_reason:
+            rejection_reasons.append(waterware_subtype_reason)
+        subject_ok = subject_ok and waterware_subtype_ok
+
+        if contract.structure_preference:
+            structure_text = " ".join(
+                str(row.get(key) or "")
+                for key in (
+                    "product_name_cn",
+                    "product_name_en",
+                    "category",
+                    "sub_category",
+                    "features",
+                    "long_description_cn",
+                    "usage_instruction",
+                    "positioning",
+                    "top_selling_points",
+                )
+            )
+            split_terms = ("分体炉", "分体式", "远程炉头", "炉头分离", "炉具分体")
+            integrated_terms = ("一体炉", "一体式", "整体炉", "整体", "桌炉一体", "一体收纳")
+            if not _usable(structure_text):
+                evidence["structure"] = _condition("unknown")
+            elif any(term in structure_text for term in split_terms):
+                evidence["structure"] = _condition("conflict", "product_structure_evidence", structure_text)
+                rejection_reasons.append("structure_condition_not_met")
+            elif any(term in structure_text for term in integrated_terms):
+                evidence["structure"] = _condition("verified", "product_structure_evidence", structure_text)
+            else:
+                evidence["structure"] = _condition("unknown", "product_structure_evidence", structure_text)
 
         if contract.people_min is not None:
             row_min, row_max, raw, source = _people_range(row)
@@ -727,6 +1275,7 @@ def verify_recommendation_candidates(
                 "self_drive": ("自驾",),
                 "seaside": ("海边",),
                 "soup": ("煮汤",),
+                "hotpot": ("火锅", "涮锅"),
             }
             if not _usable(raw_scenarios):
                 evidence["scenario"] = _condition("unknown")
@@ -803,15 +1352,72 @@ def verify_recommendation_candidates(
                 if not matched:
                     rejection_reasons.append("heat_source_condition_not_met")
 
+        requested_fuel_subtypes = list(contract.fuel_subtypes or [])
+        if not requested_fuel_subtypes and contract.fuel_subtype:
+            requested_fuel_subtypes = [contract.fuel_subtype]
+        if requested_fuel_subtypes:
+            candidate_fuel_text = " ".join(
+                str(row.get(key) or "")
+                for key in (
+                    "heat_source",
+                    "product_name_cn",
+                    "product_name_en",
+                    "features",
+                    "long_description_cn",
+                    "usage_instruction",
+                )
+            )
+            matched_fuels = all(term in candidate_fuel_text for term in requested_fuel_subtypes)
+            evidence["fuel_subtype"] = _condition(
+                "verified" if matched_fuels else "conflict",
+                "heat_source",
+                candidate_fuel_text.strip(),
+                requested_fuel_subtypes=requested_fuel_subtypes,
+            )
+            if not matched_fuels:
+                rejection_reasons.append("fuel_subtype_condition_not_met")
+
         if contract.materials:
             raw_material = str(row.get("body_material") or "").strip()
             if not _usable(raw_material):
                 evidence["material"] = _condition("unknown")
             else:
-                matched = all(material in raw_material for material in contract.materials)
+                matched = all(_material_token_matches(raw_material, material) for material in contract.materials)
                 evidence["material"] = _condition("verified" if matched else "conflict", "body_material", raw_material)
             if _usable(raw_material) and not matched:
                 rejection_reasons.append("material_condition_not_met")
+
+        if contract.accessory_requirements:
+            raw_accessory = "；".join(
+                str(row.get(key) or "").strip()
+                for key in (
+                    "accessories",
+                    "features",
+                    "top_selling_points",
+                    "long_description_cn",
+                    "bullet_points",
+                    "usage_instruction",
+                    "size_info",
+                    "product_name_cn",
+                )
+                if _usable(row.get(key))
+            )
+            positive_terms = ("蒸屉", "蒸笼", "蒸米饭", "蒸饭")
+            negative_terms = ("不支持蒸", "不能蒸", "不可蒸", "不适合蒸")
+            if not _usable(raw_accessory):
+                evidence["accessory"] = _condition("unknown")
+            elif any(term in raw_accessory for term in negative_terms):
+                evidence["accessory"] = _condition("conflict", "product_accessory_evidence", raw_accessory)
+                rejection_reasons.append("accessory_condition_not_met")
+            elif any(term in raw_accessory for term in positive_terms):
+                evidence["accessory"] = _condition(
+                    "verified",
+                    "product_accessory_evidence",
+                    raw_accessory,
+                    requirements=list(contract.accessory_requirements),
+                )
+            else:
+                evidence["accessory"] = _condition("unknown", "product_accessory_evidence", raw_accessory)
 
         if contract.dishwasher_safe_required:
             raw_usage = str(row.get("usage_instruction") or "").strip()
@@ -847,6 +1453,7 @@ def verify_recommendation_candidates(
 
         for label, required, fields in (
             ("stability", contract.stability_required, ("features", "positioning")),
+            ("windproof", contract.windproof_required, ("features", "positioning")),
             ("portability", contract.portability_required, ("features", "positioning")),
             # These are sealed first-party product fields.  They may establish
             # a storage fact only when the same SKU explicitly records it;
@@ -857,7 +1464,19 @@ def verify_recommendation_candidates(
                 continue
             raw = "；".join(str(row.get(key) or "").strip() for key in fields if _usable(row.get(key)))
             terms = {
-                "stability": ("稳定", "稳固"),
+                "stability": (
+                    "支架稳固",
+                    "支架稳定",
+                    "底座稳固",
+                    "底座稳定",
+                    "结构稳固",
+                    "结构稳定",
+                    "放置平稳",
+                    "放置稳定",
+                    "不易倾倒",
+                    "稳固支撑",
+                ),
+                "windproof": ("防风", "抗风"),
                 "portability": ("便携", "好带"),
                 "storage": ("收纳", "套娃"),
             }[label]
@@ -878,7 +1497,12 @@ def verify_recommendation_candidates(
             for label in contract.hard_constraints
             if (evidence.get(label) or {}).get("status") == "conflict"
         ]
-        has_hard_constraint_conflict = not subject_ok or bool(conflicts)
+        # An explicit non-split requirement is safety/fit-sensitive: unknown
+        # structure evidence must not be surfaced as a recommendation when
+        # the catalogue cannot verify the requested boundary.
+        has_hard_constraint_conflict = not subject_ok or bool(conflicts) or (
+            "structure" in contract.hard_constraints and "structure" in unsupported_constraints
+        )
         all_hard_constraints_verified = subject_ok and all(
             (evidence.get(label) or {}).get("status") == "verified"
             for label in contract.hard_constraints
@@ -926,7 +1550,10 @@ def select_recommendation_candidates(
         and verification_by_sku[str(row.get("sku") or "").strip().upper()].verification_level == "partially_verified"
     ]
     if not fully_verified:
-        return partially_verified
+        return [
+            row for row in partially_verified
+            if "accessory" not in (verification_by_sku[str(row.get("sku") or "").strip().upper()].unsupported_constraints or [])
+        ]
     # A missing people-range label is safe to disclose as uncertainty behind a
     # fully verified candidate.  Missing heat-source, material, capacity, or
     # other safety-relevant hard evidence must not be reinserted when a fully
@@ -947,11 +1574,16 @@ _CONSTRAINT_LABELS = {
     "capacity": "容量",
     "weight": "重量",
     "heat_source": "热源",
+    "fuel_subtype": "酒精燃料类型",
     "material": "材质",
     "budget": "预算",
+    "price_positioning": "价格定位",
     "stability": "稳定性",
+    "windproof": "防风性",
     "portability": "便携性",
     "storage": "收纳",
+    "accessory": "蒸屉兼容",
+    "structure": "结构",
 }
 
 
@@ -983,6 +1615,63 @@ def _display_verified_evidence_value(value: Any) -> str:
     return text.replace("\n", "；")
 
 
+def _compact_customer_value(value: Any, *, limit: int = 56) -> str:
+    """Keep catalogue evidence readable when a broad recommendation has no preference to rank by."""
+    text = _display_verified_evidence_value(value).strip(" 。；;,")
+    if not text or text in _EMPTY_VALUES:
+        return ""
+    # Product rows frequently store marketing copy as newline/comma-separated
+    # fragments.  Keep the first two fragments so a broad answer remains a
+    # comparison rather than a dump of the whole profile.
+    fragments = [part.strip() for part in re.split(r"[\n,，;；。]", text) if part.strip()]
+    if len(fragments) > 1:
+        text = "、".join(fragments[:2])
+    if len(text) > limit:
+        text = text[: limit - 1].rstrip() + "…"
+    return text
+
+
+def _row_customer_summary(row: dict[str, Any]) -> str:
+    """Render only same-row, customer-safe fields for an unconstrained comparison."""
+    field_values = row.get("field_values") if isinstance(row.get("field_values"), dict) else {}
+
+    def value(*keys: str) -> Any:
+        for key in keys:
+            candidate = row.get(key)
+            if _usable(candidate):
+                return candidate
+            candidate = field_values.get(key)
+            if _usable(candidate):
+                return candidate
+        return ""
+
+    details: list[str] = []
+    power = _compact_customer_value(value("power", "功率"))
+    power = re.sub(r"^(?:最大)?功率\s*[:：]?\s*", "", power)
+    if power:
+        details.append(f"功率{power}")
+    weight = value("gross_weight_g", "weight", "重量")
+    if isinstance(weight, (int, float)) and weight > 0:
+        details.append(f"重量{weight:g}g")
+    else:
+        weight_text = _compact_customer_value(weight)
+        if re.fullmatch(r"\d+(?:\.\d+)?", weight_text):
+            weight_text = f"{float(weight_text):g}"
+        if weight_text:
+            details.append(f"重量{weight_text}g" if weight_text.replace(".", "", 1).isdigit() else f"重量{weight_text}")
+    heat_source = _compact_customer_value(value("heat_source", "热源"))
+    if heat_source:
+        details.append(f"热源{heat_source}")
+    scenario = _compact_customer_value(value("usage_scenarios", "使用场景"), limit=44)
+    if scenario:
+        details.append(f"场景{scenario}")
+    if not details:
+        feature = _compact_customer_value(value("features", "卖点", "positioning", "定位"), limit=48)
+        if feature:
+            details.append(feature)
+    return "；".join(details)
+
+
 def build_verified_recommendation_answer(
     contract: RecommendationRequestContract,
     verified_rows: list[dict[str, Any]],
@@ -1009,21 +1698,37 @@ def build_verified_recommendation_answer(
     lines = (
         ["当前没有找到所有条件都能完整验证的商品。以下推荐锅具候选未发现明确冲突，但部分条件缺少资料，仅供参考；首项优先参考，其余作为备选："]
         if partial_result and not fully_verified_result
-        else ["\u63a8\u8350\u4f18\u5148\u770b\u4ee5\u4e0b\u5019\u9009\uff1b\u5b83\u4eec\u901a\u8fc7\u4e86\u53ef\u9a8c\u8bc1\u7684\u786c\u6027\u6761\u4ef6\uff1a"]
+        else [
+            "\u63a8\u8350\u4f18\u5148\u770b\u8fd9\u6b3e\uff1a"
+            if len(rows) == 1
+            else "\u53ef\u4ee5\u4f18\u5148\u8003\u8651\u4ee5\u4e0b\u51e0\u6b3e\uff1a"
+        ]
     )
     if fully_verified_result and partial_result:
         lines = [
             "以下推荐优先展示已通过当前可验证的硬性条件的候选；其余备选会明确标出尚未验证的条件，供你结合实际需求判断："
         ]
+    if contract.budget_level in {"low", "affordable"}:
+        lines.insert(
+            0,
+            "按预算不高的需求，优先看入门款或高性价比定位；资料里的价格定位不等同于实时售价。",
+        )
     if contract.subject_kind == "stove":
         subject_label = {
             "card_stove": "卡式炉",
             "alcohol_stove": "酒精炉",
         }.get(contract.subject_subtype, "炉具类商品")
-        lines.append(f"本次按“{subject_label}”主体范围筛选：")
+        lines.append(f"已找到符合“{subject_label}”类型的候选：")
     if contract.heat_sources:
         heat_source_label = "、".join(contract.heat_sources)
         lines.append(f"本次仅保留同 SKU 热源字段明确标注支持{heat_source_label}的候选。")
+    requested_fuel_subtypes = list(contract.fuel_subtypes or [])
+    if not requested_fuel_subtypes and contract.fuel_subtype:
+        requested_fuel_subtypes = [contract.fuel_subtype]
+    if requested_fuel_subtypes:
+        lines.append(f"本次还要求同 SKU 资料明确标注支持{'、'.join(requested_fuel_subtypes)}。")
+    if contract.structure_preference == "non_split":
+        lines.append("本次排除同 SKU 资料标注为分体、分体式或远程炉头的候选；未标注结构的商品不作为已核验推荐。")
     total = len(rows) if total_match_count is None else max(int(total_match_count), 0)
     if total > len(rows):
         lines.insert(0, f"共找到{total}款可供参考的商品，以下先展示前{len(rows)}款：")
@@ -1039,12 +1744,42 @@ def build_verified_recommendation_answer(
         if people_label:
             lines.append(f"当前资料未明确标注 {people_label} 适用的候选；以下仅保留未见明确冲突的备选。")
         lines.append(f"本次仅按{people_label}{scenario_label}锅具主体范围筛选。")
+
+    # A broad request such as “户外的气炉推荐一下” has a valid subject but
+    # no evidence-backed preference that can rank one SKU above the others.
+    # A bare name list looks like a successful answer while giving the
+    # customer no basis for choosing.  Keep the result set, add same-row
+    # comparison evidence, and state what is still needed for a conclusion.
+    unconstrained_multi_candidate = (
+        len(rows) > 1
+        and not contract.hard_constraints
+        and not contract.soft_preferences
+        and fully_verified_result
+        and not partial_result
+    )
+    if unconstrained_multi_candidate:
+        lines = [
+            "以下是按当前主体范围核验通过的候选。你暂时没有给出人数、热源、火力或便携偏好，现有资料不足以负责任地只定一款；先把可直接对照的信息列出来："
+        ]
+        if contract.subject_kind == "stove":
+            subject_label = {
+                "card_stove": "卡式炉",
+                "alcohol_stove": "酒精炉",
+            }.get(contract.subject_subtype, "炉具类商品")
+            lines.append(f"本次范围：{subject_label}。")
+        total = len(rows) if total_match_count is None else max(int(total_match_count), 0)
+        if total > len(rows):
+            lines.append(f"共找到{total}款，以下先展示前{len(rows)}款：")
+
     for row in rows[:5]:
         sku = str(row.get("sku") or "").strip().upper()
         item = accepted[sku]
         reasons: list[str] = []
         for label, evidence in item.evidence_by_constraint.items():
-            if label == "subject" or evidence.get("status") != "verified":
+            # Subject subtype is the scope boundary used to admit the row;
+            # it is already expressed by the customer-facing heading and is
+            # not a product feature to render as ``subject_subtype: ...``.
+            if label in {"subject", "subject_subtype"} or evidence.get("status") != "verified":
                 continue
             raw = evidence.get("raw_value")
             if not _usable(raw):
@@ -1057,7 +1792,7 @@ def build_verified_recommendation_answer(
                 display = f"{evidence['normalized_ml']:g}ml"
             elif label == "weight" and evidence.get("normalized_g") is not None:
                 display = f"{evidence['normalized_g']:g}g"
-            elif label in {"stability", "portability", "storage"}:
+            elif label in {"stability", "windproof", "portability", "storage"}:
                 display = "商品资料有明确标注"
             else:
                 display = _display_verified_evidence_value(raw)
@@ -1066,8 +1801,25 @@ def build_verified_recommendation_answer(
         line = f"- {name}（{sku}）"
         if reasons:
             line += "，" + "；".join(reasons)
+        elif contract.subject_subtype:
+            # Subtype verification is a valid identity boundary, but it is
+            # not itself a customer-facing product feature. Add one same-row
+            # fact when available so a one-item recommendation still explains
+            # why the item is being shown.
+            subtype_fact = _compact_customer_value(
+                row.get("features") or row.get("usage_scenarios") or row.get("capacity"),
+                limit=72,
+            )
+            if subtype_fact:
+                line += f"，资料显示{subtype_fact}"
         unsupported = list(dict.fromkeys([*item.unsupported_constraints, *item.unsupported_preferences]))
         if unsupported:
             line += f"。{_customer_safe_missing_requirement_note(unsupported)}"
+        if unconstrained_multi_candidate and not reasons:
+            summary = _row_customer_summary(row)
+            if summary:
+                line += f"：{summary}"
         lines.append(line)
+    if unconstrained_multi_candidate:
+        lines.append("如果你更看重火力、轻量、燃料类型或使用人数，请告诉我优先条件，我再在这些已核验候选里给出明确首选。")
     return "\n".join(lines)

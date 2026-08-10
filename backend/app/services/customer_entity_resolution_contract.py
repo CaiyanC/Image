@@ -294,6 +294,12 @@ def _normalized(value: str) -> str:
     return customer_agent_service.normalize_search_text(value).lower().strip()
 
 
+def _raw_sku_identity_key(value: str) -> str:
+    """Normalize casing/separators without expanding parenthesized variants."""
+    raw = str(value or "").strip().upper().replace("_", "-")
+    return _normalized(raw).upper() if raw else ""
+
+
 def _explicit_sku_identity_keys(value: str) -> set[str]:
     """Return catalog-verifiable equivalents for an explicit SKU token.
 
@@ -302,9 +308,9 @@ def _explicit_sku_identity_keys(value: str) -> set[str]:
     alternate key is usable only when exactly one real catalog SKU owns it.
     """
     raw = str(value or "").strip().upper().replace("_", "-")
-    if not raw:
+    normalized = _raw_sku_identity_key(raw)
+    if not normalized:
         return set()
-    normalized = _normalized(raw).upper()
     parenthetical = re.sub(r"[（(]\s*([A-Z0-9]+)\s*[）)]", r"-\1", raw)
     return {
         key
@@ -679,7 +685,11 @@ def build_entity_resolution_contract(
     if normalized_entity in _GENERIC_CATEGORY_TERMS:
         return EntityResolutionContract(entity_text, normalized_entity, "generic", None, [], [], [], "none", "low", False, matched_span, field_type, "generic_or_missing_entity")
     sku_identity_owners: dict[str, list[Product]] = {}
+    raw_sku_identity_owners: dict[str, list[Product]] = {}
     for product in products:
+        raw_key = _raw_sku_identity_key(getattr(product, "sku", ""))
+        if raw_key:
+            raw_sku_identity_owners.setdefault(raw_key, []).append(product)
         for key in _explicit_sku_identity_keys(getattr(product, "sku", "")):
             sku_identity_owners.setdefault(key, []).append(product)
     # The field-subject extractor may intentionally replace an explicit SKU
@@ -690,11 +700,16 @@ def build_entity_resolution_contract(
     # comparison participants into one product.
     question_sku_products: set[str] = set()
     for raw_sku in customer_agent_service._extract_skus(question):
-        for key in _explicit_sku_identity_keys(raw_sku):
-            for product in sku_identity_owners.get(key) or []:
-                sku = str(getattr(product, "sku", "") or "").strip().upper()
-                if sku:
-                    question_sku_products.add(sku)
+        raw_owners = raw_sku_identity_owners.get(_raw_sku_identity_key(raw_sku)) or []
+        owners = raw_owners if len(raw_owners) == 1 else [
+            product
+            for key in _explicit_sku_identity_keys(raw_sku)
+            for product in sku_identity_owners.get(key) or []
+        ]
+        for product in owners:
+            sku = str(getattr(product, "sku", "") or "").strip().upper()
+            if sku:
+                question_sku_products.add(sku)
     identity_sources = (
         (entity_text,)
         if participant_local_identity
@@ -722,19 +737,32 @@ def build_entity_resolution_contract(
             suffix = "-".join(parts[index:])
             if suffix:
                 explicit_sku_candidates.append(suffix)
+    raw_explicit_products_by_sku: dict[str, Product] = {}
+    for token in explicit_sku_candidates:
+        raw_owners = raw_sku_identity_owners.get(_raw_sku_identity_key(token)) or []
+        if len(raw_owners) == 1:
+            product = raw_owners[0]
+            sku = str(getattr(product, "sku", "") or "").strip().upper()
+            if sku:
+                raw_explicit_products_by_sku[sku] = product
+
     explicit_products_by_sku: dict[str, Product] = {}
+    if len(raw_explicit_products_by_sku) == 1:
+        explicit_products_by_sku.update(raw_explicit_products_by_sku)
+
     normalized_token_keys = {
         key
         for token in explicit_sku_candidates
         for key in _explicit_sku_identity_keys(token)
     }
-    for key in normalized_token_keys:
-        owners = sku_identity_owners.get(key) or []
-        if len(owners) == 1:
-            product = owners[0]
-            sku = str(getattr(product, "sku", "") or "").strip().upper()
-            if sku:
-                explicit_products_by_sku[sku] = product
+    if not explicit_products_by_sku:
+        for key in normalized_token_keys:
+            owners = sku_identity_owners.get(key) or []
+            if len(owners) == 1:
+                product = owners[0]
+                sku = str(getattr(product, "sku", "") or "").strip().upper()
+                if sku:
+                    explicit_products_by_sku[sku] = product
     if len(explicit_products_by_sku) == 1:
         resolved_sku, product = next(iter(explicit_products_by_sku.items()))
         raw_sku_key = _normalized(str(getattr(product, "sku", "") or "")).upper()

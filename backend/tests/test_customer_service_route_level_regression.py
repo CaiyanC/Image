@@ -409,6 +409,26 @@ def test_customer_service_ask_route_level_scene_019_prefers_stove_domain_for_bbq
     assert all(category == "炉具" for category in front_categories.values()), front_categories
 
 
+def test_customer_service_ask_route_level_tent_fuel_safety_precedes_fuel_identity_clarification(
+    route_client_and_db,
+):
+    client, headers, _ = route_client_and_db
+
+    response = client.post(
+        "/api/customer-service/ask?debug=true",
+        json={"question": "液体酒精炉在帐篷里能用吗？为什么？"},
+        headers=headers,
+    )
+
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    assert payload["answer_type"] == "product_usage_care", payload
+    assert "帐篷" in payload["answer"]
+    assert "通风" in payload["answer"]
+    assert payload["debug"]["agent_mode"] == "product_usage_care_fast_path"
+    assert payload["debug"]["agent_mode"] != "unbound_fuel_compatibility_identity_required"
+
+
 @pytest.mark.parametrize(
     ("question", "expected_sku", "expected_category", "expect_heat_source_phrase"),
     [
@@ -752,6 +772,174 @@ def test_customer_service_ask_route_level_explicit_sku_alcohol_compatibility_bea
     assert not re.search(r"明火直烧.*酒精炉|卡式炉.*酒精炉|分体炉.*酒精炉", payload["answer"]), payload["answer"]
 
 
+def test_customer_service_ask_route_level_compound_sku_keeps_product_anchor_for_each_child(
+    route_client_and_db,
+):
+    client, headers, Session = route_client_and_db
+
+    response = client.post(
+        "/api/customer-service/ask?debug=true",
+        json={"question": "CW-C83 适合什么场景？能不能用酒精炉？"},
+        headers=headers,
+    )
+
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    assert payload["answer_type"] == "product_detail", payload
+    assert payload["result_skus"] == ["CW-C83"], payload
+    assert "CW-C83" in payload["answer"]
+    assert "酒精炉" in payload["answer"]
+    assert any(term in payload["answer"] for term in ("场景", "露营", "火锅")), payload["answer"]
+    assert "这款酒精炉" not in payload["answer"]
+
+
+def test_compound_semantic_product_qa_bypasses_generic_compatibility_fast_path(
+    route_client_and_db,
+    monkeypatch,
+):
+    client, headers, _ = route_client_and_db
+    usage_calls = []
+
+    async def semantic_compound_preplan(*_args, **_kwargs):
+        return {
+            "called": True,
+            "route_family": "product_bound_qa",
+            "route_hint": "product_detail",
+            "question_type": "field",
+            "entities": ["CW-C83"],
+            "subject_text": "CW-C83",
+            "canonical_fields": [],
+            "ambiguity": False,
+            "evidence_required": True,
+            "evidence_kind": "product_qa",
+            "qa_evidence_query": "CW-C83 适合什么场景 能不能用酒精炉",
+            "qa_evidence_queries": ["适合什么场景", "能不能用酒精炉"],
+            "compound": True,
+            "confidence": 0.95,
+            "confidence_label": "high",
+            "fallback_reason": "",
+            "recommendation_constraints": {},
+            "unrepresented_recommendation_requirements": [],
+            "recommendation_soft_preferences": [],
+        }
+
+    async def generic_usage_fast_path(*_args, **_kwargs):
+        usage_calls.append(True)
+        return {
+            "intent": "product_usage_care",
+            "answer_type": "product_usage_care",
+            "answer": "generic compatibility fallback",
+            "results": [],
+            "result_skus": ["CW-C83"],
+            "candidate_skus": ["CW-C83"],
+            "debug": {"agent_mode": "generic_usage_fast_path"},
+            "skip_polish": True,
+        }
+
+    monkeypatch.setattr(customer_service_service, "_maybe_run_semantic_preplan", semantic_compound_preplan)
+    monkeypatch.setattr(
+        customer_service_service.customer_agent_intent_service,
+        "answer_product_usage_care_request",
+        generic_usage_fast_path,
+    )
+
+    response = client.post(
+        "/api/customer-service/ask?debug=true",
+        json={"question": "CW-C83 适合什么场景？能不能用酒精炉？"},
+        headers=headers,
+    )
+
+    assert response.status_code == 200, response.text
+    assert usage_calls == []
+
+
+def test_semantic_general_chat_does_not_capture_stove_pairing_recommendation(
+    route_client_and_db,
+    monkeypatch,
+):
+    client, headers, _ = route_client_and_db
+
+    async def general_chat_preplan(*_args, **_kwargs):
+        return {
+            "called": True,
+            "route_family": "general_chat",
+            "route_hint": "clarification",
+            "question_type": "recommendation",
+            "entities": [],
+            "subject_text": "炉具和烤盘",
+            "canonical_fields": [],
+            "ambiguity": False,
+            "evidence_required": False,
+            "evidence_kind": "structured_field",
+            "compound": False,
+            "confidence": 0.95,
+            "confidence_label": "high",
+            "fallback_reason": "",
+            "recommendation_constraints": {},
+            "unrepresented_recommendation_requirements": [],
+            "recommendation_soft_preferences": ["风比较大的营地"],
+        }
+
+    monkeypatch.setattr(customer_service_service, "_maybe_run_semantic_preplan", general_chat_preplan)
+
+    response = client.post(
+        "/api/customer-service/ask?debug=true",
+        json={"question": "风比较大的营地，炉具和烤盘怎么搭？"},
+        headers=headers,
+    )
+
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    assert payload["answer_type"] == "recommendation", payload
+    assert payload["result_skus"], payload
+    assert {"炉具", "锅具"}.issubset({row["category"] for row in payload["results"]})
+    assert "烤盘" in payload["answer"]
+
+
+def test_invalid_semantic_recommendation_contract_does_not_capture_stove_pairing_recommendation(
+    route_client_and_db,
+    monkeypatch,
+):
+    client, headers, _ = route_client_and_db
+
+    async def invalid_recommendation_preplan(*_args, **_kwargs):
+        return {
+            "called": True,
+            "route_family": "",
+            "route_hint": "",
+            "question_type": "",
+            "entities": [],
+            "subject_text": "",
+            "canonical_fields": [],
+            "ambiguity": False,
+            "evidence_required": False,
+            "evidence_kind": "",
+            "compound": False,
+            "confidence": 0.0,
+            "confidence_label": "low",
+            "fallback_reason": "invalid_recommendation_constraints",
+            "semantic_route_family_hint": "recommendation",
+            "recommendation_constraints": {},
+            "unrepresented_recommendation_requirements": [],
+            "recommendation_soft_preferences": ["风比较大的营地"],
+        }
+
+    monkeypatch.setattr(customer_service_service, "_maybe_run_semantic_preplan", invalid_recommendation_preplan)
+
+    response = client.post(
+        "/api/customer-service/ask?debug=true",
+        json={"question": "风比较大的营地，炉具和烤盘怎么搭？"},
+        headers=headers,
+    )
+
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    assert payload["answer_type"] == "recommendation", payload
+    assert payload["result_skus"], payload
+    assert {"炉具", "锅具"}.issubset({row["category"] for row in payload["results"]})
+    assert "烤盘" in payload["answer"]
+
+
 def test_customer_service_ask_route_level_multiturn_variant_pronoun_heat_source_followup_anchors_top_sku(
     route_client_and_db,
 ):
@@ -834,6 +1022,137 @@ def test_customer_service_ask_route_level_multiturn_variant_ordinal_followups_an
     assert payload3["result_skus"] == [payload1["result_skus"][1]], payload3
 
 
+def test_mixed_category_context_keeps_named_waterware_ordinal_in_its_scope(route_client_and_db):
+    client, headers, _ = route_client_and_db
+
+    first = client.post(
+        "/api/customer-service/ask?debug=true",
+        json={"question": "燃气和烧水壶分别推荐一个？"},
+        headers=headers,
+    )
+    assert first.status_code == 200, first.text
+    payload1 = first.json()
+    assert payload1["answer_type"] == "recommendation", payload1
+    waterware_skus = [
+        row["sku"] for row in payload1.get("results") or []
+        if row.get("category") in {"水具", "水壶"}
+    ]
+    stove_skus = [
+        row["sku"] for row in payload1.get("results") or []
+        if row.get("category") == "炉具"
+    ]
+    assert waterware_skus, payload1
+    assert stove_skus, payload1
+
+    second = client.post(
+        "/api/customer-service/ask?debug=true",
+        json={
+            "question": "第一个烧水壶的容量是多少？",
+            "conversation_id": payload1["conversation_id"],
+        },
+        headers=headers,
+    )
+    assert second.status_code == 200, second.text
+    payload2 = second.json()
+    assert payload2["result_skus"] == [waterware_skus[0]], payload2
+    assert "容量" in payload2["answer"], payload2
+    assert all(sku not in payload2["answer"] for sku in stove_skus), payload2
+
+
+def test_ordinal_followup_renders_all_requested_fields_for_one_candidate(route_client_and_db):
+    client, headers, _ = route_client_and_db
+
+    first = client.post(
+        "/api/customer-service/ask?debug=true",
+        json={"question": "推荐几款适合家庭露营的锅具。"},
+        headers=headers,
+    ).json()
+    assert len(first["result_skus"]) >= 2, first
+
+    second = client.post(
+        "/api/customer-service/ask?debug=true",
+        json={
+            "question": "你刚才推荐的第一款，重量和容量分别是多少？",
+            "conversation_id": first["conversation_id"],
+        },
+        headers=headers,
+    ).json()
+
+    assert second["result_skus"] == [first["result_skus"][0]], second
+    assert "重量" in second["answer"], second
+    assert "容量" in second["answer"], second
+
+
+def test_ordinal_griddle_followup_renders_dimensions_and_material(route_client_and_db):
+    client, headers, _ = route_client_and_db
+
+    first = client.post(
+        "/api/customer-service/ask?debug=true",
+        json={"question": "推荐一款适合露营的烤盘。"},
+        headers=headers,
+    ).json()
+    assert first["result_skus"], first
+
+    second = client.post(
+        "/api/customer-service/ask?debug=true",
+        json={
+            "question": "第一个烤盘的尺寸和材质是什么？",
+            "conversation_id": first["conversation_id"],
+        },
+        headers=headers,
+    ).json()
+
+    assert second["result_skus"] == [first["result_skus"][0]], second
+    assert "尺寸" in second["answer"], second
+    assert "材质" in second["answer"], second
+
+
+def test_comparison_choice_followup_reuses_the_adjudicated_choice(route_client_and_db):
+    client, headers, _ = route_client_and_db
+
+    first = client.post(
+        "/api/customer-service/ask?debug=true",
+        json={
+            "question": "我在 CW-C83 和 CW-C06PRO 之间纠结，周末两个人徒步，哪个更合适？"
+        },
+        headers=headers,
+    ).json()
+    selected_sku = (first.get("answer_metadata") or {}).get("final_choice_sku")
+    assert selected_sku in {"CW-C83", "CW-C06PRO"}, first
+    other_sku = "CW-C06PRO" if selected_sku == "CW-C83" else "CW-C83"
+
+    second = client.post(
+        "/api/customer-service/ask?debug=true",
+        json={
+            "question": "你更建议哪一个？为什么？",
+            "conversation_id": first["conversation_id"],
+        },
+        headers=headers,
+    ).json()
+
+    assert second["result_skus"] == [selected_sku], second
+    assert selected_sku in second["answer"], second
+    assert other_sku not in second["answer"], second
+
+
+def test_compound_contents_question_addresses_missing_package_field(route_client_and_db):
+    client, headers, _ = route_client_and_db
+
+    response = client.post(
+        "/api/customer-service/ask?debug=true",
+        json={
+            "question": "CF-PG19 里面具体有些什么？买回来是不是就能直接用？"
+        },
+        headers=headers,
+    )
+
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    assert payload["result_skus"] == ["CF-PG19"], payload
+    assert "包装内容包括" in payload["answer"], payload
+    assert "使用准备" in payload["answer"] or "首次使用" in payload["answer"], payload
+
+
 def test_customer_service_ask_route_level_multiturn_recommendation_context_survives_heat_source_and_alternative_followups(
     route_client_and_db,
 ):
@@ -909,6 +1228,89 @@ def test_customer_service_ask_route_level_multiturn_recommendation_context_survi
     assert turn3_contract.get("relative_price_preference") == "cheaper_than_anchor"
     assert turn3_contract.get("price_anchor_sku") == payload1["result_skus"][0]
     assert payload1["result_skus"][0] in turn3_contract.get("exclusions", [])
+
+
+def test_semantic_alternative_followup_consumes_persisted_recommendation_contract(
+    route_client_and_db,
+    monkeypatch,
+):
+    client, headers, _ = route_client_and_db
+    calls = []
+
+    async def fake_semantic_plan(*_args, **_kwargs):
+        return {
+            "called": True,
+            "route_family": "recommendation",
+            "route_hint": "recommendation",
+            "question_type": "recommendation",
+            "recommendation_constraints": {
+                "subject_kind": "cookware",
+                "heat_sources": ["alcohol_stove"],
+            },
+            "confidence": 0.9,
+            "ambiguity": False,
+            "evidence_required": True,
+        }
+
+    monkeypatch.setattr(
+        customer_agent_planner_service,
+        "plan_customer_question_semantic",
+        fake_semantic_plan,
+    )
+
+    async def fake_semantic_recommendation(db, question, _plan, _recommendation_context=None):
+        calls.append(question)
+        row = next(
+            row
+            for row in customer_service_service._phase1_catalog_rows(db, "产品")
+            if row.get("sku") == "CW-S10-A"
+        )
+        return {
+            "intent": "query_products",
+            "answer_type": "product_query",
+            "answer": "适合酒精炉的锅具可以看看激川单锅（CW-S10-A）。",
+            "results": [row],
+            "result_skus": ["CW-S10-A"],
+            "candidate_skus": ["CW-S10-A"],
+            "answer_metadata": {
+                "source": "validated_semantic_preplan_then_same_sku_verification",
+                "recommendation_contract": {
+                    "subject_category": "锅具",
+                    "subject_kind": "cookware",
+                    "heat_sources": ["酒精炉"],
+                    "hard_constraints": ["heat_source"],
+                },
+            },
+            "debug": {"agent_mode": "semantic_recommendation_contract"},
+            "skip_polish": True,
+        }
+
+    monkeypatch.setattr(
+        customer_service_service,
+        "_semantic_recommendation_contract_result",
+        fake_semantic_recommendation,
+    )
+
+    first = client.post(
+        "/api/customer-service/ask?debug=true",
+        json={"question": "适合酒精炉的锅具推荐一下。"},
+        headers=headers,
+    )
+    assert first.status_code == 200, first.text
+    first_payload = first.json()
+    first_sku = first_payload["result_skus"][0]
+    conversation_id = first_payload["conversation_id"]
+
+    second = client.post(
+        "/api/customer-service/ask?debug=true",
+        json={"question": "还有其他推荐吗", "conversation_id": conversation_id},
+        headers=headers,
+    )
+    assert second.status_code == 200, second.text
+    second_payload = second.json()
+    assert first_sku not in second_payload["result_skus"], second_payload
+    assert "排除" in second_payload["answer"] or "没有另一款" in second_payload["answer"], second_payload
+    assert len(calls) == 1, calls
 
 
 def test_recommendation_explanation_survives_intervening_product_field_followup(route_client_and_db):
@@ -1359,7 +1761,11 @@ def test_customer_service_ask_route_level_stove_combo_generalization_stays_in_st
         }
 
     assert front_categories, payload
-    assert all(category == "炉具" for category in front_categories.values()), front_categories
+    if "烤盘" in question:
+        assert {"炉具", "锅具"}.issubset(set(front_categories.values())), front_categories
+        assert "烤盘" in payload["answer"], payload
+    else:
+        assert all(category == "炉具" for category in front_categories.values()), front_categories
 
 
 def test_customer_service_ask_route_level_category_accessories_prioritize_clear_accessories(

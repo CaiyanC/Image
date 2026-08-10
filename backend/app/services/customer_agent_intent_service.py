@@ -18,7 +18,10 @@ from . import agent_action_service, customer_agent_service, customer_agent_tool_
 
 
 CONTEXT_WORDS = (
-    "他", "它", "这个", "这款", "该产品", "这个产品", "这产品", "这些", "那些", "刚才那些", "上面这些", "刚才的", "刚才说的",
+    # Keep multi-character deictic phrases here.  A bare ``他`` is too broad:
+    # substring matching would classify ordinary words such as ``其他的`` as
+    # a previous-result reference and incorrectly short-circuit fresh requests.
+    "它", "这个", "这款", "该产品", "这个产品", "这产品", "这些", "那些", "刚才那些", "上面这些", "刚才的", "刚才说的",
     "上一轮", "之前", "前面", "最开始", "第一个", "第一款", "上一个", "这一批", "这批", "这几个", "那几个", "里面",
 )
 ORDINAL_CONTEXT_PATTERNS = tuple(
@@ -84,7 +87,19 @@ USAGE_CARE_TERMS = (
     "涂层",
     "点不着",
     "打不着",
+    "点着火",
+    "点不起来",
     "点火",
+    "没火",
+    "只有声音",
+    "声音没火",
+    "怎么装",
+    "如何装",
+    "怎么安装",
+    "如何安装",
+    "安装方法",
+    "安装视频",
+    "装不上",
     "连接",
     "注意",
     "注意事项",
@@ -94,6 +109,34 @@ USAGE_CARE_TERMS = (
     "怎么存放",
     "气罐",
     "阀门",
+    "会漏",
+    "漏气",
+    "漏液",
+    "泄漏",
+    "密封",
+    "拧紧",
+    "扭紧",
+    "能用多久",
+    "可以用多久",
+    "用多久",
+    "能烧多久",
+    "可以烧多久",
+    "使用时长",
+    "续航多久",
+    "能烧几",
+    "功率越大",
+    "火力越大",
+    "耗气",
+    "消耗气",
+    "燃料消耗",
+    "节省时间",
+    "节约时间",
+    "不一定能节省",
+    "不一定能节约",
+    "没有管",
+    "没管",
+    "没有电",
+    "没电",
 )
 CONTENTS_GROUNDING_TERMS = (
     "里面有什么",
@@ -226,13 +269,41 @@ USAGE_CARE_BURNT_TERMS = ("糊锅", "锅糊", "烧糊", "烧焦", "焦糊")
 USAGE_CARE_COATING_TERMS = ("涂层", "不粘涂层", "防粘涂层")
 USAGE_CARE_REPLY_TERMS = ("客服怎么回复", "怎么回复客户", "客户说", "用户说")
 USAGE_CARE_AFTERSALES_TERMS = ("质保", "保修", "售后", "退换", "退货", "换货", "售后电话", "联系方式")
-USAGE_CARE_SAFETY_TERMS = ("安全", "危险", "中毒", "火灾", "帐篷", "密闭", "一氧化碳", "爆炸", "点不着", "打不着", "点火", "连接", "气罐", "阀门", "存放", "火源", "明火")
+USAGE_CARE_SAFETY_TERMS = ("安全", "危险", "中毒", "火灾", "帐篷", "密闭", "一氧化碳", "爆炸", "点不着", "打不着", "点不燃", "打不燃", "点着火", "点不起来", "点火", "没火", "只有声音", "声音没火", "连接", "气罐", "阀门", "存放", "火源", "明火", "会漏", "漏气", "漏液", "泄漏", "密封", "拧紧", "扭紧", "没有管", "没管", "没有电", "没电", "固体酒精", "液体酒精", "酒精燃料")
+USAGE_CARE_DURATION_TERMS = ("能用多久", "可以用多久", "用多久", "能烧多久", "可以烧多久", "使用时长", "续航多久", "能烧几")
+# Keep fuel-load/boil-time wording separate from generic duration aliases so
+# only explicit fuel questions enter this usage boundary.
+USAGE_CARE_FUEL_DURATION_TERMS = (
+    "多少块", "几块", "多少颗", "几颗", "多少粒", "放多少", "加多少",
+    "多久", "多长时间", "几分钟", "多少分钟", "烧开", "煮开", "沸腾",
+)
+USAGE_CARE_POWER_TRADEOFF_TERMS = ("功率越大", "火力越大", "耗气", "消耗气", "燃料消耗", "节省时间", "节约时间", "不一定能节省", "不一定能节约")
+USAGE_CARE_INSTALLATION_TERMS = (
+    "怎么装", "如何装", "怎么安装", "如何安装", "安装方法", "安装视频", "装不上", "安装步骤",
+    "炉头安装", "炉芯安装", "怎么卡", "如何卡", "卡进去", "插进去", "卡入", "装入",
+)
 USAGE_CARE_GENERAL_TERMS = ("卖点", "介绍", "品牌", "官方", "旗舰店")
 USAGE_CARE_MAINTENANCE_ACTION_TERMS = ("清洗", "保养", "擦干", "烘干", "存放", "钢丝球", "硬物刮擦", "浸泡", "骤冷骤热", "涂层", "使用后")
 USAGE_CARE_MAINTENANCE_WEAK_TERMS = ("能用多久", "使用多年", "耐用", "越用越顺手")
 USAGE_CARE_BURNT_ACTION_TERMS = ("糊锅", "烧焦", "焦糊", "粘底", "残渍", "锅底", "清洗", "浸泡", "软刷", "钢丝球", "不粘涂层", "涂层保护")
 USAGE_CARE_COOKWARE_TERMS = ("锅", "锅具", "不粘锅", "涂层锅", "烤盘", "煎盘", "套锅", "炒锅")
 USAGE_CARE_NON_COOKWARE_TERMS = ("杯", "水杯", "保温杯", "户外杯", "壶", "水壶")
+USAGE_CARE_FULL_UNIT_WASH_TERMS = (
+    "整个炉", "整个炉子", "整炉", "整机", "炉体全部", "全炉",
+    "直接冲洗", "直接水洗", "整机冲洗", "整机水洗",
+)
+USAGE_CARE_UTENSIL_TERMS = (
+    "锅铲", "铲子", "炒铲", "炒勺", "锅勺", "勺铲", "木铲", "硅胶铲",
+    "尼龙铲", "金属铲", "不锈钢铲", "铁铲",
+)
+USAGE_CARE_UTENSIL_MATERIAL_TERMS = (
+    "不锈钢", "硅胶", "木", "竹", "尼龙", "塑料", "金属", "铁",
+)
+USAGE_CARE_UTENSIL_DECISION_TERMS = (
+    "怎么选", "如何选", "选哪个", "选哪种", "买哪个", "买哪种", "还是",
+    "哪种", "哪个", "可以用", "能不能用", "能用吗", "都可以",
+    "伤锅", "刮花", "刮伤", "划伤", "损伤", "伤涂层",
+)
 WATER_CONTAINER_CAPABILITY_TERMS = (
     "装冷水",
     "装凉水",
@@ -428,6 +499,17 @@ async def process_intent_request(
 ) -> dict | None:
     request_start = perf_counter()
     previous_result_skus = previous_result_skus or []
+    mutation_intent = parse_intent(
+        question,
+        sku=sku,
+        previous_result_skus=previous_result_skus,
+    )
+    if mutation_intent and mutation_intent.intent in {"propose_update", "propose_delete"}:
+        mutation_intent = _sanitize_intent(mutation_intent)
+        mutation_intent.target_skus = _normalize_resolved_skus(db, mutation_intent.target_skus)
+        if mutation_intent.intent == "propose_delete":
+            return await _propose_delete_result(db, user_id, mutation_intent)
+        return await _propose_update_result(db, user_id, mutation_intent)
     # A high-precision category-scope count/people question has no sealed
     # single-product subject.  Resolve it before contents/accessories deferral
     # so a broad catalogue request cannot be shadowed by an incidental field
@@ -637,7 +719,11 @@ async def process_intent_request(
         (_looks_like_usage_care_question(question) or (_looks_like_contents_grounding_question(question) and explicit_named_products))
         and not _looks_like_water_container_capability_question(question)
         and not _looks_like_usage_care_aftersales_question(question)
-        and not (_looks_like_product_detail_question(question) and not _looks_like_contents_grounding_question(question))
+        and not (
+            _looks_like_product_detail_question(question)
+            and not _looks_like_contents_grounding_question(question)
+            and not _looks_like_general_fuel_definition_question(question)
+        )
     ):
         usage_care_result = await answer_product_usage_care_request(
             db,
@@ -733,9 +819,295 @@ async def process_intent_request(
     return None
 
 
+def _explicit_fuel_label(question: str) -> str:
+    text = str(question or "")
+    for phrase, label in (
+        ("固体酒精", "固体酒精"),
+        ("固态酒精", "固体酒精"),
+        ("酒精块", "固体酒精"),
+        ("固体燃料", "固体酒精"),
+        ("液体酒精", "液体酒精"),
+        ("酒精燃料", "酒精燃料"),
+        ("木炭", "木炭"),
+        ("炭火", "炭火"),
+        ("柴火", "柴火"),
+        ("煤炭", "煤炭"),
+    ):
+        if phrase in text:
+            return label
+    return ""
+
+
+def _compose_explicit_fuel_boundary_answer(question: str) -> str | None:
+    text = str(question or "")
+    label = _explicit_fuel_label(text)
+    if not label:
+        return None
+    if any(term in text for term in ("多久", "多长时间", "几分钟", "烧开", "煮开", "多少水", "几壶")):
+        return None
+    if any(term in text for term in ("怎么用", "如何用", "怎么使用", "如何使用", "怎么点火", "如何点火")):
+        return (
+            f"使用方法：当前资料未标注这款炉具使用{label}的具体点火和操作步骤，不能跨商品套用。"
+            "请提供具体商品名或 SKU，并按该炉具及燃料说明书确认；未确认前不要替换燃料或反复点火。"
+        )
+    if any(term in text for term in ("能用", "可以用", "支持", "适配", "兼容", "能不能", "能否", "是否", "可以吗", "能吗", "适合吗", "只能")):
+        return (
+            f"燃料兼容性结论：当前资料未标注这款炉具是否支持{label}，不能把液体酒精、明火或其他燃料的标注直接当作{label}适配。"
+            "请提供具体商品名或 SKU，并按同款说明书确认燃料类型；未确认前不要尝试替换燃料。"
+        )
+    return None
+
+
+def _looks_like_fuel_replenishment_question(question: str) -> bool:
+    text = str(question or "").strip()
+    if "酒精" not in text:
+        return False
+    if not any(term in text for term in ("用完了", "用完", "没有了", "没了")):
+        return False
+    if not any(term in text for term in ("怎么办", "怎么补", "补充", "更换", "再买", "再加")):
+        return False
+    return not any(term in text for term in ("清洗", "清洁", "怎么洗", "如何洗"))
+
+
+def _looks_like_environmental_fuel_safety_question(question: str) -> bool:
+    text = str(question or "")
+    return bool(
+        any(term in text for term in ("帐篷", "密闭空间", "封闭空间", "一氧化碳"))
+        and any(term in text for term in ("酒精炉", "液体酒精", "固体酒精", "燃气炉", "炉具", "明火"))
+    )
+
+
 def _compose_safety_usage_care_answer(question: str) -> str:
     text = str(question or "")
-    if any(term in text for term in ("点不着", "打不着", "点火")):
+    if _looks_like_environmental_fuel_safety_question(text):
+        return (
+            "安全结论：不要在帐篷内或其他密闭、通风不足的空间使用酒精炉、燃气炉等燃烧型炉具；"
+            "燃烧会消耗氧气，并可能产生一氧化碳和可燃蒸气。"
+            "应在安全开放环境中保持充分通风，远离易燃物；"
+            "出现异味、头晕、烟气、泄漏或火焰异常时，立即熄火、离开现场并到新鲜空气处。"
+            "具体炉具的燃料兼容性仍需提供 SKU 后按同款说明书核对。"
+        )
+    if _looks_like_full_unit_wash_question(text):
+        return _compose_full_unit_wash_usage_care_answer(text)
+    # Duration and fuel-load questions must keep their requested unit and
+    # time semantics.  They are safety-adjacent, but a generic safety
+    # paragraph does not answer “能烧多久” or “加多少毫升”.
+    if _looks_like_fuel_duration_usage_question(text):
+        return _compose_duration_usage_care_answer(text, [], [])
+    if _looks_like_canister_fault_question(text):
+        return "\n".join([
+            "故障排查建议：先关闭炉具阀门并停止继续点火，确认气罐安装方向、接口和密封圈是否到位。",
+            "如果仍然不出气，不要拆开气罐或强行改接；闻到燃气味、听到漏气声或发现接口松动时，立即停止使用并移到通风处。",
+            "当前资料未标注这款气罐的具体故障原因，请提供炉具与气罐型号或 SKU，再按同款说明书核对。",
+        ])
+    if _looks_like_canister_type_question(text):
+        return (
+            "气罐类型结论：是否为专用、一次性或可重复使用，必须以气罐型号、包装标识和同款说明书为准；"
+            "不能仅凭炉具名称、外观或‘气罐’这个统称判断。请提供炉具与气罐型号或 SKU，"
+            "未确认前不要自行充装、改接或重复使用。"
+        )
+    if "下水道" in text or any(term in text for term in (
+        "排水口", "排水管", "废弃处理", "怎么处置", "如何处置",
+        "倒哪里", "倒到哪里", "倒哪儿", "往哪里倒", "怎么处理", "如何处理",
+    )):
+        if any(term in text for term in ("酒精", "燃料", "气罐")):
+            return (
+                "燃料处置建议：不要把剩余酒精或其他燃料倒入下水道、排水口，也不要用明火焚烧。"
+                "先熄火并确认完全冷却，保持原容器密封、直立并远离火源，按燃料包装和当地规定联系回收或危险废物处置渠道；"
+                "如有泄漏、异味或无法确认成分，请立即停止操作并联系人工客服。"
+            )
+    if any(term in text for term in ("手动点火", "手动打火", "自动点火", "自动打火")):
+        return (
+            "点火方式结论：是否需要手动点火取决于具体炉具的点火结构，不能仅凭‘只有一个火力开关’判断。"
+            "当前没有锁定具体型号，资料不足以确认是电子点火、压电点火还是需要外部点火；请提供商品名或 SKU，"
+            "并按同款说明书确认。未确认前不要反复点火，若闻到燃气味或发现接口异常应立即停止操作。"
+        )
+    if _looks_like_fuel_storage_comparison_question(text):
+        return "\n".join([
+            "存放结论：气罐和酒精都不建议放在车内、后备箱或其他高温密闭环境，不能简单说其中一种在车上就一定更安全。",
+            "气罐应按说明书关闭阀门并与炉具分离；酒精应使用合规密封容器直立放置，二者都要远离火源、热源和阳光直晒。",
+            "如必须携带，请以燃料包装和当地运输要求为准；发现异味、泄漏、变形或密封异常时立即停止使用并移到通风处。",
+        ])
+    if _looks_like_fuel_replenishment_question(text):
+        return (
+            "燃料补充结论：酒精用完后，应先确认炉具已经熄火并完全冷却，再按同款说明书补充允许使用的燃料；"
+            "不要用医用酒精或未经确认的液体替代，也不要在仍有明火或高温时加注。"
+            "具体燃料类型和加注量仍需按同款说明书确认；如果尚未提供商品名或 SKU，请补充后再核对。"
+        )
+    if _looks_like_universal_heat_source_question(text):
+        return (
+            "结论：不是所有烧水壶都可以使用同一种炉具或热源；每个款式的适用范围要以同款 SKU 的热源标注和说明书为准。"
+            "当前没有锁定具体款式，不能把某一款水壶的资料套用到全部商品；请提供商品名或 SKU，我再逐款核对。"
+        )
+    if _looks_like_high_heat_split_burner_usage_question(text):
+        return "\n".join([
+            "高温或长时间大火时，分体炉头通常更合适，因为气罐可以与炉头分离，减少罐体受热风险。",
+            "但是否必须使用分体结构不能只看温度高低，还要看具体炉具的结构、热源和说明书；不能把所有分体炉头都当作通用适配。",
+            "当前没有锁定具体炉具型号，无法确认哪一款一定适用。请提供商品名或 SKU，我再按同款资料核对。",
+        ])
+    if _looks_like_general_fuel_definition_question(text):
+        return (
+            "一般来说，炉具所说的燃料酒精是用于燃烧的专用燃料，具体成分、浓度和是否变性要以包装及说明书为准；"
+            "医用酒精主要用于消毒，不能默认替代炉具燃料。"
+            "是否能买到取决于当地法规和商家，不建议把‘随处可买’当作质量或适配保证。"
+            "如果要核对某款炉具能否使用液体酒精，请提供具体商品名或 SKU，我再按同款热源标注确认。"
+        )
+    explicit_fuel_answer = _compose_explicit_fuel_boundary_answer(text)
+    if explicit_fuel_answer:
+        return explicit_fuel_answer
+    if (
+        any(term in text for term in ("燃料", "酒精"))
+        and any(term in text for term in ("是什么", "什么燃料", "用什么", "怎么买", "哪里买"))
+    ):
+        return (
+            "燃料结论：当前问题没有锁定具体商品，暂时无法确认应使用哪一种燃料。"
+            "请提供具体商品名或 SKU，再按同款热源标注和说明书核对；不要仅凭炉具类别或外观判断。"
+        )
+    if "酒精炉" in text and any(term in text for term in ("能用", "可以用", "支持", "适合", "怎么用", "如何用", "怎么使用", "如何使用")):
+        if any(term in text for term in ("高原", "高海拔")):
+            return (
+                "高海拔使用结论：当前资料未标注这款酒精炉在高原/高海拔环境下的适用性，不能直接保证燃烧和点火表现。"
+                "请提供具体商品名或 SKU，并按炉具和燃料说明书确认；使用时保持通风，远离可燃物，异常时立即停止。"
+            )
+        pair_target = next(
+            (term for term in ("玻璃水壶", "水壶", "锅具", "烤盘", "煎盘") if term in text and term != "酒精炉"),
+            "",
+        )
+        if pair_target and any(term in text for term in ("可以用", "能用", "配", "适配", "兼容")):
+            return (
+                f"配套/兼容性结论：当前资料未标注酒精炉与{pair_target}是否配套或能否安全使用，不能仅凭尺寸或外观判断。"
+                "请提供两者的具体商品名或 SKU，再按同款说明书和接口/尺寸核对。"
+            )
+        if any(term in text for term in ("怎么用", "如何用", "怎么使用", "如何使用")):
+            return (
+                "使用方法：当前资料未标注这款酒精炉的具体点火和操作步骤，不能跨商品套用。"
+                "请提供具体商品名或 SKU，并按炉具及燃料说明书确认；未确认前不要反复点火或替换燃料。"
+            )
+        return (
+            "燃料兼容性结论：当前资料未标注这款酒精炉的具体燃料适配范围，暂时无法确认。"
+            "请提供具体商品名或 SKU，并按同款热源标注和说明书核对。"
+        )
+    if "气罐桌边夹" in text:
+        return (
+            "配件结论：当前产品资料未找到名称或包装清单明确标注为‘气罐桌边夹’的配件，"
+            "不能把其他夹具、转接头或炉具当作替代品；请提供具体商品 SKU 或联系人工客服确认。"
+        )
+    if any(term in text for term in (
+        "能用多久", "可以用多久", "用多久", "能烧多久", "可以烧多久",
+        "使用时长", "续航", "燃烧时间", "耗时",
+    )) and "气罐" in text:
+        return _compose_duration_usage_care_answer(text, [], [])
+    if "点火器" in text and any(term in text for term in ("卖", "购买", "更换", "替换", "配件")):
+        return (
+            "配件结论：当前资料未标注这款点火器是否可单独购买或更换，暂时无法确认具体配件型号。"
+            "请提供炉具 SKU，并按商品页配件清单或人工客服确认；点火异常时先停止继续点火。"
+        )
+    if "酒精" in text and any(term in text for term in ("车载", "车内", "汽车", "后备箱")):
+        return (
+            "车载安全边界：不建议把液体酒精长期放在车内、后备箱或其他高温密闭环境；"
+            "应使用合规密封容器直立放置，远离火源、热源和阳光直晒。"
+            "当前资料未标注你这款产品的车载存放规范，出发前请按燃料包装和炉具说明书确认。"
+        )
+    if "酒精" in text and any(term in text for term in ("爆炸", "燃烧", "很猛", "家里", "家中", "室内")):
+        return (
+            "安全结论：酒精燃烧和挥发都有明火、回火及可燃蒸气风险，不能保证在任何环境下都不会起火或爆燃。"
+            "使用时必须保持通风，远离易燃物，不要在密闭空间或靠近残留酒精时反复点火；"
+            "如有溢出、明显酒精味或异常火焰，立即停止使用并移到安全通风处。"
+        )
+    if "固体酒精" in text and any(term in text for term in ("能用", "可以用", "支持", "适配", "兼容", "能否")):
+        return (
+            "燃料结论：当前资料未标注这款炉具是否支持固体酒精，不能把液体酒精或明火标注直接当作固体酒精适配。"
+            "请提供具体炉具 SKU，并按说明书确认燃料类型；未确认前不要尝试替换燃料。"
+        )
+    if "高山气罐" in text and any(term in text for term in ("大罐", "小罐", "大小", "容量", "什么意思", "是吧", "是不是")):
+        if any(term in text for term in ("安全", "容量大", "容量小", "多大", "多少")):
+            return (
+                "气罐类型/容量边界：高山气罐不是单纯按大罐或小罐划分，通常还涉及接口标准、罐体规格和适用炉具。"
+                "当前资料未标注你这款炉具的容量或该类型气罐的具体续航，不能仅凭‘容量大’推断更安全或更耐用。"
+                "请提供炉具 SKU 与气罐型号，再按接口、说明书和安全规范核对。"
+            )
+        return (
+            "气罐类型说明：高山气罐不是单纯按大小或容量（大罐/小罐）划分，通常还涉及接口标准、罐体规格和适用炉具。"
+            "当前资料未标注你这款炉具是否适配该类型；请提供炉具 SKU 与气罐型号，再核对接口和说明书。"
+        )
+    if any(term in text for term in ("没有管", "没管")):
+        return "配件结论：当前资料未标注该炉具是否随附炉管或对应接口配件，暂时无法确认缺少的是哪一部分。请提供具体 SKU 并核对包装清单；不要自行改接不匹配的管路。"
+    if any(term in text for term in ("没有电", "没电")):
+        return "处理建议：如果你说的是点火或供电问题，请先确认该型号是否需要电池、点火器或其他供电部件，并检查开关、接口和电池状态。当前资料未标注具体故障原因，提供 SKU 后我可以继续按说明书核对。"
+    fuel_storage_markers = ("酒精", "燃料")
+    leak_markers = ("会不会漏", "不会漏", "会漏", "漏液", "泄漏", "密封", "盖子", "拧紧", "扭紧")
+    fuel_storage_question_markers = (
+        "没用完", "用不完", "保存", "存放", "收纳", "下次用", "留着", "盖紧", "扭紧", "拧紧",
+    )
+    if any(marker in text for marker in fuel_storage_markers) and (
+        any(marker in text for marker in leak_markers)
+        or any(marker in text for marker in fuel_storage_question_markers)
+    ):
+        return "\n".join([
+            "先说结论：仅凭当前资料无法确认剩余酒精在盖紧后一定不会泄漏，不能把“盖紧”当作绝对不漏。",
+            "建议熄火并确认炉具完全冷却后，按该炉具说明书处理未用完的酒精；不要在炉内长期存放，容器要保持直立并远离火源、热源。",
+            "如发现渗漏、酒精味或密封异常，立即停止使用，移到通风处并联系人工客服确认。",
+        ])
+    if "酒精" in text and any(term in text for term in ("擦干", "擦掉", "擦净", "洒", "打翻", "清理")):
+        return (
+            "酒精清理安全：先熄火、移开火源并保持通风，确认没有残留明火或高温表面后再用吸附材料清理。"
+            "不要用电器、打火机或其他可能产生火花的物品处理；清理后的材料也要远离火源并按当地要求处置。"
+            "如果有明显酒精味、持续渗漏或无法确认是否清理干净，请停止使用并联系人工客服。"
+        )
+    if any(term in text for term in ("怎么关火", "如何关火", "关闭火焰", "关闭火", "熄火", "关掉火焰", "灭火")):
+        return (
+            "关火建议：先停止供气或停止继续添加燃料，再按该炉具说明书关闭阀门/开关；确认火焰完全熄灭后再移动或收纳。"
+            "不要用手或可燃物直接扑火，也不要在仍有燃料蒸气、漏气声或明显酒精味时反复点火。"
+            "如果无法关火、阀门失灵或火焰异常，请立即远离并联系人工客服或当地应急服务。"
+        )
+    gas_storage_markers = (
+        "没用完", "用不完", "留着下次", "下次用", "保存", "存放", "收纳",
+        "后备箱", "车内", "车上", "车里", "高温", "夏天",
+    )
+    if "气罐" in text and any(marker in text for marker in ("放到", "放进", "装到", "装进", "放入")) and any(
+        term in text for term in ("单锅", "套锅", "锅具", "锅里", "锅内")
+    ):
+        return (
+            "收纳/尺寸结论：当前资料未标注你提到的气罐是否能放入这款锅具或套锅，不能仅凭锅具容量推断。"
+            "请同时提供锅具 SKU 和气罐型号/外径，再按收纳尺寸与包装说明核对；不要强行挤压或让气罐受热。"
+        )
+    if "气罐" in text and any(marker in text for marker in gas_storage_markers):
+        return "\n".join([
+            "存放结论：气罐不应放在后备箱、车内等高温或密闭环境；当前资料也未标注剩余气体能否安全留到下次使用。",
+            "建议按气罐说明书要求关闭阀门、与炉具分离并放在阴凉通风处，远离火源、热源和阳光直晒；不要把气罐长期装在炉具上。",
+            "如有锈蚀、变形、异味或漏气，立即停止使用并联系人工客服确认。",
+        ])
+    if _looks_like_canister_addon_question(text):
+        # Adapter/converter availability is a different package boundary from
+        # whether a gas canister is included.  Keep the customer's requested
+        # accessory in the answer so a generic gas-canister template cannot
+        # masquerade as a direct answer.
+        if any(term in text for term in ("转接头", "转换头", "接口配件", "适配头")):
+            return (
+                "配件结论：当前资料未标注这款炉具是否随附、是否必须另购，或是否兼容你提到的转接头/转换头，暂时无法确认。"
+                "请提供具体炉具 SKU，并按商品页包装清单、接口规格和说明书核对；未确认前不要自行连接。"
+            )
+        return (
+            "配件结论：当前资料未标注该商品是否随附、可增配或可单独购买你提到的气罐，暂时无法确认。"
+            "请以商品页包装/配件清单或人工客服确认；不要把转接头或其他炉具当作气罐。"
+        )
+    if _looks_like_canister_compatibility_question(text) or (
+        "酒精" in text and "气罐" in text and any(
+            marker in text for marker in ("可以用", "能用", "支持", "兼容", "适配", "是否")
+        )
+    ):
+        return "\n".join([
+            "兼容性结论：当前资料未标注该接口是否适配你提到的气罐或转接方式，暂时无法确认能否连接。",
+            "请提供具体炉具型号或 SKU，再按该产品说明书核对；不要仅凭接口外观尝试连接。",
+            "安全提醒：连接前请关闭阀门，确认接口、密封圈和连接位置完好；如有异味、漏气声或松动，应立即停止使用并移到通风处。",
+        ])
+    if any(term in text for term in ("点不着", "打不着", "点不燃", "打不燃", "点着火", "点不起来", "点火", "没火", "只有声音", "声音没火")):
+        if any(term in text for term in ("酒精", "燃料")) and "气罐" not in text:
+            return "\n".join([
+                "处理建议：先确认使用的是说明书要求的酒精燃料，炉体和燃料槽保持干燥并放在通风处，再按说明书步骤点火。",
+                "注意事项：不要在未确认燃料类型、燃料量或炉体完全冷却前反复点火；酒精明火不明显时要特别注意周围是否有残留燃料。",
+                "安全提醒：当前资料不足以判断具体故障原因；如有酒精味、溢出或异常火焰，请立即停止操作并联系人工客服。",
+            ])
         return "\n".join([
             "处理建议：先关闭阀门，停止继续点火，确认周围通风后再检查气罐连接、接口密封和炉具开关。",
             "注意事项：如果闻到明显燃气味、听到漏气声或连接处异常，不要继续尝试点火。",
@@ -747,12 +1119,17 @@ def _compose_safety_usage_care_answer(question: str) -> str:
             "注意事项：不要放在车内高温环境或靠近明火的位置。",
             "安全提醒：当前资料未维护更细的存放规范，建议以气罐说明书为准。",
         ])
-    if any(term in text for term in ("连接", "气罐")):
+    if any(term in text for term in ("连接", "接上", "接口", "转接头", "阀门")):
         return "\n".join([
             "处理建议：连接前先确认阀门关闭，检查气罐接口、密封圈和炉具连接位置是否对齐。",
             "注意事项：连接后如有异味、漏气声或松动，应立即停止使用并移到通风处。",
             "安全提醒：当前资料未提供更细的单品连接步骤，建议以产品说明书和人工客服确认结果为准。",
         ])
+    if "气罐" in text:
+        return (
+            "气罐结论：当前资料未标注你提到的气罐数量、规格或购买状态，暂时无法确认。"
+            "请核对商品页的包装清单和气罐说明书；如需购买，请提供具体型号或 SKU。"
+        )
     return "\n".join([
         "安全建议：户外使用炉具时应保持通风，远离易燃物，并注意明火和气罐连接状态。",
         "注意事项：使用前检查阀门、接口和炉体稳定性，异常时不要继续使用。",
@@ -764,6 +1141,7 @@ def _same_sku_safety_usage_care_evidence(
     target_skus: list[str],
     qa_hits: list[dict],
     knowledge_hits: list[dict],
+    question: str = "",
 ) -> str:
     """Return one grounded safety snippet only for a unique, same-SKU target."""
     normalized_targets = {
@@ -778,9 +1156,204 @@ def _same_sku_safety_usage_care_evidence(
         if str(item.get("sku") or "").strip().upper() != target_sku:
             continue
         snippet = _normalize_usage_care_snippet(item.get("answer") or item.get("content") or "")
-        if snippet:
-            return snippet.strip("。；; ")
+        if not snippet:
+            continue
+        # A product-detail renderer may put the entire internal row in a QA
+        # hit.  It is not customer-facing usage evidence and may contain
+        # ownership/operational fields (for example ``负责人``).  Reject the
+        # block instead of allowing it to flow into the compatibility answer.
+        if _looks_like_internal_product_dump(snippet):
+            continue
+        if _looks_like_canister_compatibility_question(question):
+            # Same-SKU catalogue prose (titles, marketing copy, or generic
+            # cooking descriptions) is not compatibility evidence.  Keep only
+            # sentences that actually discuss an interface, canister, fuel,
+            # or an explicit compatibility statement.
+            relevant_sentences = [
+                sentence.strip("。；; ")
+                for sentence in re.split(r"(?<=[。！？!?；;])\s*|\n+|\s+-\s+", snippet)
+                if sentence.strip()
+                and any(term in sentence for term in ("适配", "兼容", "接口", "转接头", "适用热源", "酒精炉"))
+            ]
+            if not relevant_sentences:
+                continue
+            snippet = "；".join(relevant_sentences[:3])
+        return snippet.strip("。；; ")
     return ""
+
+
+def _looks_like_canister_compatibility_question(text: str) -> bool:
+    value = str(text or "").strip()
+    if not value:
+        return False
+    if _looks_like_canister_addon_question(value):
+        return False
+    # A type-definition question such as “高山气罐就是大罐吗” asks what the
+    # label means, not whether a page product can connect to it.  Let the
+    # safety/definition composer explain the distinction instead of routing
+    # through the same-SKU heat-source field contract.
+    if "高山气罐" in value and any(term in value for term in (
+        "就是大罐", "就是小罐", "大罐是", "小罐是", "大小", "多大", "容量",
+        "什么意思", "怎么理解", "是吧", "是不是",
+    )) and not any(term in value for term in ("能不能接", "能否接", "接上", "接口", "转接头", "适配", "兼容")):
+        return False
+    # Duration, quantity, and storage questions contain the same “能用/气罐”
+    # words as compatibility asks, but they do not ask whether an interface
+    # can be connected.  Keep the direct field intent instead of returning a
+    # connection template.
+    if any(term in value for term in (
+        "能用多久", "可以用多久", "用多久", "能烧多久", "可以烧多久", "多久",
+        "使用时长", "续航", "燃烧时间", "耗时", "多少克", "几克", "容量",
+        "数量", "带几个", "有没有气罐", "气罐有吗",
+    )) and not any(term in value for term in (
+        "能不能接", "能否接", "接上", "适配", "兼容", "接口", "转接头",
+    )):
+        return False
+    markers = (
+        "能不能接", "能否接", "能不能用", "能用吗", "可以用吗", "也可以用吗",
+        "可以用的", "都可以用", "直接用", "插上", "必须配", "可以接吗", "能否适配",
+        "适配", "兼容", "通用", "哪种气罐", "什么气罐", "哪种燃气罐", "什么燃气罐",
+        "气罐类型", "适用气罐", "液化气罐", "高山气罐", "卡式气罐", "通用气罐",
+        "普通气罐", "普通那种气罐", "配什么气罐",
+    )
+    if any(marker in value for marker in markers) and any(
+        subject in value for subject in ("气罐", "接口", "转接头", "连接")
+    ):
+        return True
+    if "气罐" in value and re.search(r"(?:为什么|为何).{0,8}(?:用|接|配)", value):
+        return True
+    # Natural marketplace phrasing often separates the verb and the fuel
+    # noun (``可以用普通那种气罐吗`` / ``燃气罐可以增配``), so a strict
+    # substring list alone misses the actual compatibility question.
+    if "气罐" in value and re.search(
+        r"(?:可以|能|可不可以|是否可以|能否).{0,12}(?:用|接|接上|适配|兼容|配)|"
+        r"(?:气罐|燃气罐).{0,8}(?:能不能|能否|可以|是否).{0,8}(?:用|接|配)",
+        value,
+    ):
+        return True
+    if "气罐" in value and any(term in value for term in ("接到气罐", "接气罐", "直接接", "接上就行", "连接起来")):
+        return True
+    return "酒精" in value and "气罐" in value and any(
+        marker in value for marker in ("可以用", "能用", "支持", "兼容", "适配", "是否")
+    )
+
+
+def _looks_like_canister_storage_fit_question(text: str) -> bool:
+    """Recognize whether a canister is being placed inside cookware/storage."""
+    value = str(text or "").strip()
+    if not value or "气罐" not in value:
+        return False
+    if not any(term in value for term in ("放到", "放进", "放入", "装到", "装进", "放在", "收纳")):
+        return False
+    return any(term in value for term in ("锅", "锅具", "套锅", "单锅", "锅里", "锅内"))
+
+
+def _looks_like_canister_addon_question(text: str) -> bool:
+    value = str(text or "").strip()
+    if not value or "气罐" not in value:
+        return False
+    return any(term in value for term in (
+        "增配", "加配", "单买", "另购", "另配", "随附", "配有", "包含",
+        "带几个", "带气罐", "送气罐", "卖气罐", "买气罐", "单气罐", "高压气罐",
+        "一次性气罐", "气罐库存", "气罐有卖", "气罐怎么买", "气罐在哪里买", "同一家",
+        "转接头", "转换头", "一起买", "需要买", "需要配", "配件",
+    ))
+
+
+def _looks_like_canister_fault_question(text: str) -> bool:
+    """Recognize a canister flow/fault report rather than a package query."""
+    value = str(text or "").strip()
+    if not value or "气罐" not in value:
+        return False
+    return any(term in value for term in (
+        "不出气", "出不了气", "没有气", "没气", "气出不来", "不通气",
+        "气路堵", "阀门打不开", "打不开气", "漏气声",
+    ))
+
+
+def _looks_like_ignition_fault_question(text: str) -> bool:
+    value = str(text or "").strip()
+    return bool(value and any(term in value for term in (
+        "点不着", "打不着", "点不燃", "打不燃", "点不起来",
+        "没火", "没有火", "只有声音", "声音没火",
+    )))
+
+
+def _looks_like_canister_type_question(text: str) -> bool:
+    """Recognize disposable/dedicated canister type questions."""
+    value = str(text or "").strip()
+    if not value or "气罐" not in value:
+        return False
+    return any(term in value for term in (
+        "专用", "一次性", "可重复使用", "重复使用", "能重复用", "能不能充气", "能否充气",
+    ))
+
+
+_INTERNAL_PRODUCT_DUMP_LABELS = (
+    "SKU", "中文名", "英文名", "品牌", "系列", "类目", "等级", "生命周期", "负责人",
+    "规格信息", "业务信息", "label", "value", "unit", "产品资料", "内容信息",
+    "中文标题", "英文标题", "中文描述", "英文描述",
+)
+
+
+def _looks_like_internal_product_dump(value: str) -> bool:
+    text = str(value or "")
+    if not text:
+        return False
+    labels = 0
+    for label in _INTERNAL_PRODUCT_DUMP_LABELS:
+        if re.search(rf"(?:^|[\n；;：:\-])\s*{re.escape(label)}\s*[:：]", text, flags=re.I):
+            labels += 1
+    if labels < 3 and sum(
+        1 for label in ("内容信息", "中文标题", "英文标题", "中文描述", "英文描述") if label in text
+    ) >= 2:
+        labels = 3
+    return labels >= 3 or (
+        re.search(r"(?:^|[\n；;])\s*负责人\s*[:：]", text)
+        and re.search(r"(?:^|[\n；;])\s*SKU\s*[:：]", text, flags=re.I)
+    )
+
+
+def _compose_compatibility_usage_care_answer(question: str, evidence: str) -> str:
+    """Turn same-SKU compatibility evidence into a direct conclusion.
+
+    A retrieved usage snippet is not itself a conclusion: a product may list
+    two supported canister types while the customer asks about a third.  Keep
+    the answer grounded in the snippet and explicitly distinguish listed from
+    unlisted types rather than saying both "supported" and "cannot confirm" in
+    the same undifferentiated paragraph.
+    """
+    text = str(question or "")
+    snippet = str(evidence or "").strip().strip("。；; ")
+    snippet = re.sub(r"(?:[。；;]\s*)+", "；", snippet).strip("； ")
+    requested_types = tuple(
+        term for term in ("液化气罐", "高山气罐", "卡式气罐", "通用气罐") if term in text
+    )
+    matched_types = tuple(term for term in requested_types if term in snippet)
+    if matched_types:
+        conclusion = f"兼容性结论：在同 SKU 资料标注范围内支持{ '、'.join(matched_types) }。{snippet}"
+    elif snippet:
+        listed_types = tuple(
+            term for term in ("液化气罐", "高山气罐", "卡式气罐", "通用气罐") if term in snippet
+        )
+        if not requested_types and listed_types:
+            conclusion = (
+                f"兼容性结论：在同 SKU 资料标注范围内支持{ '、'.join(listed_types) }。"
+                f"{snippet}"
+            )
+        else:
+            requested_label = "、".join(requested_types) if requested_types else "你提到的气罐类型"
+            conclusion = (
+                f"兼容性结论：同 SKU 资料仅列出以下适配说明：{snippet}。"
+                f"其中未直接标注{requested_label}，因此不能确认可直接连接或使用。"
+            )
+    else:
+        conclusion = "兼容性结论：当前资料未标注该接口是否适配你提到的气罐或转接方式，暂时无法确认能否连接。"
+    return "\n".join([
+        conclusion,
+        "请按该产品说明书核对接口、密封圈和必要转接头；不要仅凭接口外观尝试连接。",
+        "安全提醒：连接前请关闭阀门；如有异味、漏气声或松动，应立即停止使用并移到通风处。",
+    ])
 
 
 async def answer_product_usage_care_request(
@@ -811,15 +1384,38 @@ async def answer_product_usage_care_request(
             named_products = _explicit_products_from_question(db, text)
         if len(named_products) > 1:
             return _build_contents_accessories_ambiguity_result(text, named_products)
+    # Explicit SKU identity is valid for every usage/care subtype, not only
+    # contents/accessories questions.  Resolving it here seals compatibility,
+    # installation, duration, and safety answers to the named product instead
+    # of letting a later formal-field shortcut expose an unrelated catalogue
+    # field or broad retrieval hit.
+    if not named_products:
+        named_products = _explicit_products_from_question(db, text)
     named_products = _narrow_contents_grounding_products(db, text, named_products)
     if not (_looks_like_usage_care_question(text) or (_looks_like_contents_grounding_question(text) and named_products)):
         return None
     if _looks_like_water_container_capability_question(text):
         return None
-    if _looks_like_product_detail_question(text) and not _looks_like_contents_grounding_question(text) and not named_products:
+    if (
+        _looks_like_product_detail_question(text)
+        and not _looks_like_contents_grounding_question(text)
+        and not named_products
+        and not _looks_like_general_fuel_definition_question(text)
+        and not _looks_like_environmental_fuel_safety_question(text)
+    ):
         return None
     request_start = perf_counter()
     usage_subtype = _detect_usage_care_subtype(text)
+    generic_care_scope = bool(re.match(
+        r"^(?:不粘锅|不沾锅|锅具|水壶|炒锅|煎锅|套锅|气罐)(?:的|怎么|如何|怎样|能不能|可以|清洗|保养|使用|不出气|漏气|出气)",
+        text,
+    )) or (
+        not named_products
+        and (
+            _looks_like_canister_fault_question(text)
+            or _looks_like_canister_type_question(text)
+        )
+    )
     explicit_exact_target_skus = (
         _usage_care_explicit_exact_target_skus(
             db,
@@ -833,35 +1429,258 @@ async def answer_product_usage_care_request(
         intent="product_usage_care",
         term=text,
         semantic_query=text,
-        target_skus=[product.sku for product in named_products[:3] if getattr(product, "sku", None)],
+        target_skus=(
+            []
+            if generic_care_scope
+            else [product.sku for product in named_products[:3] if getattr(product, "sku", None)]
+        ),
         source_context="question",
         is_single_field_sufficient=False,
     )
     response_style = "customer_service_script" if usage_subtype == "customer_reply" else "usage_guidance"
+    if _looks_like_fuel_replenishment_question(text):
+        answer = _compose_safety_usage_care_answer(text)
+        steps = _steps(intent, [{
+            "type": "usage_care_guidance",
+            "label": "回答酒精燃料补充与安全边界",
+            "detail": "先回答燃料用完后的处理，不让清洁 QA 覆盖燃料问题",
+            "ok": True,
+        }])
+        total_ms = customer_perf_service.perf_ms(request_start)
+        target_sku = intent.target_skus[0] if len(intent.target_skus) == 1 else None
+        warnings = [] if target_sku else ["product_identity_not_provided"]
+        return _build_response(
+            intent=intent,
+            answer=answer,
+            sku=target_sku,
+            sources=[{"type": "general_usage_guidance", "label": "通用燃料补充建议", "count": 0}],
+            results=[],
+            steps=steps,
+            confidence="medium",
+            warnings=warnings,
+            anomalies=[],
+            suggested_followups=["如果要核对具体燃料类型和加注量，请提供商品名或 SKU。"],
+            answer_type="product_usage_care",
+            debug={
+                "intent": intent.as_dict(),
+                "steps": steps,
+                "warnings": warnings,
+                "anomalies": [],
+                "raw_results": [],
+                "agent_mode": "fuel_replenishment_safety_guidance",
+                "usage_care_subtype": usage_subtype,
+                "response_style": response_style,
+                "qa_result_count": 0,
+                "knowledge_result_count": 0,
+                "final_used_sources_count": 0,
+                "total_ms": round(total_ms, 2),
+            },
+        )
+    # Temporal wording is a duration request even when it also mentions
+    # alcohol/fuel.  Do not let the broader fuel-vs-medical-alcohol explainer
+    # swallow the customer's requested runtime question.
+    if usage_subtype != "duration" and _looks_like_general_fuel_definition_question(text):
+        answer = (
+            "一般来说，炉具所说的燃料酒精是用于燃烧的专用燃料，具体成分、浓度和是否变性要以包装及说明书为准；"
+            "医用酒精主要用于消毒，不能默认替代炉具燃料。"
+            "是否能买到取决于当地法规和商家，不建议把‘随处可买’当作质量或适配保证。"
+            "如果要核对某款炉具能否使用液体酒精，请提供具体商品名或 SKU，我再按同款热源标注确认。"
+        )
+        steps = _steps(intent, [{
+            "type": "general_usage_guidance",
+            "label": "说明燃料酒精与医用酒精的使用边界",
+            "detail": "按通用安全常识回答，不将燃料问题改写为购买渠道或目录筛选",
+            "ok": True,
+        }])
+        total_ms = customer_perf_service.perf_ms(request_start)
+        return _build_response(
+            intent=intent,
+            answer=answer,
+            sku=None,
+            sources=[{"type": "general_usage_guidance", "label": "通用燃料使用建议", "count": 0}],
+            results=[],
+            steps=steps,
+            confidence="medium",
+            warnings=["product_identity_not_provided"],
+            anomalies=[],
+            suggested_followups=["如果能提供炉具 SKU，我可以继续核对该款是否标注支持液体酒精。"],
+            answer_type="product_usage_care",
+            debug={
+                "intent": intent.as_dict(),
+                "steps": steps,
+                "warnings": ["product_identity_not_provided"],
+                "anomalies": [],
+                "raw_results": [],
+                "agent_mode": "general_fuel_definition_guidance",
+                "usage_care_subtype": usage_subtype,
+                "response_style": response_style,
+                "qa_result_count": 0,
+                "knowledge_result_count": 0,
+                "final_used_sources_count": 0,
+                "total_ms": round(total_ms, 2),
+            },
+        )
+    if usage_subtype == "utensil_material":
+        answer = _compose_utensil_material_usage_care_answer(text)
+        steps = _steps(intent, [{
+            "type": "usage_care_guidance",
+            "label": "整理锅具与锅铲材质使用建议",
+            "detail": "按通用材质安全边界回答；未将问题改写为商品材质筛选",
+            "ok": True,
+        }])
+        total_ms = customer_perf_service.perf_ms(request_start)
+        return _build_response(
+            intent=intent,
+            answer=answer,
+            sku=intent.target_skus[0] if len(intent.target_skus) == 1 else None,
+            sources=[{"type": "general_usage_guidance", "label": "通用锅具使用建议", "count": 0}],
+            results=[],
+            steps=steps,
+            confidence="medium",
+            warnings=["product_surface_not_provided"],
+            anomalies=[],
+            suggested_followups=["如果能提供锅具 SKU 或说明锅面是否有不粘/涂层，我可以再按同款资料核对。"],
+            answer_type="product_usage_care",
+            debug={
+                "intent": intent.as_dict(),
+                "steps": steps,
+                "warnings": ["product_surface_not_provided"],
+                "anomalies": [],
+                "raw_results": [],
+                "agent_mode": "utensil_material_safety_guidance",
+                "usage_care_subtype": usage_subtype,
+                "response_style": response_style,
+                "qa_result_count": 0,
+                "knowledge_result_count": 0,
+                "final_used_sources_count": 0,
+                "total_ms": round(total_ms, 2),
+            },
+        )
+    if usage_subtype == "full_unit_wash":
+        answer = _compose_full_unit_wash_usage_care_answer(text)
+        steps = _steps(intent, [{
+            "type": "usage_care_guidance",
+            "label": "整理整机清洁安全边界",
+            "detail": "未把通用清洁安全问题扩展为炉具目录结果",
+            "ok": True,
+        }])
+        total_ms = customer_perf_service.perf_ms(request_start)
+        return _build_response(
+            intent=intent,
+            answer=answer,
+            sku=intent.target_skus[0] if len(intent.target_skus) == 1 else None,
+            sources=[{"type": "general_usage_guidance", "label": "通用炉具清洁建议", "count": 0}],
+            results=[],
+            steps=steps,
+            confidence="medium",
+            warnings=["product_identity_not_provided"],
+            anomalies=[],
+            suggested_followups=["如果能提供炉具 SKU 或具体型号，我可以再按该款说明书核对清洁要求。"],
+            answer_type="product_usage_care",
+            debug={
+                "intent": intent.as_dict(),
+                "steps": steps,
+                "warnings": ["product_identity_not_provided"],
+                "anomalies": [],
+                "raw_results": [],
+                "agent_mode": "full_unit_wash_safety_guidance",
+                "usage_care_subtype": usage_subtype,
+                "response_style": response_style,
+                "qa_result_count": 0,
+                "knowledge_result_count": 0,
+                "final_used_sources_count": 0,
+                "total_ms": round(total_ms, 2),
+            },
+        )
     qa_hits, knowledge_hits, search_debug = await _search_usage_care_qa(db, text, intent.target_skus, usage_subtype=usage_subtype)
+    if not intent.target_skus:
+        retrieved_sku = (
+            None
+            if generic_care_scope
+            else _unique_usage_care_retrieved_sku(text, qa_hits, knowledge_hits)
+        )
+        if retrieved_sku:
+            # A single lexical retrieval identity is enough to answer a
+            # generic category question, while multiple SKU hits remain
+            # ambiguous and must not leak cross-product evidence.
+            intent.target_skus = [retrieved_sku]
+            search_debug["unbound_identity_resolution"] = {
+                "sku": retrieved_sku,
+                "source": "unique_usage_care_retrieval",
+            }
+        else:
+            # Product QA and SKU-bound knowledge are not generic instructions.
+            # Without one unambiguous retrieval identity, exposing either
+            # would let a similarly worded record answer the customer.
+            unbound_product_hits = [
+                *({"source": "product_qa", "sku": item.get("sku")} for item in qa_hits),
+                *(
+                    {"source": "knowledge_chunks", "sku": item.get("sku")}
+                    for item in knowledge_hits
+                    if str(item.get("sku") or "").strip()
+                ),
+            ]
+            qa_hits = []
+            knowledge_hits = [item for item in knowledge_hits if not str(item.get("sku") or "").strip()]
+            if unbound_product_hits:
+                search_debug["filtered_or_downgraded"] = [
+                    *(search_debug.get("filtered_or_downgraded") or []),
+                    *(
+                        {**item, "reason": "unbound_product_evidence"}
+                        for item in unbound_product_hits
+                    ),
+                ]
     if explicit_exact_target_skus:
         qa_hits, qa_filtered = _filter_usage_care_hits_to_target_skus(qa_hits, explicit_exact_target_skus)
         knowledge_hits, knowledge_filtered = _filter_usage_care_hits_to_target_skus(knowledge_hits, explicit_exact_target_skus)
         search_debug["filtered_or_downgraded"] = search_debug.get("filtered_or_downgraded", []) + qa_filtered + knowledge_filtered
+    if generic_care_scope:
+        # A generic label such as "不粘锅" is not a product identity.  Do not
+        # let SKU-less knowledge or a fuzzy catalogue hit replace the bounded
+        # common-care guidance below.
+        qa_hits = []
+        knowledge_hits = []
+    if (
+        generic_care_scope
+        and usage_subtype in {"cleaning", "sticking", "coating", "maintenance"}
+        and not intent.target_skus
+    ):
+        # Generic wording may retrieve useful FAQ fragments, but those
+        # fragments cannot establish a product identity. Keep the response
+        # useful without presenting generic text as SKU-specific evidence.
+        qa_hits = []
+        knowledge_hits = []
     compose_start = perf_counter()
     if usage_subtype == "safety":
-        grounded_safety_evidence = _same_sku_safety_usage_care_evidence(
-            intent.target_skus,
-            qa_hits,
-            knowledge_hits,
+        # Generic safety questions do not seal a product identity.  Retrieval
+        # hits may belong to unrelated SKUs, so they may inform diagnostics
+        # but must not become visible facts, product cards, or leak answers.
+        has_unique_target = len(intent.target_skus) == 1
+        grounded_safety_evidence = (
+            _same_sku_safety_usage_care_evidence(
+                intent.target_skus,
+                qa_hits,
+                knowledge_hits,
+                text,
+            )
+            if has_unique_target
+            else ""
         )
-        safety_fallback = _compose_safety_usage_care_answer(text)
-        answer = (
-            f"产品资料：{grounded_safety_evidence}。\n{safety_fallback}"
-            if grounded_safety_evidence
-            else safety_fallback
-        )
+        if _looks_like_canister_compatibility_question(text):
+            answer = _compose_compatibility_usage_care_answer(text, grounded_safety_evidence)
+        else:
+            safety_fallback = _compose_safety_usage_care_answer(text)
+            answer = (
+                f"参考说明：{grounded_safety_evidence}。\n{safety_fallback}"
+                if grounded_safety_evidence
+                else safety_fallback
+            )
         compose_answer_ms = customer_perf_service.perf_ms(compose_start)
-        results = _usage_care_results_for_response(qa_hits, knowledge_hits)
+        results = _usage_care_results_for_response(qa_hits, knowledge_hits) if has_unique_target else []
         sources: list[dict] = []
-        if qa_hits:
+        if qa_hits and has_unique_target:
             sources.append({"type": "product_qa", "label": "产品 QA", "count": len(qa_hits), "skus": sorted({item.get('sku') for item in qa_hits if item.get('sku')})})
-        if knowledge_hits:
+        if knowledge_hits and has_unique_target:
             sources.append({"type": "usage_care_knowledge", "label": "使用/清洗保养知识库", "count": len(knowledge_hits), "skus": sorted({item.get('sku') for item in knowledge_hits if item.get('sku')})})
         steps = _steps(intent, [{"type": "usage_care_search", "label": "检索使用/安全注意资料", "detail": f"命中 QA {len(qa_hits)} 条，知识库 {len(knowledge_hits)} 条；安全类问题使用保守安全答复", "ok": True}])
         total_ms = customer_perf_service.perf_ms(request_start)
@@ -900,6 +1719,12 @@ async def answer_product_usage_care_request(
             },
         )
     if not qa_hits and not knowledge_hits:
+        named_product_skus = {
+            str(getattr(product, "sku", "") or "").strip().upper()
+            for product in named_products
+            if str(getattr(product, "sku", "") or "").strip()
+        }
+        unbound_care_question = generic_care_scope or len(named_product_skus) != 1
         if usage_subtype == "burnt":
             answer = "\n".join([
                 "清洁方法：目前没有专门糊锅资料，可先用温水和软刷轻刷处理。",
@@ -908,11 +1733,40 @@ async def answer_product_usage_care_request(
             ])
         elif usage_subtype == "composition":
             answer = _compose_usage_care_composition_answer(text, [], [])
+        elif usage_subtype == "duration":
+            answer = _compose_duration_usage_care_answer(text, [], [])
+        elif usage_subtype == "installation":
+            answer = _compose_installation_usage_care_answer(text, [], [])
+        elif usage_subtype == "usage_instruction":
+            answer = _compose_usage_instruction_care_answer(text, [], [])
+        elif (
+            unbound_care_question
+            and usage_subtype in {"cleaning", "sticking", "coating", "maintenance"}
+            and any(term in text for term in USAGE_CARE_COOKWARE_TERMS)
+        ):
+            answer = _compose_unbound_usage_care_guidance(text)
         else:
-            answer = "系统暂未配置对应清洗/保养资料，建议联系人工客服确认。"
+            answer = (
+                "当前资料未标注这款商品的具体清洁、保养或表面处理步骤，暂时无法确认针对这款商品的做法。"
+                "请优先按商品说明书操作；如果要核对具体型号的使用限制，请提供 SKU。"
+            )
         compose_answer_ms = customer_perf_service.perf_ms(compose_start)
         total_ms = customer_perf_service.perf_ms(request_start)
-        fallback_results = _usage_care_named_product_results(named_products)
+        unique_target_skus = {
+            str(product.sku or "").strip().upper()
+            for product in named_products
+            if str(getattr(product, "sku", "") or "").strip()
+        }
+        fallback_results = (
+            _usage_care_named_product_results(named_products)
+            if len(unique_target_skus) == 1 and not generic_care_scope
+            else []
+        )
+        missing_warning = (
+            ["product_identity_not_provided"]
+            if unbound_care_question and usage_subtype in {"cleaning", "sticking", "coating", "maintenance"}
+            else ["usage_care_data_missing"]
+        )
         return _build_response(
             intent=intent,
             answer=answer,
@@ -921,14 +1775,14 @@ async def answer_product_usage_care_request(
             results=fallback_results,
             steps=_steps(intent, [{"type": "usage_care_search", "label": "检索使用/清洗保养资料", "detail": "未命中 QA 或知识库", "ok": True}]),
             confidence="low",
-            warnings=["usage_care_data_missing"],
+            warnings=missing_warning,
             anomalies=[],
             suggested_followups=["如果你能提供具体 SKU 或产品名，我可以继续按单品资料重查。"],
             answer_type="product_usage_care",
             debug={
                 "intent": intent.as_dict(),
                 "steps": _steps(intent, [{"type": "usage_care_search", "label": "检索使用/清洗保养资料", "detail": "未命中 QA 或知识库", "ok": True}]),
-                "warnings": ["usage_care_data_missing"],
+                "warnings": missing_warning,
                 "anomalies": [],
                 "raw_results": [],
                 "agent_mode": "product_usage_care_fast_path",
@@ -943,6 +1797,7 @@ async def answer_product_usage_care_request(
                 "total_ms": round(total_ms, 2),
                 "filtered_or_downgraded": search_debug["filtered_or_downgraded"],
                 "final_used_sources_count": 0,
+                "guidance_source": "generic_unbound_usage_care" if missing_warning == ["product_identity_not_provided"] else "missing_product_evidence",
             },
         )
 
@@ -951,10 +1806,19 @@ async def answer_product_usage_care_request(
     answer_after_clean = _sanitize_usage_care_answer_text(answer_before_clean)
     answer = answer_after_clean
     compose_answer_ms = customer_perf_service.perf_ms(compose_start)
-    results = _usage_care_results_for_response(
-        qa_hits,
-        knowledge_hits,
-        explicit_exact_target_skus=explicit_exact_target_skus,
+    unique_target_skus = {
+        str(sku or "").strip().upper()
+        for sku in intent.target_skus
+        if str(sku or "").strip()
+    }
+    results = (
+        _usage_care_results_for_response(
+            qa_hits,
+            knowledge_hits,
+            explicit_exact_target_skus=explicit_exact_target_skus,
+        )
+        if len(unique_target_skus) == 1
+        else []
     )
     sources: list[dict] = []
     if qa_hits:
@@ -1205,7 +2069,7 @@ def parse_intent(question: str, *, sku: str | None = None, previous_result_skus:
         else:
             return CustomerIntent(
                 intent="clarify",
-                clarification_question="你提到的“这些”目前没有可引用的上一轮结果。请先查一批产品，或者直接告诉我要处理的 SKU。",
+                clarification_question="请告诉我具体商品名或 SKU，我再继续核对这款商品。",
             )
 
     quoted_subject = _quoted_subject_from_question(text)
@@ -1215,6 +2079,10 @@ def parse_intent(question: str, *, sku: str | None = None, previous_result_skus:
     if update_intent:
         update_intent.source_context = source_context
         return update_intent
+    delete_info_intent = _parse_delete_info_intent(text, target_skus)
+    if delete_info_intent:
+        delete_info_intent.source_context = source_context
+        return delete_info_intent
     if _is_delete_request(text):
         if not target_skus:
             return CustomerIntent(intent="clarify", clarification_question="请先告诉我要删除哪些 SKU，或先查询一批产品后再说“删除这些”。")
@@ -1611,6 +2479,10 @@ def _looks_like_recommendation_question(text: str) -> bool:
         return False
     if _is_pure_copywriting_without_product_recommendation(value):
         return False
+    if _looks_like_novice_simple_cookware_recommendation(value):
+        return True
+    if _looks_like_scenario_recommendation_question(value):
+        return True
     if _is_long_prompt_cookware_purchase_choice_question(value):
         return True
     if _looks_like_numbered_people_cookware_recommendation(value):
@@ -1670,6 +2542,8 @@ def _looks_like_generic_core_cookware_recommendation(text: str) -> bool:
     value = str(text or "")
     if not value:
         return False
+    if _looks_like_novice_simple_cookware_recommendation(value):
+        return True
     has_choice = any(term in value for term in ("买哪个", "买哪款", "选哪个", "选哪款", "哪个最稳", "哪款最稳", "推荐"))
     if not has_choice:
         return False
@@ -1680,6 +2554,17 @@ def _looks_like_generic_core_cookware_recommendation(text: str) -> bool:
     )
     explicit_other_scope = any(term in value for term in ("水壶", "咖啡", "杯", "收纳包", "配件", "炉子", "炉具", "烤盘"))
     return signals >= 3 and not explicit_other_scope
+
+
+def _looks_like_novice_simple_cookware_recommendation(text: str) -> bool:
+    value = str(text or "")
+    if not value or _extract_skus(value) or _quoted_subject_from_question(value):
+        return False
+    has_novice_signal = any(term in value for term in ("新手", "小白", "不太会用", "没怎么用过"))
+    has_simple_signal = any(term in value for term in ("简单点", "别太复杂", "不复杂", "容易上手"))
+    has_cooking_goal = any(term in value for term in ("烧水", "煮面", "煮泡面", "煮东西"))
+    has_water_container_subject = any(term in value for term in ("水壶", "烧水壶", "杯", "保温瓶", "水瓶"))
+    return has_novice_signal and has_simple_signal and has_cooking_goal and not has_water_container_subject
 
 
 def _looks_like_numbered_people_cookware_recommendation(text: str) -> bool:
@@ -1720,11 +2605,11 @@ def _looks_like_scenario_recommendation_question(text: str) -> bool:
         return False
     people_or_scene_terms = (
         "一个人", "单人", "两人", "双人", "三人", "四人", "家庭", "团建",
-        "露营", "野餐", "徒步", "烧烤", "火锅", "煮汤", "煮面", "烧水",
+        "露营", "营地", "野餐", "徒步", "烧烤", "火锅", "煮汤", "煮面", "烧水",
     )
-    constraint_terms = ("轻量", "轻便", "好收纳", "收纳", "稳一点", "稳定", "预算", "容量大", "容量优先", "别太难清理", "新手", "小白")
+    constraint_terms = ("轻量", "轻便", "好收纳", "收纳", "稳一点", "稳定", "稳妥", "预算", "容量大", "容量优先", "别太难清理", "新手", "小白")
     product_terms = ("锅", "锅具", "套锅", "单锅", "炉子", "炉具", "烤盘")
-    explicit_choice = any(term in value for term in ("推荐", "哪个", "哪款", "先买", "怎么选", "适合", "想买", "买个", "帮我选", "帮我挑"))
+    explicit_choice = any(term in value for term in ("推荐", "哪个", "哪款", "哪种", "先买", "怎么选", "怎么搭", "搭配", "适合", "想买", "买个", "帮我选", "帮我挑"))
     return (
         any(term in value for term in people_or_scene_terms)
         and any(term in value for term in product_terms)
@@ -4723,18 +5608,32 @@ async def _finalize_recommendation_answer(
 
 async def _propose_delete_result(db: Session, user_id: str, intent: CustomerIntent) -> dict:
     actions = []
+    field_label = intent.requested_fields[0] if intent.requested_fields else ""
+    tool_name = "propose_delete_product_info" if field_label else "propose_delete_product"
     for sku in intent.target_skus:
         result = await customer_agent_tool_service.execute_tool_async(
             db,
             user_id=user_id,
-            name="propose_delete_product",
-            arguments={"sku": sku},
+            name=tool_name,
+            arguments=(
+                {"skus": [sku], "field": field_label}
+                if field_label
+                else {"sku": sku}
+            ),
         )
+        actions.extend(result.get("actions") or [])
         if result.get("action"):
             actions.append(result["action"])
 
-    followups = ["确认前我建议你先核对 SKU 范围；如果你只是想下架或清空字段，也可以改成更轻量的操作。"]
-    answer = f"我已经为 {len(actions)} 个 SKU 生成待确认删除动作。请先确认范围，确认后才会真正执行。"
+    followups = ["确认前我建议你先核对 SKU 和字段范围；确认后才会真正执行。"]
+    if field_label:
+        answer = f"我已经为 {len(actions)} 个 SKU 生成待确认清空动作，将清空“{field_label}”。请先确认范围，确认后才会真正执行。"
+        step_type = "propose_delete_product_info"
+        step_label = "生成字段清空确认动作"
+    else:
+        answer = f"我已经为 {len(actions)} 个 SKU 生成待确认删除动作。请先确认范围，确认后才会真正执行。"
+        step_type = "propose_delete_product"
+        step_label = "生成删除确认动作"
     return _build_response(
         intent=intent,
         answer=answer,
@@ -4742,21 +5641,38 @@ async def _propose_delete_result(db: Session, user_id: str, intent: CustomerInte
         sources=[{"type": "agent_action", "label": "待确认删除动作", "count": len(actions)}],
         actions=actions,
         results=[],
-        steps=_steps(intent, [{"type": "propose_delete_product", "label": "生成删除确认动作", "detail": f"{len(actions)} 条", "ok": True}]),
+        steps=_steps(intent, [{"type": step_type, "label": step_label, "detail": f"{len(actions)} 条", "ok": bool(actions)}]),
         confidence="high",
-        warnings=[],
+        warnings=[] if actions else ["没有生成待确认动作，请检查字段名称或 SKU 是否正确。"],
         anomalies=[],
         suggested_followups=followups,
     )
 
 
 async def _propose_update_result(db: Session, user_id: str, intent: CustomerIntent) -> dict:
+    target_skus = list(intent.target_skus or [])
+    if not target_skus and intent.filters:
+        search_result = await customer_agent_tool_service.execute_tool_async(
+            db,
+            user_id=user_id,
+            name="search_products",
+            arguments={
+                "term": intent.term,
+                "filters": intent.filters,
+                "limit": 50,
+            },
+        )
+        target_skus = [
+            str(item.get("sku") or "").strip().upper()
+            for item in (search_result.get("results") or [])
+            if isinstance(item, dict) and str(item.get("sku") or "").strip()
+        ]
     result = await customer_agent_tool_service.execute_tool_async(
         db,
         user_id=user_id,
         name="propose_update_product_field",
         arguments={
-            "skus": intent.target_skus,
+            "skus": target_skus,
             "field": intent.requested_fields[0] if intent.requested_fields else "",
             "new_value": intent.exact_value,
         },
@@ -4929,7 +5845,7 @@ def _extract_structured_list_query_filters(text: str) -> dict[str, Any]:
         if copula_material:
             raw_value = _clean_filter_value(copula_material.group("value"))
             recognized_material_terms = (
-                "304不锈钢", "不锈钢304", "硬质氧化铝", "铝合金",
+                "316L不锈钢", "不锈钢316L", "304不锈钢", "不锈钢304", "硬质氧化铝", "铝合金",
                 "不锈钢", "塑料", "硅胶", "钛",
             )
             if any(term in raw_value for term in recognized_material_terms):
@@ -4981,6 +5897,11 @@ def _parse_structured_filters(text: str) -> tuple[dict[str, Any], dict[str, Any]
         r"|适合\s*酒精炉"
         r"|酒精炉可用"
         r"|\balcohol\s*stove\b"
+    )
+    charcoal_support_pattern = (
+        r"(?:只想用|只用|使用|用|支持|能用|可以用|可用|适配|适合)\s*(?:炭火|炭烧|烧炭|碳火|碳烧|木炭|炭炉|碳炉)"
+        r"|(?:炭火|炭烧|烧炭|碳火|碳烧|木炭|炭炉|碳炉)(?:上|下)?(?:能用|可以用|可用|适合|使用|推荐)"
+        r"|(?:我|本人)?(?:炭烧|烧炭|碳烧)的"
     )
 
     field_filters = (
@@ -5095,6 +6016,8 @@ def _parse_structured_filters(text: str) -> tuple[dict[str, Any], dict[str, Any]
         )
         if alcohol_support_match or alcohol_fuel_match:
             filters["specs.heat_source"] = "酒精炉"
+    if not filters.get("specs.heat_source") and re.search(charcoal_support_pattern, text, flags=re.I):
+        filters["specs.heat_source"] = "炭火"
     if not filters.get("specs.surface_finish") and any(term in text for term in ("不粘", "不沾")) and any(term in text for term in ("涂层", "带", "有没有", "哪些", "里", "中")):
         filters["specs.surface_finish"] = "不粘"
 
@@ -5144,6 +6067,10 @@ def _normalize_structured_filter_value(field_path: str, value: str) -> str:
     cleaned = str(value or "").strip()
     if field_path == "specs.body_material":
         cleaned = re.sub(r"^(?:你们有没?有|有没有|有没|帮我找(?:一下)?|帮我查(?:一下)?|查(?:一下|下)?|想找|我想找)\s*", "", cleaned)
+        exact_grade = re.search(r"(?i)(?:(316L|304|430)\s*不锈钢|不锈钢\s*(316L|304|430))", cleaned)
+        if exact_grade:
+            grade = (exact_grade.group(1) or exact_grade.group(2) or "").upper()
+            return f"{grade}不锈钢"
         cleaned = cleaned.replace("不锈钢304", "304不锈钢")
         if "304不锈钢" in cleaned:
             return "304不锈钢"
@@ -5166,6 +6093,8 @@ def _normalize_structured_filter_value(field_path: str, value: str) -> str:
     if field_path == "specs.heat_source":
         if any(term in cleaned for term in ("液体酒精", "固体酒精", "酒精燃料", "酒精炉")):
             return "酒精炉"
+        if any(term in cleaned for term in ("炭火", "炭烧", "烧炭", "碳火", "碳烧", "木炭", "炭炉", "碳炉")):
+            return "炭火"
         if "卡式炉" in cleaned:
             return "卡式炉"
         if "燃气炉" in cleaned:
@@ -5294,22 +6223,100 @@ def _has_explicit_field_filter(text: str) -> bool:
 
 
 def _parse_update_intent(text: str, target_skus: list[str]) -> CustomerIntent | None:
-    match = re.search(r"把\s+(.+?)\s*的\s*(.+?)\s*(?:都)?改成\s*(.+)$", text)
+    match = re.search(
+        r"把\s*(.+?)\s*的\s*(.+?)\s*(?:都)?(?:改成|改为|设置为|设为)\s*(.+)$",
+        text,
+    )
     if match:
-        sku_text, field_label, new_value = match.groups()
-        skus = _extract_skus(sku_text) or target_skus
+        selector_text, field_label, new_value = match.groups()
+        field_label = field_label.strip()
+        selector_text, field_label = _normalize_mutation_selector_field(selector_text, field_label)
+        new_value = _clean_mutation_value(new_value)
+        skus = _extract_skus(selector_text) or target_skus
+        filters = {}
         if not skus:
-            return CustomerIntent(intent="clarify", clarification_question="请告诉我要修改哪些 SKU。")
-        return CustomerIntent(intent="propose_update", target_skus=skus, requested_fields=[field_label.strip()], exact_value=new_value.strip())
+            filters, _ = _parse_structured_filters(selector_text)
+            if not filters:
+                return CustomerIntent(intent="clarify", clarification_question="请告诉我要修改哪些 SKU。")
+        return CustomerIntent(
+            intent="propose_update",
+            target_skus=skus,
+            filters=filters,
+            requested_fields=[field_label],
+            exact_value=new_value,
+        )
 
-    match = re.search(r"(?:修改|更改|更新|改)\s*(?:他|他的|它|它的|这个|这款|该产品)?\s*的?\s*(.+?)\s*(?:为|成|改成)\s*(.+)$", text)
+    match = re.search(
+        r"把\s*(这些|那些|它们|上面这些|刚才那些|前面这些|上一轮(?:结果)?|这批|这几个|那几个)\s*"
+        r"(?:的\s*)?(.+?)\s*(?:都)?(?:改成|改为|设置为|设为)\s*(.+)$",
+        text,
+    )
+    if match:
+        _, field_label, new_value = match.groups()
+        if not target_skus:
+            return CustomerIntent(intent="clarify", clarification_question="请先查询一批产品，或告诉我要修改哪些 SKU。")
+        return CustomerIntent(
+            intent="propose_update",
+            target_skus=target_skus,
+            requested_fields=[field_label.strip()],
+            exact_value=_clean_mutation_value(new_value),
+            source_context="previous_results",
+        )
+
+    match = re.search(
+        r"(?:修改|更改|更新|改)\s*(?:他|他的|它|它的|这个|这款|该产品|该商品)?\s*的?\s*"
+        r"(.+?)\s*(?:为|成|改成|改为|设置为|设为)\s*(.+)$",
+        text,
+    )
     if not match:
         return None
     field_label, new_value = match.groups()
     skus = target_skus
     if not skus:
         return CustomerIntent(intent="clarify", clarification_question="请告诉我要修改哪些 SKU。")
-    return CustomerIntent(intent="propose_update", target_skus=skus, requested_fields=[field_label.strip()], exact_value=new_value.strip())
+    return CustomerIntent(
+        intent="propose_update",
+        target_skus=skus,
+        requested_fields=[field_label.strip()],
+        exact_value=_clean_mutation_value(new_value),
+    )
+
+
+def _clean_mutation_value(value: str) -> str:
+    return re.sub(r"[，,]\s*(?:不用|无需|不需要)\s*确认\s*$", "", str(value or "").strip()).strip()
+
+
+def _normalize_mutation_selector_field(selector_text: str, field_label: str) -> tuple[str, str]:
+    field_label = str(field_label or "").strip()
+    if agent_action_service.resolve_field_path(field_label):
+        return selector_text, field_label
+    for prefix in ("锅", "产品", "商品"):
+        if field_label.startswith(prefix):
+            candidate = field_label[len(prefix):].strip()
+            if agent_action_service.resolve_field_path(candidate):
+                return f"{selector_text} {prefix}", candidate
+    return selector_text, field_label
+
+
+def _parse_delete_info_intent(text: str, target_skus: list[str]) -> CustomerIntent | None:
+    match = re.search(
+        r"(?:清空|删除|删掉|移除)\s+(.+?)\s*的\s*([^，,。！？?]+?)\s*$",
+        text,
+    )
+    if not match:
+        return None
+    selector_text, field_label = match.groups()
+    skus = _extract_skus(selector_text) or target_skus
+    if not skus:
+        return CustomerIntent(
+            intent="clarify",
+            clarification_question="请告诉我要清空哪些 SKU 的哪个字段。",
+        )
+    return CustomerIntent(
+        intent="propose_delete",
+        target_skus=skus,
+        requested_fields=[field_label.strip()],
+    )
 
 
 def _run_special_product_filter(db: Session, intent: CustomerIntent) -> list[dict]:
@@ -5456,6 +6463,14 @@ def _category_scope_people_answer(category_ref: str, rows: list[dict]) -> str:
 
 def _category_scope_structured_result(db: Session, question: str) -> dict | None:
     text = str(question or "").strip()
+    structured_filters, _ = _parse_structured_filters(text)
+    if any(
+        structured_filters.get(field)
+        for field in ("product.person_in_charge", "product.lifecycle_status")
+    ):
+        # Owner/lifecycle predicates define the actual catalogue subset. The
+        # broad category shortcut must not discard them before SQL filtering.
+        return None
     category_ref = _category_scope_from_question(text)
     if not category_ref:
         return None
@@ -5658,6 +6673,20 @@ def _looks_like_alcohol_stove_cookware_recommendation_question(question: str) ->
     if not any(term in text for term in ("酒精炉", "液体酒精", "固体酒精")):
         return False
     if not any(term in text for term in ("锅", "锅具", "套锅", "单锅", "炊具")):
+        return False
+    # Distinguish “recommend an alcohol stove for hotpot” from “recommend
+    # cookware that is compatible with an alcohol stove”.  The cooking
+    # scenario mentions 火锅/煮火锅, but that does not make the requested
+    # product a pot.
+    cookware_binding = any(term in text for term in (
+        "支持酒精炉的锅", "适合酒精炉的锅", "酒精炉的锅具",
+        "酒精炉能用的锅", "酒精炉适配锅", "酒精炉兼容锅",
+    ))
+    stove_target = bool(
+        re.search(r"(?:推荐|介绍|找|买|购买|有没有|哪款).{0,14}(?:酒精炉|液体酒精炉|固体酒精炉)", text)
+        or re.search(r"(?:酒精炉|液体酒精炉|固体酒精炉).{0,14}(?:推荐|购买|可以买|哪里买|可以煮)", text)
+    )
+    if stove_target and not cookware_binding:
         return False
     return any(term in text for term in ("推荐", "适合", "有没有", "哪些", "有哪", "可以用"))
 
@@ -6086,6 +7115,12 @@ def _compose_filter_answer_template(rows: list[dict], intent: CustomerIntent) ->
             canonical_summaries.append(f"{canonical_key}含{value}的SKU列表")
     condition = "；".join(filter_labels) or "未提供"
     if not rows:
+        if str((intent.filters or {}).get("specs.heat_source") or "").strip() == "炭火":
+            return (
+                f"筛选条件：{condition}。\n"
+                "当前资料中未检索到明确标注支持炭火的产品；“明火直烧”不等同于“炭火”，"
+                "因此不把仅标注明火的产品列为炭火适配。"
+            )
         return f"筛选条件：{condition}。\n当前资料中未检索到符合条件的产品。"
     summary_override = _case71_filter_summary_override(intent, rows)
     lines = [
@@ -7966,11 +9001,260 @@ def _knowledge_enrichment_debug(
     }
 
 
+def _looks_like_power_tradeoff_question(text: str) -> bool:
+    value = str(text or "").strip()
+    if not value:
+        return False
+    has_power = any(term in value for term in ("功率", "火力"))
+    has_consumption = any(term in value for term in ("耗气", "消耗气", "燃料消耗"))
+    has_time_tradeoff = any(term in value for term in ("节省时间", "节约时间", "省时间", "时间"))
+    return has_power and (has_consumption or has_time_tradeoff)
+
+
+def _looks_like_high_heat_split_burner_usage_question(text: str) -> bool:
+    """Recognize a generic high-temperature/remote-burner safety ask.
+
+    This is a semantic combination of a temperature/load concern and a
+    separated-burner structure.  It deliberately excludes catalogue verbs so
+    a request to choose products still follows the recommendation route.  No
+    utterance, product name, or SKU is encoded here.
+    """
+    value = str(text or "").strip()
+    if not value:
+        return False
+    if any(term in value for term in ("推荐", "哪款", "哪种", "哪个", "有哪些", "列出", "怎么选")):
+        return False
+    temperature_terms = ("温度高", "高温", "高热", "猛火", "大火", "高火力")
+    separated_structure_terms = (
+        "分体炉头", "分体炉", "分体式炉头", "分体式炉", "炉头分体", "炉具分体", "远程炉头",
+    )
+    return any(term in value for term in temperature_terms) and any(
+        term in value for term in separated_structure_terms
+    )
+
+
+def _looks_like_fuel_storage_comparison_question(text: str) -> bool:
+    """Recognize a storage-safety comparison between fuel types.
+
+    A sentence that contains ``哪个更安全`` can look like a recommendation
+    request to a catalogue router, but the customer is asking about storing
+    hazardous consumables.  Keep this boundary semantic: it requires both
+    fuel subjects, a vehicle/storage environment, and a comparison or safety
+    predicate.  It does not identify a product or SKU.
+    """
+    value = str(text or "").strip()
+    if not value or "气罐" not in value or not any(term in value for term in ("酒精", "燃料")):
+        return False
+    if not any(term in value for term in ("车上", "车内", "车里", "后备箱", "汽车", "高温密闭")):
+        return False
+    return any(term in value for term in ("哪个", "哪种", "哪一个", "更安全", "安全一点", "安全吗", "安全"))
+
+
+def _looks_like_universal_heat_source_question(text: str) -> bool:
+    """Recognize a universal product-capability question without guessing a SKU."""
+    value = str(text or "").strip()
+    if not value:
+        return False
+    universal_markers = ("所有", "全部", "每个", "每款", "每种", "任何")
+    has_universal_marker = any(term in value for term in universal_markers)
+    if not has_universal_marker and "都" in value:
+        # Bare “都可以用” commonly appears as the last option in a material
+        # choice (for example, “不锈钢还是硅胶，还是都可以用”), not as a
+        # claim about every kettle.  Accept “都” only when the sentence also
+        # establishes a universal/deictic subject.
+        has_universal_marker = any(term in value for term in ("是不是都", "这些都", "这类都", "它们都"))
+    if not has_universal_marker:
+        return False
+    if not any(term in value for term in ("烧水壶", "水壶", "锅具", "锅")):
+        return False
+    return any(term in value for term in ("可以用", "能用", "用吗", "支持", "适合", "热源"))
+
+
+def _looks_like_fuel_compatibility_usage_question(text: str) -> bool:
+    """Recognize an explicit solid/liquid-fuel capability or handling ask.
+
+    Generic ``酒精炉`` heat-source filters remain catalogue queries.  Only a
+    concrete fuel subtype plus an action/compatibility marker enters this
+    usage boundary; list/filter language is deliberately excluded.
+    """
+    value = str(text or "").strip()
+    if not value or not any(term in value for term in ("固体酒精", "固态酒精", "酒精块", "固体燃料", "液体酒精", "酒精燃料", "酒精", "木炭", "炭火", "柴火", "煤炭", "燃料")):
+        return False
+    if any(term in value for term in ("推荐", "有哪些", "哪些", "哪款", "列表", "里面", "筛选", "查询")):
+        return False
+    return any(
+        term in value
+        for term in (
+            "能用", "可以用", "支持", "适配", "兼容", "能否", "可不可以", "可以吗", "能吗", "适合吗", "能烧", "可以烧",
+            "用什么燃料", "使用什么燃料", "燃料是什么",
+            "用什么酒精", "使用什么酒精",
+            "怎么用", "怎么使用", "怎么存放", "如何存放", "没用完", "用不完",
+            "点不着", "打不着", "安全", "泄漏", "会漏", "燃烧", "爆炸",
+            "很猛", "家里", "家中", "室内", "车载", "车内",
+            "擦干", "擦掉", "擦净", "洒", "打翻", "清理", "泄漏", "漏液",
+            *USAGE_CARE_FUEL_DURATION_TERMS,
+        )
+    )
+
+
+def _looks_like_usage_instruction_question(text: str) -> bool:
+    """Recognize ordinary product-use wording as the usage field contract.
+
+    This is a language-level boundary shared by page and unbound routes.  It
+    does not infer a product or a SKU; identity and evidence are resolved by
+    the caller afterwards.
+    """
+    value = str(text or "").strip()
+    if not value:
+        return False
+    contract = customer_field_contract.detect_field_contract(value)
+    return bool(contract and contract.field_type == "usage_instruction")
+
+
+def _looks_like_fuel_duration_usage_question(text: str) -> bool:
+    """Recognize fuel quantity/boil-time guidance without guessing a SKU."""
+    value = str(text or "").strip()
+    # ``燃料一罐能用多久`` and ``气罐能用多久`` are duration questions even
+    # when the customer does not name alcohol.  Keep this language-level
+    # boundary generic; product identity and evidence are resolved later.
+    if not value or not any(term in value for term in ("固体酒精", "固态酒精", "酒精块", "固体燃料", "液体酒精", "酒精燃料", "酒精", "气罐", "燃料")):
+        return False
+    if any(term in value for term in ("推荐", "有哪些", "哪些", "哪款", "列表", "筛选", "查询")):
+        return False
+    return any(term in value for term in USAGE_CARE_FUEL_DURATION_TERMS)
+
+
 def _looks_like_usage_care_question(text: str) -> bool:
     value = str(text or "").strip()
     if not value:
         return False
-    return any(term in value for term in USAGE_CARE_TERMS)
+    # “带/有点火装置吗” asks for a catalogue capability, not an ignition
+    # procedure or failure diagnosis.  Keep it on the formal feature contract
+    # so a page-bound SKU can answer the exact field.  The same boundary covers
+    # ordinary marketplace wording such as “带点火器吗”.
+    if (
+        any(term in value for term in ("点火装置", "点火器", "点火头"))
+        and any(term in value for term in ("带", "有", "有没有", "是否", "是不是", "吗"))
+        and not any(term in value for term in ("怎么", "如何", "步骤", "操作", "更换", "维修"))
+    ):
+        return False
+    if (
+        _looks_like_power_tradeoff_question(value)
+        or _looks_like_high_heat_split_burner_usage_question(value)
+        or _looks_like_fuel_storage_comparison_question(value)
+        or _looks_like_universal_heat_source_question(value)
+        or _looks_like_fuel_compatibility_usage_question(value)
+        or _looks_like_fuel_duration_usage_question(value)
+        or _looks_like_general_fuel_definition_question(value)
+        or _looks_like_utensil_material_safety_question(value)
+        or _looks_like_full_unit_wash_question(value)
+        or _looks_like_canister_storage_fit_question(value)
+    ):
+        return True
+    matched_terms = [term for term in USAGE_CARE_TERMS if term in value]
+    if not matched_terms:
+        return False
+    # Bare product nouns are not operational intent.  Require an action or
+    # decision predicate before treating them as usage/care; this keeps
+    # “是一个炉头？” and “包含酒精吗？” on the identity/composition route.
+    noun_only_terms = {
+        "气罐", "酒精", "燃料", "炉头", "炉芯", "内胆", "炉", "炉具", "气炉",
+    }
+    action_markers = (
+        "怎么", "如何", "能不能", "能否", "可以", "是否", "支持", "适合", "安全",
+        "安装", "连接", "使用", "用", "烧", "燃烧", "放", "装", "加热", "点火",
+        "存放", "多久", "漏", "拧紧", "扭紧",
+    )
+    if all(term in noun_only_terms for term in matched_terms) and not any(marker in value for marker in action_markers):
+        return False
+    return True
+
+
+def _looks_like_general_fuel_definition_question(text: str) -> bool:
+    """Recognize a general fuel-versus-medical-alcohol question.
+
+    This is educational usage guidance, not a product or purchase-channel
+    lookup.  Keep it semantic so a missing SKU does not force a catalogue
+    guess or an internal sales-channel template.
+    """
+    value = str(text or "").strip()
+    if not value or not any(term in value for term in ("燃料酒精", "酒精燃料", "酒精")):
+        return False
+    # “酒精炉” is a product/heat-source noun, not by itself a question about
+    # medical or fuel alcohol.  Keep ordinary stove compatibility questions
+    # on the product field contract; the educational route is for a standalone
+    # alcohol/fuel distinction.
+    if "酒精炉" in value and not any(term in value for term in ("医用酒精", "药店", "消毒", "燃料酒精", "酒精燃料")):
+        return False
+    # Explicit solid/liquid/charcoal wording is a product compatibility
+    # question, not a medical-vs-fuel educational question.
+    if any(term in value for term in ("固体酒精", "固态酒精", "酒精块", "固体燃料", "液体酒精", "木炭", "炭火", "柴火", "煤炭")) and not any(
+        term in value for term in ("医用酒精", "药店", "消毒")
+    ):
+        return False
+    # A fuel-choice sentence such as “酒精和气罐都可以用吗” asks product
+    # compatibility, not a general explanation of medical versus fuel
+    # alcohol. Keep it on the compatibility composer unless the customer
+    # explicitly mentions the medical/pharmacy distinction.
+    if "气罐" in value and any(
+        term in value for term in ("可以用", "能不能用", "能用吗", "支持", "兼容", "适配", "都可以")
+    ) and not any(term in value for term in ("医用酒精", "药店", "消毒")):
+        return False
+    comparison_or_definition = any(
+        term in value for term in (
+            "医用酒精", "药店", "消毒", "是什么", "怎么理解", "区别", "不一样",
+            "能不能用", "能用不", "可以用", "推荐什么样", "推荐哪种", "该选什么",
+            "该选哪种", "选什么规格",
+        )
+    )
+    availability = any(term in value for term in (
+        "随处能买到",
+        "哪里买",
+        "从哪里买",
+        "去哪买",
+        "去哪里买",
+        "可以买到",
+        "怎么买",
+        "买什么样",
+        "买哪种",
+        "什么规格",
+    ))
+    # A pure purchase-channel question (“95% 酒精去哪买”) belongs to the
+    # channel FAQ.  Only combine availability with this educational route
+    # when the same turn also asks about fuel identity or usability.
+    return comparison_or_definition or (
+        availability
+        and (
+            any(term in value for term in ("燃料", "炉具", "炉子", "能用", "可以用", "支持", "适配"))
+            or (
+                "酒精" in value
+                and "酒精炉" not in value
+                and any(term in value for term in ("燃料酒精", "酒精燃料", "买什么样", "买哪种", "什么规格"))
+            )
+        )
+    )
+
+
+def _looks_like_utensil_material_safety_question(text: str) -> bool:
+    """Recognize a general utensil-material choice/scratch-safety question.
+
+    This is an intent boundary, not a product or SKU rule.  The customer is
+    asking how utensil materials interact with cookware, so a catalogue
+    material filter such as ``主体材质=不锈钢`` must not consume the turn.
+    """
+    value = str(text or "").strip()
+    if not value or not any(term in value for term in USAGE_CARE_UTENSIL_TERMS):
+        return False
+    if not any(term in value for term in USAGE_CARE_UTENSIL_MATERIAL_TERMS):
+        return False
+    return any(term in value for term in USAGE_CARE_UTENSIL_DECISION_TERMS)
+
+
+def _looks_like_full_unit_wash_question(text: str) -> bool:
+    value = str(text or "").strip()
+    if not value or not any(term in value for term in USAGE_CARE_FULL_UNIT_WASH_TERMS):
+        return False
+    return any(term in value for term in ("冲洗", "水洗", "清洗", "洗吗", "洗么", "能洗", "可以洗"))
 
 
 def _looks_like_contents_grounding_question(text: str) -> bool:
@@ -8179,9 +9463,57 @@ async def _search_usage_care_knowledge(db: Session, question: str, target_skus: 
 
 def _detect_usage_care_subtype(question: str) -> str:
     text = str(question or "")
+    # Compatibility predicates take precedence over the broad composition
+    # vocabulary.  Marketplace phrasing such as “里面的气罐都可以用吗”
+    # contains “里面”, but the customer is asking whether the referenced fuel
+    # is usable, not asking for an in-box contents list.  Keeping this order
+    # prevents unbound retrieval from leaking an unrelated catalogue answer.
+    if _looks_like_canister_compatibility_question(text):
+        return "safety"
+    if _looks_like_canister_storage_fit_question(text):
+        return "safety"
+    # A universal capability question is about heat-source compatibility, not
+    # cleaning/maintenance.  Keep it on the existing safety contract so the
+    # answer can state that compatibility must be verified per SKU.
+    if _looks_like_universal_heat_source_question(text):
+        return "safety"
     if _looks_like_contents_grounding_question(text):
         return "composition"
-    if any(term in text for term in ("点不着", "打不着", "点火", "连接", "安全", "注意事项", "气罐", "存放", "阀门")):
+    if _looks_like_power_tradeoff_question(text):
+        return "power_tradeoff"
+    if _looks_like_high_heat_split_burner_usage_question(text):
+        # Keep this on the existing safety contract.  A one-off subtype named
+        # after a single customer sentence would be a brittle rule rather than
+        # an extensible intent boundary.
+        return "safety"
+    if _looks_like_utensil_material_safety_question(text):
+        return "utensil_material"
+    if _looks_like_full_unit_wash_question(text):
+        return "full_unit_wash"
+    if _looks_like_fuel_duration_usage_question(text):
+        return "duration"
+    # Fuel handling/compatibility and spill-cleanup questions need the safety
+    # boundary even when their wording does not contain the generic “安全”
+    # token.  Without this branch they fall through to cookware cleaning or a
+    # broad QA hit.
+    if _looks_like_fuel_compatibility_usage_question(text):
+        return "safety"
+    if "点火器" in text and any(term in text for term in ("卖", "购买", "更换", "替换", "配件")):
+        return "safety"
+    if _looks_like_ignition_fault_question(text):
+        return "safety"
+    if _looks_like_usage_instruction_question(text):
+        return "usage_instruction"
+    if "高山气罐" in text and any(term in text for term in (
+        "就是大罐", "就是小罐", "大罐是", "小罐是", "大小", "多大", "容量",
+        "什么意思", "怎么理解", "是吧", "是不是",
+    )):
+        return "safety"
+    if any(term in text for term in USAGE_CARE_DURATION_TERMS):
+        return "duration"
+    if any(term in text for term in USAGE_CARE_INSTALLATION_TERMS):
+        return "installation"
+    if any(term in text for term in (*USAGE_CARE_SAFETY_TERMS, "注意事项")):
         return "safety"
     if any(term in text for term in USAGE_CARE_REPLY_TERMS):
         return "customer_reply"
@@ -8199,6 +9531,10 @@ def _detect_usage_care_subtype(question: str) -> str:
 def _usage_care_focus_terms(subtype: str) -> tuple[str, ...]:
     if subtype == "composition":
         return CONTENTS_GROUNDING_TERMS + ("茶壶", "茶杯", "配件", "开箱", "组成", "套装")
+    if subtype == "utensil_material":
+        return USAGE_CARE_UTENSIL_TERMS + USAGE_CARE_UTENSIL_MATERIAL_TERMS + ("伤锅", "刮花", "刮伤", "涂层")
+    if subtype == "full_unit_wash":
+        return USAGE_CARE_FULL_UNIT_WASH_TERMS + ("冲洗", "水洗", "气路", "点火", "阀门", "接口")
     if subtype == "customer_reply":
         return USAGE_CARE_CLEANING_TERMS + USAGE_CARE_MAINTENANCE_TERMS + USAGE_CARE_STICKING_TERMS
     if subtype == "burnt":
@@ -8209,6 +9545,12 @@ def _usage_care_focus_terms(subtype: str) -> tuple[str, ...]:
         return USAGE_CARE_STICKING_TERMS + USAGE_CARE_CLEANING_TERMS + USAGE_CARE_COATING_TERMS
     if subtype == "maintenance":
         return USAGE_CARE_MAINTENANCE_TERMS + USAGE_CARE_MAINTENANCE_ACTION_TERMS + USAGE_CARE_CLEANING_TERMS
+    if subtype == "duration":
+        return USAGE_CARE_DURATION_TERMS + USAGE_CARE_FUEL_DURATION_TERMS + ("酒精", "燃料", "气罐", "火力", "容量")
+    if subtype == "power_tradeoff":
+        return USAGE_CARE_POWER_TRADEOFF_TERMS + ("功率", "火力", "燃料", "气罐", "效率")
+    if subtype == "installation":
+        return USAGE_CARE_INSTALLATION_TERMS + ("炉头", "炉芯", "接口", "说明书", "安装")
     if subtype == "safety":
         return USAGE_CARE_SAFETY_TERMS + ("点不着", "打不着", "点火", "连接", "气罐", "阀门", "存放", "阴凉通风", "火源", "关闭阀门", "检查")
     return USAGE_CARE_CLEANING_TERMS + USAGE_CARE_MAINTENANCE_TERMS
@@ -8339,6 +9681,26 @@ def _usage_care_explicit_exact_target_skus(db: Session, question: str, target_sk
     return exact_targets
 
 
+def _unique_usage_care_retrieved_sku(
+    question: str,
+    qa_hits: list[dict],
+    knowledge_hits: list[dict],
+) -> str:
+    """Bind an unscoped care question only when retrieval has one SKU."""
+    text = str(question or "")
+    if not any(term in text for term in (
+        *USAGE_CARE_COOKWARE_TERMS,
+        "炉", "炉具", "炉头", "气罐", "酒精炉", "水壶", "水杯", "烤盘",
+    )):
+        return ""
+    skus = sorted({
+        str(item.get("sku") or "").strip().upper()
+        for item in [*qa_hits, *knowledge_hits]
+        if str(item.get("sku") or "").strip()
+    })
+    return skus[0] if len(skus) == 1 else ""
+
+
 def _filter_usage_care_hits_to_target_skus(items: list[dict], target_skus: list[str]) -> tuple[list[dict], list[dict]]:
     normalized_targets = {
         str(sku or "").strip().upper()
@@ -8388,6 +9750,14 @@ def _compose_usage_care_answer(question: str, qa_hits: list[dict], knowledge_hit
         return _compose_cold_shock_usage_care_answer(question, qa_hits, knowledge_hits)
     if usage_subtype == "composition":
         return _compose_usage_care_composition_answer(question, qa_hits, knowledge_hits)
+    if usage_subtype == "power_tradeoff":
+        return _compose_power_tradeoff_usage_care_answer(question, qa_hits, knowledge_hits)
+    if usage_subtype == "duration":
+        return _compose_duration_usage_care_answer(question, qa_hits, knowledge_hits)
+    if usage_subtype == "installation":
+        return _compose_installation_usage_care_answer(question, qa_hits, knowledge_hits)
+    if usage_subtype == "usage_instruction":
+        return _compose_usage_instruction_care_answer(question, qa_hits, knowledge_hits)
     suggestions: list[str] = []
     seen = set()
     for item in qa_hits:
@@ -8400,9 +9770,19 @@ def _compose_usage_care_answer(question: str, qa_hits: list[dict], knowledge_hit
         if content and content not in seen:
             seen.add(content)
             suggestions.append(content)
+    # A missing usage record is a data boundary, not a reason to expose an
+    # internal configuration state or to manufacture a generic product claim.
+    if not suggestions or all(_is_usage_care_output_noise(item) for item in suggestions):
+        return (
+            "当前资料未标注该商品的具体清洗、保养或粘锅处理方法，暂时无法确认针对这款商品的做法。"
+            "请提供具体型号或 SKU，并优先按商品说明书操作。"
+        )
     sections = _compose_usage_care_sections(question, suggestions, usage_subtype=usage_subtype)
     if not any(sections.values()):
-        body = "系统暂未配置对应清洗/保养资料，建议联系人工客服确认。"
+        body = (
+            "当前资料未标注该商品的具体清洗或保养方法，暂时无法确认针对这款商品的做法。"
+            "请提供具体型号或 SKU，并优先按商品说明书操作。"
+        )
     else:
         lines = []
         if sections["cleaning"]:
@@ -8413,6 +9793,149 @@ def _compose_usage_care_answer(question: str, qa_hits: list[dict], knowledge_hit
             lines.append(f"避免事项：{sections['avoid']}")
         body = "\n".join(lines)
     return body
+
+
+def _compose_unbound_usage_care_guidance(question: str) -> str:
+    """Give bounded common-care guidance when no SKU evidence is available."""
+    text = str(question or "")
+    if any(term in text for term in ("保养", "存放", "收纳", "使用后")):
+        return (
+            "保养建议：锅具冷却后用温水和软布或软刷清洗，洗后及时擦干并保持干燥收纳。\n"
+            "避免事项：不要用钢丝球、硬质刷具或强腐蚀清洁剂，避免刮伤不粘或表面处理。\n"
+            "以上是通用建议；如需确认具体涂层、是否可浸泡或能否使用洗碗机，请提供具体型号或 SKU。"
+        )
+    return (
+        "清洁方法：锅具降温后先用温水和软布或软刷清洗，洗后及时擦干。\n"
+        "注意事项：不要骤冷骤热，也不要在高温状态下直接冲冷水。\n"
+        "避免事项：不要用钢丝球、硬质刷具或强腐蚀清洁剂；如需核对具体涂层和清洁限制，请提供具体型号或 SKU。"
+    )
+
+
+def _compose_power_tradeoff_usage_care_answer(question: str, qa_hits: list[dict], knowledge_hits: list[dict]) -> str:
+    """Explain the power/consumption trade-off without selecting one SKU."""
+    return (
+        "一般来说，功率或火力更大，单位时间的耗气量通常也会更高，但加热速度可能更快；"
+        "是否真的节省总时间，还取决于水量/食材、锅具效率、风力和火力档位。"
+        "因此不能只凭功率大小断言一定更省时间或更省燃料，建议按实际负载和使用场景选择。"
+    )
+
+
+def _compose_utensil_material_usage_care_answer(question: str) -> str:
+    """Answer utensil-material choice without inventing a product match."""
+    return "\n".join([
+        "选择建议：如果锅具是有不粘或涂层的表面，优先选硅胶、木或尼龙等软质锅铲。",
+        "材质结论：不锈钢等金属铲在接触涂层时更容易刮伤表面，不建议把两种材质都当作通用选择；无涂层不锈钢锅能否使用金属铲，仍应以锅具说明书为准。",
+        "当前没有具体锅具型号或锅面材质，无法确认某一款锅铲一定适配；提供锅具 SKU 或说明是否有涂层后，我可以继续按同款资料核对。",
+    ])
+
+
+def _compose_full_unit_wash_usage_care_answer(question: str) -> str:
+    """Give a product-agnostic boundary for washing a complete stove."""
+    return "\n".join([
+        "清洁结论：当前没有具体型号资料证明整台炉具可以直接冲洗或浸水，不能把整机水洗当作通用做法。",
+        "更稳妥的处理：先关闭并移除燃料，确认炉体完全冷却后用拧干的湿布擦拭，避开气路、阀门、接口和点火部件。",
+        "如果必须水洗，请先按具体型号说明书确认防水要求；如有漏气、点火异常或接口进水，立即停止使用并联系人工客服。",
+    ])
+
+
+def _compose_duration_usage_care_answer(question: str, qa_hits: list[dict], knowledge_hits: list[dict]) -> str:
+    """Answer fuel-duration questions only from a matching duration record.
+
+    A fuel volume alone is not enough to derive runtime: burner output,
+    vessel load and operating conditions all change consumption.  Prefer a
+    same-SKU QA/knowledge answer when one is explicitly about duration;
+    otherwise explain the missing variables instead of returning a cleaning
+    answer or an unrelated product list.
+    """
+    duration_terms = USAGE_CARE_DURATION_TERMS + USAGE_CARE_FUEL_DURATION_TERMS + ("耗时", "燃烧时间", "使用时间", "续航")
+    duration_answer = ""
+    question_text = str(question or "")
+    asks_liquid_amount = (
+        any(term in question_text for term in ("液体酒精", "液态酒精"))
+        and any(term in question_text.lower() for term in ("毫升", "ml", "cc"))
+        and any(term in question_text for term in ("多少", "加", "放", "用量", "容量"))
+    )
+    if asks_liquid_amount:
+        return (
+            "液体酒精用量：当前资料未标注这款炉具每次应加入多少毫升液体酒精，不能直接给出统一毫升数。"
+            "实际加注量取决于炉具燃料槽、燃料规格和说明书要求；请提供具体炉具 SKU，"
+            "并按同款说明书确认，未确认前不要把液体酒精换算成固体酒精块数。"
+        )
+    asks_alcohol_amount = "酒精" in question_text and any(
+        term in question_text for term in ("多少", "加", "放", "用量", "容量", "装满", "灌满")
+    )
+    explicitly_solid = any(
+        term in question_text for term in ("固体酒精", "固态酒精", "酒精块", "固体燃料")
+    )
+    if asks_alcohol_amount and not explicitly_solid:
+        fuel_label = "液体酒精" if any(term in question_text for term in ("液体酒精", "液态酒精")) else "酒精"
+        return (
+            f"{fuel_label}用量和使用时长：当前资料未标注这款炉具每次的加注量或对应燃烧时长，"
+            "且当前问题未提供足以核对的燃料槽规格，不能直接给出统一用量或分钟数。"
+            "请提供具体炉具 SKU，并按同款炉具和燃料说明书确认；未明确燃料类型前，"
+            "不能把酒精用量默认换算成固体酒精块数。"
+        )
+    for item in [*qa_hits, *knowledge_hits]:
+        candidate = _normalize_usage_care_snippet(item.get("answer") or item.get("content") or "")
+        if candidate and any(term in candidate for term in duration_terms):
+            duration_answer = f"使用时长：{candidate.rstrip('。；;')}。"
+            break
+    if not duration_answer:
+        if _looks_like_fuel_duration_usage_question(question) and any(
+            term in str(question or "")
+            for term in ("多少块", "几块", "多少颗", "几颗", "多少粒", "放多少", "加多少", "烧开", "煮开")
+        ):
+            duration_answer = (
+                "用量和烧水时间：当前资料未标注每次应放多少块固体酒精，也没有这组炉具烧开一壶水的固定时间，"
+                "不能直接给出块数或分钟数。实际结果会受炉具型号、燃料规格、水量、火力和挡风情况影响；"
+                "请以固体酒精及炉具说明书为准，并提供具体炉具 SKU 和水量，我再按同款资料核对。"
+            )
+        else:
+            duration_answer = (
+                "使用时长：仅凭燃料容量不能准确换算能用多久，还要看具体炉具型号、火力档位和实际负载；"
+                "当前资料未标注这组条件下的明确时长。请提供炉具型号或 SKU，我再按同款资料核对。"
+            )
+    # A customer may ask for the canister capacity and the runtime in one
+    # sentence.  The runtime answer alone would silently drop the first
+    # request, so state the separate capacity boundary before the duration
+    # conclusion.  This remains evidence-safe: it does not infer a canister
+    # size from the stove's own capacity field.
+    if "气罐" in str(question or "") and any(term in str(question or "") for term in ("容量", "多大", "多少克", "几克")):
+        return "气罐容量：当前资料未标注你所用气罐的容量或规格，暂时无法确认。\n" + duration_answer
+    return duration_answer
+
+
+def _compose_installation_usage_care_answer(question: str, qa_hits: list[dict], knowledge_hits: list[dict]) -> str:
+    """Give an installation-specific safe boundary instead of a cleaning fallback."""
+    installation_terms = USAGE_CARE_INSTALLATION_TERMS + ("安装步骤", "安装说明", "安装视频")
+    for item in [*qa_hits, *knowledge_hits]:
+        candidate = _normalize_usage_care_snippet(item.get("answer") or item.get("content") or "")
+        if candidate and any(term in candidate for term in installation_terms):
+            return f"安装说明：{candidate.rstrip('。；;')}。"
+    return (
+        "安装说明：当前资料未标注这款炉头/炉芯的具体安装步骤或视频，无法确认装配方向和接口位置。"
+        "请提供具体型号或 SKU，并按说明书核对；未确认前不要强行安装或点火。"
+    )
+
+
+def _compose_usage_instruction_care_answer(question: str, qa_hits: list[dict], knowledge_hits: list[dict]) -> str:
+    """Answer a plain use-method request without falling into cleaning copy."""
+    text = str(question or "")
+    if "点火器" in text and any(term in text for term in ("需要", "要用", "用点火器", "是否", "是不是", "吗")):
+        return (
+            "点火方式结论：是否需要外部点火器取决于具体炉具是否自带压电、电子或其他点火装置，"
+            "不能仅凭燃料类型判断。请提供炉具商品名或 SKU，并按同款说明书确认；"
+            "未确认前不要在有燃气味或残留酒精时反复点火。"
+        )
+    usage_terms = ("使用", "操作", "开火", "点火", "首次", "说明书")
+    for item in [*qa_hits, *knowledge_hits]:
+        candidate = _normalize_usage_care_snippet(item.get("answer") or item.get("content") or "")
+        if candidate and any(term in candidate for term in usage_terms):
+            return f"使用说明：{candidate.rstrip('。；;')}。"
+    return (
+        "使用说明：当前资料未标注这款商品的具体使用步骤，暂时无法确认完整操作方法。"
+        "请按商品说明书操作；如果要核对某个接口、燃料或点火步骤，请补充具体型号或 SKU。"
+    )
 
 
 def _compose_usage_care_composition_answer(question: str, qa_hits: list[dict], knowledge_hits: list[dict]) -> str:
@@ -8672,6 +10195,17 @@ def _is_usage_care_output_noise(text: str) -> bool:
         "规格信息",
         "生命周期:",
         "负责人:",
+        "产品资料",
+        "内容信息",
+        "中文标题",
+        "英文标题",
+        "中文描述",
+        "英文描述",
+        "检测报告",
+        "客服FAQ",
+        "必须严格使用替代表达",
+        "风险点",
+        "系统暂未配置",
     )
     return any(term in value for term in noise_terms) or len(value) > 80
 
@@ -9080,6 +10614,18 @@ def _sanitize_usage_care_answer_text(answer: str) -> str:
     value = str(answer or "").strip()
     if not value:
         return ""
+    if _looks_like_internal_product_dump(value):
+        # Keep a customer-facing conclusion if an upstream renderer appended
+        # an internal row before it; otherwise fail closed without exposing
+        # SKU ownership and storage fields.
+        lines = [line.strip() for line in value.splitlines() if line.strip()]
+        customer_heading = re.compile(
+            r"^(?:兼容性结论|处理建议|注意事项|安全提醒|配件结论|存放结论|先说结论|结论)\s*[:：]"
+        )
+        tail_index = next((index for index, line in enumerate(lines) if customer_heading.search(line)), None)
+        value = "\n".join(lines[tail_index:]) if tail_index is not None else (
+            "当前资料未标注可直接回答的商品信息，暂时无法确认。"
+        )
     value = re.sub(r"\bQ[:：]\s*", "", value, flags=re.IGNORECASE)
     value = re.sub(r"\bA[:：]\s*", "", value, flags=re.IGNORECASE)
     lines = [re.sub(r"[ \t]+", " ", line).strip() for line in value.splitlines()]
@@ -9602,12 +11148,19 @@ def _value_from_detail(detail: dict[str, Any], field_path: str) -> Any:
 
 
 def _is_delete_request(text: str) -> bool:
-    return any(word in text for word in ("删除", "删掉", "移除")) and any(word in text for word in ("产品", "SKU", "这些", "它们"))
+    return any(word in text for word in ("删除", "删掉", "移除")) and (
+        bool(_extract_skus(text))
+        or any(word in text for word in ("产品", "SKU", "这些", "它们"))
+    )
 
 
 def _has_context_reference(text: str) -> bool:
     value = str(text or "")
-    return any(word in value for word in CONTEXT_WORDS) or any(pattern.search(value) for pattern in ORDINAL_CONTEXT_PATTERNS)
+    # ``他`` is a valid colloquial pronoun in follow-ups such as “他防水吗”,
+    # but a raw substring check also matches the ordinary word “其他”.  Keep
+    # the pronoun only when it is not immediately preceded by “其”.
+    has_pronoun = bool(re.search(r"(?<!其)他", value))
+    return has_pronoun or any(word in value for word in CONTEXT_WORDS) or any(pattern.search(value) for pattern in ORDINAL_CONTEXT_PATTERNS)
 
 
 def _extract_skus(text: str) -> list[str]:

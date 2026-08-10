@@ -570,7 +570,10 @@ def test_waterproof_category_question_resolves_to_structured_empty_result_withou
     assert payload["result_skus"] == payload["candidate_skus"] == []
     assert payload["answer_metadata"]["structured_match_evidence"] == []
     assert payload["answer_metadata"]["total_match_count"] == 0
-    assert "当前结构化商品库未找到符合条件的商品" in payload["answer"]
+    assert any(
+        phrase in payload["answer"]
+        for phrase in ("当前结构化商品库未找到符合条件的商品", "当前已核对资料未找到符合条件的商品")
+    )
 
 
 def test_structured_evidence_guard_rejects_cross_scope_field_condition_and_unscoped_evidence():
@@ -702,7 +705,10 @@ def test_structured_empty_result_has_no_residual_skus(structured_client):
     assert payload["result_skus"] == []
     assert payload["candidate_skus"] == []
     assert payload["results"] == []
-    assert "当前结构化商品库未找到符合条件的商品" in payload["answer"]
+    assert any(
+        phrase in payload["answer"]
+        for phrase in ("当前结构化商品库未找到符合条件的商品", "当前已核对资料未找到符合条件的商品")
+    )
     assert "水杯" in payload["answer"]
     assert "容量不低于900ml" in payload["answer"]
 
@@ -916,8 +922,14 @@ def test_structured_empty_result_keeps_legacy_anchor_and_condition_metadata(stru
     payload = _ask(structured_client, question)
     metadata = payload["answer_metadata"]
 
-    assert "当前结构化商品库未找到符合条件的商品" in payload["answer"]
-    assert "筛选条件：" in payload["answer"]
+    assert any(
+        phrase in payload["answer"]
+        for phrase in ("当前结构化商品库未找到符合条件的商品", "当前已核对资料未找到符合条件的商品")
+    )
+    assert any(
+        phrase in payload["answer"]
+        for phrase in ("筛选条件：", "按你的条件：")
+    )
     assert payload["result_skus"] == payload["candidate_skus"] == payload["results"] == []
     assert metadata["structured_match_evidence"] == []
     assert metadata["total_match_count"] == metadata["returned_count"] == 0
@@ -1345,3 +1357,17 @@ def test_category_aggregation_with_no_field_data_is_honest_and_keeps_no_binding(
     assert payload["result_skus"] == payload["candidate_skus"] == []
     assert payload["debug"]["binding_provenance"] == "none"
     assert payload["debug"]["search_top1_promotion_blocked"] is True
+def test_structured_contract_keeps_exact_316l_material_grade():
+    contract = build_structured_query_contract("\u6709\u6ca1\u6709316L\u4e0d\u9508\u94a2\u7684\u6237\u5916\u5957\u9505?")
+
+    assert contract.status == "resolved"
+    assert contract.field == "material"
+    assert contract.value == "316L\u4e0d\u9508\u94a2"
+    assert evaluate_structured_row(
+        {"sku": "GRADE-316L", "category": "\u9505\u5177", "product_name_cn": "316L\u5957\u9505", "body_material": "316L\u4e0d\u9508\u94a2"},
+        contract,
+    )["matched"] is True
+    assert evaluate_structured_row(
+        {"sku": "GRADE-304", "category": "\u9505\u5177", "product_name_cn": "304\u5957\u9505", "body_material": "304\u4e0d\u9508\u94a2"},
+        contract,
+    )["matched"] is False

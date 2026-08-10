@@ -231,11 +231,23 @@ def _score_answer_hygiene(answer: str, intent: str, risks: list[str]) -> float:
 
 
 def _known_skus(rows: list[dict[str, Any]]) -> set[str]:
-    skus = set()
+    raw_skus: set[str] = set()
     for row in rows:
         sku = str(row.get("sku") or "").upper()
         if sku:
-            skus.add(sku)
+            raw_skus.add(sku)
+    # Product variants may be rendered as ``BASE（variant）`` while the answer
+    # renderer exposes the stable base token.  Add a base alias only when it
+    # maps to one returned row; multiple variants must remain distinct.
+    base_groups: dict[str, set[str]] = {}
+    for sku in raw_skus:
+        base = re.sub(r"[（(][^）)]*[）)]$", "", sku).strip()
+        if base and base != sku:
+            base_groups.setdefault(base, set()).add(sku)
+    skus = set(raw_skus)
+    for base, variants in base_groups.items():
+        if len(variants) == 1:
+            skus.add(base)
     return skus
 
 

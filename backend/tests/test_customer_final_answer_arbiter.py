@@ -1,5 +1,6 @@
 from app.services import customer_answer_coverage_contract
 from app.services import customer_final_answer_arbiter
+from app.services import customer_service_service
 
 
 def _coverage(*, answered=(), unsupported=()):
@@ -93,3 +94,26 @@ def test_final_arbiter_flags_empty_answer_and_internal_labels():
         "debug": {},
     })
     assert empty["answer_metadata"]["final_answer_audit"]["blocking_findings"] == ["empty_answer"]
+
+
+def test_final_answer_sanitizer_removes_internal_evidence_paths():
+    answer = customer_service_service._sanitize_final_answer_text(
+        "轻途套锅适合背包旅行（来源：content.features），收纳尺寸见 specs.size_info。",
+        {},
+    )
+
+    assert "content.features" not in answer
+    assert "specs.size_info" not in answer
+    assert "来源：" not in answer
+
+
+def test_final_answer_sanitizer_removes_internal_qa_kb_provenance():
+    answer = customer_service_service._sanitize_final_answer_text(
+        "适用热源：高山气罐（补充资料）\n依据：以上字段已结合当前 SKU 的 QA / KB 补充资料。其中未直接标注液化气罐，因此不能确认。",
+        {"type": "structured_product_detail"},
+    )
+
+    assert "补充资料" not in answer
+    assert "QA / KB" not in answer
+    assert "依据：以上字段" not in answer
+    assert "其中未直接标注液化气罐" in answer

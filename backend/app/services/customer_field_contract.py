@@ -47,14 +47,18 @@ FIELD_CONTRACTS: tuple[FieldContract, ...] = (
     FieldContract("brand", ("品牌", "牌子"), "unknown", ("是什么牌子的", "哪个品牌")),
     FieldContract("category", ("商品类目", "产品类目", "属于什么类别"), "unknown", ("属于什么类", "是什么品类")),
     FieldContract("dimensions", ("展开后尺寸", "收起后尺寸", "展开尺寸", "收纳尺寸", "长宽高", "大小", "尺寸"), "unknown"),
+    # Thickness is not a synonym for overall dimensions.  Keep it as its own
+    # formally recognised but currently unsupported field so a question such
+    # as “锅具的厚度多少” fails closed instead of becoming a catalogue list.
+    FieldContract("thickness", ("厚度", "厚薄", "锅壁厚度", "锅底厚度"), "unknown"),
     FieldContract("specification", ("规格",), "unknown"),
     FieldContract(
         "technical_advantages",
         ("技术优势", "技术特点"),
         "unknown",
-        ("技术优势是什么", "有什么技术特点"),
+        ("技术优势是什么", "技术特点是什么", "有什么技术特点"),
     ),
-    FieldContract("power", ("功率", "瓦数", "多少瓦"), "unknown", ("功率是多少", "最大功率是多少", "多少瓦")),
+    FieldContract("power", ("功率", "瓦数", "多少瓦", "火力"), "unknown", ("功率是多少", "最大功率是多少", "多少瓦", "火力多大", "火力怎么样")),
     FieldContract(
         "capacity",
         ("毫升数", "升数", "容量", "能装多少", "装多少"),
@@ -112,9 +116,9 @@ FIELD_CONTRACTS: tuple[FieldContract, ...] = (
     ),
     FieldContract(
         "surface_finish",
-        ("表面处理工艺", "表面处理", "表面工艺"),
+        ("表面处理工艺", "表面处理", "表面工艺", "涂层", "不粘涂层", "不沾涂层", "不粘锅", "不沾锅"),
         "unknown",
-        ("表面用了什么处理工艺", "表面是什么处理工艺", "的表面处理工艺是什么"),
+        ("表面用了什么处理工艺", "表面是什么处理工艺", "的表面处理工艺是什么", "有没有涂层", "是否有涂层", "有不粘涂层吗", "有不沾涂层吗", "是不粘锅吗", "是不沾锅吗"),
     ),
     FieldContract(
         "positioning",
@@ -154,9 +158,9 @@ FIELD_CONTRACTS: tuple[FieldContract, ...] = (
     ),
     FieldContract(
         "heat_source",
-        ("电陶炉", "电磁炉", "卡式炉", "酒精炉", "热源", "明火", "直火"),
+        ("电陶炉", "电磁炉", "卡式炉", "酒精炉", "燃气炉", "液化气罐", "高山气罐", "卡式气罐", "通用气罐", "哪种气罐", "什么气罐", "适用气罐", "气罐类型", "热源", "明火", "直火"),
         "heat_source",
-        ("可以直火加热吗", "能放什么炉上用", "能不能明火用", "能不能明火烧", "能不能直火", "可以用酒精炉吗", "能用卡式炉吗", "支持什么热源", "能明火烧吗", "能明火用吗", "可以明火吗", "支持明火吗", "适用什么炉", "适配什么燃料", "用什么燃料", "支持什么燃料", "可用什么燃料", "能用什么燃料"),
+        ("可以直火加热吗", "能放什么炉上用", "能不能明火用", "能不能明火烧", "能不能直火", "可以用酒精炉吗", "能用卡式炉吗", "支持什么热源", "能明火烧吗", "能明火用吗", "可以明火吗", "支持明火吗", "适用什么炉", "适配什么燃料", "用什么燃料", "支持什么燃料", "可用什么燃料", "能用什么燃料", "燃料是什么", "燃料是啥", "烧什么燃料", "液化气罐也可以用吗", "通用气罐能不能接上", "气罐和酒精都能用吗"),
     ),
     FieldContract("dishwasher", ("洗碗机",), "unknown"),
     FieldContract("selling_point", ("核心卖点", "主要卖点", "产品卖点", "核心特点", "主要特点", "产品特点", "特点", "卖点"), "unknown"),
@@ -164,9 +168,20 @@ FIELD_CONTRACTS: tuple[FieldContract, ...] = (
     FieldContract("purchase_channel", ("购买渠道", "哪里有售卖", "哪里购买", "在哪买", "售卖渠道"), "unknown"),
     FieldContract(
         "usage_instruction",
-        ("怎么使用", "如何使用", "使用方法", "怎么用", "应该怎么使用", "首次使用", "第一次用要注意什么"),
+        (
+            "怎么使用", "如何使用", "使用方法", "怎么用", "应该怎么使用", "首次使用",
+            "第一次用要注意什么", "怎么放", "如何放", "放置方法", "怎么装进", "如何装进",
+            "怎么装入", "如何装入", "远程打火", "远程点火", "电子点火", "点火装置",
+            "点火方式", "打火方式", "怎么点火", "如何点火", "怎么打火", "如何打火",
+            "点火步骤", "点火操作", "点火器", "点火头", "是否带电池",
+        ),
         "unknown",
-        ("怎么使用", "如何使用", "怎么用", "应该怎么使用", "第一次用要注意什么"),
+        (
+            "怎么使用", "如何使用", "怎么用", "应该怎么使用", "第一次用要注意什么",
+            "怎么放", "如何放", "放置方法", "怎么装进", "如何装进", "怎么装入", "如何装入",
+            "远程打火", "远程点火", "电子点火", "点火装置", "点火方式", "打火方式",
+            "怎么点火", "如何点火", "怎么打火", "如何打火", "点火步骤", "点火操作", "点火器", "点火头", "是否带电池",
+        ),
     ),
     FieldContract(
         "cleaning",
@@ -213,7 +228,7 @@ FIELD_CONTRACTS: tuple[FieldContract, ...] = (
     ),
     FieldContract(
         "warranty",
-        ("保修", "质保", "保修期", "质保期"),
+        ("保修", "质保", "保修期", "质保期", "保质期"),
         "unknown",
         ("质保多长时间", "保修多长时间", "保修期多久", "质保期多久", "有没有保修", "有没有质保", "保不保修", "有保修吗", "质保多久", "保修多久", "质保几年", "保几年"),
     ),
@@ -259,6 +274,7 @@ DETAIL_FIELD_LABELS = {
     "brand": "品牌",
     "category": "商品类目",
     "dimensions": "尺寸",
+    "thickness": "厚度",
     "specification": "规格",
     "power": "功率",
     "capacity": "容量",
@@ -562,11 +578,15 @@ def requested_evidence_scope(question: str, field_type: str | None) -> str:
     if str(field_type or "").strip() != "dimensions":
         return "subject"
     text = str(question or "")
+    if any(term in text for term in ("装酒精", "放酒精", "装木炭", "放木炭", "燃料槽", "燃料仓", "燃料盒")):
+        return "component"
     return "package" if any(term in text for term in ("包装尺寸", "包装后尺寸", "包装后的尺寸", "包装后有多大", "外箱尺寸", "包裹尺寸")) else "subject"
 
 
 def requested_dimension_subtype(question: str) -> str | None:
     text = str(question or "")
+    if any(term in text for term in ("装酒精", "放酒精", "装木炭", "放木炭", "燃料槽", "燃料仓", "燃料盒")):
+        return "fuel_holder"
     if any(term in text for term in ("包装尺寸", "包装后尺寸", "包装后的尺寸", "包装后有多大", "外箱尺寸", "包裹尺寸")):
         return "package"
     if any(term in text for term in ("收纳尺寸", "收起尺寸", "收起后尺寸", "收纳起来", "收起后有多大")):
@@ -693,6 +713,8 @@ def _dimension_subtype(label: str) -> str | None:
     value = str(label or "").strip()
     if any(term in value for term in ("收纳袋", "收纳包", "内袋", "外袋")):
         return None
+    if any(term in value for term in ("酒精", "木炭", "燃料槽", "燃料仓", "燃料盒")):
+        return "fuel_holder"
     if any(term in value for term in ("包装", "外箱", "包裹")):
         return "package"
     if value in {"收纳尺寸", "收起尺寸", "收起后尺寸"}:
@@ -930,6 +952,18 @@ _HEAT_SOURCE_DIRECT_HEATING_PREDICATE_PATTERN = re.compile(
     r"(?:(?:可以|能|可否)直接|是否(?:可以|能)?直接)加热(?:吗)?(?=$|[？?。！!，,、\s])"
 )
 
+# Fuel-specific capability wording is still the formal heat-source field.  It
+# is deliberately expressed as a product-agnostic grammar (not a SKU or
+# category exception), so natural questions such as “能烧酒精吗” and
+# “可以使用固体酒精吗” reach the same-SKU evidence contract as “支持什么
+# 燃料”.
+_HEAT_SOURCE_FUEL_PREDICATE_PATTERN = re.compile(
+    r"(?:(?:可以|能|可不可以|是否(?:可以|能)?|支持|适合)?(?:使用|用|烧|燃烧)"
+    r"(?:固体酒精|液体酒精|酒精|木炭|炭火|柴火|煤炭|燃料)"
+    r"(?:的)?(?:吗|呢)?|(?:燃料|热源)是什么)"
+    r"(?=$|[？?。！!，,；;、\s])"
+)
+
 _SHIPPING_PREDICATE_PATTERN = re.compile(
     r"(?:"
     r"(?:下单后)?(?:几天|多久|什么时候|何时)(?:内)?(?:能|可以)?(?:发货|发出|寄出)"
@@ -1026,9 +1060,10 @@ def _heat_source_predicate_match(text: str) -> tuple[FieldContract, str, int, bo
         match
         for pattern in (
             _HEAT_SOURCE_PREDICATE_PATTERN,
-            _HEAT_SOURCE_YES_NO_PREDICATE_PATTERN,
-            _HEAT_SOURCE_BARE_YES_NO_PREDICATE_PATTERN,
-            _HEAT_SOURCE_DIRECT_HEATING_PREDICATE_PATTERN,
+        _HEAT_SOURCE_YES_NO_PREDICATE_PATTERN,
+        _HEAT_SOURCE_BARE_YES_NO_PREDICATE_PATTERN,
+        _HEAT_SOURCE_DIRECT_HEATING_PREDICATE_PATTERN,
+        _HEAT_SOURCE_FUEL_PREDICATE_PATTERN,
         )
         if (match := pattern.search(value)) is not None
         and not re.match(r"^\s*(?:哪些|哪一些|有哪些|推荐)", value[:match.start()])
@@ -1116,7 +1151,8 @@ def _field_phrase_match(text: str) -> tuple[FieldContract, str, int, bool] | Non
     for candidate in candidates:
         contract, phrase, candidate_start, is_full_predicate = candidate
         candidate_end = candidate_start + len(phrase)
-        if is_full_predicate and any(
+        declared_full_phrase = phrase in contract.full_phrases
+        if is_full_predicate and not declared_full_phrase and any(
             other_contract.field_type != contract.field_type
             and alias
             and any(
@@ -1670,12 +1706,21 @@ def resolve_requested_field_contract(
     )
     semantic_fields = validated_semantic_fields
     semantic_called = bool(isinstance(plan.get("semantic_preplan"), dict) and plan["semantic_preplan"].get("called"))
+    confidence_label_score = {
+        "high": 1.0,
+        "medium": 0.65,
+        "low": 0.0,
+    }.get(
+        str((plan.get("semantic_preplan") or {}).get("confidence_label") or "").strip().lower(),
+        0.0,
+    )
     try:
-        semantic_product_qa_confidence = float(
-            (plan.get("semantic_preplan") or {}).get("confidence") or 0.0
+        semantic_product_qa_confidence = max(
+            float((plan.get("semantic_preplan") or {}).get("confidence") or 0.0),
+            confidence_label_score,
         )
     except (TypeError, ValueError):
-        semantic_product_qa_confidence = 0.0
+        semantic_product_qa_confidence = confidence_label_score
     semantic_product_qa = bool(
         semantic_called
         and isinstance(plan.get("semantic_preplan"), dict)
@@ -1689,11 +1734,6 @@ def resolve_requested_field_contract(
             phrase_match is not None
             and phrase_match[3]
             and is_supported_detail_field(phrase_match[0].field_type)
-        )
-        or (
-            explicit_label_is_stated
-            and explicit_phrase_field_type is not None
-            and is_supported_detail_field(explicit_phrase_field_type)
         )
     )
     # A valid semantic product-QA decision owns the distinction between a
@@ -1710,7 +1750,12 @@ def resolve_requested_field_contract(
         and plan["semantic_preplan"].get("compound") is True
     )
     if semantic_product_qa and (
-        not (explicit_supported_field_predicate or explicit_label_is_stated)
+        # A bare canonical alias such as “火力” is not a complete formal
+        # field predicate.  It may appear inside a capability question
+        # (“火力能否调节”), where the validated product-QA decision must own
+        # the intent.  Only a grammatical, supported predicate can override
+        # that decision.
+        not explicit_supported_field_predicate
         or semantic_product_qa_is_compound
     ):
         return {
@@ -1777,7 +1822,11 @@ def resolve_requested_field_contract(
             "explicit_contract_semantic_conflict"
             if explicit_semantic_conflict
             else "deterministic_full_predicate"
-            if phrase_match is not None and phrase_match[3]
+            if (
+                phrase_match is not None
+                and phrase_match[3]
+                and phrase_match[1] not in phrase_match[0].full_phrases
+            )
             else "deterministic_alias"
             if phrase_match is not None
             else "legacy_requested_fields"

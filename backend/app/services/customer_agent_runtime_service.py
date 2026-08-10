@@ -98,6 +98,12 @@ async def process_agent_request(
             conversation_history=conversation_history,
         )
     explicit_product_detection = _detect_explicit_product_mention(db, question, entity_stack)
+    if (
+        _has_unresolved_numeric_product_reference(db, question)
+        and not sku
+        and not explicit_product_detection.get("has_new_product")
+    ):
+        return _build_unresolved_numeric_product_clarification(question)
     if not explicit_product_detection.get("has_new_product"):
         contextual_detail = await _sealed_context_detail_result(
             db,
@@ -180,6 +186,14 @@ async def process_agent_request(
             return deterministic_followup
     route_hints = _build_route_hints(question, explicit_product_detection, entity_stack)
     dialogue_state = customer_dialogue_state.build_dialogue_state(question, conversation_history)
+    if (
+        _is_underspecified_recommendation_question(question)
+        and not previous_result_skus
+        and not candidate_context
+        and not recommendation_context
+        and not conversation_history
+    ):
+        return _build_clarification_result(question, sku, dialogue_state)
     local_resolved_skus: list[str] = []
     direct_detail_skus = (
         _ordinal_skus_from_conversation_history(question, conversation_history)
@@ -612,7 +626,7 @@ async def process_agent_request(
         return _build_clarification_result(question, sku, dialogue_state)
     if _needs_previous_context(question) and not previous_result_skus:
         result = {
-            "answer": "你说的“这些”我还没有可引用的上一轮产品结果。请先告诉我要处理的 SKU，或先查询一批产品，比如“负责人为 Yao 的锅有哪些”。",
+            "answer": "请告诉我具体商品名或 SKU，我再继续核对这款商品。",
             "intent": "clarify",
             "answer_type": "clarification",
             "confidence": "low",
@@ -2015,6 +2029,63 @@ def _price_bucket_rank(bucket: str | None) -> int:
 def _is_specific_recommendation_question(question: str) -> bool:
     text = str(question or "")
     return any(term in text for term in ("露营", "两个人", "2个人", "双人", "做饭", "锅", "酒精炉", "野餐", "烧水", "材质", "容量", "重量", "便携"))
+
+
+def _is_underspecified_recommendation_question(question: str) -> bool:
+    """Recognize a bare recommendation request without inventing its scope."""
+    text = customer_agent_service.normalize_search_text(question or "").strip(" ?？。！!,，")
+    if not text or len(text) > 16:
+        return False
+    if not any(term in text for term in ("推荐", "哪个好", "哪种", "哪款", "选哪个", "选什么")):
+        return False
+    if customer_agent_service._extract_skus(text):
+        return False
+    scope_terms = (
+        "锅", "炉", "水壶", "气罐", "配件", "杯", "烤盘", "露营", "徒步", "野餐",
+        "做饭", "烧水", "酒精", "卡式", "燃气", "炭火", "人", "容量", "重量", "预算",
+        "适合", "场景", "材质", "轻量", "便携",
+    )
+    return not any(term in text for term in scope_terms)
+
+
+_NUMERIC_PRODUCT_REFERENCE_RE = re.compile(
+    r"(?<![\d.])(?P<number>\d{2,6})(?![\d.])\s*(?:的\s*)?(?:这个|这款|那个|那款)?\s*(?:炉子|炉具|锅具|套锅|单锅|产品|商品|型号)"
+)
+
+
+def _has_unresolved_numeric_product_reference(db: Session, question: str) -> bool:
+    """Reject an unverified numeric product label before reusing old entities."""
+    text = customer_agent_service.normalize_search_text(question or "")
+    for match in _NUMERIC_PRODUCT_REFERENCE_RE.finditer(text):
+        number = str(match.group("number") or "").strip()
+        if number and db.query(Product).filter(Product.sku == number).first():
+            continue
+        return True
+    return False
+
+
+def _build_unresolved_numeric_product_clarification(question: str) -> dict[str, Any]:
+    match = _NUMERIC_PRODUCT_REFERENCE_RE.search(customer_agent_service.normalize_search_text(question or ""))
+    number = str(match.group("number") or "").strip() if match else "该数字"
+    answer = f"你提到的“{number}”目前无法唯一对应到已核验的商品 SKU。请提供完整商品名或页面 SKU，我再核对它适配的气罐和其他信息。"
+    return {
+        "answer": answer,
+        "intent": "clarify",
+        "answer_type": "clarification",
+        "confidence": "low",
+        "uncertainty": "ambiguous_product",
+        "needs_clarification": True,
+        "sku": None,
+        "sources": [{"type": "agent_clarification", "label": "需要确认商品身份"}],
+        "actions": [],
+        "results": [],
+        "result_skus": [],
+        "candidate_skus": [],
+        "steps": [{"type": "clarify", "label": "需要确认商品身份", "detail": "当前数字标签没有唯一 SKU。"}],
+        "warnings": ["unresolved_numeric_product_reference"],
+        "debug": {"agent_mode": "unresolved_numeric_product_reference", "reference": number},
+        "skip_polish": True,
+    }
 
 
 def _context_detail_fields(question: str, conversation_history: list[dict]) -> list[str]:

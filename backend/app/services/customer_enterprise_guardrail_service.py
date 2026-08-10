@@ -72,8 +72,10 @@ FLAMMABLE_PRODUCT_TERMS = ("酒精炉", "酒精", "燃料", "炉具", "气罐", 
 REALTIME_WEATHER_TERMS = ("天气", "下雨", "降雨", "气温", "风力", "台风", "今天", "明天", "现在")
 INTERNAL_BUSINESS_TERMS = (
     "成本价", "成本", "进价", "利润", "毛利", "底价", "采购价",
-    "负责人", "生命周期", "生命周期状态", "产品状态",
+    "负责人",
 )
+INTERNAL_BUSINESS_WRITE_TERMS = ("生命周期",)
+INTERNAL_MUTATION_TERMS = ("修改", "更改", "更新", "改成", "改为", "设为", "设置为", "删除", "清空")
 BUSINESS_SUPPORT_TERMS = ("退换货", "退货", "换货", "退换", "瑕疵", "破损", "坏了", "物流", "快递", "发货", "支付", "售后政策", "售后")
 CREATIVE_REQUEST_TERMS = ("写游记", "露营游记", "写文章", "写一篇", "作文", "文案")
 CASUAL_WEATHER_TERMS = ("天气真好", "今天天气真好", "适合出去玩吗", "出去玩吗")
@@ -90,7 +92,10 @@ def evaluate_question(question: str) -> dict[str, Any] | None:
     if not text:
         return None
 
-    if _contains_any(text, lowered, INTERNAL_BUSINESS_TERMS):
+    if _contains_any(text, lowered, INTERNAL_BUSINESS_TERMS) or (
+        _contains_any(text, lowered, INTERNAL_BUSINESS_WRITE_TERMS)
+        and _contains_any(text, lowered, INTERNAL_MUTATION_TERMS)
+    ):
         return _build_guardrail_result(
             question=text,
             category="internal_business_data",
@@ -99,7 +104,7 @@ def evaluate_question(question: str) -> dict[str, Any] | None:
             confidence="high",
             uncertainty="permission_or_data_required",
             answer=(
-                "成本价、进价、利润、底价属于内部经营数据，我不能直接对外披露或猜测。"
+                "成本价、进价、利润、底价、负责人、生命周期等属于内部经营数据，我不能直接对外披露、修改或猜测。"
                 "如果系统里没有明确授权字段，也不能把它当作普通客服资料返回。"
                 "你可以提供具体 SKU 和已授权字段，我可以帮你整理成内部查询或审批口径。"
             ),

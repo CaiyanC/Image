@@ -103,7 +103,7 @@
       "title": "明确新需求不锁旧 SKU",
       "turns": ["CW-C83 是什么？", "三个年轻人露营适合带什么？"],
       "expect": {
-        "intent": "recommend_products",
+        "intent": "recommendation",
         "answer_must_include_any": ["三个", "露营", "适合"],
         "answer_must_not_include": ["只能推荐 CW-C83", "当前 SKU"],
         "min_results": 1,
@@ -114,7 +114,7 @@
       "id": "CTX-002",
       "category": "context",
       "title": "这些指代必须使用上一轮结果",
-      "turns": ["负责人 Max 的锅具有哪些？", "把这些生命周期改成常规品"],
+      "turns": ["负责人 Greta 的锅具有哪些？", "把这些生命周期改成常规品"],
       "expect": {
         "intent": "propose_update",
         "answer_must_include_any": ["待确认", "修改", "确认"],
@@ -231,7 +231,7 @@
       "id": "WRITE-002",
       "category": "write_action",
       "title": "批量修改负责人要先查询再生成动作",
-      "turns": ["把负责人为 Max 的锅负责人改成 kang"],
+      "turns": ["把负责人为 Greta 的锅负责人改成 kang"],
       "expect": {
         "intent": "propose_update",
         "answer_must_include_any": ["待确认", "负责人", "kang"],

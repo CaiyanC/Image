@@ -4,6 +4,7 @@ import importlib.util
 import sys
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 
 SCRIPT_PATH = Path(__file__).resolve().parents[2] / "scripts" / "full_regression_runner.py"
@@ -147,6 +148,92 @@ class FullRegressionRunnerTest(unittest.TestCase):
         self.assertNotIn("?", q07["question"])
         self.assertEqual(q07["expected"]["explicit_sku"], "CW-C83")
         self.assertEqual(q07["expected"]["requested_field"], "heat_source")
+
+    def test_water_bag_matrix_question_uses_water_usage_semantics(self):
+        item = MODULE.BASE.InventoryItem(
+            sku="AC-19",
+            name="\u7a33\u7a33\u6c34\u888b",
+            category="\u914d\u4ef6",
+            sub_category="",
+            capacity="8L",
+            material="",
+            weight_g=150.0,
+            heat_source="/",
+            size_info="",
+            usage_instruction="",
+            usage_scenarios="\u9732\u8425\u50a8\u6c34",
+        )
+
+        question, requested_field = MODULE._field_question(item, 2)
+
+        self.assertEqual(requested_field, "water_usage")
+        self.assertIn("\u70e7\u6c34", question)
+
+    def test_parity_starts_stream_context_before_ask_context(self):
+        calls = []
+        case = {
+            "case_id": "parity_case",
+            "question": "parity question",
+        }
+
+        def fake_ask(_token, _question, conversation_id, **kwargs):
+            calls.append(("ask", conversation_id, kwargs.get("parity_isolation")))
+            return {
+                "status": 200,
+                "conversation_id": "ask-conversation",
+                "answer": "same answer",
+                "answer_type": "recommendation",
+                "intent": "recommendation",
+                "result_skus": ["SKU-ASK"],
+            }
+
+        def fake_stream(_token, _question, conversation_id, **kwargs):
+            calls.append(("stream", conversation_id, kwargs.get("parity_isolation")))
+            return {
+                "status": 200,
+                "conversation_id": "stream-conversation",
+                "answer": "same answer",
+                "answer_type": "recommendation",
+                "intent": "recommendation",
+                "result_skus": ["SKU-STREAM"],
+            }
+
+        with patch.object(MODULE.BASE, "ask", side_effect=fake_ask), patch.object(
+            MODULE.BASE, "ask_stream", side_effect=fake_stream
+        ):
+            report = MODULE._run_parity_case("token", case)
+
+        self.assertEqual(calls[:2], [("stream", None, True), ("ask", None, True)])
+        self.assertNotEqual(report["ask"]["conversation_id"], report["stream"]["conversation_id"])
+
+    def test_breakfast_griddle_scenario_expects_cookware_domain(self):
+        case = next(item for item in MODULE.SCENARIO_CASES if item[0] == "scene_007")
+
+        self.assertEqual(case[2], "\u9505\u5177")
+
+    def test_transport_exhaustion_is_runtime_warning_not_business_failure(self):
+        case = {
+            "case_id": "transport_case",
+            "group": "scenario_recommendation",
+            "question": "transport question",
+            "expected": {"expected_domain": "\u9505\u5177"},
+        }
+        record = {
+            "case_id": case["case_id"],
+            "question": case["question"],
+            "status": 599,
+            "answer": "",
+            "answer_type": "",
+            "result_skus": [],
+            "transport_exhausted": True,
+            "warnings": ["transport_error"],
+        }
+
+        classified = MODULE._classify_single_turn(case, record, {})
+
+        self.assertEqual(classified["judgement"], "warning")
+        self.assertEqual(classified["audited_attribution"], "runtime_noise")
+        self.assertIn("transport_error", classified["issues"])
 
     def test_summarize_timing_stats_computes_percentiles_and_slow_buckets(self):
         stats = MODULE.summarize_timing_stats(

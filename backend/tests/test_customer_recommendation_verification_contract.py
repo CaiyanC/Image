@@ -44,6 +44,97 @@ def test_request_contract_extracts_people_heat_and_soft_preferences():
     assert "heat_source" in contract.hard_constraints
 
 
+def test_explicit_charcoal_heat_source_does_not_match_generic_open_flame():
+    contract = build_recommendation_request_contract("我只想用炭火，适合买哪种锅具？")
+    charcoal, open_flame = verify_recommendation_candidates(
+        contract,
+        [
+            _row("CHARCOAL", heat_source="炭火、明火"),
+            _row("OPEN-FLAME", heat_source="明火直烧"),
+        ],
+    )
+
+    assert contract.heat_sources == ["炭火"]
+    assert charcoal.verification_level == "fully_verified"
+    assert open_flame.verification_level == "rejected"
+    assert "heat_source_condition_not_met" in open_flame.rejection_reasons
+
+
+def test_explicit_non_split_structure_rejects_split_burners_without_sku_rules():
+    contract = build_recommendation_request_contract(
+        "我要装气罐的小炉头，不要分体的，推荐哪款？"
+    )
+
+    split, integrated, unknown = verify_recommendation_candidates(
+        contract,
+        [
+            _row("SPLIT", category="炉具", product_name_cn="分体炉头", features="远程炉头"),
+            _row("INTEGRATED", category="炉具", product_name_cn="一体炉", features="一体收纳"),
+            _row("UNKNOWN", category="炉具", product_name_cn="户外炉具", features="便携耐用"),
+        ],
+    )
+
+    assert contract.structure_preference == "non_split"
+    assert "structure" in contract.hard_constraints
+    assert split.verification_level == "rejected"
+    assert "structure_condition_not_met" in split.rejection_reasons
+    assert integrated.verification_level == "fully_verified"
+    assert unknown.verification_level == "rejected"
+    assert "structure" in unknown.unsupported_constraints
+
+
+def test_semantic_contract_retains_explicit_charcoal_requirement_when_llm_omits_it():
+    contract = build_recommendation_request_contract(
+        "我只想用炭火，适合买哪种锅具？",
+        semantic_constraints={"subject_kind": "cookware"},
+    )
+
+    charcoal, open_flame = verify_recommendation_candidates(
+        contract,
+        [
+            _row("CHARCOAL", heat_source="炭火"),
+            _row("OPEN-FLAME", heat_source="明火直烧"),
+        ],
+    )
+
+    assert contract.heat_sources == ["炭火"]
+    assert charcoal.verification_level == "fully_verified"
+    assert open_flame.verification_level == "rejected"
+
+
+def test_exact_316l_material_grade_is_a_hard_constraint_not_generic_stainless_steel():
+    contract = build_recommendation_request_contract("\u6709\u6ca1\u6709316L\u4e0d\u9508\u94a2\u7684\u6237\u5916\u5957\u9505\uff1f")
+
+    match, generic_stainless = verify_recommendation_candidates(
+        contract,
+        [
+            _row("GRADE-316L", sub_category="\u5957\u9505", body_material="316L\u4e0d\u9508\u94a2"),
+            _row("GRADE-304", sub_category="\u5957\u9505", body_material="304\u4e0d\u9508\u94a2"),
+        ],
+    )
+
+    assert "316L\u4e0d\u9508\u94a2" in contract.materials
+    assert match.verification_level == "fully_verified"
+    assert generic_stainless.verification_level == "rejected"
+    assert "material_condition_not_met" in generic_stainless.rejection_reasons
+
+
+def test_request_contract_treats_approximate_liter_phrase_as_capacity_range():
+    contract = build_recommendation_request_contract("一个人露营，推荐 1L 左右的小锅")
+
+    assert contract.capacity_requirement == "numeric"
+    assert (contract.capacity_min_ml, contract.capacity_max_ml) == (800, 1200)
+    assert "capacity" in contract.hard_constraints
+
+
+def test_request_contract_extracts_bare_capacity_range_next_to_product_noun():
+    contract = build_recommendation_request_contract("推荐一个0.6到0.8升水壶")
+
+    assert contract.capacity_requirement == "numeric"
+    assert (contract.capacity_min_ml, contract.capacity_max_ml) == (600, 800)
+    assert "capacity" in contract.hard_constraints
+
+
 def test_request_contract_uses_validated_semantic_constraints_without_reparsing_question_words():
     contract = build_recommendation_request_contract(
         "想找露营用、背起来别太沉的那类。",
@@ -65,6 +156,37 @@ def test_request_contract_uses_validated_semantic_constraints_without_reparsing_
     assert {"people", "heat_source", "scenario"} <= set(contract.hard_constraints)
     assert "weight" in contract.soft_preferences
     assert all(item["provenance"] == "validated_semantic_preplan" for item in contract.field_provenance.values())
+
+
+def test_explicit_accessory_subject_overrides_a_broad_semantic_cookware_scope():
+    contract = build_recommendation_request_contract(
+        "有没有户外餐具收纳包推荐下？",
+        semantic_constraints={"subject_kind": "cookware"},
+    )
+
+    assert contract.subject_category == "配件"
+    assert contract.subject_kind == "accessories"
+    assert contract.subject_subtype == "storage_bag"
+    assert contract.source_spans["subject"] == "收纳包"
+    assert contract.field_provenance["subject_category"]["provenance"] == "current_turn_explicit_subject"
+
+
+def test_storage_bag_subtype_rejects_unrelated_accessories():
+    contract = build_recommendation_request_contract("户外餐具收纳包推荐一下")
+    storage_bag, water_bag, knife_set = verify_recommendation_candidates(
+        contract,
+        [
+            _row("BAG", product_name_cn="29L户外收纳包", category="配件", title_cn="户外炊具餐具收纳包"),
+            _row("WATER", product_name_cn="稳稳水袋", category="配件", title_cn="户外饮水水袋"),
+            _row("KNIFE", product_name_cn="拓界刀板套装", category="配件", title_cn="户外便携刀板套装"),
+        ],
+    )
+
+    assert storage_bag.verification_level == "fully_verified"
+    assert water_bag.verification_level == "rejected"
+    assert knife_set.verification_level == "rejected"
+    assert "subject_subtype_mismatch" in water_bag.rejection_reasons
+    assert "subject_subtype_mismatch" in knife_set.rejection_reasons
 
 
 def test_semantic_storage_preference_requires_same_sku_storage_evidence_without_reparsing_question_words():
@@ -156,6 +278,18 @@ def test_cookware_subject_rejects_a_water_container_even_when_catalog_category_i
     assert "subject_category_mismatch" in result.rejection_reasons
 
 
+def test_explicit_kettle_request_does_not_accept_a_water_cup():
+    contract = build_recommendation_request_contract("推荐一个0.6到0.8升水壶")
+    result = verify_recommendation_candidates(
+        contract,
+        [_row("CUP", product_name_cn="畅享水杯", category="水具", capacity="800ml")],
+    )[0]
+
+    assert contract.subject_subtype == "kettle"
+    assert result.verification_level == "rejected"
+    assert "subject_category_mismatch" in result.rejection_reasons
+
+
 def test_request_contract_normalizes_people_ranges_and_budget():
     two = build_recommendation_request_contract("两个人徒步，预算中等，推荐轻便锅具")
     range_contract = build_recommendation_request_contract("四五个人露营，锅具怎么选")
@@ -164,6 +298,15 @@ def test_request_contract_normalizes_people_ranges_and_budget():
     assert two.budget_level == "medium"
     assert "budget" in two.soft_preferences
     assert (range_contract.people_min, range_contract.people_max) == (4, 5)
+
+
+def test_request_contract_parses_young_group_people_count():
+    contract = build_recommendation_request_contract(
+        "\u4e09\u4e2a\u5e74\u8f7b\u4eba\u9732\u8425\uff0c\u9002\u5408\u5e26\u4ec0\u4e48\u9505\u5177"
+    )
+
+    assert (contract.people_min, contract.people_max) == (3, 3)
+    assert "people" in contract.hard_constraints
 
 
 def test_request_contract_ignores_negated_people_range_and_keeps_positive_people_need():
@@ -248,6 +391,7 @@ def test_cassette_stove_with_cookware_subject_is_a_heat_constraint():
         "推荐能用液体酒精的锅具",
         "推荐使用酒精燃料的锅具",
         "哪些锅支持酒精炉",
+        "适合酒精炉的锅具",
     ],
 )
 def test_cookware_alcohol_heat_expressions_share_the_legacy_canonical_condition(question):
@@ -271,6 +415,200 @@ def test_alcohol_stove_subject_does_not_become_a_cookware_heat_condition():
         assert contract.heat_sources == []
 
 
+def test_named_alcohol_stove_keeps_hotpot_as_a_hard_scenario_and_parses_soft_preferences():
+    contract = build_recommendation_request_contract("那款酒精炉适合煮火锅，又稳又防风？")
+
+    assert (contract.subject_category, contract.subject_kind, contract.subject_subtype) == (
+        "炉具",
+        "stove",
+        "alcohol_stove",
+    )
+    assert contract.heat_sources == []
+    assert contract.scenario == ["hotpot"]
+    assert "scenario" in contract.hard_constraints
+    assert contract.stability_required is True
+    assert contract.windproof_required is True
+    assert {"stability", "windproof"} <= set(contract.soft_preferences)
+
+
+def test_semantic_subject_correction_records_current_turn_literal_provenance():
+    contract = build_recommendation_request_contract(
+        "那款酒精炉适合煮火锅，又稳又防风？",
+        semantic_constraints={"subject_kind": "cookware"},
+    )
+
+    assert (contract.subject_category, contract.subject_kind, contract.subject_subtype) == (
+        "炉具",
+        "stove",
+        "alcohol_stove",
+    )
+    assert contract.field_provenance["subject_category"] == {
+        "source_turn": 1,
+        "provenance": "current_turn_explicit_subject",
+    }
+    for field_name in ("scenario", "stability", "windproof"):
+        assert contract.field_provenance[field_name] == {
+            "source_turn": 1,
+            "provenance": "current_turn",
+        }
+
+
+def test_literal_scenario_does_not_overwrite_validated_semantic_provenance():
+    contract = build_recommendation_request_contract(
+        "露营锅具推荐一下",
+        semantic_constraints={"subject_kind": "cookware", "scenarios": ["camping"]},
+    )
+
+    assert contract.scenario == ["camping"]
+    assert contract.field_provenance["scenario"] == {
+        "source_turn": 1,
+        "provenance": "validated_semantic_preplan",
+    }
+
+
+def test_action_governed_trailing_alcohol_stove_keeps_literal_requirements():
+    contract = build_recommendation_request_contract("推荐适合煮火锅又稳又防风的酒精炉")
+
+    assert (contract.subject_category, contract.subject_kind, contract.subject_subtype) == (
+        "炉具",
+        "stove",
+        "alcohol_stove",
+    )
+    assert contract.heat_sources == []
+    assert contract.scenario == ["hotpot"]
+    assert {"stability", "windproof"} <= set(contract.soft_preferences)
+
+
+def test_trailing_stove_without_recommendation_action_is_not_a_recommendation_subject():
+    contract = build_recommendation_request_contract("适合煮火锅又稳又防风的酒精炉吗？")
+
+    assert contract.subject_category is None
+    assert contract.subject_kind is None
+    assert contract.subject_subtype is None
+
+
+def test_standalone_pot_remains_cookware_when_question_also_mentions_hotpot():
+    contract = build_recommendation_request_contract("推荐一口锅煮火锅")
+
+    assert contract.subject_category == "锅具"
+    assert contract.subject_kind == "cookware"
+    assert contract.scenario == ["hotpot"]
+
+
+def test_hotpot_scenario_alone_does_not_create_a_cookware_subject():
+    contract = build_recommendation_request_contract("推荐适合煮火锅的装备")
+
+    assert contract.subject_category != "锅具"
+    assert contract.subject_kind != "cookware"
+    assert contract.scenario == ["hotpot"]
+
+
+def test_hotpot_stove_preferences_require_same_sku_feature_or_positioning_evidence():
+    contract = build_recommendation_request_contract("那款酒精炉适合煮火锅，又稳又防风？")
+    verified, unsupported = verify_recommendation_candidates(
+        contract,
+        [
+            _row(
+                "VERIFIED",
+                category="炉具",
+                product_name_cn="户外酒精炉",
+                usage_scenarios="适合煮火锅",
+                features="支架稳固",
+                positioning="防风设计",
+            ),
+            _row(
+                "UNSUPPORTED",
+                category="炉具",
+                product_name_cn="便携酒精炉",
+                title_cn="稳定防风酒精炉",
+                usage_scenarios="火锅烹饪",
+            ),
+        ],
+    )
+
+    assert verified.verification_level == "fully_verified"
+    assert {"stability", "windproof"} <= set(verified.verified_preferences)
+    assert unsupported.verification_level == "fully_verified"
+    assert {"stability", "windproof"} <= set(unsupported.unsupported_preferences)
+    assert "stability" not in unsupported.verified_preferences
+    assert "windproof" not in unsupported.verified_preferences
+
+    answer = build_verified_recommendation_answer(contract, [
+        _row(
+            "UNSUPPORTED",
+            category="炉具",
+            product_name_cn="便携酒精炉",
+            title_cn="稳定防风酒精炉",
+            usage_scenarios="火锅烹饪",
+        )
+    ], [unsupported])
+    assert "稳定性资料暂未明确" in answer
+    assert "防风性资料暂未明确" in answer
+
+
+def test_combustion_stability_does_not_verify_physical_stability():
+    contract = build_recommendation_request_contract("那款酒精炉适合煮火锅，又稳又防风？")
+    result = verify_recommendation_candidates(
+        contract,
+        [
+            _row(
+                "COMBUSTION-STABLE",
+                category="炉具",
+                product_name_cn="户外酒精炉",
+                usage_scenarios="适合煮火锅",
+                features="燃烧稳定",
+                positioning="防风设计",
+            )
+        ],
+    )[0]
+
+    assert result.evidence_by_constraint["scenario"]["status"] == "verified"
+    assert "windproof" in result.verified_preferences
+    assert "stability" in result.unsupported_preferences
+    assert "stability" not in result.verified_preferences
+
+
+def test_combustion_stability_is_unsupported_while_windproof_candidate_remains_eligible():
+    contract = build_recommendation_request_contract("那款酒精炉适合煮火锅，又稳又防风？")
+    result = verify_recommendation_candidates(
+        contract,
+        [
+            _row(
+                "ALCOHOL-STOVE",
+                category="炉具",
+                product_name_cn="酒精炉",
+                usage_scenarios="火锅烹饪",
+                features="燃烧稳定",
+                positioning="防风设计",
+            )
+        ],
+    )[0]
+
+    assert result.verification_level == "fully_verified"
+    assert "windproof" in result.verified_preferences
+    assert "stability" in result.unsupported_preferences
+    assert "stability" not in result.verified_preferences
+
+
+def test_placement_stability_verifies_physical_stability():
+    contract = build_recommendation_request_contract("那款酒精炉适合煮火锅，又稳又防风？")
+    result = verify_recommendation_candidates(
+        contract,
+        [
+            _row(
+                "PLACEMENT-STABLE",
+                category="炉具",
+                product_name_cn="酒精炉",
+                usage_scenarios="火锅烹饪",
+                features="放置稳定",
+                positioning="防风设计",
+            )
+        ],
+    )[0]
+
+    assert "stability" in result.verified_preferences
+
+
 def test_stove_subject_accepts_alcohol_stove_catalog_category():
     """A database category may name the stove subtype rather than ``炉具``."""
     contract = build_recommendation_request_contract(
@@ -292,6 +630,19 @@ def test_stove_subject_accepts_alcohol_stove_catalog_category():
     assert result.subject_eligible is True
     assert result.evidence_by_constraint["subject"]["status"] == "verified"
     assert result.verification_level == "fully_verified"
+
+
+def test_semantic_stove_kind_preserves_explicit_alcohol_subtype():
+    contract = build_recommendation_request_contract(
+        "酒精炉推荐一个",
+        semantic_constraints={"subject_kind": "stove"},
+    )
+
+    assert (contract.subject_category, contract.subject_kind, contract.subject_subtype) == (
+        "炉具",
+        "stove",
+        "alcohol_stove",
+    )
 
 
 def test_people_verification_accepts_single_person_business_evidence():
@@ -431,6 +782,7 @@ def test_verified_recommendation_answer_anchors_broad_and_specific_stove_subject
     assert "炉具类商品" in broad_answer
     assert "酒精炉" in alcohol_answer
     assert "[\"" not in broad_answer
+    assert "subject_subtype" not in alcohol_answer
 
 
 @pytest.mark.parametrize(
@@ -590,6 +942,28 @@ def test_answer_renders_serialized_list_evidence_as_customer_text():
     assert "hiking" in answer
 
 
+def test_verified_answer_uses_singular_wording_for_one_candidate():
+    contract = build_recommendation_request_contract("")
+    row = _row("ONE")
+    verification = verify_recommendation_candidates(contract, [row])[0]
+
+    answer = build_verified_recommendation_answer(contract, [row], [verification])
+
+    assert "\u63a8\u8350\u4f18\u5148\u770b\u8fd9\u6b3e\uff1a" in answer
+    assert "\u5019\u9009" not in answer
+    assert "\u786c\u6027\u6761\u4ef6" not in answer
+
+
+def test_affordable_answer_explains_the_budget_positioning():
+    contract = build_recommendation_request_contract("\u9884\u7b97\u4e0d\u9ad8\uff0c\u63a8\u8350\u4e00\u6b3e\u9505")
+    row = _row("ENTRY", price_positioning="\u5165\u95e8\u6b3e", features="\u9ad8\u6027\u4ef7\u6bd4")
+    verification = verify_recommendation_candidates(contract, [row])[0]
+
+    answer = build_verified_recommendation_answer(contract, [row], [verification])
+
+    assert any(term in answer for term in ("\u9884\u7b97\u4e0d\u9ad8", "\u6027\u4ef7\u6bd4", "\u4ef7\u683c\u5b9a\u4f4d", "\u5b9e\u60e0"))
+
+
 def test_answer_uses_only_same_sku_verified_evidence():
     contract = build_recommendation_request_contract("两个人露营，要支持明火的套锅")
     row = _row("PASS", product_name_cn="双人套锅", target_audience="适合1-2人", heat_source="明火")
@@ -600,6 +974,40 @@ def test_answer_uses_only_same_sku_verified_evidence():
     assert "人数：1-2人" in answer
     assert "明火" in answer
     assert "[" not in answer
+
+
+def test_unconstrained_multi_candidate_answer_compares_rows_before_asking_for_priority():
+    contract = build_recommendation_request_contract("户外气炉推荐")
+    rows = [
+        _row(
+            "LIGHT",
+            category="炉具",
+            product_name_cn="轻量炉",
+            power="3200W",
+            gross_weight_g=550,
+            heat_source="高山气罐",
+            usage_scenarios="轻量徒步，单人露营",
+        ),
+        _row(
+            "POWER",
+            category="炉具",
+            product_name_cn="大火力炉",
+            power="5500W",
+            gross_weight_g=3480,
+            heat_source="卡式气罐",
+            usage_scenarios="营地大餐，户外爆炒",
+        ),
+    ]
+    answer = build_verified_recommendation_answer(
+        contract,
+        rows,
+        verify_recommendation_candidates(contract, rows),
+    )
+
+    assert "不足以负责任地只定一款" in answer
+    assert "轻量炉（LIGHT）：功率3200W；重量550g；热源高山气罐" in answer
+    assert "大火力炉（POWER）：功率5500W；重量3480g；热源卡式气罐" in answer
+    assert "告诉我优先条件" in answer
 
 
 def test_answer_discloses_unsupported_soft_preferences():
@@ -967,6 +1375,17 @@ def test_merge_inherits_unmentioned_fields_and_adds_heat_source():
     assert provenance["heat_sources"] == {"source_turn": 2, "provenance": "current_turn_addition"}
 
 
+def test_merge_adds_current_turn_windproof_preference():
+    inherited = build_recommendation_request_contract("推荐一个酒精炉")
+    current = build_recommendation_request_contract("要防风的")
+
+    effective, provenance = merge_recommendation_request_contracts(inherited, current, current_turn=2)
+
+    assert effective.windproof_required is True
+    assert "windproof" in effective.soft_preferences
+    assert provenance["windproof"] == {"source_turn": 2, "provenance": "current_turn_addition"}
+
+
 def test_merge_current_people_explicitly_overrides_inherited_people():
     inherited = build_recommendation_request_contract("两个人露营，推荐锅具")
     current = build_recommendation_request_contract("改成四个人用")
@@ -1027,3 +1446,7 @@ def test_recommendation_context_product_field_is_not_rewritten_by_list_filter():
     assert result is original
     assert result["result_skus"] == ["ANCHOR"]
     assert result["answer_type"] == "product_detail"
+
+
+def test_other_recommendations_phrase_is_an_alternative_request():
+    assert customer_service_service._asks_for_alternative_recommendation("还有其他推荐吗") is True

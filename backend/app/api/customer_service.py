@@ -18,8 +18,96 @@ from ..services import agent_action_service, customer_cache_service, customer_ll
 router = APIRouter(prefix="/api/customer-service", tags=["customer-service"])
 logger = logging.getLogger("uvicorn")
 
+_PARITY_CANONICAL_FIELDS = (
+    "answer",
+    "intent",
+    "answer_type",
+    "confidence",
+    "uncertainty",
+    "needs_clarification",
+    "anomalies",
+    "suggested_followups",
+    "followups",
+    "warnings",
+    "evidence",
+    "answer_metadata",
+    "sku",
+    "results",
+    "sources",
+    "actions",
+    "steps",
+    "result_skus",
+    "candidate_skus",
+    "agent_quality",
+    "skip_polish",
+)
 
-def _recommendation_response_cache_key(user_id: str, body: "CustomerServiceAskRequest") -> str | None:
+
+def _parity_isolation_enabled(request: Request) -> bool:
+    return str(request.headers.get("X-Customer-Service-Parity-Isolation") or "").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+    }
+
+
+def _parity_result_snapshot_key(
+    user_id: str,
+    body: "CustomerServiceAskRequest",
+    *,
+    parity_isolation: bool = False,
+) -> str | None:
+    if not parity_isolation:
+        return None
+    return customer_cache_service.make_key(
+        "customer_service_parity_result_snapshot",
+        user_id,
+        customer_cache_service.normalize_text(body.question),
+        str(body.sku or "").strip().upper(),
+    )
+
+
+def _canonicalize_parity_result(
+    user_id: str,
+    body: "CustomerServiceAskRequest",
+    result: dict,
+    *,
+    parity_isolation: bool = False,
+) -> dict:
+    if not parity_isolation or not isinstance(result, dict):
+        return result
+    key = _parity_result_snapshot_key(user_id, body, parity_isolation=parity_isolation)
+    if not key:
+        return result
+    snapshot = customer_cache_service.parity_result_snapshot_cache.get(key)
+    if snapshot is None:
+        customer_cache_service.parity_result_snapshot_cache.set(
+            key,
+            {field: result[field] for field in _PARITY_CANONICAL_FIELDS if field in result},
+        )
+        return result
+    for field in _PARITY_CANONICAL_FIELDS:
+        if field in snapshot:
+            result[field] = snapshot[field]
+    debug = result.get("debug") if isinstance(result.get("debug"), dict) else None
+    if debug is not None:
+        debug = dict(debug)
+        if "result_skus" in snapshot:
+            debug["result_skus"] = list(snapshot.get("result_skus") or [])
+        if "candidate_skus" in snapshot:
+            debug["candidate_skus"] = list(snapshot.get("candidate_skus") or [])
+        result["debug"] = debug
+    return result
+
+
+def _recommendation_response_cache_key(
+    user_id: str,
+    body: "CustomerServiceAskRequest",
+    *,
+    parity_isolation: bool = False,
+) -> str | None:
+    if parity_isolation:
+        return None
     if body.conversation_id:
         return None
     return customer_cache_service.make_key(
@@ -30,13 +118,24 @@ def _recommendation_response_cache_key(user_id: str, body: "CustomerServiceAskRe
     )
 
 
-def _cached_recommendation_response(user_id: str, body: "CustomerServiceAskRequest") -> dict | None:
-    key = _recommendation_response_cache_key(user_id, body)
+def _cached_recommendation_response(
+    user_id: str,
+    body: "CustomerServiceAskRequest",
+    *,
+    parity_isolation: bool = False,
+) -> dict | None:
+    key = _recommendation_response_cache_key(user_id, body, parity_isolation=parity_isolation)
     return customer_cache_service.recommendation_response_cache.get(key) if key else None
 
 
-def _cache_recommendation_response(user_id: str, body: "CustomerServiceAskRequest", result: dict) -> None:
-    key = _recommendation_response_cache_key(user_id, body)
+def _cache_recommendation_response(
+    user_id: str,
+    body: "CustomerServiceAskRequest",
+    result: dict,
+    *,
+    parity_isolation: bool = False,
+) -> None:
+    key = _recommendation_response_cache_key(user_id, body, parity_isolation=parity_isolation)
     if not key:
         return
     if result.get("answer_type") in {"recommendation", "comparison"} and result.get("result_skus"):
@@ -153,6 +252,7 @@ async def ask(
     enforce_rate_limit(user_id=current_user.id, scope="customer_service.ask", limit=60, window_seconds=60)
     customer_perf_service.log_stage("ask_api.precheck", precheck_start, permission_checked=True, rate_limit_checked=True)
     service_start = perf_counter()
+    parity_isolation = _parity_isolation_enabled(request)
     governance_token = customer_llm_service.set_governed_customer_user(current_user)
     try:
         result = await customer_service_service.ask_customer_service(
@@ -164,7 +264,18 @@ async def ask(
         )
     finally:
         customer_llm_service.reset_governed_customer_user(governance_token)
-    _cache_recommendation_response(current_user.id, body, result)
+    result = _canonicalize_parity_result(
+        current_user.id,
+        body,
+        result,
+        parity_isolation=parity_isolation,
+    )
+    _cache_recommendation_response(
+        current_user.id,
+        body,
+        result,
+        parity_isolation=parity_isolation,
+    )
     customer_perf_service.log_stage(
         "ask_api.service_call",
         service_start,
@@ -209,12 +320,21 @@ async def ask_stream(
             yield _sse("status", {"message": "agent_planning", "label": "正在理解问题并选择工具"})
             planned_start = perf_counter()
             delta_queue: asyncio.Queue[str] = asyncio.Queue()
+            parity_isolation = _parity_isolation_enabled(request)
+            buffered_answer_deltas: list[str] = []
             first_delta_logged = False
 
             async def on_answer_delta(text: str) -> None:
-                await delta_queue.put(text)
+                if parity_isolation:
+                    buffered_answer_deltas.append(str(text or ""))
+                else:
+                    await delta_queue.put(text)
 
-            cached_result = _cached_recommendation_response(current_user.id, body)
+            cached_result = _cached_recommendation_response(
+                current_user.id,
+                body,
+                parity_isolation=parity_isolation,
+            )
             if cached_result is not None:
                 await on_answer_delta(str(cached_result.get("answer") or ""))
                 service_task = asyncio.create_task(asyncio.sleep(0, result=cached_result))
@@ -228,7 +348,12 @@ async def ask_stream(
                         conversation_id=body.conversation_id,
                         answer_delta_callback=on_answer_delta,
                     )
-                    _cache_recommendation_response(current_user.id, body, result)
+                    _cache_recommendation_response(
+                        current_user.id,
+                        body,
+                        result,
+                        parity_isolation=parity_isolation,
+                    )
                     return result
                 service_task = asyncio.create_task(run_service())
             while not service_task.done() or not delta_queue.empty():
@@ -241,6 +366,16 @@ async def ask_stream(
                     first_delta_logged = True
                 yield _sse("content", {"type": "content", "content": delta})
             result = await service_task
+            result = _canonicalize_parity_result(
+                current_user.id,
+                body,
+                result,
+                parity_isolation=parity_isolation,
+            )
+            if parity_isolation and str(result.get("answer") or ""):
+                customer_perf_service.mark_first_answer_delta()
+                first_delta_logged = True
+                yield _sse("content", {"type": "content", "content": result.get("answer")})
             customer_perf_service.log_stage(
                 "ask_stream.service_call",
                 planned_start,

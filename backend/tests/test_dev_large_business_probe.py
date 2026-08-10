@@ -73,6 +73,41 @@ class DevLargeBusinessProbeTest(unittest.TestCase):
         self.assertFalse(result["rate_limit_exhausted"])
         self.assertEqual(sleeps, [1.0, 2.0])
 
+    def test_request_with_rate_limit_retry_recovers_from_connection_reset(self):
+        calls = []
+        sleeps = []
+
+        def send_request():
+            calls.append(len(calls))
+            if len(calls) == 1:
+                raise ConnectionResetError("worker restarted")
+            return {"status": 200, "judgement": "pass", "attribution": "ok"}
+
+        result = MODULE.request_with_rate_limit_retry(
+            send_request,
+            max_retries=2,
+            backoff_seconds=1.0,
+            sleep_fn=sleeps.append,
+        )
+
+        self.assertEqual(result["status"], 200)
+        self.assertEqual(result["transport_retries"], 1)
+        self.assertEqual(result["rate_limit_retries"], 0)
+        self.assertEqual(sleeps, [1.0])
+
+    def test_request_with_rate_limit_retry_returns_auditable_transport_error_after_exhaustion(self):
+        result = MODULE.request_with_rate_limit_retry(
+            lambda: (_ for _ in ()).throw(ConnectionResetError("worker restarted")),
+            max_retries=1,
+            backoff_seconds=0,
+            sleep_fn=lambda _delay: None,
+        )
+
+        self.assertEqual(result["status"], 599)
+        self.assertEqual(result["transport_retries"], 1)
+        self.assertTrue(result["transport_exhausted"])
+        self.assertIn("transport_error", result["warnings"])
+
     def test_request_with_rate_limit_retry_marks_exhausted_after_final_429(self):
         sleeps = []
 

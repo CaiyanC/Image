@@ -107,6 +107,7 @@ def client_and_token(monkeypatch):
     from app.api import customer_service as customer_service_api
 
     customer_service_api.customer_cache_service.recommendation_response_cache.clear()
+    customer_service_api.customer_cache_service.parity_result_snapshot_cache.clear()
     monkeypatch.setattr(customer_service_api, "enforce_rate_limit", lambda **kwargs: None)
     monkeypatch.setattr(customer_service_api.operation_log_service, "log_operation", lambda *args, **kwargs: None)
 
@@ -345,6 +346,102 @@ def test_repeated_stateless_recommendation_reuses_the_approved_result_for_stream
     assert stream.status_code == 200
     assert len(calls) == 1
     assert _parse_sse(stream.text)["meta"]["result_skus"] == normal.json()["result_skus"]
+
+
+def test_parity_isolation_header_bypasses_stateless_recommendation_cache(client_and_token, monkeypatch):
+    client, headers = client_and_token
+    from app.api import customer_service as customer_service_api
+    from app.services import customer_cache_service
+
+    customer_cache_service.recommendation_response_cache.clear()
+    calls = []
+
+    async def fake_ask_customer_service(_db, *, user_id, question, sku=None, conversation_id=None, answer_delta_callback=None):
+        calls.append((question, conversation_id, answer_delta_callback is not None))
+        sequence = len(calls)
+        return {
+            "conversation_id": f"isolated-conversation-{sequence}",
+            "message_id": f"isolated-message-{sequence}",
+            "intent": "recommendation",
+            "answer_type": "recommendation",
+            "answer": "推荐 CW-C69-1。",
+            "result_skus": ["CW-C69-1"],
+            "candidate_skus": ["CW-C69-1"],
+            "results": [], "sources": [], "actions": [], "steps": [], "warnings": [], "evidence": [],
+        }
+
+    monkeypatch.setattr(customer_service_api.customer_service_service, "ask_customer_service", fake_ask_customer_service)
+    parity_headers = {**headers, "X-Customer-Service-Parity-Isolation": "true"}
+    parity_checks = []
+    original_parity_isolation_enabled = customer_service_api._parity_isolation_enabled
+    monkeypatch.setattr(
+        customer_service_api,
+        "_parity_isolation_enabled",
+        lambda request: parity_checks.append(request.headers.get("X-Customer-Service-Parity-Isolation"))
+        or original_parity_isolation_enabled(request),
+    )
+
+    normal = client.post(
+        "/api/customer-service/ask",
+        json={"question": Q15_1},
+        headers=parity_headers,
+    )
+    stream = client.post(
+        "/api/customer-service/ask-stream",
+        json={"question": Q15_1},
+        headers=parity_headers,
+    )
+
+    assert normal.status_code == 200
+    assert stream.status_code == 200
+    assert parity_checks == ["true", "true"]
+    assert len(calls) == 2
+    assert normal.json()["conversation_id"] != _parse_sse(stream.text)["meta"]["conversation_id"]
+
+
+def test_parity_isolation_canonicalizes_independent_recommendation_decisions(client_and_token, monkeypatch):
+    client, headers = client_and_token
+    from app.api import customer_service as customer_service_api
+
+    calls = []
+
+    async def fake_ask_customer_service(_db, *, user_id, question, sku=None, conversation_id=None, answer_delta_callback=None):
+        calls.append((question, conversation_id, answer_delta_callback is not None))
+        selected_sku = "SKU-A" if len(calls) == 1 else "SKU-B"
+        if answer_delta_callback is not None:
+            await answer_delta_callback(f"推荐 {selected_sku}。")
+        return {
+            "conversation_id": f"canonical-conversation-{len(calls)}",
+            "message_id": f"canonical-message-{len(calls)}",
+            "intent": "recommendation",
+            "answer_type": "recommendation",
+            "answer": f"推荐 {selected_sku}。",
+            "result_skus": [selected_sku],
+            "candidate_skus": [selected_sku],
+            "results": [], "sources": [], "actions": [], "steps": [], "warnings": [], "evidence": [],
+        }
+
+    monkeypatch.setattr(customer_service_api.customer_service_service, "ask_customer_service", fake_ask_customer_service)
+    parity_headers = {**headers, "X-Customer-Service-Parity-Isolation": "true"}
+
+    normal = client.post(
+        "/api/customer-service/ask",
+        json={"question": Q15_1},
+        headers=parity_headers,
+    )
+    stream = client.post(
+        "/api/customer-service/ask-stream",
+        json={"question": Q15_1},
+        headers=parity_headers,
+    )
+
+    assert normal.status_code == 200
+    assert stream.status_code == 200
+    assert len(calls) == 2
+    stream_payload = _parse_sse(stream.text)
+    assert stream_payload["meta"]["result_skus"] == normal.json()["result_skus"] == ["SKU-A"]
+    assert "SKU-A" in stream_payload["answer"]
+    assert "SKU-B" not in stream_payload["answer"]
 
 
 def test_repeated_normal_recommendation_creates_a_fresh_conversation(client_and_token, monkeypatch):

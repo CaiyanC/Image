@@ -209,12 +209,36 @@ def request_with_rate_limit_retry(
     sleep_fn: Callable[[float], None] = time.sleep,
 ) -> dict[str, Any]:
     attempts = 0
+    rate_limit_retries = 0
+    transport_retries = 0
     last_result: dict[str, Any] | None = None
-    while attempts <= max_retries:
-        result = dict(send_request() or {})
+    while True:
+        try:
+            result = dict(send_request() or {})
+        except OSError as exc:
+            if attempts >= max_retries:
+                return {
+                    "status": 599,
+                    "answer": "",
+                    "answer_type": "",
+                    "result_skus": [],
+                    "warnings": ["transport_error"],
+                    "transport_error": str(exc),
+                    "transport_retries": transport_retries,
+                    "rate_limit_retries": rate_limit_retries,
+                    "rate_limit_exhausted": False,
+                    "transport_exhausted": True,
+                }
+            delay = max(float(backoff_seconds), 0.0) * (2**attempts)
+            if delay > 0:
+                sleep_fn(delay)
+            attempts += 1
+            transport_retries += 1
+            continue
         status = int(result.get("status") or 0)
         if status != 429:
-            result["rate_limit_retries"] = attempts
+            result["rate_limit_retries"] = rate_limit_retries
+            result["transport_retries"] = transport_retries
             result["rate_limit_exhausted"] = False
             return result
         last_result = result
@@ -224,8 +248,10 @@ def request_with_rate_limit_retry(
         if delay > 0:
             sleep_fn(delay)
         attempts += 1
+        rate_limit_retries += 1
     final = dict(last_result or {})
-    final["rate_limit_retries"] = attempts
+    final["rate_limit_retries"] = rate_limit_retries
+    final["transport_retries"] = transport_retries
     final["rate_limit_exhausted"] = True
     return final
 
@@ -340,12 +366,15 @@ def json_request(
     *,
     payload: dict[str, Any] | None = None,
     token: str | None = None,
+    extra_headers: dict[str, str] | None = None,
     timeout: float = DEFAULT_TIMEOUT,
 ) -> tuple[int, bytes]:
     data = None if payload is None else json.dumps(payload, ensure_ascii=False).encode("utf-8")
     headers = {"Content-Type": "application/json; charset=utf-8"}
     if token:
         headers["Authorization"] = f"Bearer {token}"
+    if extra_headers:
+        headers.update(extra_headers)
     request = urllib.request.Request(url, data=data, headers=headers, method=method)
     try:
         with urllib.request.urlopen(request, timeout=timeout) as response:
@@ -462,7 +491,13 @@ def _normalized_response_payload(
     }
 
 
-def ask_stream(token: str, question: str, conversation_id: str | None) -> dict[str, Any]:
+def ask_stream(
+    token: str,
+    question: str,
+    conversation_id: str | None,
+    *,
+    parity_isolation: bool = False,
+) -> dict[str, Any]:
     payload: dict[str, Any] = {"question": question}
     if conversation_id:
         payload["conversation_id"] = conversation_id
@@ -472,6 +507,7 @@ def ask_stream(token: str, question: str, conversation_id: str | None) -> dict[s
         f"{DEFAULT_BASE_URL.rstrip('/')}/api/customer-service/ask-stream",
         payload=payload,
         token=token,
+        extra_headers={"X-Customer-Service-Parity-Isolation": "true"} if parity_isolation else None,
     )
     elapsed_ms = round((time.perf_counter() - started) * 1000, 1)
     if status >= 400:
@@ -513,7 +549,13 @@ def ask_stream(token: str, question: str, conversation_id: str | None) -> dict[s
     )
 
 
-def ask(token: str, question: str, conversation_id: str | None) -> dict[str, Any]:
+def ask(
+    token: str,
+    question: str,
+    conversation_id: str | None,
+    *,
+    parity_isolation: bool = False,
+) -> dict[str, Any]:
     payload: dict[str, Any] = {"question": question}
     if conversation_id:
         payload["conversation_id"] = conversation_id
@@ -523,6 +565,7 @@ def ask(token: str, question: str, conversation_id: str | None) -> dict[str, Any
         f"{DEFAULT_BASE_URL.rstrip('/')}/api/customer-service/ask",
         payload=payload,
         token=token,
+        extra_headers={"X-Customer-Service-Parity-Isolation": "true"} if parity_isolation else None,
     )
     elapsed_ms = round((time.perf_counter() - started) * 1000, 1)
     if status >= 400:

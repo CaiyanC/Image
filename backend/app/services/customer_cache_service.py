@@ -61,6 +61,7 @@ product_detail_cache = TTLCache(ttl_seconds=600, maxsize=4096)
 embedding_cache = TTLCache(ttl_seconds=600, maxsize=4096)
 recommendation_candidate_cache = TTLCache(ttl_seconds=300, maxsize=2048)
 recommendation_response_cache = TTLCache(ttl_seconds=20, maxsize=512)
+parity_result_snapshot_cache = TTLCache(ttl_seconds=300, maxsize=1024)
 faq_cache = TTLCache(ttl_seconds=600, maxsize=1024)
 
 

@@ -349,7 +349,7 @@ def build_structured_query_contract(question: str) -> StructuredQueryContract:
     if field in {"capacity", "weight", "dimensions", "people"}:
         operator, value, unit, value_span = _numeric_condition(text, field)
     if field == "material":
-        for candidate, normalized in (("硬质氧化铝合金", "硬质氧化铝"), ("硬质氧化铝", "硬质氧化铝"), ("硬氧", "硬质氧化铝"), ("铝合金", "铝合金"), ("不锈钢", "不锈钢"), ("钛", "钛")):
+        for candidate, normalized in (("316L不锈钢", "316L不锈钢"), ("不锈钢316L", "316L不锈钢"), ("304不锈钢", "304不锈钢"), ("不锈钢304", "304不锈钢"), ("硬质氧化铝合金", "硬质氧化铝"), ("硬质氧化铝", "硬质氧化铝"), ("硬氧", "硬质氧化铝"), ("铝合金", "铝合金"), ("不锈钢", "不锈钢"), ("钛", "钛")):
             start = text.find(candidate)
             if start >= 0:
                 operator, value, value_span = "contains", normalized, (start, start + len(candidate))
@@ -373,7 +373,7 @@ def build_structured_query_contract(question: str) -> StructuredQueryContract:
         conditions.append({"field": field, "operator": operator, "value": value, "unit": unit, "relation": relation})
 
     material_condition = None
-    for candidate, normalized in (("硬质氧化铝合金", "硬质氧化铝"), ("硬质氧化铝", "硬质氧化铝"), ("硬氧", "硬质氧化铝"), ("铝合金", "铝合金"), ("不锈钢", "不锈钢"), ("钛", "钛")):
+    for candidate, normalized in (("316L不锈钢", "316L不锈钢"), ("不锈钢316L", "316L不锈钢"), ("304不锈钢", "304不锈钢"), ("不锈钢304", "304不锈钢"), ("硬质氧化铝合金", "硬质氧化铝"), ("硬质氧化铝", "硬质氧化铝"), ("硬氧", "硬质氧化铝"), ("铝合金", "铝合金"), ("不锈钢", "不锈钢"), ("钛", "钛")):
         if candidate in text:
             material_condition = {"field": "material", "operator": "contains", "value": normalized, "unit": None, "relation": None}
             break

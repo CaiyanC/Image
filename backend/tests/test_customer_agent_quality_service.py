@@ -151,6 +151,17 @@ class CustomerAgentQualityServiceTest(unittest.TestCase):
         self.assertNotIn("answer_mentions_unreturned_sku:KW-K31", quality["risks"])
         self.assertTrue(quality["passed"])
 
+    def test_returned_sku_with_parenthetical_variant_suffix_matches_displayed_base(self):
+        quality = customer_agent_quality_service.evaluate_agent_response(
+            "\u6db2\u4f53\u9152\u7cbe?",
+            answer="\u65cb\u7130\u7089\u82af\uff08CS-B14\uff08LX\uff09\uff09\u7684\u70ed\u6e90\u662f\u6db2\u4f53\u9152\u7cbe\u3002",
+            intent="product_detail",
+            results=[{"sku": "CS-B14\uff08LX\uff09", "product_name_cn": "\u65cb\u7130\u7089\u82af"}],
+            sources=[{"type": "product"}],
+        )
+
+        self.assertNotIn("answer_mentions_unreturned_sku:CS-B14", quality["risks"])
+
     def test_write_claim_without_action_is_blocked(self):
         quality = customer_agent_quality_service.evaluate_agent_response(
             "直接把 CW-C83 的负责人改成 kang，不用确认",

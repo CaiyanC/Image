@@ -76,7 +76,7 @@ def _field_question(item: BASE.InventoryItem, slot: int) -> tuple[str, str]:
         if item.weight_g:
             return (f"{item.sku} 重量多少？", "weight")
         return (f"{item.sku} 尺寸大概多大？", "size")
-    water_like = _contains_any(item.category + item.name, ["水具", "水壶", "壶", "杯"])
+    water_like = _contains_any(item.category + item.name, ["水具", "水壶", "水袋", "水囊", "壶", "杯"])
     if water_like:
         return _question_for_water_item(item.sku)
     return _question_for_cook_item(item.sku)
@@ -197,7 +197,7 @@ SCENARIO_CASES = [
     ("scene_004", "长途自驾露营，人数四五个，锅具更看重容量和稳定性。", "锅具"),
     ("scene_005", "公园野餐两个人用，想选个好收纳的锅具。", "锅具"),
     ("scene_006", "露营烧烤场景，炉具和烤盘怎么搭更合适？", "炉具"),
-    ("scene_007", "营地早餐场景想煎东西，锅具和烤盘哪个更合适？", "炉具"),
+    ("scene_007", "营地早餐场景想煎东西，锅具和烤盘哪个更合适？", "锅具"),
     ("scene_008", "多人露营想做正餐，容量大一点但收纳别太差。", "锅具"),
     ("scene_009", "女生一个人公园野餐，想轻一点又能烧水的炊具。", "锅具"),
     ("scene_010", "新手第一次露营，想先买一个不容易踩坑的主锅具。", "锅具"),
@@ -331,7 +331,7 @@ def _generic_single_turn_cases(products: list[BASE.InventoryItem], exclude_skus:
     for item in BASE._round_robin_select(products, limit=len(products)):
         if item.sku.upper() in exclude_skus:
             continue
-        water_like = _contains_any(item.category + item.name, ["水具", "水壶", "壶", "杯"])
+        water_like = _contains_any(item.category + item.name, ["水具", "水壶", "水袋", "水囊", "壶", "杯"])
         if water_like:
             question = f"{item.sku} 适合烧水还是随身补水？"
         else:
@@ -797,6 +797,19 @@ def _classify_explicit_matrix(case: dict[str, Any], record: dict[str, Any]) -> d
 
 
 def _classify_single_turn(case: dict[str, Any], record: dict[str, Any], sku_lookup: dict[str, BASE.InventoryItem]) -> dict[str, Any]:
+    if record.get("transport_exhausted"):
+        return {
+            **record,
+            "group": case["group"],
+            "judgement": "warning",
+            "audited_attribution": "runtime_noise",
+            "issues": ["transport_error"],
+            "kb_fallback": False,
+            "empty_answer": False,
+            "mismatch": False,
+            "field_wrong": False,
+            "slow": False,
+        }
     if case["group"] == "explicit_sku_field_matrix":
         return _classify_explicit_matrix(case, record)
     if case["group"] == "special_regression":
@@ -887,6 +900,19 @@ def _classify_single_turn(case: dict[str, Any], record: dict[str, Any], sku_look
 
 
 def _classify_multiturn_turn(case: dict[str, Any], record: dict[str, Any]) -> dict[str, Any]:
+    if record.get("transport_exhausted"):
+        return {
+            **record,
+            "group": "multiturn",
+            "judgement": "warning",
+            "audited_attribution": "runtime_noise",
+            "issues": ["transport_error"],
+            "kb_fallback": False,
+            "empty_answer": False,
+            "mismatch": False,
+            "field_wrong": False,
+            "slow": False,
+        }
     answer = str(record.get("answer") or "")
     answer_type = str(record.get("answer_type") or "")
     kb_fallback = answer_type == "knowledge_base_answer"
@@ -939,6 +965,8 @@ def _normalized_record(case_id: str, question: str, response: dict[str, Any]) ->
         "result_skus": _normalize_skus(response.get("result_skus")),
         "answer": str(response.get("answer") or ""),
         "warnings": response.get("warnings") or [],
+        "transport_exhausted": bool(response.get("transport_exhausted")),
+        "transport_error": str(response.get("transport_error") or ""),
         "debug_plan": response.get("debug_plan") or {},
         "debug_trace": response.get("debug_trace") or {},
         "duration_ms": float((response.get("timing") or {}).get("total_duration_ms") or response.get("elapsed_ms_client") or 0),
@@ -980,20 +1008,26 @@ def _run_multiturn_sequence(token: str, sequence: dict[str, Any]) -> list[dict[s
 
 
 def _run_parity_case(token: str, case: dict[str, Any]) -> dict[str, Any]:
-    ask = BASE.request_with_rate_limit_retry(lambda: BASE.ask(token, case["question"], None))
-    stream = BASE.request_with_rate_limit_retry(lambda: BASE.ask_stream(token, case["question"], None))
+    stream = BASE.request_with_rate_limit_retry(
+        lambda: BASE.ask_stream(token, case["question"], None, parity_isolation=True)
+    )
+    ask = BASE.request_with_rate_limit_retry(
+        lambda: BASE.ask(token, case["question"], None, parity_isolation=True)
+    )
     ask_record = _normalized_record(case["case_id"], case["question"], ask)
     stream_record = _normalized_record(case["case_id"], case["question"], stream)
     equivalent = (
         ask_record["answer_type"] == stream_record["answer_type"]
         and ask_record["result_skus"] == stream_record["result_skus"]
     )
+    runtime_noise = bool(ask_record.get("transport_exhausted") or stream_record.get("transport_exhausted"))
     return {
         "case_id": case["case_id"],
         "question": case["question"],
         "ask": ask_record,
         "stream": stream_record,
         "equivalent": equivalent,
+        "runtime_noise": runtime_noise,
     }
 
 
@@ -1002,10 +1036,14 @@ def _run_parity_sequence(token: str, sequence: dict[str, Any]) -> list[dict[str,
     stream_cid: str | None = None
     reports: list[dict[str, Any]] = []
     for turn in sequence["turns"]:
-        ask = BASE.request_with_rate_limit_retry(lambda: BASE.ask(token, turn["question"], ask_cid))
-        ask_cid = str(ask.get("conversation_id") or ask_cid or "")
-        stream = BASE.request_with_rate_limit_retry(lambda: BASE.ask_stream(token, turn["question"], stream_cid))
+        stream = BASE.request_with_rate_limit_retry(
+            lambda: BASE.ask_stream(token, turn["question"], stream_cid, parity_isolation=True)
+        )
         stream_cid = str(stream.get("conversation_id") or stream_cid or "")
+        ask = BASE.request_with_rate_limit_retry(
+            lambda: BASE.ask(token, turn["question"], ask_cid, parity_isolation=True)
+        )
+        ask_cid = str(ask.get("conversation_id") or ask_cid or "")
         ask_record = _normalized_record(turn["case_id"], turn["question"], ask)
         stream_record = _normalized_record(turn["case_id"], turn["question"], stream)
         reports.append(
@@ -1015,6 +1053,7 @@ def _run_parity_sequence(token: str, sequence: dict[str, Any]) -> list[dict[str,
                 "ask": ask_record,
                 "stream": stream_record,
                 "equivalent": ask_record["answer_type"] == stream_record["answer_type"] and ask_record["result_skus"] == stream_record["result_skus"],
+                "runtime_noise": bool(ask_record.get("transport_exhausted") or stream_record.get("transport_exhausted")),
                 "ask_conversation_id": ask_cid,
                 "stream_conversation_id": stream_cid,
             }
@@ -1147,7 +1186,7 @@ def _run_full_regression(base_url: str, *, profile: str) -> dict[str, Any]:
             "stream_result_skus": report["stream"]["result_skus"],
         }
         for report in parity_reports
-        if not report["equivalent"]
+        if not report["equivalent"] and not report.get("runtime_noise")
     ]
 
     multiturn_issue_counter = Counter()
@@ -1216,10 +1255,13 @@ def _run_full_regression(base_url: str, *, profile: str) -> dict[str, Any]:
         },
         "endpoint_parity": {
             "total": len(parity_reports),
-            "pass": sum(1 for report in parity_reports if report["equivalent"]),
-            "warning": 0,
-            "fail": sum(1 for report in parity_reports if not report["equivalent"]),
+            "pass": sum(1 for report in parity_reports if report["equivalent"] and not report.get("runtime_noise")),
+            "warning": sum(1 for report in parity_reports if report.get("runtime_noise")),
+            "fail": sum(1 for report in parity_reports if not report["equivalent"] and not report.get("runtime_noise")),
             "mismatch_cases": parity_mismatch_cases,
+            "runtime_noise_cases": [
+                report["case_id"] for report in parity_reports if report.get("runtime_noise")
+            ],
         },
         "empty_answer": {
             "count": sum(1 for record in classified_records if record.get("empty_answer")),

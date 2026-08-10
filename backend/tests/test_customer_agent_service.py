@@ -219,6 +219,49 @@ class CustomerAgentServiceTest(unittest.TestCase):
         self.assertEqual(products["CS-G25"], "新品")
         self.assertEqual(products["CW-C93"], "新品")
 
+    def test_parse_delete_product_request_from_explicit_sku(self):
+        intent = customer_agent_intent_service.parse_intent("\u5220\u9664 CW-C93")
+
+        self.assertIsNotNone(intent)
+        self.assertEqual(intent.intent, "propose_delete")
+        self.assertEqual(intent.target_skus, ["CW-C93"])
+        self.assertEqual(intent.requested_fields, [])
+
+    def test_parse_delete_info_request_keeps_the_requested_field(self):
+        intent = customer_agent_intent_service.parse_intent(
+            "\u6e05\u7a7a CW-C93 \u7684\u60c5\u7eea\u4ef7\u503c"
+        )
+
+        self.assertIsNotNone(intent)
+        self.assertEqual(intent.intent, "propose_delete")
+        self.assertEqual(intent.target_skus, ["CW-C93"])
+        self.assertEqual(intent.requested_fields, ["\u60c5\u7eea\u4ef7\u503c"])
+
+    def test_parse_batch_update_request_resolves_selector_filters(self):
+        intent = customer_agent_intent_service.parse_intent(
+            "\u628a\u8d1f\u8d23\u4eba\u4e3a Max \u7684\u9505\u8d1f\u8d23\u4eba\u6539\u6210 kang"
+        )
+
+        self.assertIsNotNone(intent)
+        self.assertEqual(intent.intent, "propose_update")
+        self.assertEqual(intent.requested_fields, ["\u8d1f\u8d23\u4eba"])
+        self.assertEqual(intent.exact_value, "kang")
+        self.assertEqual(intent.filters["product.person_in_charge"], "Max")
+        self.assertEqual(intent.filters["product.category"], "\u9505\u5177")
+
+    def test_process_batch_update_request_creates_actions_for_selector_matches(self):
+        result = self._run_async(customer_agent_intent_service.process_intent_request(
+            self.db,
+            user_id="user-1",
+            question="\u628a\u8d1f\u8d23\u4eba\u4e3a Max \u7684\u9505\u8d1f\u8d23\u4eba\u6539\u6210 kang",
+            allow_llm_fallback=False,
+        ))
+
+        self.assertIsNotNone(result)
+        self.assertEqual(result["intent"], "propose_update")
+        self.assertEqual({item["sku"] for item in result["actions"]}, {"CW-C93", "TW-141"})
+        self.assertTrue(all(item["action_type"] == "update_field" for item in result["actions"]))
+
     def test_process_search_request_returns_product_results(self):
         result = customer_agent_service.process_agent_request(
             self.db,
@@ -1061,6 +1104,23 @@ class CustomerAgentServiceTest(unittest.TestCase):
         self.assertIsNotNone(intent)
         self.assertEqual(intent.intent, "clarify")
 
+    def test_parse_intent_does_not_treat_other_as_context_reference(self):
+        intent = customer_agent_intent_service.parse_intent(
+            "您好，我只想用炭火，不想用其他的，请问适合买哪种？"
+        )
+
+        self.assertIsNotNone(intent)
+        self.assertNotEqual(intent.intent, "clarify")
+        self.assertFalse(customer_agent_intent_service._has_context_reference("不想用其他的"))
+
+    def test_parse_intent_keeps_charcoal_as_explicit_heat_source_constraint(self):
+        intent = customer_agent_intent_service.parse_intent(
+            "我只想用炭火，不想用其他的，请问适合买哪种？"
+        )
+
+        self.assertIsNotNone(intent)
+        self.assertEqual(intent.filters.get("specs.heat_source"), "炭火")
+
     def test_parse_intent_uses_quoted_product_name_as_term_for_field_question(self):
         intent = customer_agent_intent_service.parse_intent("「1－2人野营锅7件套」的主体是什么材质做的？")
 
@@ -1383,6 +1443,23 @@ class CustomerAgentServiceTest(unittest.TestCase):
         self.assertEqual([item["sku"] for item in gx_result["results"]], ["GX14-230G"])
         self.assertEqual([item["sku"] for item in ct_result["results"]], ["CT-T04(BM)"])
 
+    def test_raw_exact_sku_wins_over_parenthesized_normalized_collision(self):
+        from app.services import customer_entity_resolution_contract
+
+        self._add_product("CT-T04(BM)", "括号版茶具", "茶具", "竹、陶瓷", "便携茶具")
+        self._add_product("CT-T04-BM", "短横线版茶具", "茶具", "铝合金", "便携茶具")
+        self.db.commit()
+
+        products = self.db.query(Product).order_by(Product.sku.asc()).all()
+        contract = customer_entity_resolution_contract.build_entity_resolution_contract(
+            "CT-T04-BM 是什么材质？",
+            products,
+        )
+
+        self.assertEqual(contract.status, "resolved")
+        self.assertEqual(contract.resolved_sku, "CT-T04-BM")
+        self.assertEqual(contract.matched_by, "sku_exact")
+
     def test_missing_explicit_sku_does_not_jump_to_other_product(self):
         self._add_product("TW-422-蓝", "有时搪瓷碗盘套装-迷迭蓝", "餐具", "铁、304不锈钢", "搪瓷餐具")
         self.db.commit()
@@ -1587,15 +1664,18 @@ class CustomerAgentRuntimeServiceTest(unittest.IsolatedAsyncioTestCase):
         ))
         self.db.commit()
         self.original_chat_completion = dmxapi_service.chat_completion
+        self.original_runtime_chat_completion = customer_agent_runtime_service.customer_llm_service.chat_completion
         self.original_execute_tool_async = customer_agent_tool_service.execute_tool_async
 
     def tearDown(self):
         dmxapi_service.chat_completion = self.original_chat_completion
+        customer_agent_runtime_service.customer_llm_service.chat_completion = self.original_runtime_chat_completion
         customer_agent_tool_service.execute_tool_async = self.original_execute_tool_async
         self.db.close()
 
     async def test_model_tool_call_executes_safe_tool_and_prints_trace(self):
         calls = []
+        original_chat_completion = customer_agent_runtime_service.customer_llm_service.chat_completion
 
         async def fake_chat_completion(db, messages, model=None, temperature=0.2, max_tokens=1200, purpose=None):
             calls.append(messages)
@@ -1617,6 +1697,7 @@ class CustomerAgentRuntimeServiceTest(unittest.IsolatedAsyncioTestCase):
 
         finally:
             agent_trace_service.TRACE_STDOUT = original_trace_stdout
+            customer_agent_runtime_service.customer_llm_service.chat_completion = original_chat_completion
 
         output = stream.getvalue()
         self.assertIsNotNone(result)
@@ -2480,7 +2561,7 @@ class CustomerAgentRuntimeServiceTest(unittest.IsolatedAsyncioTestCase):
             {"role": "assistant", "content": "找到 CW-C93。"},
         ]
 
-        async def fake_chat_completion(db, messages, model=None, temperature=0.2, max_tokens=1200):
+        async def fake_chat_completion(db, messages, model=None, temperature=0.2, max_tokens=1200, purpose=None):
             calls.append(messages)
             if len(calls) == 1:
                 return '{"context_mode":"inherit_results","query_type":"recommendation","use_previous_result_skus":true,"effective_question":"鍝閫傚悎閫佺ぜ","confidence":"high","reason":"缁х画涓婁竴杞骇鍝佽寖鍥?"}'
@@ -2490,7 +2571,7 @@ class CustomerAgentRuntimeServiceTest(unittest.IsolatedAsyncioTestCase):
                 return '{"tool_calls":[{"name":"get_product_detail","arguments":{"sku":"CW-C93"}}]}'
             return '{"answer":"结合上一轮结果，CW-C93 更适合继续查看容量和材质。"}'
 
-        dmxapi_service.chat_completion = fake_chat_completion
+        customer_agent_runtime_service.customer_llm_service.chat_completion = fake_chat_completion
         result = await customer_agent_runtime_service.process_agent_request(
             self.db,
             user_id="user-1",
@@ -2531,6 +2612,56 @@ class CustomerAgentRuntimeServiceTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result["steps"][0]["type"], "clarify")
         self.assertEqual(result["debug"]["agent_mode"], "dialogue_state_clarification")
         self.assertIn("产品范围", result["answer"])
+
+    def test_compatibility_usage_care_answers_direct_fuel_choice_and_storage(self):
+        compatibility = customer_agent_intent_service._compose_safety_usage_care_answer(
+            "酒精和气罐都可以用的吗?"
+        )
+        self.assertIn("兼容性结论", compatibility)
+        self.assertIn("暂时无法确认", compatibility)
+
+        storage = customer_agent_intent_service._compose_safety_usage_care_answer(
+            "230g的气罐没用完可以留着下次用吗?"
+        )
+        self.assertIn("存放", storage)
+        self.assertNotIn("连接前先确认阀门关闭", storage)
+
+    def test_short_recommendation_with_page_context_requires_criteria(self):
+        self.assertTrue(customer_agent_runtime_service._is_underspecified_recommendation_question("推荐哪种?"))
+
+    def test_unresolved_numeric_product_reference_cannot_reuse_previous_entity(self):
+        self.assertTrue(
+            customer_agent_runtime_service._has_unresolved_numeric_product_reference(
+                self.db,
+                "我准备买116的这个炉子，然后它适配什么样的气罐呢?",
+            )
+        )
+
+    def test_phase1_heat_source_label_does_not_own_duration_question(self):
+        result = customer_service_service._phase1_product_field_result(
+            self.db,
+            {
+                "primary_intent": "product_field",
+                "product_ref": "CS-G25",
+                "sku": "CS-G25",
+                "requested_field": "热源",
+                "raw_question": "这个炉子节约气不？一罐气大概可以用多久？",
+            },
+        )
+        self.assertIsNone(result)
+
+    def test_phase1_field_route_does_not_turn_bare_recommendation_into_product_detail(self):
+        result = customer_service_service._phase1_product_field_result(
+            self.db,
+            {
+                "primary_intent": "product_field",
+                "product_ref": "CS-G25",
+                "sku": "CS-G25",
+                "requested_field": "相关",
+                "raw_question": "推荐哪种?",
+            },
+        )
+        self.assertIsNone(result)
 
     def test_budget_followup_builds_conversation_context(self):
         context = customer_agent_runtime_service._conversation_context_for_question(
@@ -2917,7 +3048,7 @@ class CustomerAgentRuntimeServiceTest(unittest.IsolatedAsyncioTestCase):
         self.assertIn("internal_business_data_blocked", result["warnings"])
 
     async def test_product_lookup_direct_answer_is_regrounded_on_current_question(self):
-        async def fake_chat_completion(db, messages, model=None, temperature=0.2, max_tokens=1200):
+        async def fake_chat_completion(db, messages, model=None, temperature=0.2, max_tokens=1200, purpose=None):
             return '{"answer":"根据您适合泡咖啡的小锅需求，推荐 CW-C93。"}'
 
         async def fake_execute_tool_async(db, *, user_id, name, arguments):
@@ -2939,7 +3070,7 @@ class CustomerAgentRuntimeServiceTest(unittest.IsolatedAsyncioTestCase):
                 }],
             }
 
-        dmxapi_service.chat_completion = fake_chat_completion
+        customer_agent_runtime_service.customer_llm_service.chat_completion = fake_chat_completion
         customer_agent_tool_service.execute_tool_async = fake_execute_tool_async
 
         result = await customer_agent_runtime_service.process_agent_request(
@@ -2959,7 +3090,7 @@ class CustomerAgentRuntimeServiceTest(unittest.IsolatedAsyncioTestCase):
     async def test_tool_grounded_answer_replaces_stale_previous_need(self):
         calls = []
 
-        async def fake_chat_completion(db, messages, model=None, temperature=0.2, max_tokens=1200):
+        async def fake_chat_completion(db, messages, model=None, temperature=0.2, max_tokens=1200, purpose=None):
             calls.append(messages)
             if len(calls) == 1:
                 return '{"tool_calls":[{"name":"hybrid_search_products","arguments":{"semantic_query":"适合四个人做饭的锅有哪些","limit":5}}]}'
@@ -2983,7 +3114,7 @@ class CustomerAgentRuntimeServiceTest(unittest.IsolatedAsyncioTestCase):
                 }],
             }
 
-        dmxapi_service.chat_completion = fake_chat_completion
+        customer_agent_runtime_service.customer_llm_service.chat_completion = fake_chat_completion
         customer_agent_tool_service.execute_tool_async = fake_execute_tool_async
 
         result = await customer_agent_runtime_service.process_agent_request(
@@ -3004,7 +3135,7 @@ class CustomerAgentRuntimeServiceTest(unittest.IsolatedAsyncioTestCase):
     async def test_llm_route_can_treat_followup_as_new_complete_need(self):
         calls = []
 
-        async def fake_chat_completion(db, messages, model=None, temperature=0.2, max_tokens=1200):
+        async def fake_chat_completion(db, messages, model=None, temperature=0.2, max_tokens=1200, purpose=None):
             calls.append(messages)
             if len(calls) == 1:
                 return '{"context_mode":"current_question","query_type":"recommendation","use_previous_result_skus":false,"effective_question":"閫傚悎鍥涗釜浜哄仛楗殑閿呮湁鍝簺","confidence":"high","reason":"褰撳墠闂宸叉湁鏂扮殑浜烘暟銆佺敤閫斿拰浜у搧绫诲瀷"}'
@@ -3028,7 +3159,7 @@ class CustomerAgentRuntimeServiceTest(unittest.IsolatedAsyncioTestCase):
                 }],
             }
 
-        dmxapi_service.chat_completion = fake_chat_completion
+        customer_agent_runtime_service.customer_llm_service.chat_completion = fake_chat_completion
         customer_agent_tool_service.execute_tool_async = fake_execute_tool_async
 
         result = await customer_agent_runtime_service.process_agent_request(
@@ -3324,6 +3455,135 @@ class CustomerAgentEndToEndBehaviorRegressionTest(unittest.IsolatedAsyncioTestCa
             integrity_status="approved",
         ))
 
+    async def test_customer_route_creates_pending_update_action_instead_of_refusal(self):
+        result = await customer_service_service.ask_customer_service(
+            self.db,
+            user_id="route-write-user",
+            question="\u76f4\u63a5\u628a CW-C83 \u7684\u8d1f\u8d23\u4eba\u6539\u6210 kang\uff0c\u4e0d\u7528\u786e\u8ba4",
+        )
+
+        self.assertEqual(result["intent"], "propose_update")
+        self.assertTrue(result["actions"])
+        self.assertEqual(result["actions"][0]["action_type"], "update_field")
+        self.assertEqual(result["actions"][0]["status"], "pending")
+        self.assertIn("\u5f85\u786e\u8ba4", result["answer"])
+        self.assertEqual(
+            self.db.query(Product).filter(Product.sku == "CW-C83").one().person_in_charge,
+            "Test",
+        )
+
+    async def test_customer_route_creates_pending_delete_actions_for_product_and_field(self):
+        product_result = await customer_service_service.ask_customer_service(
+            self.db,
+            user_id="route-write-user",
+            question="\u5220\u9664 CW-C83",
+        )
+        info_result = await customer_service_service.ask_customer_service(
+            self.db,
+            user_id="route-write-user",
+            question="\u6e05\u7a7a CW-C83 \u7684\u60c5\u7eea\u4ef7\u503c",
+        )
+
+        self.assertEqual(product_result["intent"], "propose_delete")
+        self.assertEqual(product_result["actions"][0]["action_type"], "delete_product")
+        self.assertEqual(info_result["intent"], "propose_delete")
+        self.assertEqual(info_result["actions"][0]["action_type"], "delete_info")
+        self.assertIn("\u6e05\u7a7a", info_result["answer"])
+
+    async def test_customer_route_resolves_previous_product_for_pronoun_update(self):
+        product = self.db.query(Product).filter(Product.sku == "CW-C83").one()
+        conversation = CustomerServiceConversation(
+            id="route-pronoun-write",
+            user_id="route-write-user",
+            title="\u5c0f\u9752\u7089",
+        )
+        self.db.add(conversation)
+        self.db.add(CustomerServiceMessage(
+            conversation_id=conversation.id,
+            role="assistant",
+            content="\u5df2\u67e5\u5230\u5c0f\u9752\u7089\u3002",
+            sku=product.sku,
+            sources_json=json.dumps([
+                {"type": "agent_context", "result_skus": [product.sku]},
+            ], ensure_ascii=False),
+        ))
+        self.db.commit()
+
+        result = await customer_service_service.ask_customer_service(
+            self.db,
+            user_id="route-write-user",
+            conversation_id=conversation.id,
+            question="\u4fee\u6539\u4ed6\u7684\u8d1f\u8d23\u4eba\u4e3a kang",
+        )
+
+        self.assertEqual(result["intent"], "propose_update")
+        self.assertEqual(result["actions"][0]["sku"], "CW-C83")
+        self.assertEqual(result["actions"][0]["action_type"], "update_field")
+
+    async def test_customer_route_preserves_multi_sku_context_for_internal_owner_filter(self):
+        for product in self.db.query(Product).filter(Product.category == "锅具").all():
+            product.person_in_charge = "Max"
+        self.db.commit()
+
+        first = await customer_service_service.ask_customer_service(
+            self.db,
+            user_id="route-write-user",
+            question="\u8d1f\u8d23\u4eba Max \u7684\u9505\u5177\u6709\u54ea\u4e9b\uff1f",
+        )
+        second = await customer_service_service.ask_customer_service(
+            self.db,
+            user_id="route-write-user",
+            conversation_id=first["conversation_id"],
+            question="\u628a\u8fd9\u4e9b\u751f\u547d\u5468\u671f\u6539\u6210\u5e38\u89c4\u54c1",
+        )
+
+        self.assertTrue(first["results"])
+        self.assertEqual(second["intent"], "propose_update")
+        self.assertTrue(second["actions"])
+        self.assertTrue(all(item["action_type"] == "update_field" for item in second["actions"]))
+
+    async def test_customer_route_does_not_drop_owner_filter_from_semantic_catalog_preflight(self):
+        products = self.db.query(Product).filter(Product.category == "锅具").all()
+        self.assertGreaterEqual(len(products), 2)
+        selected = products[0]
+        selected_sku = selected.sku
+        for product in products:
+            product.person_in_charge = "Greta"
+        selected.person_in_charge = "Max"
+        self.db.commit()
+
+        async def owner_filter_preplan(_db, _question, _deterministic_plan, context=None):
+            return {
+                "called": True,
+                "route_family": "structured_query",
+                "route_hint": "query_products",
+                "question_type": "filter",
+                "subtype": "structured_query",
+                "subject_text": "锅具",
+                "field_type": "category",
+                "field_hint": "category",
+                "canonical_fields": ["category"],
+                "entities": [],
+                "confidence": 0.9,
+                "ambiguity": False,
+                "evidence_required": True,
+                "fallback_reason": "",
+            }
+
+        original = customer_agent_planner_service.plan_customer_question_semantic
+        customer_agent_planner_service.plan_customer_question_semantic = owner_filter_preplan
+        try:
+            result = await customer_service_service.ask_customer_service(
+                self.db,
+                user_id="route-owner-filter-user",
+                question="负责人 Max 的锅具有哪些？",
+            )
+        finally:
+            customer_agent_planner_service.plan_customer_question_semantic = original
+
+        self.assertEqual(result["result_skus"], [selected_sku])
+        self.assertEqual(result["results"][0]["person_in_charge"], "Max")
+
     def test_phase1_planner_routes_product_field_alias_question(self):
         from app.services import customer_agent_planner_service
 
@@ -3604,6 +3864,207 @@ class CustomerAgentEndToEndBehaviorRegressionTest(unittest.IsolatedAsyncioTestCa
         self.assertIn("timing", debug)
         self.assertIn("timing", metadata)
         self.assertIn("total_duration_ms", debug["timing"])
+
+    async def test_plain_catalog_listing_is_not_downgraded_to_recommendation_clarification(self):
+        result = await customer_service_service.ask_customer_service(
+            self.db,
+            user_id="plain-catalog-listing-user",
+            question="有哪些炉具？",
+        )
+
+        self.assertEqual(result.get("intent"), "query_products")
+        self.assertEqual(result.get("answer_type"), "query_products")
+        self.assertIn("CS-G35", result.get("answer") or "")
+        self.assertNotIn("不敢直接把它们当作推荐", result.get("answer") or "")
+        self.assertTrue(result.get("result_skus"))
+
+    async def test_page_sku_duration_question_is_not_rewritten_as_heat_source_field(self):
+        result = await customer_service_service.ask_customer_service(
+            self.db,
+            user_id="page-duration-priority-user",
+            question="这个炉子节约气不？一罐气大概可以用多久？",
+            sku="CS-G35",
+        )
+
+        self.assertEqual(result.get("answer_type"), "product_usage_care")
+        self.assertIn("使用时长", result.get("answer") or "")
+        self.assertNotIn("适用热源信息，无法确认", result.get("answer") or "")
+        self.assertNotIn("请提供炉具型号或 SKU", result.get("answer") or "")
+        self.assertEqual(result.get("result_skus"), ["CS-G35"])
+
+    async def test_page_sku_compound_canister_capacity_and_duration_covers_both_requests(self):
+        result = await customer_service_service.ask_customer_service(
+            self.db,
+            user_id="page-duration-capacity-user",
+            question="一个气罐容量多少，可以用多久？",
+            sku="CS-G35",
+        )
+
+        answer = result.get("answer") or ""
+        self.assertIn("气罐容量", answer)
+        self.assertIn("使用时长", answer)
+        self.assertEqual(result.get("result_skus"), ["CS-G35"])
+
+    async def test_page_sku_canister_compatibility_uses_same_sku_heat_source_evidence(self):
+        specs = self.db.query(ProductSpecs).join(Product).filter(Product.sku == "CS-G35").first()
+        specs.heat_source = "高山气罐、卡式气罐"
+        self.db.commit()
+
+        result = await customer_service_service.ask_customer_service(
+            self.db,
+            user_id="page-compatibility-evidence-user",
+            question="这个气罐接头可以用什么气罐？",
+            sku="CS-G35",
+        )
+
+        answer = result.get("answer") or ""
+        self.assertIn("适用热源", answer)
+        self.assertIn("高山气罐", answer)
+        self.assertIn("卡式气罐", answer)
+        self.assertIn("支持高山气罐", answer)
+        self.assertNotIn("兼容性结论：当前资料未标注", answer)
+        self.assertEqual(result.get("result_skus"), ["CS-G35"])
+
+    async def test_page_sku_canister_compatibility_answers_unlisted_requested_type(self):
+        specs = self.db.query(ProductSpecs).join(Product).filter(Product.sku == "CS-G35").first()
+        specs.heat_source = "高山气罐、卡式气罐"
+        self.db.commit()
+
+        result = await customer_service_service.ask_customer_service(
+            self.db,
+            user_id="page-compatibility-unlisted-type-user",
+            question="这个气罐接头能用液化气罐吗？",
+            sku="CS-G35",
+        )
+
+        answer = result.get("answer") or ""
+        self.assertIn("液化气罐", answer)
+        self.assertRegex(answer, r"不能确认|未直接标注|无法确认")
+        self.assertIn("高山气罐", answer)
+        self.assertIn("卡式气罐", answer)
+        self.assertNotIn("补充资料", answer)
+        self.assertNotIn("QA / KB", answer)
+        self.assertNotIn("依据：以上字段", answer)
+        self.assertEqual(result.get("result_skus"), ["CS-G35"])
+
+    async def test_page_sku_generic_usage_question_does_not_use_cleaning_template(self):
+        result = await customer_service_service.ask_customer_service(
+            self.db,
+            user_id="page-generic-usage-template-user",
+            question="怎么使用？",
+            sku="CS-G35",
+        )
+
+        answer = result.get("answer") or ""
+        self.assertNotIn("清洗/保养资料", answer)
+        self.assertRegex(answer, r"(使用|操作|说明书|资料未标注)")
+        self.assertEqual(result.get("result_skus"), ["CS-G35"])
+
+    async def test_page_sku_placement_question_does_not_leak_internal_field_copy(self):
+        result = await customer_service_service.ask_customer_service(
+            self.db,
+            user_id="page-placement-question-user",
+            question="炉头怎么放炉子里啊？",
+            sku="CS-G35",
+        )
+
+        answer = result.get("answer") or ""
+        self.assertNotIn("字段", answer)
+        self.assertNotIn("负责人", answer)
+        self.assertNotIn("当前资料和当前资料", answer)
+        self.assertRegex(answer, r"(安装|使用|放置|说明书|未标注|无法确认)")
+        self.assertEqual(result.get("result_skus"), ["CS-G35"])
+
+    async def test_page_sku_fuel_capability_answers_from_same_sku_heat_source(self):
+        result = await customer_service_service.ask_customer_service(
+            self.db,
+            user_id="page-fuel-capability-user",
+            question="小圆炉能烧酒精吗？",
+            sku="CS-G35",
+        )
+
+        answer = result.get("answer") or ""
+        self.assertIn("小圆炉", answer)
+        self.assertRegex(answer, r"(热源|燃料|酒精)")
+        self.assertRegex(answer, r"(未标注|未显示|不能确认|不支持|无法确认)")
+        self.assertNotIn("当前资料未标注相关信息，无法确认", answer)
+        self.assertEqual(result.get("result_skus"), ["CS-G35"])
+
+    async def test_page_sku_natural_fuel_predicate_answers_heat_source_field(self):
+        result = await customer_service_service.ask_customer_service(
+            self.db,
+            user_id="page-natural-fuel-predicate-user",
+            question="这炉子是烧液体酒精的吗？",
+            sku="CS-G35",
+        )
+
+        answer = result.get("answer") or ""
+        self.assertIn("小圆炉", answer)
+        self.assertRegex(answer, r"(热源|燃料|酒精)")
+        self.assertNotIn("当前资料未标注相关信息，无法确认", answer)
+        self.assertEqual(result.get("result_skus"), ["CS-G35"])
+
+    async def test_page_sku_fuel_recommendation_uses_page_identity(self):
+        result = await customer_service_service.ask_customer_service(
+            self.db,
+            user_id="page-fuel-recommendation-user",
+            question="推荐用什么燃料？",
+            sku="CS-G35",
+        )
+
+        answer = result.get("answer") or ""
+        self.assertNotEqual(result.get("answer_type"), "clarification")
+        self.assertIn("小圆炉", answer)
+        self.assertRegex(answer, r"(热源|燃料|气罐)")
+        self.assertRegex(answer, r"(未标注|没有标注|按说明书|优先)")
+        self.assertNotIn("请先告诉我具体产品范围", answer)
+        self.assertEqual(result.get("result_skus"), ["CS-G35"])
+
+    async def test_page_sku_solid_alcohol_question_is_not_generic_safety_template(self):
+        result = await customer_service_service.ask_customer_service(
+            self.db,
+            user_id="page-solid-alcohol-user",
+            question="这款可以使用固体酒精吗？",
+            sku="CW-C93",
+        )
+
+        answer = result.get("answer") or ""
+        self.assertIn("行山单锅", answer)
+        self.assertIn("固体酒精", answer)
+        self.assertRegex(answer, r"(未标注|未显示|不能确认|不支持|无法确认)")
+        self.assertNotIn("安全建议：户外使用炉具", answer)
+        self.assertEqual(result.get("result_skus"), ["CW-C93"])
+
+    async def test_page_sku_bare_recommendation_clarifies_instead_of_missing_field_card(self):
+        result = await customer_service_service.ask_customer_service(
+            self.db,
+            user_id="page-bare-recommendation-user",
+            question="推荐哪种？",
+            sku="CS-G35",
+        )
+
+        self.assertEqual(result.get("answer_type"), "clarification")
+        self.assertIn("产品范围", result.get("answer") or "")
+        self.assertNotIn("当前资料未标注相关信息", result.get("answer") or "")
+        self.assertEqual(result.get("result_skus"), [])
+
+    async def test_unresolved_numeric_context_is_clarified_before_previous_entity_reuse(self):
+        first = await customer_service_service.ask_customer_service(
+            self.db,
+            user_id="numeric-context-priority-user",
+            question="请介绍一下 CS-G35",
+        )
+        second = await customer_service_service.ask_customer_service(
+            self.db,
+            user_id="numeric-context-priority-user",
+            question="我准备买116的这个炉子，然后它适配什么样的气罐呢？",
+            conversation_id=first.get("conversation_id"),
+        )
+
+        self.assertEqual(second.get("answer_type"), "clarification")
+        self.assertIn("116", second.get("answer") or "")
+        self.assertNotIn("CS-G25", second.get("answer") or "")
+        self.assertEqual(second.get("result_skus"), [])
 
     async def test_phase1_timing_is_attached_to_composite_n065_path(self):
         result = await customer_service_service.ask_customer_service(
@@ -4036,6 +4497,202 @@ class CustomerAgentEndToEndBehaviorRegressionTest(unittest.IsolatedAsyncioTestCa
         self.assertNotRegex(result["answer"], r"核心卖点包括")
         self.assertIn("total_duration_ms", (result.get("answer_metadata") or {}).get("timing") or {})
 
+    async def test_page_context_compound_capacity_and_material_keep_both_fields(self):
+        self._add_product(
+            "CW-C84",
+            "鸣泉水壶",
+            "水壶",
+            "1.4L",
+            "硬质氧化铝合金",
+            "明火、卡式炉",
+            "便携烧水",
+            "露营烧水",
+            320,
+        )
+        specs = self.db.query(ProductSpecs).filter(ProductSpecs.product_id == "e2e-CW-C84").first()
+        specs.capacity = "1.4L"
+        specs.body_material = "硬质氧化铝合金"
+        self.db.commit()
+
+        result = await customer_service_service.ask_customer_service(
+            self.db,
+            user_id="page-compound-field-user",
+            question="有便携带吗，壶容量多大，什么材质？（当前商品：鸣泉）",
+        )
+
+        answer = result.get("answer") or ""
+        self.assertEqual(result.get("answer_type"), "product_detail")
+        self.assertEqual(result.get("result_skus"), ["CW-C84"])
+        self.assertRegex(answer, r"(容量|1\.4L|1400ML)")
+        self.assertRegex(answer, r"(材质|硬质氧化铝合金)")
+        self.assertNotIn("request_sku_anchor_guard", (result.get("debug") or {}).get("agent_mode", ""))
+
+    async def test_page_sku_cookware_fit_keeps_explicit_identity_when_size_is_unmarked(self):
+        result = await customer_service_service.ask_customer_service(
+            self.db,
+            user_id="page-cookware-fit-user",
+            question="最大能放多大的锅？",
+            sku="CS-G35",
+        )
+
+        answer = result.get("answer") or ""
+        self.assertNotRegex(answer, r"请提供.*(?:商品名|SKU)")
+        self.assertEqual(result.get("result_skus"), ["CS-G35"])
+        self.assertRegex(answer, r"(锅|承载|尺寸|未标注|说明书|无法确认)")
+
+    async def test_page_canister_brand_recommendation_does_not_answer_stove_brand(self):
+        result = await customer_service_service.ask_customer_service(
+            self.db,
+            user_id="page-canister-brand-user",
+            question="高山气罐品牌有推荐吗？",
+            sku="CS-G35",
+        )
+
+        answer = result.get("answer") or ""
+        self.assertEqual(result.get("answer_type"), "recommendation")
+        self.assertNotRegex(answer, r"小圆炉.*品牌")
+        self.assertRegex(answer, r"(气罐|没有找到|未找到|无法确认)")
+
+    async def test_unresolved_page_compound_material_safety_keeps_both_requests_visible(self):
+        result = await customer_service_service.ask_customer_service(
+            self.db,
+            user_id="unresolved-page-material-safety-user",
+            question="这个壶是什么材质的？煲的开水喝的安全吗？（当前商品：水壶）",
+        )
+
+        answer = result.get("answer") or ""
+        self.assertEqual(result.get("answer_type"), "clarification")
+        self.assertEqual(result.get("result_skus"), [])
+        self.assertRegex(answer, r"材质")
+        self.assertRegex(answer, r"安全")
+        self.assertRegex(answer, r"(商品名|SKU)")
+
+    async def test_page_compound_detail_keeps_portability_request_visible(self):
+        self._add_product(
+            "CW-C84",
+            "鸣泉水壶",
+            "水壶",
+            "1.4L",
+            "硬质氧化铝合金",
+            "明火、卡式炉",
+            "便携烧水",
+            "露营烧水",
+            320,
+        )
+        self.db.commit()
+        result = await customer_service_service.ask_customer_service(
+            self.db,
+            user_id="page-compound-portability-user",
+            question="\u6709\u4fbf\u643a\u5e26\u5417\uff0c\u58f6\u5bb9\u91cf\u591a\u5927\uff0c\u4ec0\u4e48\u6750\u8d28\uff1f\uff08\u5f53\u524d\u5546\u54c1\uff1a\u9e23\u6cc9\uff09",
+        )
+
+        answer = result.get("answer") or ""
+        self.assertEqual(result.get("result_skus"), ["CW-C84"])
+        self.assertRegex(answer, r"(\u4fbf\u643a|\u643a\u5e26|\u8f7b\u4fbf|\u63d0\u624b|\u672a\u5355\u72ec\u6807\u6ce8)")
+        self.assertRegex(answer, r"(\u5bb9\u91cf|4L)")
+        self.assertRegex(answer, r"(\u6750\u8d28|\u786c\u8d28\u6c27\u5316\u94dd)")
+
+    async def test_unresolved_page_material_only_does_not_fall_into_cleaning_shortcut(self):
+        result = await customer_service_service.ask_customer_service(
+            self.db,
+            user_id="unresolved-page-material-only-user",
+            question="\u6709\u6ca1\u6709\u6d82\u5c42?\uff08\u5f53\u524d\u5546\u54c1\uff1a\u71c3\u6c14\u9152\u7cbe\u56f4\u7089\u9732\u8425\u9505\u5177\u5957\u88c5\uff09",
+        )
+
+        answer = result.get("answer") or ""
+        self.assertEqual(result.get("answer_type"), "clarification")
+        self.assertEqual(result.get("result_skus"), [])
+        self.assertRegex(answer, r"(商品名|SKU)")
+        self.assertNotRegex(answer, r"(清洁方法|严禁骤冷骤热|损坏涂层)")
+
+    async def test_generic_canister_duration_does_not_list_adapters(self):
+        result = await customer_service_service.ask_customer_service(
+            self.db,
+            user_id="generic-canister-duration-user",
+            question="\u6c14\u7f50\u80fd\u7528\u591a\u4e45?\uff08\u5f53\u524d\u5546\u54c1\uff1a\u5957\u9505\uff09",
+        )
+
+        answer = result.get("answer") or ""
+        self.assertEqual(result.get("result_skus"), [])
+        self.assertNotIn("GA01-37", answer)
+        self.assertRegex(answer, r"(\u65f6\u957f|\u706b\u529b|\u6c14\u7f50|\u65e0\u6cd5\u786e\u8ba4)")
+
+    async def test_unknown_named_product_is_not_bound_to_unrelated_pan(self):
+        result = await customer_service_service.ask_customer_service(
+            self.db,
+            user_id="unknown-named-product-user",
+            question="\u84dd\u7ffc\u6c14\u7089\u7684\u70e4\u8089\uff0c\u53ea\u9002\u54081~2\u4eba\u7684mini\u5c0f\u714e\u76d8?",
+        )
+
+        answer = result.get("answer") or ""
+        self.assertEqual(result.get("result_skus"), [])
+        self.assertRegex(answer, r"(\u5546\u54c1\u540d|SKU|\u84dd\u7ffc\u6c14\u7089)")
+        self.assertNotIn("CW-C12", answer)
+
+    async def test_stove_support_bracket_question_does_not_become_generic_pot_recommendation(self):
+        result = await customer_service_service.ask_customer_service(
+            self.db,
+            user_id="stove-support-bracket-user",
+            question="\u8fd9\u4e2a\u652f\u67b6\u5fc5\u7528\u5427\uff0c\u8fd9\u4e2a\u98ce\u66b4\u7089\u54ea\u4e2a\u9505\u53ef\u4ee5\u4e0d\u7528\u8fd9\u4e2a\u652f\u67b6?",
+        )
+
+        answer = result.get("answer") or ""
+        self.assertNotEqual(result.get("answer_type"), "recommendation")
+        self.assertNotRegex(answer, r"\u5c0f\u65b9\u9505\u5957\u88c5.*\u66f4\u63a8\u8350")
+        self.assertRegex(answer, r"(\u652f\u67b6|\u517c\u5bb9|\u914d\u5957|SKU|\u65e0\u6cd5\u786e\u8ba4)")
+
+    async def test_fuel_purchase_question_does_not_expand_to_burner_accessories(self):
+        result = await customer_service_service.ask_customer_service(
+            self.db,
+            user_id="fuel-purchase-boundary-user",
+            question="这个炉子没有配酒精，酒精从哪里买、买什么样的？（当前商品：家用户外露营水壶1.4升）",
+        )
+
+        answer = result.get("answer") or ""
+        visible_skus = " ".join(result.get("result_skus") or [])
+        self.assertNotRegex(answer + " " + visible_skus, r"(CS-B14|PA-B15S-27|PA-CS-B02-001-42)")
+        self.assertEqual(result.get("result_skus"), [])
+        self.assertRegex(answer, r"(酒精|燃料|说明书|热源|无法确认|不能)")
+
+    async def test_unresolved_page_fuel_purchase_keeps_fuel_boundary_before_recommendation(self):
+        original = customer_agent_planner_service.plan_customer_question_semantic
+
+        async def recommendation_preplan(*_args, **_kwargs):
+            return {
+                "called": True,
+                "route_family": "recommendation",
+                "route_hint": "recommendation",
+                "question_type": "recommendation",
+                "subtype": "recommendation",
+                "entity_scope": "catalogue",
+                "entities": [],
+                "subject_text": "",
+                "field_type": "",
+                "field_hint": "",
+                "canonical_fields": [],
+                "confidence": 0.99,
+                "ambiguity": False,
+                "evidence_required": True,
+                "context_usage": "none",
+                "fallback_reason": "",
+            }
+
+        customer_agent_planner_service.plan_customer_question_semantic = recommendation_preplan
+        try:
+            result = await customer_service_service.ask_customer_service(
+                self.db,
+                user_id="unresolved-page-fuel-boundary-user",
+                question="这个炉子没有配酒精，酒精从哪里买、买什么样的？（当前商品：家用户外露营水壶1.4升）",
+            )
+        finally:
+            customer_agent_planner_service.plan_customer_question_semantic = original
+
+        answer = result.get("answer") or ""
+        self.assertEqual(result.get("answer_type"), "product_usage_care")
+        self.assertEqual(result.get("result_skus"), [])
+        self.assertNotRegex(answer, r"(炉芯|转接头|配件推荐)")
+        self.assertRegex(answer, r"(燃料酒精|说明书|医用酒精|热源)")
+
     async def test_phase1_xiangye_kettle_cold_water_and_capacity_answers_both_fields(self):
         self._add_product(
             "CW-C76",
@@ -4374,7 +5031,9 @@ class CustomerAgentEndToEndBehaviorRegressionTest(unittest.IsolatedAsyncioTestCa
         self.assertIn("CW-S10-1", result["answer"])
         self.assertNotIn("请确认产品名或 SKU", result["answer"])
         self.assertRegex(result["answer"], r"(两个不同SKU|两个不同 SKU|不同SKU|不同 SKU)")
-        self.assertRegex(result["answer"], r"(当前资料未提供明确差异字段|未提供明确差异字段)")
+        # Customer-facing output intentionally sanitizes internal “字段” wording
+        # to “信息”; accept either form for compatibility with older fixtures.
+        self.assertRegex(result["answer"], r"(当前资料未提供明确差异(?:字段|信息)|未提供明确差异(?:字段|信息))")
         self.assertEqual(((result.get("debug") or {}).get("trace") or {}).get("llm_call_count", 0), 0)
 
     async def test_multi_sku_compare_stays_on_explicit_pair(self):
@@ -7880,6 +8539,45 @@ class CustomerServiceServiceTest(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(any(source.get("type") in {"product_qa", "knowledge_base", "usage_care_knowledge"} for source in result["sources"]))
         self.assertEqual(result["debug"].get("usage_care_subtype"), "coating")
 
+    async def test_utensil_material_choice_answers_scratch_risk_instead_of_filtering_cookware(self):
+        result = await customer_service_service.ask_customer_service(
+            self.db,
+            user_id="utensil-material-guidance-user",
+            question="我另外买锅铲的话，选不锈钢还是硅胶的，不锈钢会伤锅吗，还是都可以用？",
+        )
+
+        answer = result.get("answer") or ""
+        self.assertEqual(result.get("intent"), "product_usage_care")
+        self.assertEqual((result.get("debug") or {}).get("agent_mode"), "utensil_material_safety_guidance")
+        self.assertEqual((result.get("debug") or {}).get("usage_care_subtype"), "utensil_material")
+        self.assertIn("优先选硅胶", answer)
+        self.assertIn("刮伤", answer)
+        self.assertIn("无法确认", answer)
+        self.assertEqual(result.get("result_skus"), [])
+        self.assertNotIn("筛到", answer)
+        self.assertNotIn("材质包含不锈钢", answer)
+
+    async def test_generic_full_stove_wash_followup_does_not_return_catalogue_cards(self):
+        listing = await customer_service_service.ask_customer_service(
+            self.db,
+            user_id="full-stove-wash-context-user",
+            question="有哪些炉具？",
+        )
+        result = await customer_service_service.ask_customer_service(
+            self.db,
+            user_id="full-stove-wash-context-user",
+            question="整个炉可以冲洗吗？",
+            conversation_id=listing.get("conversation_id"),
+        )
+
+        answer = result.get("answer") or ""
+        self.assertEqual(result.get("intent"), "product_usage_care")
+        self.assertEqual((result.get("debug") or {}).get("agent_mode"), "full_unit_wash_safety_guidance")
+        self.assertEqual((result.get("debug") or {}).get("usage_care_subtype"), "full_unit_wash")
+        self.assertEqual(result.get("result_skus"), [])
+        self.assertIn("不能把整机水洗当作通用做法", answer)
+        self.assertIn("气路、阀门、接口和点火部件", answer)
+
     async def test_usage_care_question_with_burnt_pot_uses_usage_care_path(self):
         self._seed_usage_care_knowledge()
 
@@ -7935,6 +8633,67 @@ class CustomerServiceServiceTest(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("根据目前知识库", result["answer"])
         self.assertNotIn("不同产品说明可能略有差异", result["answer"])
         self.assertTrue(any("用完" in line or "温水" in line for line in result["answer"].splitlines()))
+
+    async def test_unbound_cleaning_question_returns_bounded_generic_guidance_without_cards(self):
+        self.db.add(Product(
+            id="generic-nonstick-pot",
+            sku="GENERIC-NONSTICK",
+            barcode="generic-nonstick-barcode",
+            product_name_cn="不粘锅",
+            product_name_en="non-stick pot",
+            brand="test",
+            series="test",
+            category="锅具",
+            lifecycle_status="常规品",
+        ))
+        self.db.commit()
+
+        result = await customer_service_service.ask_customer_service(
+            self.db,
+            user_id="unbound-cleaning-user",
+            question="不粘锅怎么清洗",
+        )
+
+        self.assertEqual(result["intent"], "product_usage_care")
+        self.assertEqual(result.get("result_skus"), [])
+        self.assertIn("清洁方法：", result["answer"])
+        self.assertIn("温水", result["answer"])
+        self.assertIn("钢丝球", result["answer"])
+        self.assertIn("具体型号或 SKU", result["answer"])
+        self.assertNotIn("当前资料未标注该商品", result["answer"])
+
+    async def test_unresolved_page_category_does_not_widen_mixed_fuel_catalogue_scope(self):
+        for sku, name, heat_source in (
+            ("CS-B15SPRO", "围雪炉酒精版", "液体酒精"),
+            ("CS-G25", "小青炉", "高山气罐、卡式气罐"),
+        ):
+            self.db.add(Product(
+                id=f"page-scope-{sku}",
+                sku=sku,
+                barcode=f"barcode-{sku}",
+                product_name_cn=name,
+                product_name_en=name,
+                brand="test",
+                series="test",
+                category="炉具",
+                lifecycle_status="常规品",
+            ))
+            self.db.add(ProductSpecs(
+                id=f"page-scope-specs-{sku}",
+                product_id=f"page-scope-{sku}",
+                heat_source=heat_source,
+            ))
+        self.db.commit()
+
+        result = await customer_service_service.ask_customer_service(
+            self.db,
+            user_id="page-scope-user",
+            question="这个是不包括酒精炉和气炉?（当前商品：卡式炉）",
+        )
+
+        self.assertEqual(result.get("result_skus"), [])
+        self.assertEqual(result.get("debug", {}).get("agent_mode"), "unresolved_page_context_guard")
+        self.assertIn("无法唯一对应", result["answer"])
 
     async def test_query_products_single_field_detail_skips_llm_compose(self):
         original_llm_compose = customer_agent_intent_service._llm_compose_answer
@@ -8396,8 +9155,207 @@ class CustomerServiceServiceTest(unittest.IsolatedAsyncioTestCase):
         self.assertIn("淘宝", result["answer"])
         self.assertIn("京东", result["answer"])
 
+    async def test_unlisted_consumable_purchase_question_does_not_return_catalogue_cards(self):
+        result = await customer_service_service.ask_customer_service(
+            self.db,
+            user_id="unlisted-consumable-purchase-user",
+            question="95 的酒精去哪买呢?",
+        )
+
+        self.assertEqual(result["intent"], "purchase_channel")
+        self.assertEqual(result.get("result_skus"), [])
+        self.assertNotRegex(result.get("answer") or "", r"\b(?:CW|CS|TW)-[A-Z0-9-]+\b")
+
     async def test_product_scoped_quality_issue_does_not_use_pure_faq_fast_path(self):
         self.assertIsNone(customer_service_service._classify_customer_faq_intent("CW-C83\u8d28\u91cf\u6709\u95ee\u9898"))
+
+    async def test_unbound_usage_question_does_not_use_generic_greeting_fast_path(self):
+        self.assertIsNone(customer_service_service._classify_customer_faq_intent("你好，这个怎么使用?"))
+
+    async def test_unbound_usage_question_returns_identity_clarification(self):
+        result = await customer_service_service.ask_customer_service(
+            self.db,
+            user_id="user-1",
+            question="你好，这个怎么使用?",
+        )
+        self.assertEqual(result["intent"], "clarify")
+        self.assertIn("具体商品名或 SKU", result["answer"])
+
+    async def test_unbound_accessory_availability_question_does_not_return_safety_script(self):
+        result = await customer_service_service.ask_customer_service(
+            self.db,
+            user_id="user-1",
+            question="气罐有?",
+        )
+        self.assertEqual(result["intent"], "clarify")
+        self.assertIn("配有气罐/配件", result["answer"])
+
+    async def test_page_category_identity_corrects_a_mismatched_product_noun(self):
+        product = Product(
+            id="page-category-CS-G25",
+            sku="CS-G25",
+            barcode="page-category-barcode",
+            product_name_cn="小青炉",
+            product_name_en="Mini Stove",
+            brand="alocs爱路客",
+            category="炉具",
+        )
+        self.db.add(product)
+        self.db.commit()
+
+        result = await customer_service_service.ask_customer_service(
+            self.db,
+            user_id="page-category-user",
+            question="那个水壶吗?",
+            sku="CS-G25",
+        )
+
+        self.assertIn("小青炉（CS-G25）", result["answer"])
+        self.assertIn("炉具", result["answer"])
+        self.assertIn("不是水壶", result["answer"])
+        self.assertEqual(result.get("result_skus"), ["CS-G25"])
+
+    async def test_unbound_separate_sale_question_names_every_requested_accessory(self):
+        async def fail_runtime(*args, **kwargs):
+            raise AssertionError("配件单卖问题应在进入通用运行时前完成边界回答")
+
+        customer_agent_runtime_service.process_agent_request = fail_runtime
+        result = await customer_service_service.ask_customer_service(
+            self.db,
+            user_id="separate-accessory-user",
+            question="点火器跟管线有单独配件卖么?",
+        )
+
+        self.assertEqual(result["intent"], "clarify")
+        self.assertIn("点火器", result["answer"])
+        self.assertRegex(result["answer"], r"(管线|连接管)")
+        self.assertEqual(result.get("result_skus"), [])
+
+    async def test_exact_unlisted_category_availability_returns_a_direct_no_match(self):
+        async def fail_runtime(*args, **kwargs):
+            raise AssertionError("精确品类可售查询不应退化到通用运行时")
+
+        customer_agent_runtime_service.process_agent_request = fail_runtime
+        result = await customer_service_service.ask_customer_service(
+            self.db,
+            user_id="fairness-cup-user",
+            question="有没有公道杯?",
+        )
+
+        self.assertRegex(result["answer"], r"(没有|未找到).{0,12}公道杯")
+        self.assertEqual(result.get("result_skus"), [])
+        self.assertEqual(result.get("results"), [])
+
+    async def test_page_missing_adapter_complaint_is_not_rewritten_as_a_spare_burner_question(self):
+        product = Product(
+            id="missing-adapter-CS-G25",
+            sku="CS-G25",
+            barcode="missing-adapter-barcode",
+            product_name_cn="小青炉",
+            product_name_en="Mini Stove",
+            brand="alocs爱路客",
+            category="炉具",
+        )
+        self.db.add(product)
+        self.db.commit()
+        question = (
+            "你说我买个炉子你没有转换头怎么整，你给我发个这个这炉子个转头还不是一起到的，"
+            "你给我候补的完了，现在用不了我这炉头，我现在借转头在这做饭呢，"
+            "你说我没有没有转向头做饭都做不了。"
+        )
+
+        result = await customer_service_service.ask_customer_service(
+            self.db,
+            user_id="missing-adapter-user",
+            question=question,
+            sku="CS-G25",
+        )
+
+        self.assertRegex(result["answer"], r"(漏发|缺件|补发|售后)")
+        self.assertIn("转换头", result["answer"])
+        self.assertNotIn("备用炉头", result["answer"])
+        self.assertEqual(result.get("result_skus"), [])
+
+    async def test_unbound_cause_and_cleaning_compound_answers_both_slots(self):
+        async def fail_runtime(*args, **kwargs):
+            raise AssertionError("无身份的原因和清洗复合问题应先返回双槽位边界")
+
+        customer_agent_runtime_service.process_agent_request = fail_runtime
+        result = await customer_service_service.ask_customer_service(
+            self.db,
+            user_id="cause-cleaning-user",
+            question="：这是酒精的问题么?这种材质应该怎么清洗干净?",
+        )
+
+        self.assertRegex(result["answer"], r"(酒精.*导致|是否.*酒精)")
+        self.assertIn("清洗", result["answer"])
+        self.assertRegex(result["answer"], r"(商品名|SKU|材质|照片)")
+        self.assertEqual(result.get("result_skus"), [])
+
+    async def test_two_lost_storage_bags_are_not_merged_into_one_recommendation_contract(self):
+        result = await customer_service_service.ask_customer_service(
+            self.db,
+            user_id="two-storage-bags-user",
+            question="我的烧水壶和酒精炉的收纳袋丢了，酒精炉是B02，烧水壶是1.4L的。怎么买?",
+        )
+
+        self.assertIn("两件商品", result["answer"])
+        self.assertIn("酒精炉", result["answer"])
+        self.assertIn("烧水壶", result["answer"])
+        self.assertRegex(result["answer"], r"(分别|各自)")
+        self.assertNotIn("同 SKU 资料明确核验你提出的条件", result["answer"])
+        self.assertEqual(result.get("result_skus"), [])
+
+    async def test_accessory_combination_availability_returns_a_direct_catalogue_no_match(self):
+        result = await customer_service_service.ask_customer_service(
+            self.db,
+            user_id="accessory-combination-user",
+            question="有没有可以选择的配件点火和调节开关一起?",
+        )
+
+        self.assertIn("点火器", result["answer"])
+        self.assertIn("火力调节开关", result["answer"])
+        self.assertRegex(result["answer"], r"(未找到|没有找到).{0,12}(同时|组合)")
+        self.assertEqual(result.get("result_skus"), [])
+
+    async def test_mixed_alcohol_and_gas_stove_catalogue_uses_each_rows_heat_source(self):
+        alcohol = Product(
+            id="mixed-stove-alcohol",
+            sku="MIXED-ALCOHOL",
+            barcode="mixed-stove-alcohol-barcode",
+            product_name_cn="测试酒精炉",
+            product_name_en="Test Alcohol Stove",
+            brand="alocs爱路客",
+            category="炉具",
+        )
+        gas = Product(
+            id="mixed-stove-gas",
+            sku="MIXED-GAS",
+            barcode="mixed-stove-gas-barcode",
+            product_name_cn="测试燃气炉",
+            product_name_en="Test Gas Stove",
+            brand="alocs爱路客",
+            category="炉具",
+        )
+        self.db.add_all([
+            alcohol,
+            gas,
+            ProductSpecs(id="mixed-stove-alcohol-specs", product_id=alcohol.id, heat_source="液体酒精"),
+            ProductSpecs(id="mixed-stove-gas-specs", product_id=gas.id, heat_source="高山气罐"),
+        ])
+        self.db.commit()
+
+        result = await customer_service_service.ask_customer_service(
+            self.db,
+            user_id="mixed-stove-user",
+            question="你这炉子里到底都包括啥呀?有酒精炉和瓦斯炉吗?",
+        )
+
+        self.assertIn("MIXED-ALCOHOL", result.get("result_skus") or [])
+        self.assertIn("MIXED-GAS", result.get("result_skus") or [])
+        self.assertIn("酒精炉", result["answer"])
+        self.assertRegex(result["answer"], r"(瓦斯炉|燃气炉)")
+        self.assertNotIn("没有酒精炉和瓦斯炉", result["answer"])
 
     async def test_single_person_cookware_purchase_is_not_classified_as_purchase_channel(self):
         self.assertIsNone(customer_service_service._classify_customer_faq_intent("我想买个锅，适合一个人用的那种"))
@@ -8590,6 +9548,182 @@ class CustomerServiceServiceTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result["debug"]["agent_mode"], "product_usage_care_fast_path")
         self.assertNotEqual(result["answer_type"], "product_query")
         self.assertTrue(any(source.get("type") in {"product_qa", "usage_care_knowledge", "knowledge_base"} for source in result["sources"]))
+
+    async def test_ambiguous_alcohol_storage_question_does_not_bind_first_stove(self):
+        result = await customer_agent_intent_service.process_intent_request(
+            self.db,
+            user_id="user-1",
+            question="炉子里倒进去的酒精用不完盖子扭紧不会漏吧？",
+            sku=None,
+            previous_result_skus=[],
+            allow_llm_fallback=False,
+        )
+
+        self.assertIsNotNone(result)
+        self.assertEqual(result["intent"], "product_usage_care")
+        self.assertEqual(result["answer_type"], "product_usage_care")
+        self.assertEqual(result.get("result_skus") or [], [])
+        self.assertEqual((result.get("debug") or {}).get("usage_care_subtype"), "safety")
+        self.assertIn("无法确认", result["answer"])
+        self.assertIn("远离火源", result["answer"])
+        self.assertNotIn("密封设计", result["answer"])
+
+    async def test_charcoal_recommendation_does_not_substitute_open_flame(self):
+        result = await customer_agent_intent_service.process_intent_request(
+            self.db,
+            user_id="user-1",
+            question="我只想用炭火，不想用其他的，请问适合买哪种？",
+            sku=None,
+            previous_result_skus=[],
+            allow_llm_fallback=False,
+        )
+
+        self.assertIsNotNone(result)
+        self.assertIn("炭火", result["answer"])
+        self.assertIn("明火直烧", result["answer"])
+        self.assertNotIn("支持明火直烧，可搭配炭火", result["answer"])
+        self.assertEqual(result.get("result_skus") or [], [])
+
+    async def test_service_charcoal_recommendation_does_not_fall_into_general_chat(self):
+        original_semantic = customer_agent_planner_service.plan_customer_question_semantic
+
+        async def semantic_general_chat(*_args, **_kwargs):
+            return {
+                "called": True,
+                "route_family": "general_chat",
+                "route_hint": "chat",
+                "question_type": "chat",
+                "confidence": 0.99,
+                "entities": [],
+                "canonical_fields": [],
+            }
+
+        customer_agent_planner_service.plan_customer_question_semantic = semantic_general_chat
+        try:
+            result = await customer_service_service.ask_customer_service(
+                self.db,
+                user_id="charcoal-service-user",
+                question="我只想用炭火，不想用其他的，请问适合买哪种？",
+            )
+        finally:
+            customer_agent_planner_service.plan_customer_question_semantic = original_semantic
+
+        self.assertNotEqual(result.get("answer_type"), "chat")
+        self.assertIn("炭火", result.get("answer") or "")
+        self.assertIn("明火直烧", result.get("answer") or "")
+        self.assertNotIn("支持明火直烧，可搭配炭火", result.get("answer") or "")
+        self.assertEqual(result.get("result_skus") or [], [])
+
+    async def test_multi_category_recommendation_answers_each_requested_scope(self):
+        original_intent = customer_agent_intent_service.process_intent_request
+
+        async def fake_category_recommendation(_db, *, question, **_kwargs):
+            if "燃气炉" in question:
+                row = {
+                    "sku": "GAS-1",
+                    "product_name_cn": "便携气炉",
+                    "category": "炉具",
+                    "lifecycle_status": "主推品",
+                    "features": "3200W 防风设计",
+                    "usage_scenarios": "户外露营",
+                }
+            elif "烧水壶" in question:
+                row = {
+                    "sku": "KETTLE-1",
+                    "product_name_cn": "轻量烧水壶",
+                    "category": "水壶",
+                    "lifecycle_status": "常规品",
+                    "features": "1.4L 快速沸腾",
+                    "usage_scenarios": "徒步露营",
+                }
+            else:
+                return None
+            return {
+                "intent": "recommend_products",
+                "answer_type": "recommendation",
+                "answer": f"推荐 {row['product_name_cn']}（{row['sku']}）。",
+                "results": [row],
+                "result_skus": [row["sku"]],
+                "candidate_skus": [row["sku"]],
+                "sources": [{"type": "product_search", "label": "推荐候选范围", "count": 1}],
+            }
+
+        customer_agent_intent_service.process_intent_request = fake_category_recommendation
+        try:
+            result = await customer_service_service.ask_customer_service(
+                self.db,
+                user_id="multi-category-recommendation-user",
+                question="燃气和烧水壶分别推荐一个？",
+            )
+        finally:
+            customer_agent_intent_service.process_intent_request = original_intent
+
+        self.assertEqual(result.get("intent"), "recommendation")
+        self.assertIn("便携气炉", result.get("answer") or "")
+        self.assertIn("轻量烧水壶", result.get("answer") or "")
+        self.assertEqual(set(result.get("result_skus") or []), {"GAS-1", "KETTLE-1"})
+
+    async def test_multi_category_recommendation_handles_compound_accessory_request(self):
+        original_intent = customer_agent_intent_service.process_intent_request
+
+        async def fake_category_recommendation(_db, *, question, **_kwargs):
+            rows = {
+                "酒精炉": {
+                    "sku": "ALCOHOL-1",
+                    "product_name_cn": "旋焰酒精炉",
+                    "category": "炉具",
+                    "lifecycle_status": "常规品",
+                    "features": "液体酒精热源",
+                    "heat_source": "液体酒精、酒精炉",
+                },
+                "烧水壶": {
+                    "sku": "KETTLE-2",
+                    "product_name_cn": "轻量烧水壶",
+                    "category": "水壶",
+                    "lifecycle_status": "常规品",
+                    "features": "1.4L 容量",
+                },
+                "煮面锅": {
+                    "sku": "POT-1",
+                    "product_name_cn": "轻量煮面锅",
+                    "category": "锅具",
+                    "lifecycle_status": "常规品",
+                    "features": "适合煮面",
+                },
+            }
+            for scope, row in rows.items():
+                if scope in question:
+                    return {
+                        "intent": "recommend_products",
+                        "answer_type": "recommendation",
+                        "answer": f"推荐 {row['product_name_cn']}（{row['sku']}）。",
+                        "results": [row],
+                        "result_skus": [row["sku"]],
+                        "candidate_skus": [row["sku"]],
+                        "sources": [],
+                    }
+            return None
+
+        customer_agent_intent_service.process_intent_request = fake_category_recommendation
+        try:
+            result = await customer_service_service.ask_customer_service(
+                self.db,
+                user_id="compound-category-recommendation-user",
+                question="推荐一个酒精炉，适配的烧水壶，煮面锅，以及配件？",
+            )
+        finally:
+            customer_agent_intent_service.process_intent_request = original_intent
+
+        answer = result.get("answer") or ""
+        self.assertEqual(result.get("intent"), "recommendation")
+        self.assertIn("旋焰酒精炉", answer)
+        self.assertIn("轻量烧水壶", answer)
+        self.assertIn("轻量煮面锅", answer)
+        self.assertIn("配件：当前资料中没有找到", answer)
+        self.assertNotIn("优先推荐激流水壶", answer)
+        self.assertEqual(answer.count("烧水壶："), 1)
+        self.assertTrue(answer.startswith("酒精炉："))
+        self.assertEqual(set(result.get("result_skus") or []), {"ALCOHOL-1", "KETTLE-2", "POT-1"})
 
     async def test_process_intent_request_purchase_question_does_not_fall_into_query_products(self):
         result = await customer_agent_intent_service.process_intent_request(
@@ -9807,7 +10941,64 @@ class CustomerServiceServiceTest(unittest.IsolatedAsyncioTestCase):
         self.assertRegex(turn3["answer"], r"(CW-C06PRO|轻途套锅).*(酒精炉)")
         self.assertRegex(turn3["answer"], r"(CW-C19T-37|享野套锅).*(酒精炉)")
 
-    async def test_pronoun_internal_update_is_refused_before_runtime(self):
+    async def test_contextual_power_followup_compares_the_prior_candidate_collection(self):
+        for sku, name, power in (
+            ("POWER-20", "轻火炉", "2000W"),
+            ("POWER-28", "劲火炉", "2800W"),
+            ("POWER-32", "猛火炉", "3200W"),
+        ):
+            product = Product(
+                id=f"product-{sku}",
+                sku=sku,
+                barcode=f"barcode-{sku}",
+                product_name_cn=name,
+                product_name_en=name,
+                brand="alocs爱路客",
+                category="炉具",
+            )
+            self.db.add(product)
+            self.db.add(ProductSpecs(
+                id=f"specs-{sku}",
+                product_id=product.id,
+                power=power,
+                heat_source="气罐",
+            ))
+        conversation = CustomerServiceConversation(id="conv-power-followup", user_id="power-user", title="炉具推荐")
+        self.db.add(conversation)
+        self.db.add(CustomerServiceMessage(
+            conversation_id=conversation.id,
+            role="assistant",
+            content="这三款炉具都可以看看。",
+            sources_json=json.dumps([{
+                "type": "agent_meta",
+                "recommendation_context": {
+                    "candidate_skus": ["POWER-20", "POWER-28", "POWER-32"],
+                    "ordered_result_skus": ["POWER-20", "POWER-28", "POWER-32"],
+                    "recommended_skus": ["POWER-20", "POWER-28", "POWER-32"],
+                    "top_recommended_sku": "POWER-20",
+                    "last_referenced_sku": "POWER-20",
+                    "active_single_product_anchor": "POWER-20",
+                    "product_scope": "炉具",
+                },
+            }], ensure_ascii=False),
+        ))
+        self.db.commit()
+
+        result = await customer_service_service.ask_customer_service(
+            self.db,
+            user_id="power-user",
+            conversation_id=conversation.id,
+            question="有没有更大火力？",
+        )
+
+        self.assertEqual(result.get("answer_type"), "comparison")
+        self.assertIn("猛火炉（POWER-32）", result["answer"])
+        self.assertIn("3200W", result["answer"])
+        self.assertIn("轻火炉（POWER-20）2000W", result["answer"])
+        self.assertIn("劲火炉（POWER-28）2800W", result["answer"])
+        self.assertEqual(result.get("result_skus"), ["POWER-20", "POWER-28", "POWER-32"])
+
+    async def test_pronoun_internal_update_creates_pending_action_before_runtime(self):
         product = Product(
             id="product-cs-g25",
             sku="CS-G25",
@@ -9868,9 +11059,10 @@ class CustomerServiceServiceTest(unittest.IsolatedAsyncioTestCase):
             conversation_id="conv-pronoun",
         )
 
-        self.assertEqual(result["intent"], "safety_refusal")
+        self.assertEqual(result["intent"], "propose_update")
         self.assertEqual(captured, {})
-        self.assertFalse(result["actions"])
+        self.assertEqual(result["actions"][0]["action_type"], "update_field")
+        self.assertEqual(result["actions"][0]["status"], "pending")
 
     def test_recommendation_answer_filters_oversized_pans_for_coffee(self):
         tool_results = [{
