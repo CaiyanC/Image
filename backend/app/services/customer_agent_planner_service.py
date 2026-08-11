@@ -1326,11 +1326,11 @@ def _semantic_preplan_messages_legacy(
                 "Every recommendation constraint must be explicitly stated by the customer in this turn or supplied by an explicit prior-turn customer preference; omit it when it is merely plausible or typical. In particular, do not infer people, heat_sources, scenarios, or weight_preference from the product category, a generic outdoor word, or the fact that a customer asks for a recommendation. "
                 "For a recommendation that explicitly asks to replace the prior recommendation, set recommendation_followup_action=alternative; otherwise omit it. This is only allowed when an explicit prior customer preference is supplied. "
                 "Before returning a recommendation plan, inspect every explicit customer requirement. When one customer expression contains multiple independently allowed requirements, emit every matching allowed constraint rather than letting one suppress another. If a single requested product form explicitly combines multiple components (for example a pot, burner, and canister bundle), do not collapse that form to one broad subject_kind; preserve the exact combined phrase in unrepresented_recommendation_requirements when the ontology cannot represent the whole combination. If a must-have eligibility condition cannot be put in recommendation_constraints without inventing a meaning, it MUST appear verbatim in unrepresented_recommendation_requirements. Do not turn a non-binding preference into an eligibility gap merely because the ontology cannot encode it. "
-                    "route_family enum: structured_query,recommendation,comparison,product_bound_qa,product_navigation,unresolved_product_like,negative_product_like,unknown_realtime,contents_accessories,generic_query,knowledge_base_meta,general_chat,clarification. Use general_chat for ordinary conversation that can be answered without claiming a catalogue product fact: greetings, capability questions, general outdoor preparation checklists, beginner education, category-level tradeoffs, or general safety guidance. For general_chat set entities=[], canonical_fields=[], evidence_required=false, and do not request catalogue retrieval. Use recommendation only when the customer asks the assistant to identify or select actual catalogue products; use comparison only for named catalogue products, never merely for generic product forms. A request to prepare for camping or choose equipment is recommendation only when it seeks actual products rather than general decision guidance. Use knowledge_base_meta only when the user asks about a knowledge-base document itself, its contents, rules, or principles rather than requesting a product fact. A named-product question about operating steps, safety rules, prohibited actions, cleaning, maintenance, or any other product field is product_bound_qa even if its answer may later use a manual or knowledge-base document as evidence. "
+                    "route_family enum: structured_query,recommendation,comparison,product_bound_qa,product_navigation,unresolved_product_like,negative_product_like,unknown_realtime,contents_accessories,generic_query,knowledge_base_meta,general_chat,clarification. Use general_chat for ordinary conversation that can be answered without claiming a catalogue product fact: greetings, capability questions, general outdoor preparation checklists, beginner education, category-level tradeoffs, or general safety guidance. For general_chat set entities=[], canonical_fields=[], evidence_required=false, and do not request catalogue retrieval. Use recommendation only when the customer asks the assistant to identify or select actual catalogue products; use comparison only for named catalogue products, never merely for generic product forms. When the customer asks for a bounded number of relevant choices, asks you to select options, or asks who each choice suits, use recommendation even if the same turn also contains catalogue-discovery wording such as which products exist. A request to prepare for camping or choose equipment is recommendation only when it seeks actual products rather than general decision guidance. Use knowledge_base_meta only when the user asks about a knowledge-base document itself, its contents, rules, or principles rather than requesting a product fact. A named-product question about operating steps, safety rules, prohibited actions, cleaning, maintenance, or any other product field is product_bound_qa even if its answer may later use a manual or knowledge-base document as evidence. "
                 "entity_scope enum: generic_scope,category_scope,product_like,resolved_product,ambiguous_product,unresolved_product,negative_product. "
                 "field_type enum: " + ",".join(sorted(SEMANTIC_PREPLAN_FIELD_TYPES)) + ". "
                 "evidence_kind is required for every product_bound_qa request. Use structured_field only when the customer directly asks for a recorded field value. Use product_qa when the customer asks a product-specific capability, judgement, procedure, or compatibility fact that is not identical to one structured field; then canonical_fields MUST be [] and no field_type/field_hint may be emitted. For product_qa, qa_evidence_query is required: return a concise semantic retrieval phrase for the customer's intent, with no product name, SKU, database value, or answer. Preserve the customer's concrete operative condition rather than replacing it with an abstract category: for a question about whether low heat can be adjusted for simmering, the retrieval phrase must retain the low-heat adjustment and simmering condition, not merely say slow-cooking performance. For example, describe gifting suitability, authenticity verification, flame adjustability, household compatibility, durability, or load-bearing as the requested capability. For every other evidence_kind set qa_evidence_query="". Durability is not lifecycle_status; whether a product is suitable as a present is not whether a purchase includes a promotional gift; authenticity verification is not certification; adjustability is not a numeric power rating; household compatibility is not a list of usage scenes; and load-bearing is not net weight, headcount, or volume. These are ontology boundaries, not product facts: keep them product_qa so only a later same-SKU QA evidence contract may answer. "
-                "canonical_fields is an ordered array of one or more field concepts; use every independently requested field. A number, unit, model marker, capacity, size, color, or version that occurs only inside the product mention belongs only to subject_text and MUST NOT create an additional canonical field, structured filter, recommendation condition, or ambiguity. Add a field only when the customer's predicate independently asks for that fact. subject_text is the product mention only, never a SKU decision. "
+                "canonical_fields is an ordered array of one or more field concepts; use every independently requested field. A number, unit, model marker, capacity, size, color, or version that occurs only inside the product mention belongs only to subject_text and MUST NOT create an additional canonical field, structured filter, recommendation condition, or ambiguity. Add a field only when the customer's predicate independently asks for that fact. subject_text is the product mention only, never a SKU decision. For one named product, asking which or what usage settings/scenarios it suits is a direct usage_scene structured_field request. Use product_qa instead only for a personalised suitability judgement whose condition is not the stored usage-scene field. "
                 "For a comparison between two or more named products, entities is mandatory: put each verbatim product mention in entities in mention order (at least two items). Any factual request that asks for those named participants' respective values is route_family=comparison even when it asks for no winner; structured_query is only for filters over a product set, never a pairwise product fact. canonical_fields must contain only published formal fields. When a comparison asks a formal field together with a non-field attribute (for example people together with packing/storage, durability, handling, or suitability), keep the formal field in canonical_fields, use evidence_kind=structured_field, and put one concise retrieval phrase for the non-field attribute in supplemental_qa_evidence_query. Do not emit the non-field attribute in canonical_fields and do not silently drop it. The executor compares the formal field from structured same-SKU evidence and separately validates the supplemental QA for each participant. For a generic non-decisive request such as 'what is the difference' with no criterion, use evidence_kind=structured_field, canonical_fields=[], subtype=comparison_overview, decision_requested=false, and qa_evidence_query='': this asks for a factual overview of recorded differences only, not a winner and not QA retrieval. If the criterion is a product-specific capability, procedure, compatibility, judgement, or performance fact that is not identical to one structured field, set evidence_kind=product_qa, canonical_fields=[], and provide qa_evidence_query; never substitute a merely related structured field. Set decision_requested=true only when the customer explicitly asks which named participant wins a stated criterion, including which is lighter, heavier, larger, cheaper, more suitable, or should be chosen; otherwise false. Never infer a preference from a product name, version label, or SKU, and never invent, normalize, or choose a SKU. "
                 "A request such as 'what is different about their material' or 'what is the difference in capacity/weight/heat source' has an explicit formal criterion: keep that criterion in canonical_fields and compare it directly. "
                 "Do not choose recommendation merely because a question asks where, what, or which: recommendation requires asking for options or advice, not a fact about one product. "
@@ -2011,12 +2011,17 @@ async def _repair_unanchored_set_scope_semantically(db, *, question: str) -> dic
         {
             "role": "system",
             "content": (
-                "Return JSON only: {route_family,set_field,subject_text}. Re-read the complete customer turn. "
+                "Return JSON only with exactly {route_family,set_field,subject_text,subject_kind,unrepresented_requirements}. Re-read the complete customer turn. "
                 "route_family must be structured_query, recommendation, or clarification. Use structured_query "
                 "when the customer asks to list/query members of a product set; then set_field must be exactly one "
-                "of series, brand, category, product_level and subject_text must be the exact literal set phrase from "
-                "the customer turn. Use recommendation only when the customer asks you to select catalogue products. "
-                "Use clarification when no set scope can be identified. Never output a product, SKU, fact, or answer."
+                "of series, brand, category, product_level, subject_text must be the exact literal set phrase from "
+                "the customer turn, subject_kind must be empty, and unrepresented_requirements must be empty. "
+                "Use recommendation when the customer asks you to select catalogue products, requests a bounded number of relevant choices, "
+                "or asks who each choice suits, even if the turn also asks which products exist. For recommendation set_field must be empty, "
+                "subject_kind must be exactly cookware, waterware, stove, or coffee_gear, and unrepresented_requirements must contain at most three "
+                "material requirements copied verbatim from the customer turn that do not fit subject_kind. "
+                "Use clarification when no set scope can be identified; then all four other values must be empty. "
+                "Never output a product, SKU, fact, or answer."
             ),
         },
         {"role": "user", "content": json.dumps({"question": question}, ensure_ascii=False)},
@@ -2035,14 +2040,31 @@ async def _repair_unanchored_set_scope_semantically(db, *, question: str) -> dic
         data = _extract_json_object(content)
     except Exception:
         return None
-    if not isinstance(data, dict) or set(data) != {"route_family", "set_field", "subject_text"}:
+    if not isinstance(data, dict) or set(data) != {
+        "route_family", "set_field", "subject_text", "subject_kind", "unrepresented_requirements",
+    }:
         return None
     route_family = str(data.get("route_family") or "").strip()
     set_field = str(data.get("set_field") or "").strip()
     subject_text = str(data.get("subject_text") or "").strip()
+    subject_kind = str(data.get("subject_kind") or "").strip()
+    raw_requirements = data.get("unrepresented_requirements")
+    requirements = (
+        [str(item or "").strip() for item in raw_requirements if str(item or "").strip()]
+        if isinstance(raw_requirements, list)
+        else []
+    )
+    if len(requirements) > 3 or any(item not in question for item in requirements):
+        return None
     if subject_text and subject_text not in question:
         return None
-    if route_family == "structured_query" and set_field in {"series", "brand", "category", "product_level"} and subject_text:
+    if (
+        route_family == "structured_query"
+        and set_field in {"series", "brand", "category", "product_level"}
+        and subject_text
+        and not subject_kind
+        and not requirements
+    ):
         return _validate_semantic_preplan({
             "route_family": "structured_query",
             "route_hint": "query_products",
@@ -2059,6 +2081,32 @@ async def _repair_unanchored_set_scope_semantically(db, *, question: str) -> dic
             "evidence_kind": "structured_field",
             "context_usage": "none",
             "reasoning_summary": "Flash classified an unanchored product-set query.",
+        }, raw_content=content)
+    if (
+        route_family == "recommendation"
+        and not set_field
+        and subject_text
+        and subject_kind in {"cookware", "waterware", "stove", "coffee_gear"}
+    ):
+        return _validate_semantic_preplan({
+            "route_family": "recommendation",
+            "route_hint": "recommendation",
+            "question_type": "recommendation",
+            "subtype": "recommendation",
+            "entities": [],
+            "subject_text": subject_text,
+            "canonical_fields": [],
+            "field_type": "",
+            "confidence": "high",
+            "ambiguity": False,
+            "evidence_required": True,
+            "evidence_kind": "structured_field",
+            "recommendation_constraints": {"subject_kind": subject_kind},
+            "unrepresented_recommendation_requirements": requirements,
+            "recommendation_soft_preferences": [],
+            "context_usage": "none",
+            "decision_requested": False,
+            "reasoning_summary": "Flash classified an unanchored bounded product selection request.",
         }, raw_content=content)
     return None
 

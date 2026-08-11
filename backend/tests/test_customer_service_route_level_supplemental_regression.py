@@ -330,6 +330,15 @@ def test_semantic_storage_schema_label_normalizes_to_formal_care_field():
     assert customer_field_contract.semantic_preplan_field_type("maintenance") == "care"
 
 
+def test_named_product_which_scenarios_question_is_formal_usage_scene_field():
+    contract = customer_field_contract.detect_field_contract(
+        "天鹅壶4杯黑色适合什么露营场景？"
+    )
+
+    assert contract is not None
+    assert contract.field_type == "usage_scene"
+
+
 def test_semantic_preplan_parser_accepts_code_fence_and_tracks_llm_calls(monkeypatch):
     calls = []
 
@@ -3221,6 +3230,8 @@ def test_unanchored_set_scope_repair_keeps_field_choice_model_owned(monkeypatch)
             "route_family": "structured_query",
             "set_field": "series",
             "subject_text": "围雪炉",
+            "subject_kind": "",
+            "unrepresented_requirements": [],
         }, ensure_ascii=False)
 
     monkeypatch.setattr(customer_agent_planner_service.customer_llm_service, "chat_completion", fake_chat_completion)
@@ -3233,6 +3244,30 @@ def test_unanchored_set_scope_repair_keeps_field_choice_model_owned(monkeypatch)
     assert result["route_family"] == "structured_query"
     assert result["canonical_fields"] == ["series"]
     assert result["structured_query_constraints"] == []
+
+
+def test_unanchored_set_scope_repair_preserves_bounded_selection_as_recommendation(monkeypatch):
+    async def fake_chat_completion(_db, messages, **kwargs):
+        assert kwargs["purpose"] == "semantic_preplan_set_scope_repair"
+        assert "bounded number of relevant choices" in messages[0]["content"]
+        return json.dumps({
+            "route_family": "recommendation",
+            "set_field": "",
+            "subject_text": "咖啡器具",
+            "subject_kind": "coffee_gear",
+            "unrepresented_requirements": ["手冲"],
+        }, ensure_ascii=False)
+
+    monkeypatch.setattr(customer_agent_planner_service.customer_llm_service, "chat_completion", fake_chat_completion)
+    result = asyncio.run(customer_agent_planner_service._repair_unanchored_set_scope_semantically(
+        None,
+        question="咖啡器具里有哪些适合手冲的产品？请给我两三款真正相关的选择。",
+    ))
+
+    assert result is not None
+    assert result["route_family"] == "recommendation"
+    assert result["recommendation_constraints"]["subject_kind"] == "coffee_gear"
+    assert result["unrepresented_recommendation_requirements"] == ["手冲"]
 
 
 def test_semantic_preplan_repairs_named_nonfilter_field_misrouted_as_empty_structured_query(monkeypatch):

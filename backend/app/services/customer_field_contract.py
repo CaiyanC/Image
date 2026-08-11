@@ -984,6 +984,16 @@ _SHIPPING_PREDICATE_PATTERN = re.compile(
     r"(?=吗?(?:$|[？?。！!，,；;\s]))"
 )
 
+# A request for which settings or activities a named product suits is a
+# direct read of the published usage-scene field. This grammatical contract
+# is product-agnostic; personalised suitability judgements remain semantic QA.
+_USAGE_SCENE_FIELD_REQUEST_PATTERN = re.compile(
+    r"(?:"
+    r"(?:使用|适用)场景(?:是(?:什么|哪些|哪类)?|有(?:哪些|什么)|包括(?:哪些|什么))?"
+    r"|适合(?:什么|哪些|哪类)[^，,。！？?]{0,12}场景"
+    r")(?=$|[？?。！!，,；;\s])"
+)
+
 _DIMENSIONS_QUALIFIED_PREDICATE_PATTERN = re.compile(
     r"(?:产品本体尺寸|具体尺寸|规格尺寸|展开后尺寸|收起后尺寸|收纳尺寸|展开尺寸|"
     r"收起尺寸|包装尺寸|外箱尺寸|包裹尺寸|本体尺寸|产品尺寸|长宽高|直径|尺寸)"
@@ -1095,6 +1105,14 @@ def _shipping_predicate_match(text: str) -> tuple[FieldContract, str, int, bool]
     return contract, match.group(0), match.start(), True
 
 
+def _usage_scene_predicate_match(text: str) -> tuple[FieldContract, str, int, bool] | None:
+    return _canonical_field_predicate_match(
+        text,
+        field_type="usage_scene",
+        pattern=_USAGE_SCENE_FIELD_REQUEST_PATTERN,
+    )
+
+
 def _dimensions_predicate_match(text: str) -> tuple[FieldContract, str, int, bool] | None:
     value = str(text or "")
     match = _DIMENSIONS_QUALIFIED_PREDICATE_PATTERN.search(value)
@@ -1125,6 +1143,7 @@ def _field_phrase_match(text: str) -> tuple[FieldContract, str, int, bool] | Non
         _dishwasher_predicate_match,
         _selling_point_predicate_match,
         _heat_source_predicate_match,
+        _usage_scene_predicate_match,
         _shipping_predicate_match,
         _dimensions_predicate_match,
         _purchase_channel_predicate_match,
