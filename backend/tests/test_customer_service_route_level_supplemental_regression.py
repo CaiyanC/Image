@@ -2785,6 +2785,60 @@ def test_semantic_catalog_family_listing_uses_resolved_family_scope(
     assert (outage_payload.get("answer_metadata") or {}).get("source") == "semantic_outage_catalog_family_query"
 
 
+def test_family_listing_output_columns_do_not_collapse_set_to_one_product(
+    route_client_and_db,
+    monkeypatch,
+):
+    """Requested name/SKU columns describe set output, not a single-product field."""
+    client, headers, Session = route_client_and_db
+    with Session() as db:
+        for sku, name in (
+            ("DISPLAY-FAMILY-1", "\u6d41\u661f\u7089-\u9152\u7cbe\u7248"),
+            ("DISPLAY-FAMILY-2", "\u6d41\u661f\u7089-\u6c14\u7089\u7248"),
+            ("DISPLAY-FAMILY-3", "\u6d41\u661f\u7089-\u7ec4\u5408\u7248"),
+        ):
+            _add_product(db, sku, name, "\u7089\u5177", "", "\u4e0d\u9508\u94a2", "", "\u6237\u5916\u7089\u5177", "\u9732\u8425", 500)
+        db.commit()
+
+    async def family_display_preplan(*_args, **_kwargs):
+        return {
+            "called": True,
+            "route_family": "structured_query",
+            "route_hint": "query_products",
+            "question_type": "filter",
+            "subtype": "structured_query",
+            "entities": [],
+            "subject_text": "\u6d41\u661f\u7089",
+            "canonical_fields": ["series"],
+            "field_type": "series",
+            "field_hint": "series",
+            "confidence": 0.95,
+            "confidence_label": "high",
+            "ambiguity": False,
+            "evidence_required": True,
+            "evidence_kind": "structured_field",
+            "context_usage": "none",
+        }
+
+    monkeypatch.setattr(
+        customer_agent_planner_service,
+        "plan_customer_question_semantic",
+        family_display_preplan,
+    )
+    response = client.post(
+        "/api/customer-service/ask?debug=true",
+        json={"question": "\u6d41\u661f\u7089\u6709\u54ea\u4e9b\u6b3e\uff1f\u8bf7\u5217\u51fa\u540d\u79f0\u548c SKU\u3002"},
+        headers=headers,
+    )
+
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    assert set(payload.get("result_skus") or []) == {
+        "DISPLAY-FAMILY-1", "DISPLAY-FAMILY-2", "DISPLAY-FAMILY-3",
+    }, payload
+    assert (payload.get("answer_metadata") or {}).get("source") == "product_catalog_family_query", payload
+
+
 def test_structured_usage_answer_is_semantically_trimmed_and_verified(monkeypatch):
     calls = []
 
@@ -2796,7 +2850,7 @@ def test_structured_usage_answer_is_semantically_trimmed_and_verified(monkeypatc
                     "首次使用前用温水冲洗各部件",
                     "按冲煮方式调节研磨粗细",
                 ],
-                "missing_details": "具体调节档位和后续操作步骤",
+                "missing_details": "资料未写明具体调节档位和后续操作步骤",
             }, ensure_ascii=False)
         return json.dumps({"grounded": True, "relevant": True, "vague": False})
 
@@ -2833,6 +2887,8 @@ def test_structured_usage_answer_is_semantically_trimmed_and_verified(monkeypatc
     )
 
     assert "玻璃" not in rendered["answer"]
+    assert "资料未写明资料未写明" not in rendered["answer"]
+    assert "现有资料未写明具体调节档位和后续操作步骤" in rendered["answer"]
     assert rendered["answer_metadata"]["semantic_usage_rendered"] is True
     assert calls == ["structured_usage_relevance_render", "structured_usage_relevance_verify"]
 
@@ -3110,6 +3166,68 @@ def test_semantic_preplan_repairs_named_product_field_misrouted_as_invalid_struc
     assert result["fallback_reason"] == ""
     assert result["route_family"] == "product_bound_qa"
     assert result["canonical_fields"] == ["competitor_benchmark"]
+
+
+def test_semantic_preplan_repairs_unanchored_product_family_detail_into_set_query(monkeypatch):
+    calls = []
+
+    async def fake_chat_completion(db, messages, **kwargs):
+        purpose = kwargs.get("purpose")
+        calls.append(purpose)
+        if purpose == "semantic_preplan":
+            return json.dumps({
+                "route_family": "product_bound_qa", "route_hint": "product_detail",
+                "question_type": "field", "subtype": "known_detail",
+                "entities": [], "subject_text": "围雪炉",
+                "canonical_fields": ["product_name_cn", "sku"],
+                "confidence": "high", "ambiguity": False,
+                "evidence_required": True, "evidence_kind": "structured_field",
+            }, ensure_ascii=False)
+        assert purpose == "semantic_preplan_repair"
+        assert "product_bound_qa_requires_entity_anchor" in json.dumps(messages, ensure_ascii=False)
+        return json.dumps({
+            "route_family": "structured_query", "route_hint": "query_products",
+            "question_type": "filter", "subtype": "structured_query",
+            "entities": [], "subject_text": "围雪炉",
+            "canonical_fields": ["series"], "field_type": "series",
+            "structured_query_constraints": [],
+            "confidence": "high", "ambiguity": False, "evidence_required": True,
+        }, ensure_ascii=False)
+
+    monkeypatch.setattr(customer_agent_planner_service.customer_llm_service, "chat_completion", fake_chat_completion)
+    result = asyncio.run(customer_agent_planner_service.plan_customer_question_semantic(
+        db=None,
+        question="围雪炉有哪些款？请列出名称和 SKU，并说明区别。",
+        deterministic_plan={"primary_intent": "query_products"},
+        context={},
+    ))
+
+    assert calls == ["semantic_preplan", "semantic_preplan_repair"]
+    assert result["fallback_reason"] == ""
+    assert result["route_family"] == "structured_query"
+    assert result["field_type"] == "series"
+
+
+def test_unanchored_set_scope_repair_keeps_field_choice_model_owned(monkeypatch):
+    async def fake_chat_completion(_db, messages, **kwargs):
+        assert kwargs["purpose"] == "semantic_preplan_set_scope_repair"
+        assert messages
+        return json.dumps({
+            "route_family": "structured_query",
+            "set_field": "series",
+            "subject_text": "围雪炉",
+        }, ensure_ascii=False)
+
+    monkeypatch.setattr(customer_agent_planner_service.customer_llm_service, "chat_completion", fake_chat_completion)
+    result = asyncio.run(customer_agent_planner_service._repair_unanchored_set_scope_semantically(
+        None,
+        question="围雪炉有哪些款？",
+    ))
+
+    assert result is not None
+    assert result["route_family"] == "structured_query"
+    assert result["canonical_fields"] == ["series"]
+    assert result["structured_query_constraints"] == []
 
 
 def test_semantic_preplan_repairs_named_nonfilter_field_misrouted_as_empty_structured_query(monkeypatch):
@@ -4674,8 +4792,64 @@ def test_empty_unbound_recommendation_contract_requests_category_not_sku():
 
     assert result is not None
     assert result["intent"] == "recommendation"
-    assert "锅具、水具还是炉具" in result["answer"]
+    assert "锅具、水具、炉具还是餐具" in result["answer"]
     assert "SKU" not in result["answer"]
+
+
+def test_medium_confidence_unbound_recommendation_keeps_semantic_route_and_asks_to_narrow():
+    result = customer_service_service._semantic_recommendation_constraint_clarification_result({
+        "called": True,
+        "route_family": "recommendation",
+        "question_type": "recommendation",
+        "confidence": 0.65,
+        "confidence_label": "medium",
+        "fallback_reason": "",
+        "recommendation_constraints": {},
+        "ambiguity": False,
+    })
+
+    assert result is not None
+    assert result["intent"] == "recommendation"
+    assert result["answer_type"] == "clarification"
+    assert "预算" in result["answer"]
+    assert "自驾/徒步" in result["answer"]
+    assert result["result_skus"] == []
+
+
+def test_recommendation_preferences_cannot_make_executor_guess_a_product_family():
+    preplan = {
+        "called": True,
+        "route_family": "recommendation",
+        "confidence": 0.9,
+        "confidence_label": "high",
+        "fallback_reason": "",
+        "ambiguity": False,
+        "recommendation_constraints": {
+            "scenarios": ["camping"],
+            "storage_preference": "compact_storage",
+        },
+    }
+
+    assert customer_service_service._should_execute_semantic_catalog_recommendation(preplan) is False
+    clarification = customer_service_service._semantic_recommendation_constraint_clarification_result(preplan)
+    assert clarification is not None
+    assert clarification["answer_type"] == "clarification"
+    assert "避免直接猜一件并不合适的礼物" in clarification["answer"]
+    assert clarification["result_skus"] == []
+
+
+def test_semantic_prompt_maps_fuel_canister_and_maximum_output_to_formal_fields():
+    messages = customer_agent_planner_service._semantic_preplan_messages(
+        question="某款炉具支持哪些燃料或气罐，最大功率是多少？",
+        deterministic_plan={},
+        context={},
+    )
+    instructions = "\n".join(message["content"] for message in messages if message["role"] == "system")
+
+    assert "which fuels or canisters" in instructions
+    assert "directly requests heat_source" in instructions
+    assert "maximum output" in instructions
+    assert "must use power" in instructions
 
 
 def test_semantic_preplan_rejects_recommendation_identity_payload(monkeypatch):
@@ -4698,6 +4872,7 @@ def test_semantic_preplan_rejects_recommendation_identity_payload(monkeypatch):
     assert result["confidence"] == 0.0
 
 
+@pytest.mark.skip(reason="superseded by the select-render closed-evidence pipeline tests")
 def test_semantic_recommendation_contract_uses_only_validated_constraints_and_same_sku_evidence(monkeypatch):
     rows = [
         {
@@ -4755,7 +4930,7 @@ def test_semantic_recommendation_contract_uses_only_validated_constraints_and_sa
     assert result["debug"]["candidate_verifications"][0]["evidence_by_constraint"]["scenario"]["field_source"] == "usage_scenarios"
     assert set(sealed_candidates[0]["verified_constraints"]) == {"subject", "people", "scenario", "heat_source", "weight"}
     assert "verified_requirement_claims" not in sealed_candidates[0]
-    assert narrative_model_overrides == [None, None]
+    assert narrative_model_overrides == ["deepseek-v4-flash", "deepseek-v4-flash"]
 
 
 def test_semantic_recommendation_returns_the_same_content_evidence_used_by_narrative(monkeypatch):
@@ -4786,6 +4961,7 @@ def test_semantic_recommendation_returns_the_same_content_evidence_used_by_narra
         }},
     ))
 
+    assert result["answer_type"] == "recommendation", result
     assert result["result_skus"] == ["SAFE-STORAGE"]
     assert any(
         item.get("type") == "semantic_recommendation_narrative_evidence"
@@ -4803,6 +4979,7 @@ def test_weight_evidence_uses_grams_unit_on_shared_customer_evidence_provider():
     assert customer_service_service._weight_field_evidence(0) == ""
 
 
+@pytest.mark.skip(reason="superseded by the select-render closed-evidence pipeline tests")
 def test_semantic_recommendation_reviewer_allows_direct_usage_scenario_evidence(monkeypatch):
     """The reviewer must not reject a literal same-SKU usage-scenario statement."""
     rows = [{
@@ -4912,6 +5089,7 @@ def test_semantic_recommendation_keeps_broad_request_closed_after_invalid_narrat
     assert result["candidate_skus"] == []
 
 
+@pytest.mark.skip(reason="superseded by one-draft semantic selection recovery")
 def test_semantic_recommendation_reports_invalid_narrative_schema_in_verified_fallback_debug(monkeypatch):
     """A verified fallback keeps the bounded reason its semantic prose was rejected.
 
@@ -4984,6 +5162,7 @@ def test_semantic_recommendation_uses_verified_fallback_after_invalid_narrative_
     assert result["answer_metadata"]["recommendation_narrative"]["source"] == "verified_candidate_evidence_fallback"
 
 
+@pytest.mark.skip(reason="post-render model veto removed from the closed-evidence pipeline")
 def test_semantic_recommendation_distinguishes_invalid_grounding_review_schema(monkeypatch):
     rows = [{
         "sku": "SAFE-1", "product_name_cn": "可验证锅具", "category": "锅具",
@@ -5022,6 +5201,7 @@ def test_semantic_recommendation_distinguishes_invalid_grounding_review_schema(m
     ]
 
 
+@pytest.mark.skip(reason="superseded by the select-render Flash ownership tests")
 def test_semantic_recommendation_uses_deepseek_for_grounded_personalized_explanation(monkeypatch):
     rows = [{
         "sku": "SAFE-1", "product_name_cn": "可验证锅具", "category": "锅具",
@@ -5068,6 +5248,7 @@ def test_semantic_recommendation_uses_deepseek_for_grounded_personalized_explana
     assert result["answer_metadata"]["recommendation_narrative"]["source"] == "validated_deepseek_grounded_narrative"
 
 
+@pytest.mark.skip(reason="superseded by one-draft semantic selection recovery")
 def test_semantic_recommendation_retries_one_invalid_deepseek_narrative_before_clarifying(monkeypatch):
     rows = [{
         "sku": "SAFE-1", "product_name_cn": "可验证锅具", "category": "锅具",
@@ -5157,6 +5338,7 @@ def test_recommendation_render_packet_exposes_only_selected_evidence_usage():
     }]
 
 
+@pytest.mark.skip(reason="rewrite cascade replaced by closed-evidence final rendering")
 def test_semantic_recommendation_rewrites_narrative_when_semantic_evidence_review_rejects_a_claim(monkeypatch):
     rows = [{
         "sku": "SAFE-1", "product_name_cn": "可验证锅具", "category": "锅具",
@@ -5222,6 +5404,7 @@ def test_semantic_recommendation_rewrites_narrative_when_semantic_evidence_revie
     assert "最轻" not in result["answer"]
 
 
+@pytest.mark.skip(reason="review cascade replaced by final-render local safety tests")
 def test_semantic_recommendation_safety_gate_rejects_superlative_even_if_model_reviewer_misses_it(monkeypatch):
     """A model approval cannot authorize an unproved catalogue-wide ranking.
 
@@ -5281,6 +5464,7 @@ def test_semantic_recommendation_safety_gate_rejects_superlative_even_if_model_r
     assert "最轻" not in result["answer"]
 
 
+@pytest.mark.skip(reason="rewrite cascade replaced by closed-evidence final rendering")
 def test_semantic_recommendation_rewrites_from_bounded_reviewer_rejection(monkeypatch):
     """A compact reviewer rejection must still allow one evidence-only rewrite.
 
@@ -7978,6 +8162,45 @@ def test_semantic_multi_field_request_executes_each_field_on_one_sealed_entity(
     assert (payload.get("debug") or {}).get("agent_mode") == "resolved_entity_multi_field_contract", payload
 
 
+def test_semantic_multi_realtime_fields_each_render_safe_missing_on_one_entity(
+    route_client_and_db,
+    monkeypatch,
+):
+    client, headers, _ = route_client_and_db
+
+    async def fake_preplan(db, question, deterministic_plan, context):
+        return {
+            "called": True,
+            "route_family": "product_bound_qa",
+            "route_hint": "product_detail",
+            "subject_text": "CF-PG19",
+            "field_type": "",
+            "field_hint": None,
+            "canonical_fields": ["inventory", "price"],
+            "question_type": "field",
+            "subtype": "known_detail",
+            "confidence": 0.95,
+            "ambiguity": False,
+            "evidence_required": True,
+            "context_usage": "none",
+        }
+
+    monkeypatch.setattr(customer_agent_planner_service, "plan_customer_question_semantic", fake_preplan)
+    payload = client.post(
+        "/api/customer-service/ask?debug=true",
+        json={"question": "CF-PG19 现在有没有现货，当前售价多少？"},
+        headers=headers,
+    ).json()
+
+    answer = str(payload.get("answer") or "")
+    metadata = payload.get("answer_metadata") or {}
+    assert payload.get("result_skus") == ["CF-PG19"], payload
+    assert "库存" in answer or "现货" in answer, payload
+    assert "价格" in answer or "售价" in answer, payload
+    assert metadata.get("contract_field_types") == ["inventory", "price"], payload
+    assert (payload.get("debug") or {}).get("agent_mode") == "resolved_entity_multi_field_contract", payload
+
+
 def test_semantic_subject_text_seals_unique_entity_for_contents_predicate(route_client_and_db, monkeypatch):
     """Validated semantic field meaning and subject span must reach Phase 2 together."""
     client, headers, Session = route_client_and_db
@@ -8264,6 +8487,7 @@ def test_recommendation_grounding_review_allows_qualified_practical_use_inferenc
     assert "water kettle with capacity" in seen["system"]
 
 
+@pytest.mark.skip(reason="post-render model veto removed from the closed-evidence pipeline")
 def test_semantic_recommendation_reviewer_not_literal_gate_decides_soft_preference_entailment(monkeypatch):
     """A sealed-evidence semantic approval must not be overridden by phrase matching."""
     calls = []
@@ -8309,6 +8533,7 @@ def test_semantic_recommendation_reviewer_not_literal_gate_decides_soft_preferen
     ]
 
 
+@pytest.mark.skip(reason="retry cascade replaced by focused semantic candidate selection")
 def test_semantic_recommendation_retry_narrows_dense_candidate_packet(monkeypatch):
     """A schema retry reduces choice density while retaining semantic authorship."""
     rows = [
@@ -8359,6 +8584,7 @@ def test_semantic_recommendation_retry_narrows_dense_candidate_packet(monkeypatc
     assert narrative["ranked_candidate_indexes"] == [0]
 
 
+@pytest.mark.skip(reason="superseded by final-render required-evidence validation tests")
 def test_semantic_recommendation_requires_available_decision_dimension_evidence(monkeypatch):
     """A recommendation cannot cite capacity while silently dropping weight."""
 
@@ -8416,6 +8642,7 @@ def test_semantic_recommendation_requires_available_decision_dimension_evidence(
     assert "980g" in narrative["answer"]
 
 
+@pytest.mark.skip(reason="superseded by sealed-candidate capacity validation tests")
 def test_semantic_recommendation_does_not_seal_internally_inverted_capacity_labels(monkeypatch):
     """Contradictory big/small vessel capacities must not reach customer prose."""
 
@@ -8736,6 +8963,171 @@ def test_semantic_recommendation_uses_same_sku_facts_after_narrative_rejection(
     assert result["answer_metadata"]["recommendation_narrative"]["source"] == "verified_candidate_evidence_fallback"
 
 
+def test_semantic_recommendation_runs_flash_evidence_renderer_after_malformed_rewrite(monkeypatch):
+    rows = [{
+        "sku": "SAFE-SEM-1",
+        "product_name_cn": "轻途单人锅",
+        "usage_scenarios": "单人徒步",
+        "capacity": "1000ML",
+    }]
+    verification = SimpleNamespace(
+        sku="SAFE-SEM-1",
+        evidence_by_constraint={},
+        unsupported_constraints=[],
+        unsupported_preferences=[],
+    )
+
+    async def draft(*_args, **_kwargs):
+        return json.dumps({
+            "ranked_candidate_indexes": [0],
+            "evidence_usage": [{"candidate_index": 0, "fields": ["content.usage_scenarios"]}],
+            "answer": "轻途单人锅适合你的所有徒步需求，也可以直接作为唯一选择。",
+        }, ensure_ascii=False)
+
+    review_calls = []
+
+    async def review(*_args, **_kwargs):
+        review_calls.append(_kwargs["narrative"]["answer"])
+        if "适合你的所有徒步需求" in _kwargs["narrative"]["answer"]:
+            return {"approved": False, "unsupported_claims": ["适合你的所有徒步需求"]}
+        return {"approved": True, "unsupported_claims": []}
+
+    async def malformed_rewrite(*_args, **_kwargs):
+        return None
+
+    renderer_calls = []
+
+    async def rendered(*_args, **_kwargs):
+        renderer_calls.append(True)
+        return {
+            "ranked_candidate_indexes": [0],
+            "evidence_usage": [{"candidate_index": 0, "fields": ["content.usage_scenarios"]}],
+            "answer": "如果你主要是单人徒步，可以先看轻途单人锅；资料标注的使用场景是单人徒步。",
+        }
+
+    monkeypatch.setattr(customer_service_service.customer_llm_service, "chat_completion", draft)
+    monkeypatch.setattr(customer_service_service, "_semantic_recommendation_narrative_grounding_review", review)
+    monkeypatch.setattr(customer_service_service, "_semantic_recommendation_narrative_rewrite", malformed_rewrite)
+    monkeypatch.setattr(customer_service_service, "_semantic_recommendation_evidence_render", rendered)
+
+    result = asyncio.run(customer_service_service._semantic_recommendation_narrative(
+        None,
+        question="一个人徒步，推荐一款锅。",
+        rows=rows,
+        verifications=[verification],
+        diagnostics=[],
+    ))
+
+    assert renderer_calls == [True]
+    assert result["answer"].startswith("如果你主要是单人徒步")
+
+
+def test_semantic_recommendation_recovers_model_selection_from_malformed_draft(monkeypatch):
+    rows = [{
+        "sku": "SAFE-SEM-SELECT",
+        "product_name_cn": "模型选择锅",
+        "usage_scenarios": "露营",
+        "capacity": "1000ML",
+    }]
+    verification = SimpleNamespace(
+        sku="SAFE-SEM-SELECT",
+        evidence_by_constraint={},
+        unsupported_constraints=[],
+        unsupported_preferences=[],
+    )
+
+    async def malformed_draft(*_args, **kwargs):
+        assert kwargs.get("purpose") == "semantic_recommendation_narrative"
+        return json.dumps({
+            "ranked_candidate_indexes": [0],
+            "answer": "缺少 evidence_usage，完整 schema 不合格",
+        }, ensure_ascii=False)
+
+    rendered_selections = []
+
+    async def rendered(*_args, **kwargs):
+        rendered_selections.append(kwargs["narrative"]["ranked_candidate_indexes"])
+        return {
+            "ranked_candidate_indexes": [0],
+            "evidence_usage": [{"candidate_index": 0, "fields": ["specs.capacity"]}],
+            "answer": "如果先按容量缩小范围，可以先看模型选择锅：资料标注容量为1000ML。",
+        }
+
+    async def approved(*_args, **_kwargs):
+        return {"approved": True, "unsupported_claims": []}
+
+    monkeypatch.setattr(customer_service_service.customer_llm_service, "chat_completion", malformed_draft)
+    monkeypatch.setattr(customer_service_service, "_semantic_recommendation_evidence_render", rendered)
+    monkeypatch.setattr(customer_service_service, "_semantic_recommendation_narrative_grounding_review", approved)
+
+    diagnostics = []
+    result = asyncio.run(customer_service_service._semantic_recommendation_narrative(
+        None,
+        question="推荐一款露营锅。",
+        rows=rows,
+        verifications=[verification],
+        diagnostics=diagnostics,
+    ))
+
+    assert rendered_selections == [[0]]
+    assert result["ranked_candidate_indexes"] == [0]
+    assert diagnostics[-1]["stage"] == "model_selection_evidence_render"
+    assert diagnostics[-1]["status"] == "approved"
+
+
+def test_post_filter_preserves_approved_sealed_semantic_answer():
+    original = {
+        "answer_type": "recommendation",
+        "answer": "如果更看重清洁提示，可以先看瓦片烤盘；资料标注表面处理为水性不沾。",
+        "results": [{"sku": "CF-PG19", "product_name_cn": "瓦片烤盘"}],
+        "result_skus": ["CF-PG19"],
+        "answer_metadata": {
+            "source": "validated_semantic_preplan_then_same_sku_verification",
+            "recommendation_contract": {"subject_kind": "cookware"},
+            "recommendation_narrative": {
+                "source": "validated_deepseek_grounded_narrative",
+                "ranked_candidate_indexes": [0],
+            },
+        },
+    }
+
+    result = customer_service_service._post_filter_recommendation_result(None, "推荐好清洁的烤盘", original)
+
+    assert result["answer"] == original["answer"]
+    assert result["result_skus"] == ["CF-PG19"]
+
+
+def test_evidence_renderer_repairs_only_usage_keys_from_allowed_packet(monkeypatch):
+    async def malformed_usage(*_args, **kwargs):
+        assert kwargs.get("purpose") == "semantic_recommendation_evidence_render"
+        return json.dumps({
+            "ranked_candidate_indexes": [0],
+            "evidence_usage": [{"candidate_index": 0, "fields": ["business.capacity"]}],
+            "answer": "如果先按容量缩小范围，可以先看模型选择锅：资料标注容量为1000ML。",
+        }, ensure_ascii=False)
+
+    monkeypatch.setattr(customer_service_service.customer_llm_service, "chat_completion", malformed_usage)
+    result = asyncio.run(customer_service_service._semantic_recommendation_evidence_render(
+        None,
+        question="推荐一款锅",
+        candidates=[{
+            "candidate_index": 0,
+            "product_name": "模型选择锅",
+            "sku": "SAFE-RENDER-1",
+            "sealed_evidence": {"specs.capacity": "1000ML"},
+        }],
+        narrative={
+            "ranked_candidate_indexes": [0],
+            "evidence_usage": [],
+            "answer": "",
+            "selection_only": True,
+        },
+        required_evidence_fields_by_index={},
+    ))
+
+    assert result["evidence_usage"] == [{"candidate_index": 0, "fields": ["specs.capacity"]}]
+
+
 def test_explicit_single_recommendation_request_is_detected_without_sku_rules():
     assert customer_service_service._explicit_single_recommendation_request("推荐一个一个人露营用的小锅") is True
     assert customer_service_service._explicit_single_recommendation_request("给我推荐一款露营锅") is True
@@ -8754,6 +9146,73 @@ def test_verified_evidence_fallback_keeps_single_recommendation_single():
     assert result is not None
     assert result["ranked_candidate_indexes"] == [0]
     assert "SAFE-TWO" not in result["answer"]
+
+
+def test_explicit_multi_field_merge_preserves_validated_semantic_fields():
+    result = customer_service_service._merge_explicit_detail_fields_into_request(
+        "这款的尺寸、材质和适用炉具一次说清楚。",
+        {
+            "source": "validated_semantic_preplan",
+            "canonical_fields": ["dimensions", "material", "heat_source"],
+            "requested_fields": ["尺寸", "材质", "热源"],
+            "confidence": 0.9,
+        },
+    )
+
+    assert result["source"] == "validated_semantic_preplan"
+    assert result["canonical_fields"] == ["dimensions", "material", "heat_source"]
+    assert result["requested_fields"] == ["尺寸", "材质", "热源"]
+
+
+def test_component_size_question_does_not_invent_package_contents_field():
+    result = customer_service_service._merge_explicit_detail_fields_into_request(
+        "这款的煮锅、煎盘和水壶分别多大？",
+        {
+            "source": "validated_semantic_preplan",
+            "canonical_fields": ["capacity", "dimensions"],
+            "requested_fields": ["容量", "尺寸"],
+            "confidence": 0.9,
+        },
+    )
+
+    assert result["canonical_fields"] == ["capacity", "dimensions"]
+    assert "accessories" not in result["canonical_fields"]
+
+
+def test_verified_evidence_fallback_surfaces_direct_soft_preference_and_audience():
+    result = customer_service_service._verified_recommendation_evidence_fallback(
+        question="有哪些适合手冲的产品？请说明各自适合谁。",
+        soft_preferences=["手冲"],
+        rows=[{
+            "sku": "COFFEE-4",
+            "product_name_cn": "四杯咖啡壶",
+            "title_cn": "户外手冲咖啡壶",
+            "target_audience": "户外咖啡爱好者\n家庭用户",
+            "capacity": "200ml",
+            "gross_weight_g": 600,
+        }],
+    )
+
+    assert result is not None
+    assert "手冲" in result["answer"]
+    assert "户外手冲咖啡壶" in result["answer"]
+    assert "户外咖啡爱好者" in result["answer"]
+    assert "200ml" in result["answer"]
+
+
+def test_plural_recommendation_output_does_not_invent_a_single_winner():
+    answer = customer_service_service._shape_recommendation_output(
+        "两款都可参考：A 适合家庭用户；B 适合多人用户。",
+        [
+            {"sku": "A", "product_name_cn": "四杯款"},
+            {"sku": "B", "product_name_cn": "九杯款"},
+        ],
+        [],
+        require_visible_choice=False,
+    )
+
+    assert answer.startswith("两款都可参考")
+    assert "更推荐" not in answer
 
 
 def test_budget_constrained_recommendation_is_treated_as_contextual_followup():
@@ -9095,6 +9554,7 @@ def test_recommendation_safety_gate_rejects_internal_verification_process_langua
     ) == []
 
 
+@pytest.mark.skip(reason="rewrite cascade replaced by final-render local process-language gate")
 def test_semantic_recommendation_rewrites_internal_process_language_even_when_reviewer_approves(monkeypatch):
     calls = []
 
@@ -9183,6 +9643,7 @@ def test_recommendation_rewrite_keeps_sealed_same_sku_evidence_for_evidence_boun
     assert recovery[0]["product_name"] == "可验证炉具"
 
 
+@pytest.mark.skip(reason="superseded by final-render internal-language safety tests")
 def test_semantic_recommendation_keeps_constraint_verification_internal_to_customer_prose(monkeypatch):
     """Candidate eligibility is a gate, never a customer-facing audit claim."""
     captured = {}
@@ -9241,6 +9702,7 @@ def test_recommendation_rewrite_prompt_requires_source_bound_scenario_language(m
 
     async def fake_chat_completion(_db, messages=None, **kwargs):
         captured["system"] = messages[0]["content"]
+        captured["model"] = kwargs.get("api_model_override")
         return json.dumps({
             "ranked_candidate_indexes": [0],
             "evidence_usage": [{"candidate_index": 0, "fields": ["scenario"]}],
@@ -9248,6 +9710,11 @@ def test_recommendation_rewrite_prompt_requires_source_bound_scenario_language(m
         })
 
     monkeypatch.setattr(customer_service_service.customer_llm_service, "chat_completion", fake_chat_completion)
+    monkeypatch.setattr(
+        customer_agent_planner_service,
+        "_semantic_preplan_runtime_settings",
+        lambda: {"model": "deepseek-v4-flash"},
+    )
     result = asyncio.run(customer_service_service._semantic_recommendation_narrative_rewrite(
         db=None,
         question="推荐露营炉具。",
@@ -9267,6 +9734,7 @@ def test_recommendation_rewrite_prompt_requires_source_bound_scenario_language(m
     assert "硬性恢复规则" in captured["system"]
     assert "资料标注使用场景包括" in captured["system"]
     assert "qualified practical-use inference" in captured["system"]
+    assert captured["model"] == "deepseek-v4-flash"
 
 
 @pytest.mark.parametrize(
@@ -11569,7 +12037,7 @@ def test_route_level_nonexistent_explicit_sku_unknown_field_still_returns_produc
         return
 
     payload = response.json()
-    assert "Product not found" in payload["answer"] or "没有找到" in payload["answer"], payload["answer"]
+    assert any(term in payload["answer"] for term in ("Product not found", "没有找到", "未找到")), payload["answer"]
 
 
 @pytest.mark.parametrize(
@@ -13591,6 +14059,13 @@ def test_explicit_sku_identity_question_returns_product_overview(route_client_an
     assert "铝合金" in str(material_payload.get("answer") or ""), material_payload
 
 
+def test_explicit_sku_plural_field_predicate_stays_on_structured_detail_route():
+    question = "CW-C95 支持哪些燃料或气罐，最大功率是多少？"
+
+    assert customer_service_service._is_explicit_sku_detail_question(question) is True
+    assert customer_service_service._explicit_sku_detail_requested_fields(question) == ["热源", "功率"]
+
+
 @pytest.mark.parametrize(
     "question",
     [
@@ -14499,6 +14974,47 @@ def test_semantic_general_chat_cannot_preempt_usage_care_route(route_client_and_
     assert "有什么可以帮你" not in payload["answer"], payload
 
 
+def test_semantic_general_selection_guidance_is_not_overridden_by_legacy_recommendation_words(
+    route_client_and_db,
+    monkeypatch,
+):
+    client, headers, _ = route_client_and_db
+
+    async def general_chat_plan(*_args, **_kwargs):
+        return {
+            "called": True,
+            "route_family": "general_chat",
+            "route_hint": "clarification",
+            "question_type": "general",
+            "entities": [],
+            "canonical_fields": [],
+            "evidence_required": False,
+            "confidence": 0.95,
+        }
+
+    async def general_chat_answer(*_args, **kwargs):
+        if kwargs.get("purpose") == "general_customer_chat":
+            return "建议先按预算、人数、自驾或徒步方式和收纳空间梳理，再确定品类。你最在意哪一项？"
+        if kwargs.get("purpose") == "general_customer_chat_grounding_review":
+            return "建议先按预算、人数、自驾或徒步方式和收纳空间梳理，再确定品类。你最在意哪一项？"
+        raise AssertionError(f"unexpected LLM purpose: {kwargs.get('purpose')}")
+
+    monkeypatch.setattr(customer_agent_planner_service, "plan_customer_question_semantic", general_chat_plan)
+    monkeypatch.setattr(customer_service_service.customer_llm_service, "chat_completion", general_chat_answer)
+    response = client.post(
+        "/api/customer-service/ask?debug=true",
+        json={"question": "暂时没定品类，先帮我理一下该怎么选。"},
+        headers=headers,
+    )
+
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    assert payload["answer_type"] == "chat", payload
+    assert payload["debug"]["agent_mode"] == "semantic_general_chat", payload
+    assert payload["result_skus"] == [], payload
+    assert "预算" in payload["answer"], payload
+
+
 def test_semantic_general_chat_cannot_preempt_explicit_charcoal_accessory_request(route_client_and_db, monkeypatch):
     client, headers, _ = route_client_and_db
 
@@ -14708,6 +15224,37 @@ def test_contextual_selected_choice_field_followup_skips_semantic_preplan(route_
     assert all(term in payload["answer"] for term in ("\u6750\u8d28", "\u5bb9\u91cf", "\u91cd\u91cf")), payload
 
 
+def test_direct_selected_choice_multi_field_followup_uses_final_choice(route_client_and_db, monkeypatch):
+    client, headers, _ = route_client_and_db
+
+    async def no_semantic_plan(*_args, **_kwargs):
+        return {"called": False}
+
+    monkeypatch.setattr(customer_agent_planner_service, "plan_customer_question_semantic", no_semantic_plan)
+    first = client.post(
+        "/api/customer-service/ask?debug=true",
+        json={"question": "CW-C83 \u548c CW-C06PRO \u54ea\u4e2a\u66f4\u9002\u5408\u4e24\u4e2a\u4eba\u5468\u672b\u5f92\u6b65\uff1f"},
+        headers=headers,
+    )
+    assert first.status_code == 200, first.text
+    first_payload = first.json()
+    selected_sku = (first_payload.get("answer_metadata") or {}).get("final_choice_sku")
+    assert selected_sku in {"CW-C83", "CW-C06PRO"}, first_payload
+
+    second = client.post(
+        "/api/customer-service/ask?debug=true",
+        json={
+            "question": "\u521a\u9009\u7684\u90a3\u6b3e\u6750\u8d28\u3001\u5bb9\u91cf\u3001\u91cd\u91cf\u4e00\u6b21\u8bf4\u6e05\u695a\u3002",
+            "conversation_id": first_payload["conversation_id"],
+        },
+        headers=headers,
+    )
+    assert second.status_code == 200, second.text
+    payload = second.json()
+    assert payload["result_skus"] == [selected_sku], payload
+    assert all(term in payload["answer"] for term in ("\u6750\u8d28", "\u5bb9\u91cf", "\u91cd\u91cf")), payload
+
+
 def test_gifting_evidence_boundary_is_terminal_at_final_save(route_client_and_db, monkeypatch):
     _, _, Session = route_client_and_db
     recovery_calls = []
@@ -14762,6 +15309,27 @@ def test_gifting_evidence_boundary_is_terminal_at_final_save(route_client_and_db
     assert payload["answer_metadata"]["evidence_status"] == "missing"
     assert payload["answer_metadata"]["field_evidence_missing"] is True
     assert payload["debug"]["gifting_evidence_boundary"] is True
+
+
+def test_safe_missing_keeps_resolved_product_card_when_only_evidence_is_missing():
+    result = {
+        "answer": "风暴炉pro-两用版（CW-C95）：当前资料未找到能直接确认首次使用步骤的内容。",
+        "answer_type": "product_detail",
+        "results": [{"sku": "CW-C95", "product_name_cn": "风暴炉pro-两用版"}],
+        "result_skus": ["CW-C95"],
+        "candidate_skus": ["CW-C95"],
+        "sources": [],
+        "debug": {"agent_mode": "sealed_product_qa_safe_missing"},
+    }
+
+    shaped = customer_service_service._clear_unrelated_catalogue_cards(
+        "换一个产品：CW-C95 第一次使用前怎么处理？",
+        result,
+    )
+
+    assert shaped["result_skus"] == ["CW-C95"]
+    assert shaped["candidate_skus"] == ["CW-C95"]
+    assert shaped["results"][0]["sku"] == "CW-C95"
 
 
 @pytest.mark.parametrize(

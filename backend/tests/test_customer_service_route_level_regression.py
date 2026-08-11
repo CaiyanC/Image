@@ -1396,7 +1396,7 @@ def test_recommendation_formatter_does_not_duplicate_existing_priority_lead():
     assert result.count("优先推荐 瓦片烤盘（CF-PG19）") == 1
 
 
-def test_recommendation_formatter_removes_short_duplicate_lead_for_same_top_sku():
+def test_recommendation_formatter_does_not_rewrite_semantic_prose():
     answer = "优先推荐 瓦片烤盘（CF-PG19）。\n优先推荐 瓦片烤盘（CF-PG19），因为它适合露营。"
     result = customer_service_service._shape_recommendation_output(
         answer,
@@ -1404,7 +1404,7 @@ def test_recommendation_formatter_removes_short_duplicate_lead_for_same_top_sku(
         [],
     )
 
-    assert result == "优先推荐 瓦片烤盘（CF-PG19），因为它适合露营。"
+    assert result == answer
 
 
 def test_recommendation_explanation_formats_json_backed_business_values(route_client_and_db):

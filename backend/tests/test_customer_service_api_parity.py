@@ -444,6 +444,44 @@ def test_parity_isolation_canonicalizes_independent_recommendation_decisions(cli
     assert "SKU-B" not in stream_payload["answer"]
 
 
+def test_parity_isolation_serializes_runtime_only_nested_values(client_and_token, monkeypatch):
+    client, headers = client_and_token
+    from app.api import customer_service as customer_service_api
+
+    async def fake_ask_customer_service(_db, **_kwargs):
+        return {
+            "conversation_id": "runtime-value-conversation",
+            "message_id": "runtime-value-message",
+            "intent": "product_detail",
+            "answer_type": "product_detail",
+            "answer": "同一份可序列化的商品事实。",
+            "result_skus": ["SKU-RUNTIME"],
+            "candidate_skus": ["SKU-RUNTIME"],
+            "results": [{"sku": "SKU-RUNTIME", "runtime_module": customer_service_api}],
+            "sources": [], "actions": [], "steps": [], "warnings": [], "evidence": [],
+        }
+
+    monkeypatch.setattr(customer_service_api.customer_service_service, "ask_customer_service", fake_ask_customer_service)
+    parity_headers = {**headers, "X-Customer-Service-Parity-Isolation": "true"}
+
+    normal = client.post(
+        "/api/customer-service/ask",
+        json={"question": "SKU-RUNTIME 的资料是什么？"},
+        headers=parity_headers,
+    )
+    stream = client.post(
+        "/api/customer-service/ask-stream",
+        json={"question": "SKU-RUNTIME 的资料是什么？"},
+        headers=parity_headers,
+    )
+
+    assert normal.status_code == 200, normal.text
+    assert stream.status_code == 200, stream.text
+    stream_payload = _parse_sse(stream.text)
+    assert stream_payload["meta"]["results"] == normal.json()["results"]
+    assert isinstance(normal.json()["results"][0]["runtime_module"], str)
+
+
 def test_repeated_normal_recommendation_creates_a_fresh_conversation(client_and_token, monkeypatch):
     client, headers = client_and_token
     from app.api import customer_service as customer_service_api

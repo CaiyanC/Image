@@ -1236,7 +1236,7 @@ def test_bundle_heat_source_question_does_not_accept_plain_cookware_sets():
     assert not service._looks_like_bundle_heat_source_question("有没有户外套装?")
 
 
-def test_product_query_recommendation_gets_a_decision_lead():
+def test_product_query_formatter_does_not_invent_a_decision_lead():
     answer = service._shape_product_query_output(
         "小青炉，支持高山气罐；魔盒卡式炉，适合桌面露营。",
         [
@@ -1247,7 +1247,8 @@ def test_product_query_recommendation_gets_a_decision_lead():
         question="有没有炉头推荐?",
     )
 
-    assert "更推荐" in answer or "优先推荐" in answer
+    assert answer == "小青炉，支持高山气罐；魔盒卡式炉，适合桌面露营。"
+    assert "更推荐" not in answer and "优先推荐" not in answer
 
 
 def test_unbound_installation_support_requires_identity():
@@ -1522,7 +1523,7 @@ def test_missing_previous_result_clarification_hides_internal_context():
     assert "\u5177\u4f53\u5546\u54c1\u540d" in answer
 
 
-def test_recommendation_shape_adds_choice_to_neutral_data_sheet():
+def test_recommendation_shape_does_not_invent_choice_for_neutral_data_sheet():
     shaped = service._shape_recommendation_output(
         "以下是三款炉具，资料标注使用场景和特征如下：\n小青炉（CS-G25）：3200W。",
         [
@@ -1531,7 +1532,8 @@ def test_recommendation_shape_adds_choice_to_neutral_data_sheet():
         ],
         [],
     )
-    assert shaped.startswith("更推荐小青炉（CS-G25）")
+    assert shaped.startswith("以下是三款炉具")
+    assert "更推荐" not in shaped
 
 
 def test_recommendation_cards_follow_grounded_multi_product_narrative():
@@ -2437,6 +2439,19 @@ def test_semantic_recommendation_treats_unforced_stability_as_soft_preference(mo
 
 def test_cookware_is_catalogue_subject_when_alcohol_stove_is_a_constraint():
     assert service._semantic_catalog_product_ref("推荐一个支持酒精炉的锅具") == "锅具"
+    assert service._semantic_catalog_product_ref("除去燃气炉和卡式炉，只看能配酒精炉的锅具") == "锅具"
+
+
+def test_generic_shipping_commitment_is_helpful_without_inventing_a_promise():
+    result = service._unknown_product_fact_result(
+        "我今天下单能保证明天发货吗？",
+        semantic_authorized=True,
+    )
+
+    assert result is not None
+    assert any(term in result["answer"] for term in ("无法保证", "无法承诺"))
+    assert "下单页" in result["answer"] and "店铺客服" in result["answer"]
+    assert "提供 SKU" not in result["answer"]
 
 
 def test_plural_recommendation_persists_verified_candidate_domain_for_comparison():

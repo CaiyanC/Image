@@ -6681,7 +6681,12 @@ def _looks_like_alcohol_stove_cookware_recommendation_question(question: str) ->
     cookware_binding = any(term in text for term in (
         "支持酒精炉的锅", "适合酒精炉的锅", "酒精炉的锅具",
         "酒精炉能用的锅", "酒精炉适配锅", "酒精炉兼容锅",
-    ))
+    )) or bool(
+        re.search(
+            r"(?:支持|适合|能用|适配|兼容).{0,10}酒精炉.{0,5}的?.{0,8}(?:锅具|套锅|单锅|炊具|锅)",
+            text,
+        )
+    )
     stove_target = bool(
         re.search(r"(?:推荐|介绍|找|买|购买|有没有|哪款).{0,14}(?:酒精炉|液体酒精炉|固体酒精炉)", text)
         or re.search(r"(?:酒精炉|液体酒精炉|固体酒精炉).{0,14}(?:推荐|购买|可以买|哪里买|可以煮)", text)

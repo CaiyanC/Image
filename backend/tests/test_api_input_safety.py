@@ -178,12 +178,14 @@ class ApiInputSafetyTest(unittest.TestCase):
         db = sessionmaker(bind=engine)()
         try:
             with self.assertRaises(HTTPException) as ctx:
-                products_api.update_product_full(
-                    "NO-SUCH-SKU",
-                    {},
-                    request=None,
-                    current_user=None,
-                    db=db,
+                asyncio.run(
+                    products_api.update_product_full(
+                        "NO-SUCH-SKU",
+                        {},
+                        request=None,
+                        current_user=None,
+                        db=db,
+                    )
                 )
             self.assertEqual(ctx.exception.status_code, 404)
         finally:

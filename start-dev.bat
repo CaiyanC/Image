@@ -81,7 +81,11 @@ if not exist "%CAIYAN_ENV_FILE%" (
     exit /b 1
 )
 for /f "usebackq eol=# tokens=1,* delims==" %%a in ("%~dp0backend\.env.dev") do (
-    if not "%%a"=="" set "%%a=%%b"
+    if not "%%a"=="" (
+        rem Keep credential material out of cmd.exe's code-page conversion.
+        rem Backend Python reads these values as UTF-8 from CAIYAN_ENV_FILE.
+        if /i not "%%a"=="SECRET_KEY" if /i not "%%a"=="MODEL_CREDENTIAL_ENCRYPTION_KEY" if /i not "%%a"=="DASHSCOPE_API_KEY" set "%%a=%%b"
+    )
 )
 exit /b 0
 

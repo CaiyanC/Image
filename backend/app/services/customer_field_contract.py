@@ -169,7 +169,7 @@ FIELD_CONTRACTS: tuple[FieldContract, ...] = (
     FieldContract(
         "usage_instruction",
         (
-            "怎么使用", "如何使用", "使用方法", "怎么用", "应该怎么使用", "首次使用",
+            "怎么使用", "如何使用", "使用方法", "怎么用", "应该怎么使用", "首次使用", "第一次使用",
             "第一次用要注意什么", "怎么放", "如何放", "放置方法", "怎么装进", "如何装进",
             "怎么装入", "如何装入", "远程打火", "远程点火", "电子点火", "点火装置",
             "点火方式", "打火方式", "怎么点火", "如何点火", "怎么打火", "如何打火",
@@ -177,7 +177,7 @@ FIELD_CONTRACTS: tuple[FieldContract, ...] = (
         ),
         "unknown",
         (
-            "怎么使用", "如何使用", "怎么用", "应该怎么使用", "第一次用要注意什么",
+            "怎么使用", "如何使用", "怎么用", "应该怎么使用", "第一次使用", "第一次用要注意什么",
             "怎么放", "如何放", "放置方法", "怎么装进", "如何装进", "怎么装入", "如何装入",
             "远程打火", "远程点火", "电子点火", "点火装置", "点火方式", "打火方式",
             "怎么点火", "如何点火", "怎么打火", "如何打火", "点火步骤", "点火操作", "点火器", "点火头", "是否带电池",
@@ -260,6 +260,13 @@ _LEGACY_SEMANTIC_FIELD_ALIASES = {
     "stock": "inventory",
     "contents": "accessories",
     "usage": "usage_instruction",
+    # Providers sometimes emit these natural schema labels even though the
+    # formal catalogue stores stove/fuel compatibility in one heat-source
+    # field. This is output-schema normalization only; it does not inspect the
+    # customer sentence or infer a product fact.
+    "fuel": "heat_source",
+    "fuel_source": "heat_source",
+    "fuel_type": "heat_source",
 }
 
 DETAIL_FIELD_LABELS = {

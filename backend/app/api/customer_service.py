@@ -81,10 +81,22 @@ def _canonicalize_parity_result(
         return result
     snapshot = customer_cache_service.parity_result_snapshot_cache.get(key)
     if snapshot is None:
+        # Service results can carry runtime-only values in nested debug/result
+        # payloads.  The parity cache is a public-response snapshot, so seal it
+        # as JSON data before the cache performs its defensive deepcopy.  This
+        # also guarantees that the first normal response and the later SSE
+        # response are serializable through the same contract.
+        snapshot = json.loads(json.dumps(
+            {field: result[field] for field in _PARITY_CANONICAL_FIELDS if field in result},
+            ensure_ascii=False,
+            default=str,
+        ))
         customer_cache_service.parity_result_snapshot_cache.set(
             key,
-            {field: result[field] for field in _PARITY_CANONICAL_FIELDS if field in result},
+            snapshot,
         )
+        for field, value in snapshot.items():
+            result[field] = value
         return result
     for field in _PARITY_CANONICAL_FIELDS:
         if field in snapshot:

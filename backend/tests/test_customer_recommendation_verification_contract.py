@@ -1450,3 +1450,76 @@ def test_recommendation_context_product_field_is_not_rewritten_by_list_filter():
 
 def test_other_recommendations_phrase_is_an_alternative_request():
     assert customer_service_service._asks_for_alternative_recommendation("还有其他推荐吗") is True
+
+
+def test_griddle_direct_object_overrides_semantic_stove_subject():
+    contract = build_recommendation_request_contract(
+        "我有卡式炉，想买烤盘，哪些产品明确支持卡式炉？",
+        semantic_constraints={"subject_kind": "stove", "heat_sources": ["card_stove"]},
+    )
+
+    assert (contract.subject_category, contract.subject_kind) == ("锅具", "cookware")
+    assert contract.heat_sources == ["卡式炉"]
+    assert contract.cleaning_required is False
+
+
+def test_cleanability_preference_is_verified_and_ranked_from_same_sku_evidence():
+    contract = build_recommendation_request_contract(
+        "想买支持卡式炉的烤盘，优先推荐好清洁的。"
+    )
+    plain = _row("PLAIN", product_name_cn="普通烤盘", heat_source="卡式炉")
+    easy_clean = _row(
+        "CLEAN",
+        product_name_cn="易洁烤盘",
+        heat_source="卡式炉",
+        surface_finish="水性不沾处理，便于清洁",
+    )
+    verifications = verify_recommendation_candidates(contract, [plain, easy_clean])
+    selected = select_recommendation_candidates([plain, easy_clean], verifications)
+    answer = build_verified_recommendation_answer(contract, selected, verifications)
+
+    assert contract.cleaning_required is True
+    assert selected[0]["sku"] == "CLEAN"
+    cleaning_evidence = next(item for item in verifications if item.sku == "CLEAN").evidence_by_constraint["cleaning"]
+    assert cleaning_evidence["field_source"] == "surface_finish"
+    assert cleaning_evidence["raw_value"] == "水性不沾处理，便于清洁"
+    assert "清洁便利" in answer and "便于清洁" in answer
+
+
+def test_negated_heat_sources_do_not_become_positive_requirements():
+    contract = build_recommendation_request_contract(
+        "除去燃气炉和卡式炉，只看能配酒精炉的锅具。"
+    )
+
+    assert contract.subject_kind == "cookware"
+    assert contract.heat_sources == ["酒精炉"]
+    assert "炉具" in contract.excluded_categories
+
+
+def test_explicit_sku_exclusion_is_preserved_and_rejected_by_subject_guard():
+    contract = build_recommendation_request_contract(
+        "除了 CW-C83，再推荐一款更轻的锅具。"
+    )
+    excluded, allowed = verify_recommendation_candidates(
+        contract,
+        [_row("CW-C83"), _row("CW-C06PRO")],
+    )
+
+    assert contract.exclusions == ["CW-C83"]
+    assert excluded.verification_level == "rejected"
+    assert excluded.rejection_reasons == ["excluded_sku"]
+    assert allowed.subject_eligible is True
+
+
+def test_recommendation_summary_renders_structured_capacity_without_json_keys():
+    contract = build_recommendation_request_contract("推荐一款两个人用的锅具。")
+    row = _row(
+        "COOKSET",
+        target_audience="1-2人",
+        capacity='[{"label":"水壶","value":"约1.0L","unit":""},{"label":"大锅","value":"约1.7L","unit":""}]',
+    )
+    verifications = verify_recommendation_candidates(contract, [row])
+    answer = build_verified_recommendation_answer(contract, [row], verifications)
+
+    assert "水壶：约1.0L" in answer and "大锅：约1.7L" in answer
+    assert "value：" not in answer and "label：" not in answer

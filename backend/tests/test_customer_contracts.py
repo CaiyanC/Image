@@ -85,6 +85,9 @@ def test_semantic_preplan_uses_the_formal_canonical_taxonomy_for_safe_fields():
     assert semantic_preplan_field_type("shipping") == "shipping"
     assert semantic_preplan_field_type("stock") == "inventory"
     assert semantic_preplan_field_type("contents") == "accessories"
+    assert semantic_preplan_field_type("fuel") == "heat_source"
+    assert semantic_preplan_field_type("fuel_source") == "heat_source"
+    assert semantic_preplan_field_type("fuel_type") == "heat_source"
 
 
 def test_semantic_preplan_preserves_supplemental_same_sku_qa_for_mixed_product_fact():
@@ -1672,6 +1675,74 @@ def test_semantic_preserves_a_complete_product_qa_plan_without_lexical_reclassif
     assert result["evidence_kind"] == "product_qa"
 
 
+def test_semantic_rechecks_compound_product_qa_and_restores_formal_fields(monkeypatch):
+    """A broad QA query must not absorb a directly requested recorded field."""
+    initial = {
+        "route_family": "product_bound_qa",
+        "route_hint": "product_detail",
+        "question_type": "field",
+        "subtype": "product_qa",
+        "entities": ["Sample stove"],
+        "subject_text": "Sample stove",
+        "canonical_fields": [],
+        "confidence": "high",
+        "ambiguity": False,
+        "evidence_required": True,
+        "evidence_kind": "product_qa",
+        "qa_evidence_query": "supported fuel and maximum power",
+        "compound": True,
+        "intent_coverage": "full",
+        "context_usage": "none",
+        "decision_requested": False,
+        "information_scope": "",
+        "reasoning_summary": "A compound product fact request.",
+    }
+    repaired = {
+        **initial,
+        "subtype": "known_detail",
+        "canonical_fields": ["heat_source", "power"],
+        "field_type": "heat_source",
+        "field_hint": "heat_source",
+        "evidence_kind": "structured_field",
+        "qa_evidence_query": "",
+        "reasoning_summary": "Both requested facts map to recorded fields.",
+    }
+    responses = iter([
+        json.dumps(initial),
+        json.dumps(repaired),
+        '{"capability_query":"","safety_evaluation_requested":false}',
+    ])
+    purposes = []
+    prompts = []
+
+    async def fake_chat_completion(_db, messages, **kwargs):
+        prompts.append(messages)
+        purposes.append(kwargs.get("purpose"))
+        return next(responses)
+
+    monkeypatch.setattr(customer_agent_planner_service.customer_llm_service, "chat_completion", fake_chat_completion)
+    monkeypatch.setattr(customer_agent_planner_service, "_database_field_value_hints", lambda *_args: [])
+
+    result = asyncio.run(
+        customer_agent_planner_service.plan_customer_question_semantic(
+            None,
+            "What fuel does Sample stove support, and what is its maximum power?",
+            {},
+            context={},
+        )
+    )
+
+    assert purposes == [
+        "semantic_preplan",
+        "semantic_preplan_repair",
+        "semantic_compound_supplemental_query",
+    ]
+    assert result["evidence_kind"] == "structured_field"
+    assert result["canonical_fields"] == ["heat_source", "power"]
+    assert result["supplemental_qa_evidence_query"] == ""
+    assert "broad product_qa query must not absorb" in prompts[1][0]["content"]
+
+
 def test_semantic_rechecks_a_supplemental_qa_that_is_only_courtesy_scaffolding(monkeypatch):
     """Semantic review removes a non-factual supplement without lexical routing."""
     responses = iter(
@@ -2050,7 +2121,14 @@ def test_carrying_weight_questions_are_formal_weight_contracts(question):
     }) is True
 
 
-@pytest.mark.parametrize("question", ["示例收纳箱应该怎么使用？", "示例收纳箱第一次用要注意什么？"])
+@pytest.mark.parametrize(
+    "question",
+    [
+        "示例收纳箱应该怎么使用？",
+        "示例收纳箱第一次用要注意什么？",
+        "换一个产品：SKU-EXAMPLE 第一次使用前怎么处理？资料不完整就明确说。",
+    ],
+)
 def test_usage_instruction_natural_forms_preempt_semantic_product_qa(question):
     plan = {"semantic_preplan": {
         "called": True, "route_family": "product_bound_qa", "evidence_kind": "product_qa",
@@ -2300,3 +2378,27 @@ def test_semantic_catalogue_listing_subtype_requires_structured_repair():
 
     assert preplan["fallback_reason"] == "unbound_catalogue_browse_requires_structured_query"
     assert preplan["semantic_route_family_hint"] == "structured_query"
+
+
+def test_unanchored_product_bound_shape_requires_semantic_route_repair():
+    """A product family list must never collapse into one detail record."""
+    preplan = customer_agent_planner_service._validate_semantic_preplan(
+        {
+            "route_family": "product_bound_qa",
+            "subtype": "known_detail",
+            "entities": [],
+            "subject_text": "围雪炉",
+            "canonical_fields": ["product_name_cn", "sku"],
+            "confidence": "high",
+            "ambiguity": False,
+            "evidence_required": True,
+            "evidence_kind": "structured_field",
+            "context_usage": "none",
+            "reasoning_summary": "List a named catalogue family.",
+        }
+    )
+
+    # Shape validation is context-free; the runtime semantic planner applies
+    # the entity-anchor consistency gate before execution.
+    assert preplan["route_family"] == "product_bound_qa"
+    assert preplan["entities"] == []

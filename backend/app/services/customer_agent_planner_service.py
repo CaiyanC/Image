@@ -1366,13 +1366,15 @@ def _semantic_preplan_messages_legacy(
                 "dimensions=physical measurements such as length, width, height, diameter, folded size, or unfolded size; capacity=volume or the amount a container can hold. "
                 "weight=the recorded product mass or carrying-weight fact, including natural questions such as whether a named product feels heavy to carry, hold, or wear; answer from the weight field and do not substitute a QA claim about portability. "
                 "If generic wording such as how big could genuinely mean either physical dimensions or capacity, mark ambiguity instead of using a number in the product name to guess. "
-                "heat_source=compatible stove types, heating methods, fuel sources, or whether direct flame/charcoal/wood/induction is supported. "
-                "power=rated output, wattage, electrical power consumption, burner output, heat output, or firepower. A request for rated output or power must use power, not specification merely because it is a technical parameter. Operating duration, fuel endurance, burn time, runtime, or how long a consumable load lasts are not power: when the formal taxonomy has no direct field for that product-specific fact, retain route_family=product_bound_qa with canonical_fields=[] so the sealed same-SKU QA evidence stage can evaluate it. "
+                "For multi-component sets, keep capacity for volume and dimensions for physical size; return both when both are asked. "
+                "heat_source=compatible stove types, heating methods, fuel sources, gas-canister types, or whether direct flame/charcoal/wood/induction is supported. A question asking which fuels or canisters a named product supports directly requests heat_source. "
+                "power=rated output, maximum output, wattage, electrical power consumption, burner output, heat output, or firepower. A request for rated output or power must use power, not specification merely because it is a technical parameter; the same applies to maximum output, which must not be routed to product_qa. Operating duration, fuel endurance, burn time, runtime, or how long a consumable load lasts are not power: when the formal taxonomy has no direct field for that product-specific fact, retain route_family=product_bound_qa with canonical_fields=[] so the sealed same-SKU QA evidence stage can evaluate it. "
                 "usage_instruction=operating or usage steps for the product, including how a named product should be used or what to note on first use; a request about stove, fuel, or heating compatibility remains heat_source even if phrased as how compatibility should be stated. "
                 "dishwasher=only whether the product is explicitly dishwasher-safe or compatible with a dishwashing machine. "
                 "generic machine-wash or washing-machine compatibility belongs to cleaning, not dishwasher; never translate generic machine-wash wording into dishwasher. "
                 "cleaning=manual cleaning methods, washing steps, wiping, rinsing, detergents, or laundry-machine compatibility, excluding explicit dishwasher compatibility. "
                 "care=maintenance, upkeep, drying before storage, rust prevention, protection, or long-term storage practices. Care and maintenance remain care even when the evidence shares a usage-instruction document; do not relabel them as cleaning or usage_instruction. "
+                "Cleaning plus storage asks for both cleaning and care; product-name words are not fields. "
                 "product_level=the catalogue's grade or tier label such as A-class or B-class; category=the merchandise type such as cookware, stove, or accessory. "
                 "people=a numeric or bounded group-size fact. target_audience=the user personas, customer types, or groups the product is intended for; it is not a numeric headcount. "
                 "selling_point=the named product's benefits, highlights, advantages, differentiators, or reasons it is worth choosing. Asking why one already named product is worth choosing is a product_bound_qa selling_point fact, not recommendation. When the same request also asks for limitations, cautions, tradeoffs, drawbacks, or what needs attention, it is not a single selling_point field: use product_bound_qa with evidence_kind=product_qa, canonical_fields=[], and one qa_evidence_query preserving both the positive and limiting sides of the request. "
@@ -1380,7 +1382,8 @@ def _semantic_preplan_messages_legacy(
                 "Use selling_point for customer-facing value propositions and general highlights, and technical_advantages for how the product achieves a capability through a named technology, mechanism, structure, or technical implementation. "
                 "recommendation requires asking the assistant to select, rank, or propose product options; it is not triggered by asking for the merits of one named product. "
                 "For a pronoun follow-up with a conversation, classify only the requested field; do not infer or output an identity. "
-                "If the user only selects, switches to, opens, or says they want to look at one named product without asking any fact, use route_family=product_navigation, extract that product mention in subject_text, set canonical_fields=[], evidence_required=false, and do not invent an overview field. "
+                "A multi-item family list/difference request is structured_query with canonical_fields=[series], not one product detail. "
+                "A product switch with no fact is product_navigation with canonical_fields=[] and evidence_required=false; a switch plus any fact or procedure is product_bound_qa. "
                 "For a product fact use route_family=product_bound_qa, question_type=field, subtype=known_detail, "
                 "and repeat the selected canonical label in field_hint. "
                 "When evidence_kind=product_qa, qa_evidence_query must be a short retrieval phrase in the customer's language that describes only the requested capability, judgement, procedure, or concern. "
@@ -1433,11 +1436,11 @@ def _semantic_preplan_messages(
         "route_family must be one of structured_query,recommendation,comparison,product_bound_qa,product_navigation,"
         "unresolved_product_like,negative_product_like,unknown_realtime,contents_accessories,generic_query,knowledge_base_meta,general_chat,clarification. "
         "Use general_chat for guidance without catalogue facts; entities/canonical_fields empty and evidence_required=false. "
-        "Use recommendation only to select catalogue products. For recommendation, emit recommendation_constraints as an object using only subject_kind=cookware|waterware|stove|coffee_gear|accessories, people={min,max}, heat_sources=[card_stove|gas_stove|alcohol_stove|open_flame|induction], scenarios=[camping|hiking|self_drive|seaside|soup], weight_preference=lightweight, price_preference=affordable|premium, storage_preference=compact_storage, or dishwasher_safe=true for an explicit dishwasher-safe requirement. Use accessories for an explicitly requested storage bag/box, tableware set, knife/cutting-board set, utensil, replacement part, connector, or other accessory; do not classify those as cookware merely because they are used near a pot or stove. An explicitly requested coffee grinder or coffee-brewing apparatus means coffee_gear; do not classify it as cookware. Include every explicitly stated compatible requirement: a pot, pan, or griddle means cookware; an exact group size becomes people={min:N,max:N}; camping becomes scenarios=[camping]; an explicit dishwasher-safe request becomes dishwasher_safe=true; and a request for low carrying weight becomes weight_preference=lightweight. If the customer asks for one combined form containing multiple components that no single subject_kind represents, preserve that exact combined phrase as an unrepresented recommendation requirement rather than silently treating it as only one component. Every constraint must be explicitly stated by the customer. "
+        "Use recommendation only to select catalogue products. recommendation_constraints may contain only subject_kind=cookware|waterware|stove|coffee_gear|accessories, people={min,max}, heat_sources=[card_stove|gas_stove|alcohol_stove|open_flame|induction], scenarios=[camping|hiking|self_drive|seaside|soup], weight_preference=lightweight, price_preference=affordable|premium, storage_preference=compact_storage, or explicit dishwasher_safe=true. Map pot/pan/griddle to cookware, grinder/brewer to coffee_gear, and explicitly requested parts or utensils to accessories. Preserve every requirement explicitly stated by the customer. If one requested form combines components no single subject_kind represents, copy that exact phrase to unrepresented_recommendation_requirements. Never invent a constraint. "
         "unbound customer request for actual catalogue candidates must use route_family=recommendation; product_bound_qa requires one named product or an entity anchor. "
         "A named-product question about operating steps, safety rules, prohibited actions, cleaning, maintenance, or any other product field is product_bound_qa even if its answer may later use a manual or knowledge-base document as evidence. subject_text must preserve every customer-stated identity-bearing version or edition, colour, size, capacity, or configuration; never shorten it to a family name. "
         "When has_unique_current_turn_catalog_product_name=true, the server has independently verified one catalogue name; unique_current_turn_catalog_product_mention is that subject and does not provide an SKU, answer, or database value or decide the route. "
-        "product_navigation is only a product switch/open with no fact. "
+        "product_navigation is only a switch/open with no fact; a switch plus any fact or procedure is product_bound_qa. "
         "entity_scope is generic_scope,category_scope,product_like,resolved_product,ambiguous_product,unresolved_product,or negative_product. "
         "canonical_fields is an ordered subset of this allowlist: " + field_types + ". "
         "Add only facts actually requested in this turn; a number, colour, version, size, or capacity inside the product mention is not another field. "
@@ -1467,8 +1470,8 @@ def _semantic_preplan_messages(
         "content_title is a listing/website/Amazon/marketing title; content_description is a long listing description; bullet_points are recorded five points; "
         "search_keywords is internal and must never be substituted by customer content. "
         "dimensions are physical measurements; capacity is volume. Mark genuinely ambiguous generic size wording instead of guessing. "
-        "heat_source=compatible stove types, heating methods, fuel sources, or direct-flame/induction support. power is rated output or wattage; "
-        "rated output or power must use power, not specification. usage_instruction=operating or usage steps for the product. "
+        "heat_source=compatible stove types, heating methods, fuel sources, gas-canister types, or direct-flame/induction support; asking which fuels or canisters are supported directly requests heat_source. "
+        "power is rated or maximum output, burner output, heat output, or wattage; rated output or power must use power, not specification or product_qa; the same applies to maximum output. usage_instruction=operating or usage steps for the product. "
         "dishwasher=only whether the product is explicitly dishwasher-safe. generic machine-wash or washing-machine compatibility belongs to cleaning; "
         "never translate generic machine-wash wording into dishwasher. cleaning removes soot, stains, residue, or dirt; 熏黑 belongs to cleaning. care=maintenance, upkeep, drying before storage, rust prevention, protection, or long-term storage. "
         "target_audience=the user personas, customer types, or groups (user persona, customer type, or user group); questions such as 适合哪些人 use target_audience. people=a numeric or bounded group-size fact. positioning=target customer/problem, intended role, or brand strategy; "
@@ -1635,6 +1638,31 @@ async def _repair_semantic_preplan_output(
         deterministic_plan={},
         context=context if isinstance(context, dict) else {},
     )
+    if failure_reason == "product_bound_qa_requires_entity_anchor":
+        messages = [
+            {
+                "role": "system",
+                "content": (
+                    "Return only one complete semantic-preplan JSON object. The previous plan treated a subject "
+                    "with no single-product entity/SKU/validated anchor as product_bound_qa, which is invalid. "
+                    "Re-read the whole customer turn and choose its actual route: structured_query for listing or "
+                    "querying members of a family/series/category/product set; recommendation when the customer asks "
+                    "you to select products; clarification when the scope truly cannot be identified. Never return "
+                    "product_bound_qa unless the turn itself contains one named product entity. For a stored family, "
+                    "series, brand, category, or product-level listing, keep the literal subject_text, use the matching "
+                    "canonical field, and leave structured_query_constraints empty so the database adapter resolves "
+                    "the exact stored value. Do not output a product, SKU, fact, candidate, or customer answer. Include "
+                    "all required semantic-preplan keys. Diagnostic: product_bound_qa_requires_entity_anchor."
+                ),
+            },
+            {
+                "role": "user",
+                "content": json.dumps(
+                    {"question": question, "previous_output": _safe_preview(raw_content, 1000)},
+                    ensure_ascii=False,
+                ),
+            },
+        ]
     if failure_reason == "unknown_canonical_field_in_comparison":
         # The broad ontology prompt can make a small model repeat an illegal
         # mixed-field list. Keep this as a semantic repair, but isolate the
@@ -1693,22 +1721,28 @@ async def _repair_semantic_preplan_output(
     }:
         messages[0]["content"] += (
             " The prior output mixed an allowlisted structured field with another customer-requested meaning that is not in the formal field enum. "
-            "Do not silently drop either part. Re-evaluate the complete turn. If the requested meanings must be answered together as product-specific "
-            "capability, judgement, procedure, safety, compatibility, or performance, return product_bound_qa with evidence_kind=product_qa, "
-            "canonical_fields=[], and one concise qa_evidence_query covering every requested condition. Do not substitute a nearby structured field "
-            "for an unrepresented meaning, and do not invent a field, answer, or fact. For a comparison preserve both participants and set "
+            "Do not silently drop either part and do not collapse a directly recorded field into a broad QA query. Re-evaluate the complete turn. "
+            "Retain every directly requested allowlisted field in canonical_fields with evidence_kind=structured_field, and put only the separate "
+            "product-specific capability, judgement, procedure, safety, compatibility, or performance meaning into one concise "
+            "supplemental_qa_evidence_query. Set compound=true and intent_coverage=full only when both parts are represented. Do not substitute a nearby "
+            "structured field for an unrepresented meaning, and do not invent a field, answer, or fact. For a comparison preserve both participants and set "
             "decision_requested=false unless the customer explicitly asks which product is better, more suitable, or should be chosen."
         )
         if failure_reason == "unknown_canonical_field_in_comparison":
             messages[0]["content"] += (
                 " This is a mixed factual comparison. The previous output named a non-field comparison dimension, "
-                "so return route_family=comparison, evidence_kind=product_qa, canonical_fields=[], and one concise "
-                "qa_evidence_query that covers every requested dimension. Keep the same two entities and "
-                "decision_requested=false. The executor will retrieve only same-SKU evidence for each participant."
+                "so return route_family=comparison and keep each valid formal dimension in canonical_fields; put only the non-field comparison "
+                "dimension into supplemental_qa_evidence_query. Keep the same two entities and decision_requested=false. The executor will bind "
+                "both structured and supplemental evidence to each participant's same SKU."
             )
     if failure_reason == "incomplete_product_bound_multi_intent":
         messages[0]["content"] += (
-            " The prior semantic JSON explicitly reported partial coverage of a named-product turn. Re-read the complete question and represent every independent requested product fact: retain any allowlisted recorded canonical field, and put one separate non-column fact in supplemental_qa_evidence_query when needed. Return intent_coverage=full only after every requested fact is represented. Do not invent a field, product, SKU, value, evidence, or answer."
+            " The prior compound semantic JSON requires an independent coverage confirmation for this named-product turn. Re-read the complete question "
+            "and represent every independently requested product fact. A broad product_qa query must not absorb a directly requested formal field: retain "
+            "every allowlisted recorded field in canonical_fields with evidence_kind=structured_field, and put only the separate non-column fact in "
+            "supplemental_qa_evidence_query. If every requested fact is genuinely outside the formal taxonomy, product_qa remains valid. Return "
+            "intent_coverage=full only after every requested fact is represented. Remember that supported fuel or gas-canister types are heat_source, "
+            "and rated or maximum output is power; when both are independently requested, return both canonical fields. Do not invent a field, product, SKU, value, evidence, or answer."
         )
     if failure_reason in {
         "pairwise_recommendation_requires_comparison_contract",
@@ -1963,6 +1997,84 @@ async def _repair_semantic_preplan_output(
         api_model_override=runtime_settings["model"],
         response_format=runtime_settings["response_format"],
         thinking=runtime_settings["thinking"],
+    )
+
+
+async def _repair_unanchored_set_scope_semantically(db, *, question: str) -> dict[str, Any] | None:
+    """Let Flash classify an unanchored subject with a tiny closed contract."""
+    runtime = _semantic_preplan_runtime_settings()
+    messages = [
+        {
+            "role": "system",
+            "content": (
+                "Return JSON only: {route_family,set_field,subject_text}. Re-read the complete customer turn. "
+                "route_family must be structured_query, recommendation, or clarification. Use structured_query "
+                "when the customer asks to list/query members of a product set; then set_field must be exactly one "
+                "of series, brand, category, product_level and subject_text must be the exact literal set phrase from "
+                "the customer turn. Use recommendation only when the customer asks you to select catalogue products. "
+                "Use clarification when no set scope can be identified. Never output a product, SKU, fact, or answer."
+            ),
+        },
+        {"role": "user", "content": json.dumps({"question": question}, ensure_ascii=False)},
+    ]
+    try:
+        content = await customer_llm_service.chat_completion(
+            db,
+            messages=messages,
+            temperature=runtime["temperature"],
+            max_tokens=160,
+            purpose="semantic_preplan_set_scope_repair",
+            api_model_override=runtime["model"],
+            response_format=runtime["response_format"],
+            thinking=runtime["thinking"],
+        )
+        data = _extract_json_object(content)
+    except Exception:
+        return None
+    if not isinstance(data, dict) or set(data) != {"route_family", "set_field", "subject_text"}:
+        return None
+    route_family = str(data.get("route_family") or "").strip()
+    set_field = str(data.get("set_field") or "").strip()
+    subject_text = str(data.get("subject_text") or "").strip()
+    if subject_text and subject_text not in question:
+        return None
+    if route_family == "structured_query" and set_field in {"series", "brand", "category", "product_level"} and subject_text:
+        return _validate_semantic_preplan({
+            "route_family": "structured_query",
+            "route_hint": "query_products",
+            "question_type": "filter",
+            "subtype": "structured_query",
+            "entities": [],
+            "subject_text": subject_text,
+            "canonical_fields": [set_field],
+            "field_type": set_field,
+            "structured_query_constraints": [],
+            "confidence": "high",
+            "ambiguity": False,
+            "evidence_required": True,
+            "evidence_kind": "structured_field",
+            "context_usage": "none",
+            "reasoning_summary": "Flash classified an unanchored product-set query.",
+        }, raw_content=content)
+    return None
+
+
+def _is_unanchored_product_set_display_shape(
+    result: dict[str, Any],
+    *,
+    question: str,
+    context: dict[str, Any],
+) -> bool:
+    """Detect a schema contradiction without classifying words or products."""
+    fields = set(result.get("canonical_fields") or [])
+    return bool(
+        result.get("route_family") == "product_bound_qa"
+        and not result.get("entities")
+        and not bool(context.get("has_unique_current_turn_catalog_product_name"))
+        and not customer_agent_service._extract_skus(question)
+        and {"product_name_cn", "sku"}.issubset(fields)
+        and fields <= {"product_name_cn", "product_name_en", "sku"}
+        and not result.get("fallback_reason")
     )
 
 
@@ -2538,9 +2650,20 @@ def _recommendation_literal_grounding_filter(
                 filtered_spans[key] = spans
             continue
         if key == "dishwasher_safe":
-            if value is True and spans:
+            # ``dishwasher_safe`` is a narrow interoperability field, not a
+            # general ease-of-cleaning score.  The semantic layer may reason
+            # about natural cleaning preferences freely, but this closed
+            # boolean may narrow the catalogue only when its literal source
+            # actually names a dishwasher.  This is ontology provenance, not
+            # a customer-intent keyword route.
+            dishwasher_spans = [
+                span
+                for span in spans
+                if "洗碗机" in span or "dishwasher" in span.casefold()
+            ]
+            if value is True and dishwasher_spans:
                 filtered_constraints[key] = True
-                filtered_spans[key] = spans
+                filtered_spans[key] = dishwasher_spans
             continue
         if key == "price_preference":
             terms = ("预算", "便宜", "别太高", "低价") if value == "affordable" else ("高端", "高价", "贵")
@@ -2957,6 +3080,14 @@ async def plan_customer_question_semantic(
             "missing_recommendation_subject_kind"
             if recommendation_constraints else "missing_recommendation_constraints"
         )
+    # A product-bound fact contract must have an independently established
+    # single-product anchor.  A family/category phrase with identity fields is
+    # a set query, not permission to collapse that set to the first matching
+    # catalogue row.  Reject the inconsistent semantic shape and let the same
+    # model repair the whole-sentence route; no keyword or product family is
+    # inferred here.
+    if _is_unanchored_product_set_display_shape(result, question=text, context=context):
+        result["fallback_reason"] = "product_bound_qa_requires_entity_anchor"
     # A named-product question already understood as a factual request cannot
     # safely fall through to a legacy catalogue/KB route merely because the
     # first semantic JSON left its canonical field as ``unknown``.  Give the
@@ -3020,6 +3151,22 @@ async def plan_customer_question_semantic(
         and _semantic_subject_omits_explicit_numeric_version(text, str(result.get("subject_text") or ""))
     ):
         result["fallback_reason"] = "semantic_subject_omitted_identity_variant"
+    # A compound product-QA shape can hide a directly requested formal field
+    # inside one broad retrieval query.  Give the semantic model one bounded
+    # coverage confirmation before execution so mixed turns are partitioned
+    # into structured fields plus a supplemental same-SKU QA query.  This is a
+    # semantic review of the complete turn; deterministic code does not infer a
+    # field or inspect question-specific vocabulary here.
+    if (
+        result.get("route_family") == "product_bound_qa"
+        and result.get("question_type") == "field"
+        and str(result.get("evidence_kind") or "").strip() == "product_qa"
+        and result.get("compound") is True
+        and str(result.get("confidence_label") or "").strip().lower() == "high"
+        and not bool(result.get("ambiguity"))
+        and not result.get("fallback_reason")
+    ):
+        result["fallback_reason"] = "incomplete_product_bound_multi_intent"
     # A generic overview and a requested winner are materially different
     # comparison contracts. Ask the semantic model for an independent second
     # reading before an overview can suppress a customer-requested choice.
@@ -3051,6 +3198,7 @@ async def plan_customer_question_semantic(
         "unbound_catalogue_browse_requires_structured_query",
         "missing_recommendation_constraints",
         "missing_recommendation_subject_kind",
+        "product_bound_qa_requires_entity_anchor",
         "missing_comparison_decision_criterion",
         "unclassified_product_bound_field",
         "empty_product_qa_field_semantics",
@@ -3125,6 +3273,8 @@ async def plan_customer_question_semantic(
             repaired_data = dict(repaired_data)
             repaired_data["entities"] = raw_pairwise_entities
         result = _validate_semantic_preplan(repaired_data, raw_content=repaired)
+        if _is_unanchored_product_set_display_shape(result, question=text, context=context):
+            result["fallback_reason"] = "product_bound_qa_requires_entity_anchor"
         # Structured comparison criteria occasionally remain empty or illegal
         # after the first repair even though the two customer-named entities
         # were valid. Retry this bounded, side-effect-free semantic repair once;
@@ -3173,6 +3323,7 @@ async def plan_customer_question_semantic(
             "incomplete_structured_query_scope",
             "catalogue_value_requires_structured_query",
             "unbound_catalogue_browse_requires_structured_query",
+            "product_bound_qa_requires_entity_anchor",
         }
         # The initial repair can still repeat the same malformed structured
         # JSON despite correctly understanding the route. Retry that isolated
@@ -3191,10 +3342,58 @@ async def plan_customer_question_semantic(
                 llm_call_count += 1
                 repaired_data = _extract_json_object(repaired)
                 result = _validate_semantic_preplan(repaired_data, raw_content=repaired)
+                if _is_unanchored_product_set_display_shape(result, question=text, context=context):
+                    result["fallback_reason"] = "product_bound_qa_requires_entity_anchor"
             except Exception as exc:
                 result["fallback_reason"] = f"repair_error:{type(exc).__name__}"
                 result["error"] = str(exc)[:240]
                 break
+        if result.get("fallback_reason") == "product_bound_qa_requires_entity_anchor":
+            repaired_set_scope = await _repair_unanchored_set_scope_semantically(
+                db,
+                question=text,
+            )
+            llm_call_count += 1
+            if repaired_set_scope is not None:
+                result = repaired_set_scope
+                semantic_repaired = True
+        if (
+            result.get("fallback_reason")
+            and str(deterministic_plan.get("primary_intent") or "").strip() in {"catalog_count", "query_products"}
+            and isinstance(initial_semantic_data, dict)
+            and str(initial_semantic_data.get("subject_text") or "").strip()
+            and str(initial_semantic_data.get("subject_text") or "").strip() in text
+        ):
+            repaired_set_scope = await _repair_unanchored_set_scope_semantically(
+                db,
+                question=text,
+            )
+            llm_call_count += 1
+            if repaired_set_scope is not None:
+                result = repaired_set_scope
+                semantic_repaired = True
+        # Flash can occasionally label an exhaustive set-list request as a
+        # recommendation even though it asks for no decision and supplies no
+        # recommendation constraints. The deterministic planner is used only
+        # as structural corroboration that this is a catalogue/list shape;
+        # the tiny Flash repair still owns whether the literal subject is a
+        # series, brand, category, product level, recommendation, or ambiguity.
+        if (
+            result.get("route_family") == "recommendation"
+            and not result.get("fallback_reason")
+            and not result.get("decision_requested")
+            and not result.get("recommendation_constraints")
+            and str(result.get("subject_text") or "").strip()
+            and str(deterministic_plan.get("primary_intent") or "").strip() in {"catalog_count", "query_products"}
+        ):
+            repaired_set_scope = await _repair_unanchored_set_scope_semantically(
+                db,
+                question=text,
+            )
+            llm_call_count += 1
+            if repaired_set_scope is not None:
+                result = repaired_set_scope
+                semantic_repaired = True
         # The full semantic replan occasionally repeats an invalid
         # recommendation partition while preserving every other valid route
         # field. Re-ask DeepSeek only for that partition rather than handing
@@ -3269,6 +3468,8 @@ async def plan_customer_question_semantic(
         and proposed_constraints
         and not result.get("fallback_reason")
     ):
+        pre_grounding_spans = result.get("recommendation_constraint_evidence_spans")
+        pre_grounding_spans = pre_grounding_spans if isinstance(pre_grounding_spans, dict) else {}
         try:
             reconciliation = await _semantic_recommendation_requirement_reconciliation(
                 db,
@@ -3350,6 +3551,26 @@ async def plan_customer_question_semantic(
             result["recommendation_constraint_evidence_spans"] = grounding["evidence_spans"]
             result["recommendation_constraint_evidence_sources"] = grounding["evidence_sources"]
             result["recommendation_constraint_grounding"] = "validated_semantic_grounding"
+        # If a semantic pass used a broad cleaning preference as evidence for
+        # the much narrower dishwasher field, preserve the customer's exact
+        # words as non-binding context after the ontology gate removes that
+        # field.  Candidate ranking/prose remain model-owned, while the
+        # verifier no longer treats "easy to clean" as "dishwasher safe".
+        grounded_constraints = result.get("recommendation_constraints") or {}
+        if "dishwasher_safe" in proposed_constraints and "dishwasher_safe" not in grounded_constraints:
+            rejected_cleaning_spans = [
+                str(span or "").strip()
+                for span in (pre_grounding_spans.get("dishwasher_safe") or [])
+                if str(span or "").strip()
+                and (str(span) in text or any(str(span) in prior for prior in context.get("prior_customer_preference_texts") or []))
+                and "洗碗机" not in str(span)
+                and "dishwasher" not in str(span).casefold()
+            ]
+            if rejected_cleaning_spans:
+                result["recommendation_soft_preferences"] = list(dict.fromkeys([
+                    *(result.get("recommendation_soft_preferences") or []),
+                    *rejected_cleaning_spans,
+                ]))[:5]
     # Review only the final accepted semantic shape. An earlier schema repair
     # can introduce or remove a supplemental QA query, so auditing an
     # intermediate result would leave the final answer scope unchecked.
@@ -3393,9 +3614,20 @@ async def plan_customer_question_semantic(
             # supplemental query.
             str(result.get("intent_coverage") or "").strip().lower() == "partial"
             or bool(str(result.get("supplemental_qa_evidence_query") or "").strip())
+            # ``compound`` with several formal fields is often complete, but a
+            # small semantic adapter can cheaply confirm whether a distinct
+            # non-column capability was also requested. It returns an empty
+            # query for a fields-only turn, preserving the formal contract.
+            or result.get("compound") is True
             or semantic_repair_reason == "empty_product_qa_field_semantics"
         )
-        and not result.get("fallback_reason")
+        and str(result.get("fallback_reason") or "") in {
+            "",
+            # A schema repair may correctly preserve the formal fields while
+            # still repeating the prior unknown-field warning. The bounded
+            # semantic adapter is precisely the safe recovery for that shape.
+            "unknown_canonical_field_in_multi_intent",
+        }
     ):
         # The preplan owns intent partitioning. A bounded follow-up is only
         # justified when it itself reported an incomplete/compound turn; do
@@ -3411,6 +3643,10 @@ async def plan_customer_question_semantic(
         if generated_query and not str(result.get("supplemental_qa_evidence_query") or "").strip():
             result["supplemental_qa_evidence_query"] = generated_query
             result["supplemental_qa_intent_review"] = "generated_semantic_query"
+            if result.get("fallback_reason") == "unknown_canonical_field_in_multi_intent":
+                result["fallback_reason"] = ""
+                result["accepted_or_overridden"] = "semantic_mixed_intent_partition_recovery"
+                result["override_reason"] = "formal_fields_plus_semantic_supplement"
         result["supplemental_safety_evaluation_requested"] = bool(
             generated_supplement.get("safety_evaluation_requested")
         )

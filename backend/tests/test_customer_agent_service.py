@@ -8889,7 +8889,7 @@ class CustomerServiceServiceTest(unittest.IsolatedAsyncioTestCase):
         self.assertIn("主体材质：硬质氧化铝合金", answer)
         self.assertIn("手柄材质：白蜡木", answer)
 
-    def test_service_product_query_shaping_builds_readable_fallback_from_candidates(self):
+    def test_service_product_query_shaping_does_not_invent_fallback_from_candidates(self):
         answer = customer_service_service._shape_product_query_output(
             "",
             [
@@ -8903,18 +8903,14 @@ class CustomerServiceServiceTest(unittest.IsolatedAsyncioTestCase):
             ["CW-C69-1", "CW-C06PRO"],
         )
 
-        self.assertTrue(answer.strip())
-        self.assertIn("锅具", answer)
-        self.assertIn("小方锅套装（CW-C69-1）", answer)
-        self.assertIn("轻途套锅（CW-C06PRO）", answer)
-        self.assertIn("继续筛选", answer)
+        self.assertEqual(answer, "")
 
     def test_service_product_query_shaping_does_not_fabricate_without_candidates(self):
         answer = customer_service_service._shape_product_query_output("", [], ["CW-C69-1"])
 
         self.assertEqual(answer, "")
 
-    def test_shape_answer_for_output_product_query_empty_answer_uses_candidate_fallback(self):
+    def test_shape_answer_for_output_product_query_does_not_invent_candidate_fallback(self):
         finalized = customer_service_service._shape_answer_for_output({
             "answer": "   ",
             "intent": "query_products",
@@ -8936,12 +8932,10 @@ class CustomerServiceServiceTest(unittest.IsolatedAsyncioTestCase):
         })
 
         self.assertEqual(finalized["answer_type"], "product_query")
-        self.assertTrue(finalized["answer"].strip())
-        self.assertIn("CW-C69-1", finalized["answer"])
-        self.assertIn("小方锅套装", finalized["answer"])
+        self.assertEqual(finalized["answer"], "")
         self.assertNotEqual(finalized["answer_type"], "knowledge_base_answer")
 
-    def test_shape_answer_for_output_scene_product_query_questions_never_return_empty_answer_with_candidates(self):
+    def test_shape_answer_for_output_scene_product_query_does_not_rule_render_candidates(self):
         scene_questions = [
             "双人徒步露营，希望锅具和收纳都别太占地方。",
             "家庭露营带孩子，锅具要稳一点也别太难清理。",
@@ -8972,8 +8966,7 @@ class CustomerServiceServiceTest(unittest.IsolatedAsyncioTestCase):
                 "skip_polish": True,
             })
             self.assertEqual(finalized["answer_type"], "product_query")
-            self.assertTrue(finalized["answer"].strip(), question)
-            self.assertIn("CW-C69-1", finalized["answer"], question)
+            self.assertEqual(finalized["answer"], "", question)
 
     async def test_named_product_handle_material_question_separates_body_and_handle_material(self):
         product = Product(

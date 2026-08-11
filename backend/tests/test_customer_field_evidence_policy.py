@@ -818,7 +818,7 @@ def test_capacity_evidence_rejects_placeholders_and_cross_field_values(raw_value
     assert customer_service_service._capacity_field_evidence(raw_value) == ""
 
 
-def test_capacity_evidence_keeps_only_capacity_unit_items():
+def test_capacity_evidence_keeps_capacity_units_and_labeled_component_sizes():
     raw_value = json.dumps(
         [
             {"label": "大锅", "value": "3L", "unit": ""},
@@ -828,7 +828,7 @@ def test_capacity_evidence_keeps_only_capacity_unit_items():
         ensure_ascii=False,
     )
 
-    assert customer_service_service._capacity_field_evidence(raw_value) == "大锅 3L，水壶 800ml"
+    assert customer_service_service._capacity_field_evidence(raw_value) == "大锅 3L，煎盘 8寸，水壶 800ml"
 
 
 def test_usage_field_evidence_keeps_complete_numbered_items():
@@ -1168,6 +1168,26 @@ def test_semantic_heat_source_literal_contract_rejects_wrong_ontology_code():
 
     assert constraints == {}
     assert spans == {}
+
+
+def test_dishwasher_constraint_requires_literal_dishwasher_provenance():
+    constraints, spans = customer_agent_planner_service._recommendation_literal_grounding_filter(
+        {"dishwasher_safe": True},
+        {"dishwasher_safe": ["优先推荐好清洁的"]},
+    )
+
+    assert constraints == {}
+    assert spans == {}
+
+
+def test_dishwasher_constraint_keeps_explicit_dishwasher_requirement():
+    constraints, spans = customer_agent_planner_service._recommendation_literal_grounding_filter(
+        {"dishwasher_safe": True},
+        {"dishwasher_safe": ["必须能放洗碗机"]},
+    )
+
+    assert constraints == {"dishwasher_safe": True}
+    assert spans == {"dishwasher_safe": ["必须能放洗碗机"]}
 
 
 def test_weight_evidence_fails_closed_for_physically_conflicting_high_capacity_value():
@@ -3026,3 +3046,5 @@ def test_marketing_set_composition_is_not_a_complete_package_list():
     assert customer_service_service._is_complete_package_contents_evidence(
         "包装清单：主锅、煎锅、可拆卸手柄和收纳袋。"
     )
+def test_people_field_accepts_explicit_single_person_audience_word():
+    assert customer_service_service._people_count_field_evidence("适合单人背包客") == "单人"
