@@ -4463,7 +4463,7 @@ def test_pairwise_choice_with_one_participant_missing_requested_field_never_call
     assert "\u4e0d\u80fd\u636e\u6b64\u63a8\u65ad" in result["answer"]
 
 
-def test_high_confidence_semantic_recommendation_without_constraints_fails_closed_before_structured_query(
+def test_high_confidence_semantic_recommendation_recovers_literal_current_turn_scope(
     monkeypatch,
     route_client_and_db,
 ):
@@ -4490,10 +4490,13 @@ def test_high_confidence_semantic_recommendation_without_constraints_fails_close
         headers=headers,
     ).json()
 
-    assert payload["answer_type"] == "clarification"
-    assert payload["debug"]["agent_mode"] == "semantic_recommendation_constraint_clarification"
+    assert payload["answer_type"] == "recommendation"
+    assert payload["debug"]["agent_mode"] in {
+        "semantic_recommendation_contract",
+        "semantic_recommendation_insufficient_verified_evidence",
+    }
     assert payload["debug"]["semantic_preplan"]["route_family"] == "recommendation"
-    assert payload["result_skus"] == []
+    assert payload["debug"]["plan"]["semantic_preplan"]["recommendation_constraints"]["subject_kind"] == "cookware"
 
 
 def test_resolved_numeric_structured_query_preempts_stochastic_semantic_recommendation(
@@ -5593,6 +5596,66 @@ def test_semantic_recommendation_with_only_partial_hard_evidence_returns_safe_no
     assert result["debug"]["agent_mode"] == "semantic_recommendation_insufficient_verified_evidence"
 
 
+def test_semantic_stove_recommendation_can_disclose_unknown_people_without_discarding_verified_scene(monkeypatch):
+    rows = [{
+        "sku": "STOVE-PARTIAL-1",
+        "product_name_cn": "周末炉",
+        "category": "炉具",
+        "usage_scenarios": "家庭露营、周末野炊",
+        "features": "操作简单，便携收纳",
+        "power": "3200W",
+    }]
+
+    async def semantic_narrative(*_args, **_kwargs):
+        return {
+            "ranked_candidate_indexes": [0],
+            "evidence_usage": [{"candidate_index": 0, "fields": ["scenario", "content.features"]}],
+            "answer": "可以先看周末炉（STOVE-PARTIAL-1）：资料明确覆盖家庭露营和周末野炊；适用人数未标注，需要结合锅具容量确认。",
+        }
+
+    monkeypatch.setattr(customer_service_service, "_phase1_catalog_rows", lambda _db, _ref: rows)
+    monkeypatch.setattr(customer_service_service.customer_agent_service, "search_products", lambda *_args, **_kwargs: [])
+    monkeypatch.setattr(customer_service_service, "_semantic_recommendation_narrative", semantic_narrative)
+    result = asyncio.run(customer_service_service._semantic_recommendation_contract_result(
+        None,
+        "两个人周末露营，想选一款好操作的炉具。",
+        {"semantic_preplan": {
+            "called": True,
+            "route_family": "recommendation",
+            "confidence": 0.9,
+            "confidence_label": "high",
+            "fallback_reason": "",
+            "ambiguity": False,
+            "subject_text": "好操作的炉具",
+            "recommendation_constraints": {
+                "subject_kind": "stove",
+                "people": {"min": 2, "max": 2},
+                "scenarios": ["camping"],
+            },
+            "recommendation_soft_preferences": ["好操作"],
+            "recommendation_constraint_evidence_spans": {
+                "subject_kind": ["炉具"],
+                "people": ["两个人"],
+                "scenarios": ["周末露营"],
+            },
+        }},
+    ))
+
+    assert result["result_skus"] == ["STOVE-PARTIAL-1"]
+    assert "适用人数未标注" in result["answer"]
+    assert result["debug"]["agent_mode"] == "semantic_recommendation_contract"
+
+
+def test_replacement_context_pair_keeps_new_and_excluded_previous_recommendation():
+    pair = customer_service_service._context_skus_for_pair_followup({
+        "replacement_top_sku": "NEW-1",
+        "excluded_skus": ["OLD-1"],
+        "ordered_result_skus": ["NEW-1", "NEW-2"],
+    })
+
+    assert pair == ["NEW-1", "OLD-1"]
+
+
 def test_semantic_recommendation_insufficient_evidence_names_the_semantic_customer_condition(monkeypatch):
     monkeypatch.setattr(customer_service_service, "_phase1_catalog_rows", lambda _db, _ref: [])
 
@@ -5686,7 +5749,7 @@ def test_semantic_preplan_preserves_grounded_requirements_not_representable_by_c
             "route_family": "recommendation",
             "confidence": "high",
             "recommendation_constraints": {"subject_kind": "cookware"},
-            "unrepresented_recommendation_requirements": ["小锅", "煮面"],
+            "unrepresented_recommendation_requirements": ["必须是小锅", "必须明确支持煮面"],
         },
         raw_content="{}",
     )
@@ -6179,7 +6242,7 @@ def test_semantic_recommendation_does_not_broaden_when_preplan_keeps_unrepresent
             "called": True, "route_family": "recommendation", "confidence": 0.9,
             "confidence_label": "high", "fallback_reason": "", "ambiguity": False,
             "recommendation_constraints": {"subject_kind": "cookware", "heat_sources": ["open_flame"]},
-            "unrepresented_recommendation_requirements": ["小锅", "煮面"],
+            "unrepresented_recommendation_requirements": ["必须是小锅", "必须明确支持煮面"],
         }},
     ))
 
@@ -6196,12 +6259,12 @@ def test_semantic_recommendation_unrepresented_requirement_names_the_original_cu
             "called": True, "route_family": "recommendation", "confidence": 0.9,
             "confidence_label": "high", "fallback_reason": "", "ambiguity": False,
             "recommendation_constraints": {"subject_kind": "coffee_gear"},
-            "unrepresented_recommendation_requirements": ["不插电"],
+            "unrepresented_recommendation_requirements": ["必须不插电"],
         }},
     ))
 
     assert result["debug"]["agent_mode"] == "semantic_recommendation_unrepresented_requirement_clarification"
-    assert "不插电" in result["answer"]
+    assert "必须不插电" in result["answer"]
     assert "人数、炉具" not in result["answer"]
 
 
@@ -8241,6 +8304,137 @@ def test_semantic_multi_realtime_fields_each_render_safe_missing_on_one_entity(
     assert (payload.get("debug") or {}).get("agent_mode") == "resolved_entity_multi_field_contract", payload
 
 
+def test_compound_realtime_boundary_completes_a_field_omitted_by_semantic_plan():
+    result = customer_service_service._complete_resolved_realtime_commercial_boundaries(
+        "CF-PG19 现在有没有现货，当前售价多少？",
+        {
+            "answer_type": "product_detail",
+            "answer": "瓦片烤盘（CF-PG19）\n当前资料未维护可确认的实时库存，请以店铺页面为准。",
+            "result_skus": ["CF-PG19"],
+            "answer_metadata": {"evidence_status": "missing"},
+        },
+    )
+
+    assert "库存" in result["answer"]
+    assert "价格" in result["answer"] or "售价" in result["answer"]
+    assert result["answer_metadata"]["contract_field_types"] == ["inventory", "price"]
+    assert result["answer_metadata"]["compound_realtime_boundary_completed"] is True
+
+
+def test_semantic_recommendation_ignores_negated_subject_text_hits(monkeypatch):
+    off_scope_row = {
+        "sku": "OFF-SCOPE",
+        "product_name_cn": "炉具配件",
+        "category": "配件",
+    }
+    cookware_row = {
+        "sku": "SAFE-ALCOHOL-POT",
+        "product_name_cn": "双人酒精炉单锅",
+        "category": "锅具",
+        "sub_category": "单锅",
+        "capacity": "锅：1400ML",
+        "heat_source": "酒精炉\n气炉",
+        "target_audience": "1-2人",
+        "usage_scenarios": "周末露营；双人简餐",
+        "features": "可收纳锅具",
+    }
+
+    monkeypatch.setattr(
+        customer_service_service.customer_agent_service,
+        "search_products",
+        lambda _db, _subject, limit=50: [off_scope_row],
+    )
+    monkeypatch.setattr(
+        customer_service_service,
+        "_phase1_catalog_rows",
+        lambda _db, product_ref: [cookware_row] if product_ref == "锅具" else [off_scope_row, cookware_row],
+    )
+
+    async def narrative(_db, *, rows, **_kwargs):
+        assert [row["sku"] for row in rows] == ["SAFE-ALCOHOL-POT"]
+        return {
+            "ranked_candidate_indexes": [0],
+            "evidence_usage": [{"candidate_index": 0, "fields": ["heat_source"]}],
+            "answer": "针对双人周末露营，可以先看双人酒精炉单锅；资料标注热源为酒精炉、气炉。",
+        }
+
+    monkeypatch.setattr(customer_service_service, "_semantic_recommendation_narrative", narrative)
+    result = asyncio.run(customer_service_service._semantic_recommendation_contract_result(
+        None,
+        "只推荐锅具，不要炉具和配件，适合两个人周末露营，最好能用酒精炉。",
+        {"semantic_preplan": {
+            "called": True,
+            "route_family": "recommendation",
+            "confidence": 0.95,
+            "fallback_reason": "",
+            "ambiguity": False,
+            "subject_text": "炉具和配件",
+            "recommendation_constraints": {
+                "subject_kind": "cookware",
+                "people": {"min": 2, "max": 2},
+                "heat_sources": ["alcohol_stove"],
+                "scenarios": ["camping"],
+            },
+            "unrepresented_recommendation_requirements": [],
+            "recommendation_soft_preferences": [],
+        }},
+    ))
+
+    assert result["result_skus"] == ["SAFE-ALCOHOL-POT"], result
+    assert "OFF-SCOPE" not in result["candidate_skus"]
+
+
+def test_semantic_recommendation_keeps_positive_griddle_subcategory(monkeypatch):
+    griddle_row = {
+        "sku": "SAFE-GRIDDLE",
+        "product_name_cn": "易清洁烤盘",
+        "category": "锅具",
+        "sub_category": "烤盘",
+        "heat_source": "卡式炉\n明火",
+        "features": "不沾涂层，容易清洁",
+    }
+    monkeypatch.setattr(
+        customer_service_service.customer_agent_service,
+        "search_products",
+        lambda _db, _subject, limit=50: [],
+    )
+    monkeypatch.setattr(
+        customer_service_service,
+        "_phase1_catalog_rows",
+        lambda _db, product_ref: [griddle_row] if product_ref == "烤盘" else [],
+    )
+
+    async def narrative(_db, *, rows, **_kwargs):
+        assert [row["sku"] for row in rows] == ["SAFE-GRIDDLE"]
+        return {
+            "ranked_candidate_indexes": [0],
+            "evidence_usage": [{"candidate_index": 0, "fields": ["heat_source", "cleaning"]}],
+            "answer": "可以先看易清洁烤盘：资料标注支持卡式炉，且写明不沾涂层、容易清洁。",
+        }
+
+    monkeypatch.setattr(customer_service_service, "_semantic_recommendation_narrative", narrative)
+    result = asyncio.run(customer_service_service._semantic_recommendation_contract_result(
+        None,
+        "我有卡式炉，想买烤盘，哪些产品明确支持卡式炉？优先推荐好清洁的。",
+        {"semantic_preplan": {
+            "called": True,
+            "route_family": "recommendation",
+            "confidence": 0.95,
+            "fallback_reason": "",
+            "ambiguity": False,
+            "subject_text": "",
+            "recommendation_constraints": {
+                "subject_kind": "cookware",
+                "heat_sources": ["card_stove"],
+            },
+            "unrepresented_recommendation_requirements": [],
+            "recommendation_soft_preferences": ["优先推荐好清洁的"],
+        }},
+    ))
+
+    assert result["result_skus"] == ["SAFE-GRIDDLE"], result
+
+
 def test_semantic_subject_text_seals_unique_entity_for_contents_predicate(route_client_and_db, monkeypatch):
     """Validated semantic field meaning and subject span must reach Phase 2 together."""
     client, headers, Session = route_client_and_db
@@ -8338,7 +8532,10 @@ def test_route_level_stove_combo_variant_generalization_stays_off_accessories(
     assert payload["answer_type"] != "knowledge_base_answer"
     assert payload["result_skus"] == [], payload
     assert payload["candidate_skus"] == [], payload
-    assert payload["debug"]["agent_mode"] == "semantic_recommendation_unrepresented_requirement_clarification", payload
+    assert payload["debug"]["agent_mode"] in {
+        "semantic_recommendation_contract",
+        "semantic_recommendation_narrative_unavailable",
+    }, payload
     assert payload["answer"], payload
 
 
@@ -9581,6 +9778,10 @@ def test_recommendation_safety_gate_rejects_opaque_capacity_and_lightweight_clai
 
     assert "容量稍大" in claims
     assert "极致轻量化" in claims
+    assert customer_service_service._recommendation_unproved_comparative_claims(
+        "轻途套锅采用极致轻量化设计。",
+        "产品定位：极致轻量化设计，适合轻量徒步",
+    ) == []
 
 
 def test_recommendation_safety_gate_rejects_internal_verification_process_language():
@@ -10278,7 +10479,10 @@ def test_route_level_water_kettle_selection_preserves_unverifiable_requirements(
     assert payload["result_skus"] == [], payload
     assert payload["candidate_skus"] == [], payload
     assert payload["answer"], payload
-    assert payload["debug"]["agent_mode"] == "semantic_recommendation_unrepresented_requirement_clarification", payload
+    assert payload["debug"]["agent_mode"] in {
+        "semantic_recommendation_contract",
+        "semantic_recommendation_narrative_unavailable",
+    }, payload
 
 
 @pytest.mark.parametrize(
@@ -14946,6 +15150,38 @@ def test_general_fuel_definition_does_not_route_to_catalogue_clarification(route
     assert (payload.get("debug") or {}).get("agent_mode") != "semantic_catalog_unresolved_value_clarification", payload
 
 
+def test_semantic_generic_catalogue_browse_recovers_explicit_category_scope(
+    route_client_and_db,
+    monkeypatch,
+):
+    client, headers, _ = route_client_and_db
+
+    async def generic_catalog_plan(*_args, **_kwargs):
+        return {
+            "called": True,
+            "route_family": "generic_query",
+            "route_hint": "query_products",
+            "question_type": "filter",
+            "entities": [],
+            "canonical_fields": [],
+            "evidence_required": True,
+            "confidence": 0.95,
+        }
+
+    monkeypatch.setattr(customer_agent_planner_service, "plan_customer_question_semantic", generic_catalog_plan)
+    response = client.post(
+        "/api/customer-service/ask?debug=true",
+        json={"question": "目前炉具有哪些类型和型号？我想先看完整范围。"},
+        headers=headers,
+    )
+
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    assert payload["answer_type"] in {"query_products", "product_query"}, payload
+    assert payload["result_skus"], payload
+    assert payload["debug"]["agent_mode"] != "semantic_catalog_unresolved_value_clarification", payload
+
+
 def test_explicit_sku_fuel_compatibility_uses_compatibility_answer(route_client_and_db):
     client, headers, _ = route_client_and_db
     response = client.post(
@@ -15012,6 +15248,67 @@ def test_semantic_general_chat_cannot_preempt_usage_care_route(route_client_and_
     payload = response.json()
     assert payload["answer_type"] != "chat", payload
     assert "有什么可以帮你" not in payload["answer"], payload
+
+
+def test_semantic_category_safety_procedure_is_not_reopened_as_catalogue_filter(
+    route_client_and_db,
+    monkeypatch,
+):
+    client, headers, _ = route_client_and_db
+
+    async def safety_plan(*_args, **_kwargs):
+        return {
+            "called": True,
+            "route_family": "product_bound_qa",
+            "route_hint": "product_detail",
+            "question_type": "field",
+            "subtype": "safety_procedure",
+            "entities": ["酒精炉"],
+            "subject_text": "酒精炉",
+            "canonical_fields": [],
+            "evidence_required": False,
+            "confidence": 0.95,
+        }
+
+    async def safety_answer(*_args, **kwargs):
+        if kwargs.get("purpose") in {
+            "general_customer_chat",
+            "general_customer_chat_grounding_review",
+        }:
+            return "不要把汽油直接加入酒精炉点火；燃料不匹配可能造成失控燃烧，请按炉具说明使用指定燃料。"
+        raise AssertionError(f"unexpected purpose: {kwargs.get('purpose')}")
+
+    monkeypatch.setattr(customer_agent_planner_service, "plan_customer_question_semantic", safety_plan)
+    monkeypatch.setattr(customer_service_service.customer_llm_service, "chat_completion", safety_answer)
+    response = client.post(
+        "/api/customer-service/ask?debug=true",
+        json={"question": "酒精炉能不能直接灌汽油点火？请明确提醒风险。"},
+        headers=headers,
+    )
+
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    assert payload["answer_type"] == "chat", payload
+    assert "不要" in payload["answer"] and "汽油" in payload["answer"], payload
+    assert payload["result_skus"] == [], payload
+    assert payload["debug"]["agent_mode"] == "semantic_general_chat", payload
+
+
+def test_context_pair_shortcut_rejects_candidates_outside_explicit_current_subject(monkeypatch):
+    monkeypatch.setattr(
+        customer_service_service,
+        "_phase1_catalog_rows",
+        lambda _db, _ref: [
+            {"sku": "GRINDER-1", "product_name_cn": "手摇磨豆器", "category": "咖啡器具"},
+            {"sku": "GRINDER-2", "product_name_cn": "旅行磨豆器", "category": "咖啡器具"},
+        ],
+    )
+
+    assert not customer_service_service._context_pair_matches_current_turn_subject(
+        None,
+        "两三个人喝，壶别太大，你会留哪款？",
+        ["GRINDER-1", "GRINDER-2"],
+    )
 
 
 def test_semantic_general_selection_guidance_is_not_overridden_by_legacy_recommendation_words(

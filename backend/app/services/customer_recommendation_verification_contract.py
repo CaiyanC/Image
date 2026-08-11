@@ -179,7 +179,11 @@ def _apply_literal_use_requirements(
         ("windproof_required", "windproof", ("防风", "抗风")),
         ("portability_required", "portability", ("便携", "好带", "轻便")),
         ("storage_required", "storage", ("收纳", "套娃")),
-        ("cleaning_required", "cleaning", ("好清洁", "易清洁", "容易清洁", "便于清洁", "清洗方便")),
+        (
+            "cleaning_required",
+            "cleaning",
+            ("好清洁", "易清洁", "容易清洁", "便于清洁", "清洗方便", "好洗", "容易洗", "方便洗"),
+        ),
     )
     for field_name, label, terms in requirements:
         if any(term in text for term in terms):
@@ -559,9 +563,10 @@ def build_recommendation_request_contract(
     )
     waterware_subtype = (
         "kettle"
-        if any(term in text for term in ("水壶", "烧水壶", "茶壶"))
+        if any(term in text for term in ("水壶", "烧水壶", "茶壶", "壶"))
         else "cup" if any(term in text for term in ("水杯", "杯子", "保温杯")) else None
     )
+    has_waterware_subject = any(term in text for term in ("水壶", "水杯", "水具", "杯子", "壶"))
     explicit_accessory_requirements = []
     if any(term in text for term in ("蒸屉", "蒸笼", "蒸米饭", "蒸饭")):
         explicit_accessory_requirements.append("蒸屉兼容")
@@ -595,6 +600,17 @@ def build_recommendation_request_contract(
                 "source_turn": 1,
                 "provenance": "current_turn_explicit_subject",
             }
+        elif has_waterware_subject:
+            semantic_contract.subject_category = "水具"
+            semantic_contract.subject_kind = "waterware"
+            semantic_contract.subject_subtype = waterware_subtype
+            semantic_contract.source_spans["subject"] = next(
+                term for term in ("水壶", "烧水壶", "茶壶", "水具", "壶") if term in text
+            )
+            semantic_contract.field_provenance["subject_category"] = {
+                "source_turn": 1,
+                "provenance": "current_turn_explicit_subject",
+            }
         elif stove_subject:
             semantic_contract.subject_category = "炉具"
             semantic_contract.subject_kind = "stove"
@@ -615,7 +631,7 @@ def build_recommendation_request_contract(
             semantic_contract.subject_subtype = waterware_subtype
             semantic_contract.source_spans["subject"] = next(
                 term
-                for term in (("水壶", "烧水壶", "茶壶") if waterware_subtype == "kettle" else ("水杯", "杯子", "保温杯"))
+                for term in (("水壶", "烧水壶", "茶壶", "壶") if waterware_subtype == "kettle" else ("水杯", "杯子", "保温杯"))
                 if term in text
             )
         elif semantic_contract.subject_kind == "stove":
@@ -660,6 +676,12 @@ def build_recommendation_request_contract(
             semantic_contract.capacity_max_ml = capacity_max
             semantic_contract.source_spans["capacity"] = capacity_span
             _append_unique(semantic_contract.hard_constraints, "capacity")
+            semantic_contract.field_provenance["capacity"] = {
+                "source_turn": 1,
+                "provenance": "current_turn",
+            }
+        elif any(term in text for term in ("别太大", "不要太大", "小一点", "小一些", "小容量")):
+            _append_unique(semantic_contract.soft_preferences, "capacity")
             semantic_contract.field_provenance["capacity"] = {
                 "source_turn": 1,
                 "provenance": "current_turn",
@@ -744,7 +766,6 @@ def build_recommendation_request_contract(
             semantic_contract.scenario = semantic_scenarios
         return semantic_contract
     contract = RecommendationRequestContract()
-    has_waterware_subject = any(term in text for term in ("水壶", "水杯", "水具", "杯子"))
     if explicit_accessory_subject:
         contract.subject_category = "配件"
         contract.subject_kind = "accessories"
@@ -788,6 +809,8 @@ def build_recommendation_request_contract(
         _append_unique(contract.hard_constraints, "capacity")
     elif any(term in text for term in ("容量大", "容量要大", "大容量", "容量宽裕", "容量够用", "容量别太小", "容量不要太小")):
         contract.capacity_requirement = "spacious"
+        _append_unique(contract.soft_preferences, "capacity")
+    elif any(term in text for term in ("别太大", "不要太大", "小一点", "小一些", "小容量")):
         _append_unique(contract.soft_preferences, "capacity")
 
     _, weight_max, weight_span = _parse_numeric_limit(text, "weight")
@@ -1027,10 +1050,20 @@ def _row_scope(row: dict[str, Any]) -> str:
 
 
 def _row_matches_excluded_category(row: dict[str, Any], excluded_categories: list[str]) -> bool:
-    category_text = " ".join(
+    structured_category = " ".join(
         str(row.get(key) or "")
-        for key in ("category", "sub_category", "product_name_cn", "product_name_en")
-    )
+        for key in ("category", "sub_category")
+    ).strip()
+    # Category fields are the authoritative scope. Product names can mention
+    # the compatible appliance (for example “酒精炉单锅”) without turning a
+    # cookware row into a stove. Use names only when imported category data is
+    # absent or wholly generic.
+    category_text = structured_category
+    if not structured_category or structured_category in {"产品", "户外用品", "其他", "未分类"}:
+        category_text = " ".join(
+            str(row.get(key) or "")
+            for key in ("category", "sub_category", "product_name_cn", "product_name_en")
+        )
     aliases = {
         "炉具": ("炉具", "炉子", "燃气炉", "卡式炉", "酒精炉", "气炉"),
         "配件": ("配件", "附件", "锅夹", "点火器", "炉芯", "内胆"),
@@ -1246,13 +1279,32 @@ def _numeric_values(raw: Any, *, kind: str) -> list[float]:
         return []
     unit_pattern = r"(ml|毫升|l|升)" if kind == "capacity" else r"(g|克|kg|千克|公斤)"
     values: list[float] = []
-    for match in re.finditer(rf"(\d+(?:\.\d+)?)\s*{unit_pattern}", text, re.IGNORECASE):
+    for match in re.finditer(rf"(?<![\d.])(\d+(?:\.\d+)?)\s*{unit_pattern}(?![A-Za-z])", text, re.IGNORECASE):
         value = float(match.group(1))
         unit = match.group(2).lower()
         if unit in {"l", "升", "kg", "千克", "公斤"}:
             value *= 1000
         values.append(value)
     return values
+
+
+def _capacity_consistent_with_product_identity(row: dict[str, Any]) -> bool:
+    """Do not treat a contradictory imported capacity cell as sealed evidence."""
+    capacity_values = _numeric_values(row.get("capacity"), kind="capacity")
+    identity_text = " ".join(
+        str(value or "")
+        for value in (
+            row.get("product_name_cn") or row.get("product_name_en"),
+            row.get("features") or row.get("technical_advantages"),
+            row.get("long_description_cn"),
+        )
+    )
+    identity_values = set(_numeric_values(identity_text, kind="capacity"))
+    return not (
+        len(identity_values) == 1
+        and capacity_values
+        and next(iter(identity_values)) not in capacity_values
+    )
 
 
 def _condition(status: str, source: str = "", raw: Any = None, **extra: Any) -> dict[str, Any]:
@@ -1350,7 +1402,11 @@ def verify_recommendation_candidates(
                 if not matched:
                     rejection_reasons.append("scenario_condition_not_met")
 
-        capacity_values = _numeric_values(row.get("capacity"), kind="capacity")
+        capacity_values = (
+            _numeric_values(row.get("capacity"), kind="capacity")
+            if _capacity_consistent_with_product_identity(row)
+            else []
+        )
         if contract.capacity_min_ml is not None or contract.capacity_max_ml is not None:
             if not capacity_values:
                 evidence["capacity"] = _condition("unknown")
@@ -1745,7 +1801,11 @@ def _row_customer_summary(row: dict[str, Any]) -> str:
             weight_text = f"{float(weight_text):g}"
         if weight_text:
             details.append(f"重量{weight_text}g" if weight_text.replace(".", "", 1).isdigit() else f"重量{weight_text}")
-    capacity = _compact_customer_value(value("capacity", "容量"), limit=52)
+    capacity = (
+        _compact_customer_value(value("capacity", "容量"), limit=52)
+        if _capacity_consistent_with_product_identity(row)
+        else ""
+    )
     if capacity:
         details.append(f"容量{capacity}")
     heat_source = _compact_customer_value(value("heat_source", "热源"))

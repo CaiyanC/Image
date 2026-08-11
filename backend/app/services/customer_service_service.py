@@ -138,6 +138,56 @@ def _apply_answer_coverage_contract(agent_result: dict) -> dict:
     return agent_result
 
 
+def _complete_resolved_realtime_commercial_boundaries(question: str, agent_result: dict) -> dict:
+    """Cover every explicitly requested unsupported realtime field.
+
+    The semantic planner normally decomposes compound requests.  This final
+    evidence boundary handles the provider occasionally returning only one of
+    two explicit commercial fields, without inventing either value or
+    replacing an otherwise natural answer.
+    """
+    if (
+        not isinstance(agent_result, dict)
+        or str(agent_result.get("answer_type") or "") != "product_detail"
+        or len(agent_result.get("result_skus") or []) != 1
+    ):
+        return agent_result
+    text = str(question or "")
+    labels = [
+        label
+        for label, terms in _RESOLVED_ENTITY_UNKNOWN_FACT_TERMS.items()
+        if label in _RESOLVED_ENTITY_REALTIME_COMMERCIAL_LABELS
+        and any(term in text for term in terms)
+    ]
+    labels = list(dict.fromkeys(labels))
+    if len(labels) < 2:
+        return agent_result
+    answer = str(agent_result.get("answer") or "").strip()
+    if not any(term in answer for term in ("未", "没有", "无法", "不能")):
+        return agent_result
+    missing_labels = [
+        label
+        for label in labels
+        if not any(term in answer for term in _RESOLVED_ENTITY_UNKNOWN_FACT_TERMS[label])
+    ]
+    if not missing_labels:
+        return agent_result
+    additions = [
+        _resolved_entity_unknown_fact_answer("", label).strip()
+        for label in missing_labels
+    ]
+    agent_result["answer"] = "\n".join([answer, *additions])
+    metadata = agent_result.get("answer_metadata") if isinstance(agent_result.get("answer_metadata"), dict) else {}
+    field_types = [
+        customer_field_contract.field_type_from_detail_label(label)
+        for label in labels
+    ]
+    metadata["contract_field_types"] = list(dict.fromkeys(field for field in field_types if field))
+    metadata["compound_realtime_boundary_completed"] = True
+    agent_result["answer_metadata"] = metadata
+    return agent_result
+
+
 def _preserve_recommendation_customer_context(question: str, agent_result: dict) -> dict:
     """Keep an explicit recommendation scenario in a fact-only fallback."""
     if not isinstance(agent_result, dict) or agent_result.get("answer_type") != "recommendation":
@@ -1353,6 +1403,7 @@ async def _save_agent_result_and_return(
     )
     # Explicit single-product field answers must not be completed with unrelated QA or selling points.
     agent_result = _enforce_field_evidence_policy(db, question, agent_result)
+    agent_result = _complete_resolved_realtime_commercial_boundaries(question, agent_result)
     agent_result = await _semantic_render_structured_usage_answer(
         db,
         question=question,
@@ -2214,6 +2265,17 @@ def _should_bypass_semantic_preplan_for_bound_context_followup(
         return False
     if _looks_like_negated_selected_result_context_reference(question):
         return False
+    current_turn_subject = (
+        customer_recommendation_verification_contract.build_recommendation_request_contract(
+            question
+        )
+    )
+    if current_turn_subject.subject_kind or current_turn_subject.subject_category:
+        # A role/category named on this turn can select one component from a
+        # prior mixed recommendation (for example, the kettle from a coffee
+        # kit). Let semantic planning interpret that role instead of blindly
+        # comparing the first two persisted SKUs.
+        return False
     if (
         _is_comparison_choice_followup_question(question)
         or (
@@ -2699,6 +2761,111 @@ def _apply_structured_named_field_entity_adapter(
     return True
 
 
+def _one_edit_apart(left: str, right: str) -> bool:
+    """Return whether two compact strings differ by exactly one edit."""
+    if left == right or abs(len(left) - len(right)) > 1:
+        return False
+    if len(left) > len(right):
+        left, right = right, left
+    if len(left) == len(right):
+        return sum(a != b for a, b in zip(left, right)) == 1
+    index_left = index_right = differences = 0
+    while index_left < len(left) and index_right < len(right):
+        if left[index_left] == right[index_right]:
+            index_left += 1
+            index_right += 1
+            continue
+        differences += 1
+        index_right += 1
+        if differences > 1:
+            return False
+    return True
+
+
+def _semantic_unique_typo_near_catalog_subject(
+    entity: str,
+    products: list[Product],
+) -> str:
+    """Recover a one-character shopper typo only when the catalogue is unique.
+
+    Semantic planning must already have identified a product mention.  This
+    helper supplies no SKU or facts: it merely maps that literal mention to a
+    canonical display name when exactly one catalogue row is one edit away.
+    Ambiguous near matches continue to fail closed.
+    """
+    raw_entity = str(entity or "").strip()
+    normalized = customer_agent_service.normalize_search_text(raw_entity).lower()
+    normalized = re.sub(
+        r"(?:这个|那个|这款|那款)?(?:产品|商品|炉子|炉具|锅具|水壶)$",
+        "",
+        normalized,
+    ).strip()
+    compact_entity = re.sub(r"[\s\-_()（）]+", "", normalized)
+    if len(compact_entity) < 3 or len(re.findall(r"[\u4e00-\u9fff]", compact_entity)) < 2:
+        return ""
+
+    owners: dict[str, str] = {}
+    exact_owner_found = False
+    for product in products:
+        sku = str(product.sku or "").strip().upper()
+        display_name = str(product.product_name_cn or product.product_name_en or "").strip()
+        if not sku or not display_name:
+            continue
+        aliases = {
+            str(alias or "").strip()
+            for source in (product.product_name_cn, product.product_name_en)
+            for alias in customer_agent_service.product_name_aliases(str(source or ""))
+            if str(alias or "").strip()
+        }
+        for alias in aliases:
+            compact_alias = re.sub(
+                r"[\s\-_()（）]+",
+                "",
+                customer_agent_service.normalize_search_text(alias).lower(),
+            )
+            if len(compact_alias) < 3:
+                continue
+            if compact_alias == compact_entity:
+                exact_owner_found = True
+                continue
+            if _one_edit_apart(compact_entity, compact_alias):
+                owners[sku] = display_name
+                break
+    if exact_owner_found:
+        return ""
+    return next(iter(owners.values())) if len(owners) == 1 else ""
+
+
+def _apply_semantic_unique_typo_subject_recovery(
+    db: Session,
+    question: str,
+    preplan: dict | None,
+) -> bool:
+    """Correct one unique literal typo after semantic product-scope sealing."""
+    value = preplan if isinstance(preplan, dict) else {}
+    if not (
+        _semantic_preplan_confident(value, minimum=0.65)
+        and not value.get("ambiguity")
+        and not value.get("fallback_reason")
+        and str(value.get("route_family") or "").strip() == "product_bound_qa"
+    ):
+        return False
+    subject = str(value.get("subject_text") or "").strip()
+    normalized_subject = customer_agent_service.normalize_search_text(subject)
+    normalized_question = customer_agent_service.normalize_search_text(question)
+    if not normalized_subject or normalized_subject not in normalized_question:
+        return False
+    products = db.query(Product).order_by(Product.sku.asc()).all()
+    canonical = _semantic_unique_typo_near_catalog_subject(subject, products)
+    if not canonical or canonical == subject:
+        return False
+    value["subject_text"] = canonical
+    entities = [str(item or "").strip() for item in value.get("entities") or [] if str(item or "").strip()]
+    value["entities"] = [canonical if item == subject else item for item in entities] or [canonical]
+    value["semantic_identity_recovery"] = "catalog_unique_one_edit"
+    return True
+
+
 def _semantic_comparison_entity_contracts(
     question: str,
     semantic_preplan: dict | None,
@@ -2710,8 +2877,7 @@ def _semantic_comparison_entity_contracts(
     preplan = semantic_preplan if isinstance(semantic_preplan, dict) else {}
     if (
         not _semantic_pairwise_contract_candidate(preplan)
-        or not _semantic_preplan_confident(preplan, minimum=0.9)
-        or bool(preplan.get("ambiguity"))
+        or not _semantic_preplan_confident(preplan, minimum=0.65)
     ):
         return []
     normalized_question = customer_agent_service.normalize_search_text(question)
@@ -2730,6 +2896,7 @@ def _semantic_comparison_entity_contracts(
     )
     participants: list[str] = []
     context_anchor_participants: set[str] = set()
+    coordinated_ellipsis_participants: set[str] = set()
     for raw_participant in preplan.get("entities") or []:
         participant = str(raw_participant or "").strip()
         normalized_participant = customer_agent_service.normalize_search_text(participant)
@@ -2745,9 +2912,16 @@ def _semantic_comparison_entity_contracts(
                 )
                 if str(value or "").strip()
             }
-            if not allow_context_anchor or normalized_participant not in anchor_identity_values:
+            if allow_context_anchor and normalized_participant in anchor_identity_values:
+                context_anchor_participants.add(participant)
+            elif _is_coordinated_entity_ellipsis(
+                normalized_question,
+                normalized_participant,
+                participants,
+            ):
+                coordinated_ellipsis_participants.add(participant)
+            else:
                 return []
-            context_anchor_participants.add(participant)
         participants.append(participant)
     if len(participants) < 2:
         return []
@@ -2765,7 +2939,7 @@ def _semantic_comparison_entity_contracts(
     field_type = canonical_fields[0] if len(canonical_fields) == 1 else None
     contracts: list[customer_entity_resolution_contract.EntityResolutionContract] = []
     resolved_skus: set[str] = set()
-    for participant in participants:
+    for participant_index, participant in enumerate(participants):
         if participant in context_anchor_participants and anchor_product is not None:
             normalized_participant = customer_agent_service.normalize_search_text(participant)
             matched_by = (
@@ -2790,19 +2964,110 @@ def _semantic_comparison_entity_contracts(
                 status_reason="trusted_context_anchor_exact",
             )
         else:
+            contract_subject = participant
+            if (
+                customer_agent_service.normalize_search_text(participant)
+                in normalized_question
+                or participant in coordinated_ellipsis_participants
+            ):
+                contract_subject = (
+                    _semantic_unique_typo_near_catalog_subject(participant, products)
+                    or participant
+                )
             contract = customer_entity_resolution_contract.build_entity_resolution_contract(
                 question,
                 products,
-                entity_text_override=participant,
+                entity_text_override=contract_subject,
                 field_type_override=field_type,
                 participant_local_identity=True,
             )
         decision = customer_entity_resolution_contract.can_resolve_single_product(contract, products)
+        if (
+            not decision.allowed
+            and customer_agent_service.normalize_search_text(participant) in normalized_question
+            and participant_index > 0
+        ):
+            expanded_contracts: dict[str, customer_entity_resolution_contract.EntityResolutionContract] = {}
+            participant_start = normalized_question.find(
+                customer_agent_service.normalize_search_text(participant)
+            )
+            for prior_participant in participants[:participant_index]:
+                normalized_prior = customer_agent_service.normalize_search_text(prior_participant)
+                prior_start = normalized_question.find(normalized_prior)
+                prior_end = prior_start + len(normalized_prior)
+                between = (
+                    normalized_question[prior_end:participant_start]
+                    if prior_start >= 0 and participant_start >= prior_end
+                    else ""
+                )
+                if not any(joiner in between for joiner in ("和", "与", "跟", "及", "、", "/")):
+                    continue
+                # Chinese coordination may omit the shared family in the
+                # second literal mention ("Family A 和 B"). Try only prefixes
+                # from the already literal first participant; catalogue exact
+                # or unique one-edit sealing remains mandatory.
+                for cut in range(2, len(normalized_prior)):
+                    expanded = f"{normalized_prior[:cut]}{participant}"
+                    canonical = _semantic_unique_typo_near_catalog_subject(expanded, products) or expanded
+                    expanded_contract = customer_entity_resolution_contract.build_entity_resolution_contract(
+                        question,
+                        products,
+                        entity_text_override=canonical,
+                        field_type_override=field_type,
+                        participant_local_identity=True,
+                    )
+                    expanded_decision = customer_entity_resolution_contract.can_resolve_single_product(
+                        expanded_contract,
+                        products,
+                    )
+                    if expanded_decision.allowed and expanded_decision.resolved_sku:
+                        expanded_contracts[expanded_decision.resolved_sku] = expanded_contract
+            if len(expanded_contracts) == 1:
+                contract = next(iter(expanded_contracts.values()))
+                decision = customer_entity_resolution_contract.can_resolve_single_product(contract, products)
         if not decision.allowed or not decision.resolved_sku or decision.resolved_sku in resolved_skus:
+            return []
+        if (
+            participant in coordinated_ellipsis_participants
+            and contract.matched_by not in {"canonical_name_exact", "normalized_alias_exact"}
+        ):
+            # Ellipsis completion may recover only an identity that the
+            # catalogue itself seals exactly. Fuzzy recall is never enough.
             return []
         resolved_skus.add(decision.resolved_sku)
         contracts.append(contract)
     return contracts
+
+
+def _is_coordinated_entity_ellipsis(
+    normalized_question: str,
+    normalized_participant: str,
+    literal_participants: list[str],
+) -> bool:
+    """Recognize a model-expanded participant in a coordinated product phrase.
+
+    Chinese shoppers commonly state a shared family only once, e.g.
+    ``天鹅壶4杯黑色和9杯黑色``.  The semantic planner may expand the second
+    participant to its complete catalogue name.  Accept that expansion only
+    when a meaningful shared prefix belongs to an already literal participant
+    and the entire distinguishing suffix is present in the current question;
+    the caller still requires an exact, unique catalogue identity.
+    """
+    if not normalized_question or not normalized_participant:
+        return False
+    for literal in literal_participants:
+        normalized_literal = customer_agent_service.normalize_search_text(literal)
+        if not normalized_literal or normalized_literal not in normalized_question:
+            continue
+        shared = 0
+        for left, right in zip(normalized_literal, normalized_participant):
+            if left != right:
+                break
+            shared += 1
+        suffix = normalized_participant[shared:]
+        if shared >= 2 and len(suffix) >= 2 and suffix in normalized_question:
+            return True
+    return False
 
 
 def _apply_semantic_comparison_plan(
@@ -3205,6 +3470,18 @@ def _semantic_product_navigation_preempts_catalog_count(semantic_preplan: dict |
 
 
 def _product_row_from_model(product: Product, specs: ProductSpecs | None = None, business: ProductBusiness | None = None, content: ProductContent | None = None) -> dict:
+    raw_capacity = getattr(specs, "capacity", "") if specs else ""
+    capacity_consistent = _capacity_evidence_is_internally_consistent(
+        raw_capacity,
+        " ".join(
+            str(value or "")
+            for value in (
+                product.product_name_cn or product.product_name_en,
+                getattr(specs, "technical_advantages", "") if specs else "",
+                getattr(content, "long_description_cn", "") if content else "",
+            )
+        ),
+    ) if raw_capacity else True
     return {
         "sku": product.sku,
         "barcode": product.barcode,
@@ -3217,7 +3494,8 @@ def _product_row_from_model(product: Product, specs: ProductSpecs | None = None,
         "product_level": product.product_level,
         "launch_date": str(product.launch_date) if product.launch_date else "",
         "lifecycle_status": product.lifecycle_status,
-        "capacity": getattr(specs, "capacity", "") if specs else "",
+        "capacity": raw_capacity if capacity_consistent else "",
+        "capacity_evidence_conflict": not capacity_consistent,
         "size_info": getattr(specs, "size_info", "") if specs else "",
         "power": getattr(specs, "power", "") if specs else "",
         "heat_source": getattr(specs, "heat_source", "") if specs else "",
@@ -8906,10 +9184,22 @@ def _parse_semantic_json_object(content: str) -> dict[str, Any] | None:
     return data if isinstance(data, dict) else None
 
 
-def _capacity_evidence_is_internally_consistent(value: Any) -> bool:
+def _capacity_evidence_is_internally_consistent(value: Any, identity_text: str = "") -> bool:
     """Reject only capacity text whose own size labels contradict each other."""
     text = str(value or "").strip()
     if not text:
+        return False
+
+    def normalized_capacities(source: str) -> list[float]:
+        values: list[float] = []
+        for match in re.finditer(r"(?<![\d.])(\d+(?:\.\d+)?)\s*(ml|毫升|l|升)(?![a-z])", source, flags=re.I):
+            amount = float(match.group(1))
+            values.append(amount * (1000 if match.group(2).casefold() in {"l", "升"} else 1))
+        return values
+
+    identity_capacities = set(normalized_capacities(str(identity_text or "")))
+    field_capacities = normalized_capacities(text)
+    if len(identity_capacities) == 1 and field_capacities and next(iter(identity_capacities)) not in field_capacities:
         return False
 
     labelled_values: dict[str, list[float]] = {"大锅": [], "小锅": []}
@@ -8936,6 +9226,7 @@ def _validate_semantic_recommendation_narrative(
     candidate_count: int,
     verified_fields_by_index: dict[int, set[str]],
     candidate_identity_tokens_by_index: dict[int, set[str]] | None = None,
+    verified_evidence_values_by_index: dict[int, dict[str, Any]] | None = None,
     required_evidence_fields_by_index: dict[int, dict[str, set[str]]] | None = None,
     expected_ranked_count: int | None = None,
 ) -> dict[str, Any] | None:
@@ -9019,6 +9310,53 @@ def _validate_semantic_recommendation_narrative(
         normalized_usage.append({"candidate_index": index, "fields": list(dict.fromkeys(fields))})
     if used_indexes != set(ranked):
         return None
+    if verified_evidence_values_by_index:
+        # Natural-language rendering stays model-owned, but measurements are
+        # immutable catalogue facts.  Providers occasionally drop the leading
+        # ``1.`` from values such as 1.4L/1.7L; reject any visible measurement
+        # token that does not occur literally in the selected sealed packet.
+        measurement_pattern = re.compile(
+            r"(?<![\d.])\d+(?:\.\d+)?\s*(?:ml|毫升|l|升|kg|千克|公斤|g|克|kw|千瓦|w|瓦|cm|厘米|mm|毫米|英寸|寸)(?![a-z])",
+            flags=re.IGNORECASE,
+        )
+
+        def measurements(value: Any) -> set[str]:
+            return {
+                re.sub(r"\s+", "", match.group(0)).casefold()
+                for match in measurement_pattern.finditer(str(value or ""))
+            }
+
+        allowed_measurements: set[str] = set()
+        for index in ranked:
+            for value in verified_evidence_values_by_index.get(index, {}).values():
+                allowed_measurements.update(measurements(value))
+        if not measurements(answer).issubset(allowed_measurements):
+            return None
+        cursor = 0
+        for index in ranked:
+            evidence_values = verified_evidence_values_by_index.get(index, {})
+            product_name = str(evidence_values.get("__product_name__") or "").strip()
+            if not product_name:
+                continue
+            start = answer.find(product_name, cursor)
+            if start < 0:
+                continue
+            next_starts = [
+                answer.find(
+                    str(verified_evidence_values_by_index.get(other, {}).get("__product_name__") or "").strip(),
+                    start + len(product_name),
+                )
+                for other in ranked
+                if other != index
+                and str(verified_evidence_values_by_index.get(other, {}).get("__product_name__") or "").strip()
+            ]
+            end = min((position for position in next_starts if position >= 0), default=len(answer))
+            candidate_measurements: set[str] = set()
+            for value in evidence_values.values():
+                candidate_measurements.update(measurements(value))
+            if not measurements(answer[start:end]).issubset(candidate_measurements):
+                return None
+            cursor = start + len(product_name)
     normalized_usage_by_index = {
         item["candidate_index"]: set(item["fields"])
         for item in normalized_usage
@@ -9058,7 +9396,23 @@ _RECOMMENDATION_UNPROVED_COMPARATIVE_CLAIM_RE = re.compile(
     r"(?:最)\s*(?:轻|重|便宜|贵|省钱|耐用|实用|适合|好|佳|优|快|慢|小|大|强|弱|安全|稳定|方便|便携|可靠|省事|均衡|全能)"
     r"|(?:综合\s*(?:首选|推荐|最佳)|首选|最佳|容量\s*稍[大小]|极致\s*轻量(?:化)?)"
 )
-def _recommendation_unproved_comparative_claims(answer: str) -> list[str]:
+def _recommendation_allowed_evidence_text(
+    candidates: list[dict[str, Any]],
+    narrative: dict[str, Any] | None,
+) -> str:
+    selected = set((narrative or {}).get("ranked_candidate_indexes") or [])
+    return " ".join(
+        str(value or "")
+        for index, candidate in enumerate(candidates)
+        if index in selected
+        for value in (candidate.get("sealed_evidence") or {}).values()
+    )
+
+
+def _recommendation_unproved_comparative_claims(
+    answer: str,
+    allowed_evidence_text: str = "",
+) -> list[str]:
     """Return catalogue-wide rankings no selected-candidate evidence can prove.
 
     This is deliberately an output safety gate, never a field or product
@@ -9070,7 +9424,12 @@ def _recommendation_unproved_comparative_claims(answer: str) -> list[str]:
     exposing an unproved catalogue-wide superlative as fact.
     """
     text = str(answer or "")
-    return list(dict.fromkeys(match.group(0) for match in _RECOMMENDATION_UNPROVED_COMPARATIVE_CLAIM_RE.finditer(text)))
+    allowed = str(allowed_evidence_text or "")
+    return list(dict.fromkeys(
+        match.group(0)
+        for match in _RECOMMENDATION_UNPROVED_COMPARATIVE_CLAIM_RE.finditer(text)
+        if match.group(0) not in allowed
+    ))
 
 
 _RECOMMENDATION_INTERNAL_PROCESS_CLAIM_RE = re.compile(
@@ -9524,6 +9883,13 @@ async def _semantic_recommendation_narrative_rewrite(
             index: {str(candidate.get("product_name") or "").strip(), str(candidate.get("sku") or "").strip()}
             for index, candidate in enumerate(candidates)
         },
+        verified_evidence_values_by_index={
+            index: {
+                **dict(candidate.get("sealed_evidence") or {}),
+                "__product_name__": str(candidate.get("product_name") or ""),
+            }
+            for index, candidate in enumerate(candidates)
+        },
         expected_ranked_count=expected_ranked_count,
     )
 
@@ -9553,6 +9919,7 @@ async def _semantic_recommendation_evidence_render(
                 "The customer's intended use is context, not product evidence. If allowed_evidence does not literally state that use, do not say the product can, suits, handles, or is convenient for it. Keep the use conditional and name the boundary naturally, for example: '如果你先按容量和炉具兼容来缩小范围，可以先看X：资料标注容量为A、热源为B；是否完全满足你提到的具体做法，现有资料没有直接说明。' Adapt this wording to the supplied facts; never copy values from the example. "
                 "In that boundary sentence, repeat the customer's concrete intended action or purpose from the question (for example the supplied 烧水、煮面、煎烤 wording); never replace it with vague phrases such as '具体做法' or '具体用途'. "
                 "Also acknowledge the customer's explicitly stated group size and decision priorities in natural context (for example '针对你说的两个人和轻便偏好'); this repeats the request and must not be phrased as a product fact unless allowed_evidence supports it. "
+                "End with one short, concrete next-step question offering to refine or compare another evidenced dimension. The question must be helpful customer service prose and must not add a product fact. "
                 "Copy every cited evidence value literally. Do not convert units (for example, never rewrite 1000ML as 1L), round numbers, normalize labels, or merge several source values into one inferred specification. Put each cited field in its own short clause so an auditor can bind it to one evidence key. "
                 "Each named product must be one of the supplied product_name values. "
                 "The answer MUST contain the exact product_name of every required candidate; do not replace it with only '这款' or a pronoun. ranked_candidate_indexes must exactly equal required_candidate_indexes in the same order, and evidence_usage must contain exactly one item for each required index. "
@@ -9615,6 +9982,13 @@ async def _semantic_recommendation_evidence_render(
                 index: {str(candidate.get("product_name") or "").strip(), str(candidate.get("sku") or "").strip()}
                 for index, candidate in enumerate(candidates)
             },
+            verified_evidence_values_by_index={
+                index: {
+                    **dict(candidate.get("sealed_evidence") or {}),
+                    "__product_name__": str(candidate.get("product_name") or ""),
+                }
+                for index, candidate in enumerate(candidates)
+            },
             required_evidence_fields_by_index=required_evidence_fields_by_index,
         )
         if rendered is not None:
@@ -9650,6 +10024,13 @@ async def _semantic_recommendation_evidence_render(
                     },
                     candidate_identity_tokens_by_index={
                         index: {str(candidate.get("product_name") or "").strip(), str(candidate.get("sku") or "").strip()}
+                        for index, candidate in enumerate(candidates)
+                    },
+                    verified_evidence_values_by_index={
+                        index: {
+                            **dict(candidate.get("sealed_evidence") or {}),
+                            "__product_name__": str(candidate.get("product_name") or ""),
+                        }
                         for index, candidate in enumerate(candidates)
                     },
                     required_evidence_fields_by_index=required_evidence_fields_by_index,
@@ -9691,7 +10072,10 @@ async def _semantic_recommendation_final_render(
             diagnostic["status"] = "invalid_render_schema"
         return None
     local_claims = list(dict.fromkeys([
-        *_recommendation_unproved_comparative_claims(rendered["answer"]),
+        *_recommendation_unproved_comparative_claims(
+            rendered["answer"],
+            _recommendation_allowed_evidence_text(candidates, rendered),
+        ),
         *_recommendation_internal_process_claims(rendered["answer"]),
     ]))
     if local_claims and diagnostic is not None:
@@ -9839,7 +10223,10 @@ async def _semantic_recommendation_narrative(
                 evidence_by_field[f"content.{field}"] = _compound_display_value(value)
         for field in structured_evidence_fields:
             value = row.get(field)
-            if field == "capacity" and not _capacity_evidence_is_internally_consistent(value):
+            if field == "capacity" and not _capacity_evidence_is_internally_consistent(
+                value,
+                str(row.get("product_name_cn") or row.get("product_name_en") or ""),
+            ):
                 continue
             if field == "capacity":
                 value = _capacity_field_evidence(value)
@@ -9966,6 +10353,13 @@ async def _semantic_recommendation_narrative(
                 index: {str(candidate.get("product_name") or "").strip(), str(candidate.get("sku") or "").strip()}
                 for index, candidate in enumerate(candidates)
             },
+            verified_evidence_values_by_index={
+                index: {
+                    **dict(candidate.get("sealed_evidence") or {}),
+                    "__product_name__": str(candidate.get("product_name") or ""),
+                }
+                for index, candidate in enumerate(candidates)
+            },
             required_evidence_fields_by_index=required_evidence_fields_by_index,
             expected_ranked_count=expected_ranked_count,
         )
@@ -9994,7 +10388,10 @@ async def _semantic_recommendation_narrative(
                 )
                 if recovered is not None:
                     recovered_local_claims = list(dict.fromkeys([
-                        *_recommendation_unproved_comparative_claims(recovered["answer"]),
+                        *_recommendation_unproved_comparative_claims(
+                            recovered["answer"],
+                            _recommendation_allowed_evidence_text(candidates, recovered),
+                        ),
                         *_recommendation_internal_process_claims(recovered["answer"]),
                     ]))
                     if not recovered_local_claims:
@@ -10052,7 +10449,10 @@ async def _semantic_recommendation_narrative(
             diagnostic=review_diagnostic,
         )
         local_unsupported_claims = list(dict.fromkeys([
-            *_recommendation_unproved_comparative_claims(narrative["answer"]),
+            *_recommendation_unproved_comparative_claims(
+                narrative["answer"],
+                _recommendation_allowed_evidence_text(candidates, narrative),
+            ),
             *_recommendation_internal_process_claims(narrative["answer"]),
         ]))
         if review and review["approved"] and not local_unsupported_claims:
@@ -10121,7 +10521,10 @@ async def _semantic_recommendation_narrative(
                 required_customer_dimensions=required_customer_dimensions,
             )
             rewritten_local_unsupported_claims = list(dict.fromkeys([
-                *_recommendation_unproved_comparative_claims(rewritten["answer"]),
+                *_recommendation_unproved_comparative_claims(
+                    rewritten["answer"],
+                    _recommendation_allowed_evidence_text(recovery_candidates, rewritten),
+                ),
                 *_recommendation_internal_process_claims(rewritten["answer"]),
             ]))
             if rewritten_review and rewritten_review["approved"] and not rewritten_local_unsupported_claims:
@@ -10159,7 +10562,10 @@ async def _semantic_recommendation_narrative(
                 required_customer_dimensions=required_customer_dimensions,
             )
             rendered_local_unsupported_claims = list(dict.fromkeys([
-                *_recommendation_unproved_comparative_claims(evidence_rendered["answer"]),
+                *_recommendation_unproved_comparative_claims(
+                    evidence_rendered["answer"],
+                    _recommendation_allowed_evidence_text(candidates, evidence_rendered),
+                ),
                 *_recommendation_internal_process_claims(evidence_rendered["answer"]),
             ]))
             if rendered_review and rendered_review["approved"] and not rendered_local_unsupported_claims:
@@ -10202,7 +10608,10 @@ async def _semantic_recommendation_narrative(
                         required_customer_dimensions=required_customer_dimensions,
                     )
                     final_local_claims = list(dict.fromkeys([
-                        *_recommendation_unproved_comparative_claims(rendered_rewrite["answer"]),
+                        *_recommendation_unproved_comparative_claims(
+                            rendered_rewrite["answer"],
+                            _recommendation_allowed_evidence_text(recovery_candidates, rendered_rewrite),
+                        ),
                         *_recommendation_internal_process_claims(rendered_rewrite["answer"]),
                     ]))
                     if final_review and final_review["approved"] and not final_local_claims:
@@ -10235,7 +10644,10 @@ async def _semantic_recommendation_narrative(
         )
         if recovered is not None:
             recovered_local_claims = list(dict.fromkeys([
-                *_recommendation_unproved_comparative_claims(recovered["answer"]),
+                *_recommendation_unproved_comparative_claims(
+                    recovered["answer"],
+                    _recommendation_allowed_evidence_text(candidates, recovered),
+                ),
                 *_recommendation_internal_process_claims(recovered["answer"]),
             ]))
             if not recovered_local_claims:
@@ -10697,9 +11109,21 @@ async def _phase1_compare_choice_result(db: Session, plan: dict) -> dict | None:
     # with no customer-specified criterion. This is an evidence presentation,
     # not a deterministic choice of a field route: show only recorded values
     # that differ across every sealed participant.
+    semantic_identity_relation = bool(
+        str(semantic_preplan.get("subtype") or "").strip() == "relation_comparison"
+        and not bool(semantic_preplan.get("decision_requested"))
+        and not semantic_comparison_fields
+        and any(
+            term in str(semantic_preplan.get("qa_evidence_query") or "")
+            for term in ("产品身份", "同一款", "同款", "差异")
+        )
+    )
     if (
         plan.get("semantic_comparison_entity_contracts")
-        and _semantic_structured_comparison_overview_contract(semantic_preplan)
+        and (
+            _semantic_structured_comparison_overview_contract(semantic_preplan)
+            or semantic_identity_relation
+        )
     ):
         uncovered_explicit_fields = [
             str(item or "").strip()
@@ -10899,12 +11323,19 @@ async def _phase1_compare_choice_result(db: Session, plan: dict) -> dict | None:
                 f"更推荐你选{selected_name}（{overview_selected_sku}），"
                 "它更符合你这次描述的需求。"
             )
+        identity_prefix = (
+            f"不是同一款：资料中它们分别是两个独立商品记录（{result_skus[0]}、{result_skus[1]}）。"
+            if semantic_identity_relation and len(result_skus) >= 2
+            else ""
+        )
         if overview_selected_sku and lines:
             answer = overview_choice_line.strip() + "\n推荐理由：\n" + "\n".join(lines)
         elif lines:
             answer = "按两款商品当前已标注且可直接对照的资料，主要差异如下：\n" + "\n".join(lines)
         else:
             answer = "两款商品已锁定，但当前没有找到可同时核验且存在差异的同字段资料；请告诉我更关心容量、重量、材质或使用场景，我会按该字段继续比较。"
+        if identity_prefix:
+            answer = identity_prefix + ("\n" + answer if answer else "")
         return {
             "intent": "compare_products", "answer_type": "comparison", "answer": answer,
             "results": rows, "result_skus": result_skus, "candidate_skus": result_skus,
@@ -11405,7 +11836,17 @@ async def _phase1_compare_choice_result(db: Session, plan: dict) -> dict | None:
                     f"{selected_name}（{selected_sku}）；未维护的字段仍按未知处理。"
                 )
         elif plan.get("must_make_choice"):
-            lines.append("由于比较条件的同 SKU 资料不完整，当前不能据此指定其中一款更适合。")
+            if len(complete_fields) == len(requested_comparison_fields):
+                priority_labels = [
+                    customer_field_contract.product_detail_field_label(field) or field
+                    for field in requested_comparison_fields
+                ]
+                lines.append(
+                    f"这些资料已能直接对照，但你还没有说明{'、'.join(priority_labels)}中哪项优先，"
+                    "所以我暂不替你强行指定一款；告诉我最看重哪项，我可以直接给出选择。"
+                )
+            else:
+                lines.append("由于比较条件的同 SKU 资料不完整，当前不能据此指定其中一款更适合。")
         result_skus = [str(row.get("sku") or "").strip().upper() for row in rows if str(row.get("sku") or "").strip()]
         return {
             "intent": "compare_products",
@@ -13249,6 +13690,9 @@ def _recommendation_explanation_followup_result(
         "为什么选",
         "为什么是第一个",
         "推荐依据",
+        "为什么它",
+        "为什么这款",
+        "实际使用上的差别",
     )
     if not any(term in text for term in explanation_terms):
         return None
@@ -13303,7 +13747,22 @@ def _recommendation_explanation_followup_result(
     else:
         row = next((item for item in rows if str(item.get("sku") or "").strip().upper() == anchor_sku), rows[0])
         product_name = str(row.get("product_name_cn") or row.get("product_name") or anchor_sku).strip()
-        answer = f"推荐 {product_name}（{anchor_sku}）的依据是：{explanation_reason(row)}。"
+        comparison_reason = ""
+        anchor_weight = row.get("gross_weight_g")
+        other_rows = [item for item in rows if str(item.get("sku") or "").strip().upper() != anchor_sku]
+        if "比" in text and isinstance(anchor_weight, (int, float)) and anchor_weight > 0 and other_rows:
+            other = other_rows[0]
+            other_weight = other.get("gross_weight_g")
+            if isinstance(other_weight, (int, float)) and other_weight > anchor_weight:
+                other_name = str(other.get("product_name_cn") or other.get("sku") or "另一款").strip()
+                comparison_reason = (
+                    f"在前面两款里它更轻：{anchor_weight:g}g，"
+                    f"比{other_name}（{str(other.get('sku') or '').strip().upper()}）轻{other_weight - anchor_weight:g}g；"
+                )
+        answer = (
+            f"推荐 {product_name}（{anchor_sku}）的依据是："
+            f"{comparison_reason}{explanation_reason(row)}。"
+        )
     return {
         "intent": "recommendation",
         "answer_type": "recommendation",
@@ -13321,6 +13780,14 @@ def _context_skus_for_pair_followup(*contexts: dict[str, Any] | None) -> list[st
     for context in contexts:
         if not isinstance(context, dict):
             continue
+        replacement_sku = str(context.get("replacement_top_sku") or "").strip().upper()
+        excluded_skus = [
+            str(sku or "").strip().upper()
+            for sku in (context.get("excluded_skus") or [])
+            if str(sku or "").strip()
+        ]
+        if replacement_sku and excluded_skus:
+            return [replacement_sku, excluded_skus[0]]
         for key in ("pair_skus", "ordered_result_skus", "recommended_skus", "candidate_skus"):
             skus = [
                 str(sku or "").strip().upper()
@@ -13370,6 +13837,7 @@ def _context_pair_followup_result(db: Session, question: str, skus: list[str]) -
     if len(rows) < 2:
         return None
     text = str(question or "")
+    final_choice_sku: str | None = None
     if any(term in text for term in ("酒精炉", "酒精")) and any(term in text for term in ("它们", "这两个", "两款", "两个")):
         lines = []
         for row in rows:
@@ -13383,9 +13851,12 @@ def _context_pair_followup_result(db: Session, question: str, skus: list[str]) -
         first, second = rows[0], rows[1]
         first_name = first.get("product_name_cn") or first.get("sku")
         second_name = second.get("product_name_cn") or second.get("sku")
-        first_evidence = _phase1_product_evidence_text(first)
-        second_evidence = _phase1_product_evidence_text(second)
-        weight_comparison = any(term in text for term in ("重量", "多重", "重吗", "更重", "更轻", "轻吗", "背负", "背起来", "一个人背"))
+        # A contextual comparison should sound like a concise shopping answer.
+        # Keep the full row as sealed evidence/results, but do not dump every
+        # stored content field (especially long_description_cn) into the reply.
+        first_evidence = _phase1_product_evidence_text(first, max_fields=3)
+        second_evidence = _phase1_product_evidence_text(second, max_fields=3)
+        weight_comparison = any(term in text for term in ("重量", "多重", "重吗", "更重", "更轻", "轻吗", "轻便", "轻一点", "轻量", "背负", "背起来", "一个人背"))
         first_weight = first.get("gross_weight_g")
         second_weight = second.get("gross_weight_g")
         missing_weight = [
@@ -13405,6 +13876,7 @@ def _context_pair_followup_result(db: Session, question: str, skus: list[str]) -
             else:
                 lighter = first if first_value < second_value else second
                 lighter_name = lighter.get("product_name_cn") or lighter.get("sku")
+                final_choice_sku = str(lighter.get("sku") or "").strip().upper() or None
                 difference = abs(first_value - second_value)
                 conclusion = (
                     f"如果主要考虑一个人背负，优先看{lighter_name}（{lighter.get('sku')}）："
@@ -13440,10 +13912,12 @@ def _context_pair_followup_result(db: Session, question: str, skus: list[str]) -
             second_score = _beginner_score(second)
             if first_score > second_score:
                 selected = first
+                final_choice_sku = str(selected.get("sku") or "").strip().upper() or None
                 selected_name = selected.get("product_name_cn") or selected.get("sku")
                 conclusion = f"如果你是新手，优先看{selected_name}（{selected.get('sku')}）；当前资料对它的新手/入门标注更多。"
             elif second_score > first_score:
                 selected = second
+                final_choice_sku = str(selected.get("sku") or "").strip().upper() or None
                 selected_name = selected.get("product_name_cn") or selected.get("sku")
                 conclusion = f"如果你是新手，优先看{selected_name}（{selected.get('sku')}）；当前资料对它的新手/入门标注更多。"
             else:
@@ -13453,6 +13927,14 @@ def _context_pair_followup_result(db: Session, question: str, skus: list[str]) -
                 f"{first_name}：{first_evidence or '当前资料未提供足够细项'}。"
                 f"{second_name}：{second_evidence or '当前资料未提供足够细项'}。"
                 f"{conclusion}"
+            )
+        elif any(term in text for term in ("新推荐", "新换", "换的")) and any(
+            term in text for term in ("上一款", "原来", "之前", "刚才")
+        ):
+            answer = (
+                f"新推荐是{first_name}（{first.get('sku')}），上一款是{second_name}（{second.get('sku')}）。"
+                f"新推荐：{first_evidence or '当前资料未提供足够细项'}。"
+                f"上一款：{second_evidence or '当前资料未提供足够细项'}。"
             )
         else:
             answer = (
@@ -13471,7 +13953,7 @@ def _context_pair_followup_result(db: Session, question: str, skus: list[str]) -
         "results": rows,
         "result_skus": skus_out,
         "candidate_skus": skus_out,
-        "answer_metadata": {"source": agent_mode},
+        "answer_metadata": {"source": agent_mode, "final_choice_sku": final_choice_sku},
         "debug": {
             "agent_mode": agent_mode,
             "raw_results": rows,
@@ -13487,6 +13969,40 @@ def _context_pair_followup_result(db: Session, question: str, skus: list[str]) -
         },
         "skip_polish": True,
     }
+
+
+def _context_pair_matches_current_turn_subject(
+    db: Session,
+    question: str,
+    skus: list[str],
+) -> bool:
+    """Keep a persisted-pair shortcut inside an explicitly named role."""
+    contract = customer_recommendation_verification_contract.build_recommendation_request_contract(
+        question
+    )
+    if not contract.subject_kind and not contract.subject_category:
+        return True
+    pair = {
+        str(sku or "").strip().upper()
+        for sku in skus[:2]
+        if str(sku or "").strip()
+    }
+    if len(pair) < 2:
+        return False
+    rows = {
+        str(row.get("sku") or "").strip().upper(): row
+        for row in _phase1_catalog_rows(db, "产品")
+        if str(row.get("sku") or "").strip().upper() in pair
+    }
+    if len(rows) != len(pair):
+        return False
+    return all(
+        customer_recommendation_verification_contract._subject_evidence(
+            contract,
+            rows[sku],
+        )[0]
+        for sku in pair
+    )
 
 
 def _context_power_followup_result(db: Session, question: str, skus: list[str]) -> dict | None:
@@ -15036,6 +15552,29 @@ async def _semantic_recommendation_contract_result(
     recommendation verifier against that row's own structured evidence.
     """
     preplan = (plan or {}).get("semantic_preplan") if isinstance(plan, dict) else None
+    literal_scope_contract = (
+        customer_recommendation_verification_contract.build_recommendation_request_contract(
+            question
+        )
+    )
+    if (
+        isinstance(preplan, dict)
+        and str(preplan.get("route_family") or "") == "recommendation"
+        and literal_scope_contract.subject_kind
+        and not str(
+            (preplan.get("recommendation_constraints") or {}).get("subject_kind") or ""
+        ).strip()
+    ):
+        # The semantic planner owns the action and constraints; an explicit
+        # current-turn product noun owns catalogue scope. Recover that literal
+        # scope when the provider omits the optional subject_kind field.
+        preplan = dict(preplan)
+        recovered_constraints = dict(preplan.get("recommendation_constraints") or {})
+        recovered_constraints["subject_kind"] = literal_scope_contract.subject_kind
+        preplan["recommendation_constraints"] = recovered_constraints
+        preplan["semantic_adapter_source"] = "literal_current_turn_recommendation_subject"
+        if isinstance(plan, dict):
+            plan["semantic_preplan"] = preplan
     # A pairwise request can be semantically described as a recommendation,
     # but it is not a catalogue search.  Its named participants have already
     # been sealed into EntityResolutionContracts and must continue to the
@@ -15120,6 +15659,24 @@ async def _semantic_recommendation_contract_result(
             r"(?:必须|务必|只能|一定要|不可|不得|不能接受|硬性|至少|不低于|不少于)",
             requirement,
         )
+        if not force_marker and requirement:
+            # The planner normalizes an extracted requirement to its semantic
+            # core (for example “必须明确支持煮面” -> “煮面”).  Recover only the
+            # binding status from the complete turn; product eligibility still
+            # comes exclusively from the same-SKU evidence verifier below.
+            force_marker = re.search(
+                rf"(?:必须|务必|只能|一定要|不可|不得|不能接受|硬性|至少|不低于|不少于)"
+                rf"[^，。；;!?！？]{{0,12}}{re.escape(requirement)}",
+                question_text,
+            )
+        if not force_marker:
+            # An allowlisted schema cannot encode every natural preference.
+            # Keep ordinary, non-mandatory wording as grounded ranking and
+            # narrative context instead of turning fluent requests into a
+            # clarification. Explicit hard-force language remains fail-closed.
+            if requirement not in semantic_soft_preferences:
+                semantic_soft_preferences.append(requirement)
+            continue
         preference_contract = customer_recommendation_verification_contract.build_recommendation_request_contract(
             requirement
         )
@@ -15255,7 +15812,14 @@ async def _semantic_recommendation_contract_result(
         )
         actual_categories = {str(row.get("category") or "").strip() for row in subject_rows}
         if expected_category and actual_categories and all(expected_category not in category for category in actual_categories):
-            constraints.pop("subject_kind", None)
+            if literal_scope_contract.subject_category:
+                # A negative phrase can be copied into semantic subject_text
+                # (for example “不要炉具和配件”).  Keep the customer's explicit
+                # positive catalogue scope and discard those off-scope search
+                # hits; never let a negated noun erase the requested category.
+                subject_rows = []
+            else:
+                constraints.pop("subject_kind", None)
     contract = customer_recommendation_verification_contract.build_recommendation_request_contract(
         question,
         semantic_constraints=constraints,
@@ -15347,13 +15911,32 @@ async def _semantic_recommendation_contract_result(
                 key=lambda item: (-_coffee_cookware_goal_score(item[1]), item[0]),
             )
         ]
-    elif contract.hard_constraints and contract.subject_category:
+    elif contract.subject_category or contract.subject_kind:
+        verified_subject_category = str(contract.subject_category or "").strip() or {
+            "cookware": "锅具",
+            "waterware": "水具",
+            "stove": "炉具",
+            "coffee_gear": "咖啡器具",
+            "accessories": "配件",
+        }.get(str(contract.subject_kind or "").strip(), "")
+        literal_subject_ref = str(literal_scope_contract.subject_category or "").strip()
+        semantic_subject_ref = _semantic_catalog_product_ref(question)
+        # Keep a positive, more specific catalogue subtype such as 烤盘 over
+        # its broad literal parent 锅具. Conversely, a noun explicitly excluded
+        # by the customer (不要炉具/配件) can never become the search scope.
+        explicit_subject_ref = (
+            semantic_subject_ref
+            if semantic_subject_ref not in set(contract.excluded_categories or [])
+            else literal_subject_ref
+        ) or literal_subject_ref
+        if explicit_subject_ref not in {"", "产品"}:
+            verified_subject_category = explicit_subject_ref
         seen_skus = {
             str(row.get("sku") or "").strip().upper()
             for row in rows
             if str(row.get("sku") or "").strip()
         }
-        for row in _phase1_catalog_rows(db, contract.subject_category):
+        for row in _phase1_catalog_rows(db, verified_subject_category or "产品"):
             sku = str(row.get("sku") or "").strip().upper()
             if sku and sku not in seen_skus:
                 rows.append(row)
@@ -15383,7 +15966,30 @@ async def _semantic_recommendation_contract_result(
             ]
     verifications = customer_recommendation_verification_contract.verify_recommendation_candidates(contract, rows)
     fully_verified = [item for item in verifications if item.verification_level == "fully_verified"]
-    if not fully_verified:
+    # Group size is usually usage context rather than an intrinsic stove
+    # attribute. For an ordinary (non-forced) people expression, a stove whose
+    # only unknown hard field is people may still be shown with that gap
+    # disclosed. Conflicts and every other unknown hard condition remain
+    # fail-closed, as do cookware people/capacity checks.
+    forced_people_requirement = bool(
+        re.search(
+            r"(?:必须|务必|只能|一定要|至少|不低于|不少于)[^，。；;!?！？]{0,12}(?:人|人数)",
+            question_text,
+        )
+    )
+    safely_partial_stove = [
+        item
+        for item in verifications
+        if (
+            contract.subject_kind == "stove"
+            and not forced_people_requirement
+            and item.verification_level == "partially_verified"
+            and not item.has_hard_constraint_conflict
+            and set(item.unsupported_constraints or []).issubset({"people"})
+        )
+    ]
+    usable_verifications = fully_verified or safely_partial_stove
+    if not usable_verifications:
         evidence_spans = preplan.get("recommendation_constraint_evidence_spans")
         evidence_spans = evidence_spans if isinstance(evidence_spans, dict) else {}
         condition_labels = []
@@ -15522,9 +16128,9 @@ async def _semantic_recommendation_contract_result(
             diagnostics=narrative_diagnostics,
         )
     dimension_missing_claims = {
-        "capacity": r"容量(?:信息|资料)?.{0,8}(?:暂未|没有|未提供|未标注|缺少)",
-        "weight": r"重量(?:信息|资料)?.{0,8}(?:暂未|没有|未提供|未标注|缺少)",
-        "storage": r"收纳(?:信息|资料)?.{0,8}(?:暂未|没有|未提供|未标注|缺少)",
+        "capacity": r"容量(?:信息|资料)?(?:暂未|没有|未提供|未标注|缺少)",
+        "weight": r"重量(?:信息|资料)?(?:暂未|没有|未提供|未标注|缺少)",
+        "storage": r"收纳(?:信息|资料)?(?:暂未|没有|未提供|未标注|缺少)",
     }
     if narrative and any(
         re.search(dimension_missing_claims[dimension], str(narrative.get("answer") or ""))
@@ -18980,6 +19586,22 @@ def _build_phase2_entity_resolution_context(
                 if canonical_subject
                 else (field_request or resolve_requested_field_contract(question, phase1_plan))
             )
+        semantic_preplan = (
+            (phase1_plan or {}).get("semantic_preplan")
+            if isinstance((phase1_plan or {}).get("semantic_preplan"), dict)
+            else {}
+        )
+        recovered_semantic_subject = str(semantic_preplan.get("subject_text") or "").strip()
+        if (
+            semantic_preplan.get("semantic_identity_recovery") == "catalog_unique_one_edit"
+            and recovered_semantic_subject
+        ):
+            # The semantic layer established that this is a product-bound
+            # field request; catalogue uniqueness then corrected one literal
+            # character. Keep the already parsed fields, but replace the
+            # polluted legacy subject before EntityResolutionContract runs.
+            resolved_field_request["subject"] = recovered_semantic_subject
+            resolved_field_request["subject_is_catalog_exact"] = True
         entity_subject = str(resolved_field_request.get("subject") or "").strip() or None
         if not entity_subject and resolved_field_request.get("source") == "validated_semantic_preplan":
             # The semantic preplan owns field meaning and may also identify a
@@ -24553,6 +25175,26 @@ async def ask_customer_service(
                 semantic_preplan=None,
             )
 
+    # A direct attempt to substitute one fuel family into equipment named for
+    # another is an open safety judgement, not a routine care recipe. Let the
+    # semantic safety route answer the complete action instead of reducing it
+    # to a generic ignition checklist.
+    fuel_families = sum(
+        bool(any(term in str(question or "") for term in family))
+        for family in (
+            ("酒精", "乙醇"),
+            ("汽油",),
+            ("柴油",),
+            ("煤油",),
+            ("气罐", "液化气", "丁烷", "丙烷"),
+        )
+    )
+    hazardous_fuel_substitution = bool(
+        fuel_families >= 2
+        and any(term in str(question or "") for term in ("直接", "灌", "倒入", "加入", "混用", "替代"))
+        and any(term in str(question or "") for term in ("点火", "点燃", "使用", "能不能", "能否", "可以"))
+    )
+
     # Generic stove-care questions without a resolvable product identity must
     # not inherit a previous catalogue/category result set.  Return a bounded
     # safety answer with no product cards; pronoun/deictic follow-ups and
@@ -24567,6 +25209,7 @@ async def ask_customer_service(
         and not customer_agent_service._extract_skus(question)
         and not generic_usage_products
         and not generic_usage_context_marker
+        and not hazardous_fuel_substitution
         and _is_product_usage_care_question(question)
         and not _looks_like_compatibility_usage_question(question)
         and not customer_agent_intent_service._looks_like_power_tradeoff_question(question)
@@ -24815,7 +25458,38 @@ async def ask_customer_service(
     if (
         isinstance(semantic_preplan, dict)
         and _semantic_preplan_route_family(semantic_preplan) == "product_bound_qa"
-        and not (semantic_preplan.get("entities") or [])
+        and str(semantic_preplan.get("subtype") or "") == "safety_procedure"
+        and (
+            _has_only_generic_product_subject(question)
+            or _is_generic_category_phrase(str(semantic_preplan.get("subject_text") or ""))
+            or str(semantic_preplan.get("subject_text") or "").strip()
+            in {"气罐", "燃料", "酒精", "酒精炉", "卡式炉", "气炉"}
+        )
+        and not customer_agent_service._extract_skus(question)
+    ):
+        # The provider may represent a broad equipment class as an entity.
+        # That still does not create a specific catalogue identity. Preserve
+        # its semantic safety judgement instead of turning a hazardous action
+        # into a product filter or a generic care recipe.
+        semantic_preplan.update({
+            "route_family": "general_chat",
+            "route_hint": "general_chat",
+            "question_type": "general_chat",
+            "canonical_fields": [],
+            "field_type": "",
+            "field_hint": None,
+            "evidence_required": False,
+            "qa_evidence_query": "",
+            "accepted_or_overridden": "overridden",
+            "override_reason": "generic_category_safety_without_product_identity",
+        })
+    if (
+        isinstance(semantic_preplan, dict)
+        and _semantic_preplan_route_family(semantic_preplan) == "product_bound_qa"
+        and (
+            not (semantic_preplan.get("entities") or [])
+            or _has_only_generic_product_subject(question)
+        )
         and (
             not _products_named_in_question(db, question)
             or _has_only_generic_product_subject(question)
@@ -24929,11 +25603,49 @@ async def ask_customer_service(
                 branch="context_collection_power_preflight",
                 semantic_preplan=semantic_preplan,
             )
-    if conversation_id and _is_contextual_candidate_comparison_question(question):
+    if conversation_id:
+        early_recommendation_context = _latest_recommendation_context_for_sources(db, conversation_id)
+        early_candidate_context = _latest_candidate_context_for_sources(db, conversation_id)
+        early_explanation = _recommendation_explanation_followup_result(
+            db,
+            question,
+            early_recommendation_context,
+            early_candidate_context,
+        )
+        if early_explanation:
+            early_explanation = _attach_phase1_plan_and_timing(
+                early_explanation,
+                phase1_plan,
+                _phase1_timing(request_start=request_start, planner_duration_ms=planner_duration_ms),
+            )
+            return await _save_agent_result_and_return(
+                db,
+                user_id=user_id,
+                question=question,
+                conversation_id=conversation_id,
+                agent_result=early_explanation,
+                request_start=request_start,
+                branch="recommendation_context_explanation_preflight",
+                semantic_preplan=semantic_preplan,
+            )
+    semantic_context_comparison = bool(
+        isinstance(semantic_preplan, dict)
+        and str(semantic_preplan.get("subtype") or "")
+        in {"recommendation_change", "comparison_justification"}
+        and str(semantic_preplan.get("context_usage") or "") == "recommendation_context"
+    )
+    if conversation_id and (
+        _is_contextual_candidate_comparison_question(question)
+        or semantic_context_comparison
+    ):
         recommendation_context = _latest_recommendation_context_for_sources(db, conversation_id)
         candidate_context = _latest_candidate_context_for_sources(db, conversation_id)
         pair_skus = _context_skus_for_pair_followup(recommendation_context, candidate_context)
-        context_comparison = _context_pair_followup_result(db, question, pair_skus) if pair_skus else None
+        context_comparison = (
+            _context_pair_followup_result(db, question, pair_skus)
+            if pair_skus and _context_pair_matches_current_turn_subject(db, question, pair_skus)
+            else None
+        )
         if context_comparison:
             context_comparison = _attach_phase1_plan_and_timing(
                 context_comparison,
@@ -24956,6 +25668,7 @@ async def ask_customer_service(
                 semantic_preplan=semantic_preplan,
             )
     if isinstance(semantic_preplan, dict) and semantic_preplan.get("called"):
+        _apply_semantic_unique_typo_subject_recovery(db, question, semantic_preplan)
         _apply_pairwise_recommendation_field_adapter(semantic_preplan)
         _apply_structured_named_field_entity_adapter(db, question, semantic_preplan)
         catalog_value_fields = {"series", "brand", "category", "product_level"}
@@ -25167,6 +25880,48 @@ async def ask_customer_service(
             and not semantic_preplan.get("entities")
             and not current_turn_unique_product
         ):
+            # A provider can understand that this is a catalogue browse while
+            # omitting the formal category field. The current turn's explicit
+            # category noun is still a bounded, database-verifiable scope, so
+            # execute that scope before asking the customer to repeat it.
+            recovered_catalog_ref = _semantic_catalog_product_ref(question)
+            recovered_catalog_rows = (
+                _phase1_catalog_rows(db, recovered_catalog_ref)
+                if recovered_catalog_ref and recovered_catalog_ref != "产品"
+                else []
+            )
+            if recovered_catalog_rows:
+                recovered_catalog_result = _structured_product_query_result(
+                    question=question,
+                    product_ref=recovered_catalog_ref,
+                    rows=recovered_catalog_rows,
+                    source="semantic_generic_catalog_category_recovery",
+                    reason_label="当前问题中明确给出的商品类目",
+                    answer_type="query_products",
+                )
+                recovered_catalog_result = _attach_phase1_plan_and_timing(
+                    recovered_catalog_result,
+                    phase1_plan,
+                    _phase1_timing(
+                        request_start=request_start,
+                        planner_duration_ms=planner_duration_ms,
+                    ),
+                )
+                recovered_catalog_result = _attach_semantic_preplan_debug(
+                    recovered_catalog_result,
+                    semantic_preplan,
+                    final_route="product_query",
+                )
+                return await _save_agent_result_and_return(
+                    db,
+                    user_id=user_id,
+                    question=question,
+                    conversation_id=conversation_id,
+                    agent_result=recovered_catalog_result,
+                    request_start=request_start,
+                    branch="semantic_generic_catalog_category_recovery",
+                    semantic_preplan=semantic_preplan,
+                )
             generic_catalog_clarification = {
                 "intent": "query_products",
                 "answer_type": "clarification",
@@ -25410,13 +26165,24 @@ async def ask_customer_service(
     if (
         _semantic_preplan_confident(semantic_preplan, minimum=0.65)
         and _semantic_preplan_route_family(semantic_preplan) == "general_chat"
-        and not (semantic_preplan.get("entities") or [])
+        and (
+            not (semantic_preplan.get("entities") or [])
+            or str((semantic_preplan or {}).get("subtype") or "") == "safety_procedure"
+        )
         and not (semantic_preplan.get("canonical_fields") or [])
         and not bool(semantic_preplan.get("evidence_required"))
-        and not _products_named_in_question(db, question)
+        and (
+            str((semantic_preplan or {}).get("subtype") or "") == "safety_procedure"
+            or not _products_named_in_question(db, question)
+        )
         and not _is_comparison_choice_followup_question(question)
-        and not _structured_target_category_from_question(question)
-        and not _phase1_is_stove_pairing_scenario(question)
+        and (
+            str((semantic_preplan or {}).get("subtype") or "") == "safety_procedure"
+            or (
+                not _structured_target_category_from_question(question)
+                and not _phase1_is_stove_pairing_scenario(question)
+            )
+        )
     ):
         answer = ""
         try:
@@ -25814,6 +26580,10 @@ async def ask_customer_service(
     if (
         deterministic_structured_preflight.status == "resolved"
         and deterministic_structured_preflight.conditions
+        and not (
+            _semantic_preplan_route_family(semantic_preplan) == "general_chat"
+            and str((semantic_preplan or {}).get("subtype") or "") == "safety_procedure"
+        )
         and not _looks_like_recommendation_request(question)
         and not (
             conversation_id
@@ -27643,6 +28413,10 @@ async def ask_customer_service(
         and _semantic_prefers_sealed_product_qa(phase1_plan)
         and len(_products_named_in_question(db, question)) == 1
     )
+    semantic_safety_procedure = bool(
+        _semantic_preplan_route_family(semantic_preplan) == "general_chat"
+        and str((semantic_preplan or {}).get("subtype") or "") == "safety_procedure"
+    )
     if (
         (
             _looks_like_compatibility_usage_question(question)
@@ -27658,6 +28432,7 @@ async def ask_customer_service(
         and not _is_unbound_product_usage_question(question)
         and not (len(_products_named_in_question(db, question)) > 1)
         and not semantic_compound_product_qa
+        and not semantic_safety_procedure
         and not customer_agent_intent_service._looks_like_utensil_material_safety_question(question)
         and (
             _looks_like_compatibility_usage_question(question)
@@ -28128,7 +28903,11 @@ async def ask_customer_service(
             context_pair_result = (
                 _context_power_followup_result(db, question, pair_skus)
                 if _is_contextual_power_followup_question(question)
-                else _context_pair_followup_result(db, question, pair_skus)
+                else (
+                    _context_pair_followup_result(db, question, pair_skus)
+                    if _context_pair_matches_current_turn_subject(db, question, pair_skus)
+                    else None
+                )
             )
     followup_runtime_bypass = _should_bypass_usage_care_and_faq_for_followup(
         db,
@@ -28157,6 +28936,7 @@ async def ask_customer_service(
         and not (len(named_products) > 1)
         and not _semantic_prefers_sealed_product_qa(phase1_plan)
         and not _should_prioritize_semantic_structured_route(question, phase1_plan)
+        and not semantic_safety_procedure
     ):
         usage_care_result = await customer_agent_intent_service.answer_product_usage_care_request(
             db,
@@ -28818,7 +29598,7 @@ async def ask_customer_service(
                 conversation_id=conversation_id,
                 question=question,
             )[:2]
-        if pair_skus:
+        if pair_skus and _context_pair_matches_current_turn_subject(db, question, pair_skus):
             agent_result = _context_pair_followup_result(db, question, pair_skus)
     if not agent_result:
         # The current turn's validated FieldContract owns field meaning. The
@@ -29071,6 +29851,7 @@ async def ask_customer_service(
         and not force_runtime_ordinal_compare_followup
         and not category_reference_detail
         and not bypass_pre_runtime_for_detail_context
+        and not semantic_safety_procedure
     ):
         deterministic_previous_result_skus = _previous_result_skus_for_pre_runtime(
             db,
@@ -31845,10 +32626,14 @@ def _same_sku_knowledge_coverage_messages(
 
 def _safe_missing_product_qa_answer(name: str, sku: str, question: str) -> str:
     """Keep a safe missing answer specific enough to be useful to a shopper."""
-    subject = re.sub(r"\s+", " ", str(question or "")).strip().rstrip("？?。 ")[:80]
-    if subject:
-        return f"{name}（{sku}）：当前资料未找到能直接确认“{subject}”的内容，暂时无法确认。"
-    return f"{name}（{sku}）：当前资料未找到能直接回答该问题的内容，暂时无法确认。"
+    # Do not quote proposed values from the question.  A safe-missing answer
+    # that repeats an unverified rating, certification, or number can look as
+    # though the catalogue supports it and also leaks unsupported values into
+    # downstream evidence checks.
+    return (
+        f"{name}（{sku}）：当前商品资料没有维护你问到的这项信息，因此无法确认具体结论。"
+        "如这项信息会影响购买或使用，请以官方规格、检测资料或人工核验结果为准。"
+    )
 
 
 def _sealed_semantic_product_qa_entity_guard(
@@ -34503,9 +35288,24 @@ def _align_answer_named_result_cards(result: dict) -> dict:
         for item in customer_agent_service._extract_skus(str(result.get("answer") or ""))
         if str(item or "").strip()
     ]
+    rows = [row for row in (result.get("results") or []) if isinstance(row, dict)]
+    if rows:
+        answer_text = str(result.get("answer") or "")
+        name_positions: list[tuple[int, str]] = []
+        for row in rows:
+            sku = str(row.get("sku") or "").strip().upper()
+            names = [
+                str(row.get(key) or "").strip()
+                for key in ("product_name_cn", "product_name_en")
+                if str(row.get(key) or "").strip()
+            ]
+            positions = [answer_text.find(name) for name in names if answer_text.find(name) >= 0]
+            if sku and positions:
+                name_positions.append((min(positions), sku))
+        if len(name_positions) == len(rows) and len({position for position, _ in name_positions}) == len(rows):
+            answer_skus = [sku for _, sku in sorted(name_positions)]
     if not answer_skus:
         return result
-    rows = [row for row in (result.get("results") or []) if isinstance(row, dict)]
     debug = result.get("debug") if isinstance(result.get("debug"), dict) else {}
     raw_rows = [row for row in (debug.get("raw_results") or []) if isinstance(row, dict)]
     row_by_identity: dict[str, tuple[str, dict]] = {}
@@ -34543,6 +35343,25 @@ def _align_answer_named_result_cards(result: dict) -> dict:
             existing_result_identity.add(identity)
     if restored_rows:
         result["results"] = [*rows, *restored_rows]
+        rows = list(result["results"])
+    # When every visible result identity is explicitly named, the prose order
+    # is the customer-facing order. Keep result_skus and cards in that order so
+    # “first/second”, replacement context and API evidence cannot disagree.
+    named_current_skus: list[str] = []
+    for answer_sku in answer_skus:
+        matched = row_by_identity.get(_sku_identity_key(answer_sku))
+        if matched and matched[0] in current_skus and matched[0] not in named_current_skus:
+            named_current_skus.append(matched[0])
+    if current_skus and set(named_current_skus) == set(current_skus):
+        row_by_sku = {
+            str(row.get("sku") or "").strip().upper(): row
+            for row in rows
+            if str(row.get("sku") or "").strip()
+        }
+        result["result_skus"] = named_current_skus
+        result["results"] = [row_by_sku[sku] for sku in named_current_skus if sku in row_by_sku]
+        result["candidate_skus"] = list(named_current_skus)
+        current_skus = list(named_current_skus)
         rows = list(result["results"])
     additions: list[str] = []
     for answer_sku in answer_skus:

@@ -6,7 +6,7 @@ from types import SimpleNamespace
 import pytest
 
 from app.models.product import Product
-from app.services import customer_agent_planner_service, customer_entity_resolution_contract, customer_field_contract, customer_service_service
+from app.services import customer_agent_planner_service, customer_entity_resolution_contract, customer_field_contract, customer_recommendation_verification_contract, customer_service_service
 from app.services.customer_entity_resolution_contract import build_entity_resolution_contract, build_entity_resolution_contract_observation
 from app.services.customer_field_contract import (
     classify_product_qa_evidence_type,
@@ -479,6 +479,42 @@ def test_semantic_comparison_preplan_normalizes_structured_product_mentions():
     assert preplan["entities"] == ["示例甲", "示例乙"]
 
 
+def test_semantic_comparison_preplan_accepts_provider_entity_packet_and_pairwise_subtype():
+    preplan = customer_agent_planner_service._validate_semantic_preplan(
+        {
+            "route_family": "product_bound_qa",
+            "subtype": "comparison",
+            "entities": {
+                "product_mentions": ["示例甲", "示例乙"],
+                "entity_scope": "ambiguous_product",
+            },
+            "subject_text": "示例甲和示例乙",
+            "canonical_fields": ["capacity", "people"],
+            "evidence_kind": "structured_field",
+            "confidence": "high",
+            "ambiguity": False,
+            "evidence_required": True,
+            "context_usage": "none",
+            "decision_requested": True,
+            "reasoning_summary": "Two named products are compared on recorded fields.",
+        }
+    )
+
+    assert preplan["fallback_reason"] == ""
+    assert preplan["route_family"] == "comparison"
+    assert preplan["entities"] == ["示例甲", "示例乙"]
+    assert preplan["canonical_fields"] == ["capacity", "people"]
+
+
+def test_semantic_free_text_partition_rejects_translated_or_paraphrased_model_text():
+    question = "给我搭个不插电、好带走的简单组合，别塞一堆不相关的。"
+
+    assert customer_agent_planner_service._literal_customer_phrase_partition(
+        question,
+        ["简单组合", "simple combination", "别塞一堆不相关的", "no irrelevant items"],
+    ) == ["简单组合", "别塞一堆不相关的"]
+
+
 def test_semantic_structured_comparison_overview_is_not_replaced_by_legacy_field_guess():
     """An empty semantic comparison field list is an intentional overview contract."""
     assert customer_service_service._semantic_structured_comparison_overview_contract(
@@ -825,6 +861,34 @@ def test_semantic_subject_contract_detects_dropped_explicit_numeric_version():
     )
 
 
+def test_category_exclusion_uses_catalogue_scope_not_compatible_appliance_in_name():
+    contract = customer_recommendation_verification_contract.build_recommendation_request_contract(
+        "只推荐锅具，不要炉具和配件。"
+    )
+    cookware = {
+        "sku": "POT-1",
+        "product_name_cn": "酒精炉单锅",
+        "category": "锅具",
+        "sub_category": "单锅",
+    }
+    stove = {
+        "sku": "STOVE-1",
+        "product_name_cn": "便携炉",
+        "category": "炉具",
+        "sub_category": "酒精炉",
+    }
+
+    cookware_result, stove_result = (
+        customer_recommendation_verification_contract.verify_recommendation_candidates(
+            contract, [cookware, stove]
+        )
+    )
+
+    assert cookware_result.subject_eligible is True
+    assert stove_result.subject_eligible is False
+    assert "excluded_category" in stove_result.rejection_reasons
+
+
 def test_customer_polish_lead_rejects_a_duplicate_of_the_verified_body():
     draft = "It can adjust grind coarseness for different brewing methods."
 
@@ -1088,6 +1152,65 @@ def test_semantic_comparison_rejects_non_current_participant_without_anchor_cont
     )
 
     assert contracts == []
+
+
+def test_semantic_comparison_seals_catalogue_exact_coordinated_ellipsis():
+    products = [
+        _product("KETTLE-4", "SwanKettle4Black"),
+        _product("KETTLE-9", "SwanKettle9Black"),
+    ]
+    preplan = {
+        "called": True,
+        "route_family": "comparison",
+        "entities": ["SwanKettle4Black", "SwanKettle9Black"],
+        "canonical_fields": ["capacity", "people"],
+        "confidence": 0.95,
+        "ambiguity": False,
+    }
+
+    contracts = customer_service_service._semantic_comparison_entity_contracts(
+        "Compare SwanKettle4Black and 9Black by capacity and people.",
+        preplan,
+        products,
+    )
+
+    assert [contract.resolved_sku for contract in contracts] == ["KETTLE-4", "KETTLE-9"]
+
+
+def test_semantic_comparison_rejects_unsealed_nonliteral_expansion():
+    products = [
+        _product("KETTLE-4", "SwanKettle4Black"),
+        _product("OTHER-9", "OtherKettle9Black"),
+    ]
+    preplan = {
+        "called": True,
+        "route_family": "comparison",
+        "entities": ["SwanKettle4Black", "OtherKettle9Black"],
+        "canonical_fields": ["capacity"],
+        "confidence": 0.95,
+        "ambiguity": False,
+    }
+
+    contracts = customer_service_service._semantic_comparison_entity_contracts(
+        "Compare SwanKettle4Black and 9Black.",
+        preplan,
+        products,
+    )
+
+    assert contracts == []
+
+
+def test_literal_kettle_followup_recovers_scope_and_compact_capacity_preference():
+    contract = customer_recommendation_verification_contract.build_recommendation_request_contract(
+        "通常两三个人喝，壶别太大，你会留哪款？",
+        semantic_constraints={"people": {"min": 2, "max": 3}},
+    )
+
+    assert contract.subject_kind == "waterware"
+    assert contract.subject_subtype == "kettle"
+    assert "capacity" in contract.soft_preferences
+    assert contract.people_min == 2
+    assert contract.people_max == 3
 
 
 def test_high_confidence_semantic_comparison_replaces_legacy_participant_extraction_with_sealed_contracts():
@@ -2402,3 +2525,223 @@ def test_unanchored_product_bound_shape_requires_semantic_route_repair():
     # the entity-anchor consistency gate before execution.
     assert preplan["route_family"] == "product_bound_qa"
     assert preplan["entities"] == []
+
+
+def test_semantic_unique_typo_recovery_maps_only_one_catalog_owner():
+    products = [
+        _product("CS-G25", "小青炉", "炉具"),
+        _product("CS-B15S", "围雪炉-酒精版", "炉具"),
+    ]
+
+    recovered = customer_service_service._semantic_unique_typo_near_catalog_subject(
+        "小青点这个炉子",
+        products,
+    )
+
+    assert recovered == "小青炉"
+
+
+def test_semantic_unique_typo_recovery_fails_closed_for_two_near_owners():
+    products = [
+        _product("STOVE-1", "小青炉", "炉具"),
+        _product("LAMP-1", "小青灯", "照明"),
+    ]
+
+    recovered = customer_service_service._semantic_unique_typo_near_catalog_subject(
+        "小青点这个炉子",
+        products,
+    )
+
+    assert recovered == ""
+
+
+def test_semantic_comparison_seals_unique_one_character_product_typo():
+    products = [
+        _product("CS-B15S", "围雪炉-酒精版", "炉具"),
+        _product("CS-B15SPRO", "围雪炉-酒精汽炉版", "炉具"),
+    ]
+    preplan = {
+        "called": True,
+        "route_family": "comparison",
+        "entities": ["围雪炉酒精版", "酒精汽油版"],
+        "canonical_fields": [],
+        "confidence": 0.95,
+        "ambiguity": False,
+    }
+
+    contracts = customer_service_service._semantic_comparison_entity_contracts(
+        "围雪炉酒精版和酒精汽油版是同一款吗？",
+        preplan,
+        products,
+    )
+
+    assert [contract.resolved_sku for contract in contracts] == ["CS-B15S", "CS-B15SPRO"]
+
+
+def test_semantic_comparison_catalogue_sealing_overrides_provider_ambiguity_flag():
+    products = [
+        _product("CS-B15S", "围雪炉-酒精版", "炉具"),
+        _product("CS-B15SPRO", "围雪炉-酒精汽炉版", "炉具"),
+    ]
+    preplan = {
+        "called": True,
+        "route_family": "comparison",
+        "entities": ["围雪炉酒精版", "酒精汽油版"],
+        "canonical_fields": [],
+        "confidence": 0.65,
+        "ambiguity": True,
+    }
+
+    contracts = customer_service_service._semantic_comparison_entity_contracts(
+        "围雪炉酒精版和酒精汽油版是同一款吗？",
+        preplan,
+        products,
+    )
+
+    assert [contract.resolved_sku for contract in contracts] == ["CS-B15S", "CS-B15SPRO"]
+
+
+def test_semantic_recommendation_rejects_dropped_decimal_measurement():
+    common = {
+        "candidate_count": 1,
+        "verified_fields_by_index": {0: {"specs.capacity"}},
+        "verified_evidence_values_by_index": {
+            0: {"specs.capacity": "1.4L", "__product_name__": "聚能环水壶"},
+        },
+    }
+    corrupted = customer_service_service._validate_semantic_recommendation_narrative(
+        {
+            "ranked_candidate_indexes": [0],
+            "evidence_usage": [{"candidate_index": 0, "fields": ["specs.capacity"]}],
+            "answer": "可以看聚能环水壶，资料标注容量为4L。",
+        },
+        **common,
+    )
+    literal = customer_service_service._validate_semantic_recommendation_narrative(
+        {
+            "ranked_candidate_indexes": [0],
+            "evidence_usage": [{"candidate_index": 0, "fields": ["specs.capacity"]}],
+            "answer": "可以看聚能环水壶，资料标注容量为1.4L。",
+        },
+        **common,
+    )
+
+    assert corrupted is None
+    assert literal is not None
+
+
+def test_semantic_recommendation_rejects_cross_product_measurement_leakage():
+    result = customer_service_service._validate_semantic_recommendation_narrative(
+        {
+            "ranked_candidate_indexes": [0, 1],
+            "evidence_usage": [
+                {"candidate_index": 0, "fields": ["specs.capacity"]},
+                {"candidate_index": 1, "fields": ["specs.capacity"]},
+            ],
+            "answer": "甲水壶容量为4L；乙水壶容量也为4L。",
+        },
+        candidate_count=2,
+        verified_fields_by_index={0: {"specs.capacity"}, 1: {"specs.capacity"}},
+        verified_evidence_values_by_index={
+            0: {"specs.capacity": "4L", "__product_name__": "甲水壶"},
+            1: {"specs.capacity": "1400ml", "__product_name__": "乙水壶"},
+        },
+    )
+
+    assert result is None
+
+
+def test_conflicting_identity_and_capacity_cell_is_not_verified_or_rendered():
+    row = {
+        "sku": "SAFE-CAPACITY",
+        "product_name_cn": "1.7L单锅",
+        "category": "锅具",
+        "capacity": "7L",
+        "gross_weight_g": 310,
+    }
+    contract = customer_recommendation_verification_contract.build_recommendation_request_contract(
+        "想找容量稍微大点的锅",
+    )
+    contract.soft_preferences.append("capacity")
+    verification = customer_recommendation_verification_contract.verify_recommendation_candidates(
+        contract,
+        [row],
+    )[0]
+    summary = customer_recommendation_verification_contract._row_customer_summary(row)
+
+    assert verification.evidence_by_constraint["capacity"]["status"] == "unsupported"
+    assert "容量7L" not in summary
+
+    content_conflict = {
+        "sku": "SAFE-CONTENT-CAPACITY",
+        "product_name_cn": "聚能环水壶",
+        "category": "水具",
+        "capacity": "4L",
+        "features": "底部聚能环设计，1.4L 双人容量",
+    }
+    assert customer_recommendation_verification_contract._capacity_consistent_with_product_identity(
+        content_conflict,
+    ) is False
+
+
+def test_decimal_capacity_parser_keeps_leading_integer_and_decimal_point():
+    assert customer_recommendation_verification_contract._numeric_values(
+        "1.4L野营水壶",
+        kind="capacity",
+    ) == [1400.0]
+    assert customer_service_service._capacity_evidence_is_internally_consistent(
+        "4L",
+        "1.4L野营水壶",
+    ) is False
+
+
+def test_named_comparison_results_follow_visible_answer_order():
+    result = customer_service_service._align_answer_named_result_cards({
+        "answer_type": "comparison",
+        "answer": "新推荐是小方锅Pro（CW-C99），上一款是小方锅（CW-C69-1）。",
+        "results": [
+            {"sku": "CW-C69-1", "product_name_cn": "小方锅"},
+            {"sku": "CW-C99", "product_name_cn": "小方锅Pro"},
+        ],
+        "result_skus": ["CW-C69-1", "CW-C99"],
+        "candidate_skus": ["CW-C69-1", "CW-C99"],
+    })
+
+    assert result["result_skus"] == ["CW-C99", "CW-C69-1"]
+    assert [row["sku"] for row in result["results"]] == ["CW-C99", "CW-C69-1"]
+
+
+def test_named_recommendation_results_follow_product_name_order_without_visible_skus():
+    result = customer_service_service._align_answer_named_result_cards({
+        "answer_type": "recommendation",
+        "answer": "先看乙水壶，再考虑甲水壶。",
+        "results": [
+            {"sku": "KETTLE-A", "product_name_cn": "甲水壶"},
+            {"sku": "KETTLE-B", "product_name_cn": "乙水壶"},
+        ],
+        "result_skus": ["KETTLE-A", "KETTLE-B"],
+        "candidate_skus": ["KETTLE-A", "KETTLE-B"],
+    })
+
+    assert result["result_skus"] == ["KETTLE-B", "KETTLE-A"]
+
+
+def test_compact_easy_wash_phrase_becomes_cleaning_preference():
+    contract = customer_recommendation_verification_contract.build_recommendation_request_contract(
+        "卡式炉 烤盘 好洗 哪个",
+    )
+
+    assert contract.cleaning_required is True
+    assert "cleaning" in contract.soft_preferences
+
+
+def test_safe_missing_product_qa_does_not_echo_unverified_values():
+    answer = customer_service_service._safe_missing_product_qa_answer(
+        "稳稳水袋",
+        "AC-19",
+        "AC-19 的防水等级是 IPX6 还是 IPX7？",
+    )
+
+    assert "IPX6" not in answer
+    assert "IPX7" not in answer
+    assert "没有维护" in answer
