@@ -53,6 +53,23 @@ def test_final_arbiter_preserves_one_boundary_for_each_unsupported_request():
     assert result["answer_metadata"]["final_answer_audit"]["passed"] is True
 
 
+def test_final_arbiter_deduplicates_equivalent_missing_boundaries_for_same_request():
+    result = customer_final_answer_arbiter.arbitrate_final_answer({
+        "answer": "关于“里面都有什么”：当前该商品资料未直接确认，无法确认。",
+        "result_skus": ["CW-C95"],
+        "evidence": [],
+        "answer_metadata": {
+            "answer_coverage_contract": _coverage(unsupported=["里面都有什么"]),
+        },
+        "debug": {},
+    })
+
+    assert result["answer"].count("关于“里面都有什么”") == 1
+    assert "equivalent_missing_boundary_removed" in (
+        result["answer_metadata"]["final_answer_audit"]["repairs"]
+    )
+
+
 def test_final_arbiter_flags_cross_sku_evidence_without_rewriting_facts():
     original = "CW-C95的材质为硬质氧化铝合金。"
     result = customer_final_answer_arbiter.arbitrate_final_answer({

@@ -4166,7 +4166,10 @@ def _is_compare_question(text: str) -> bool:
     # (A、B、C 三者是什么关系) rather than the binary conjunction "和".
     # Once two or more explicit references are present, its comparison intent
     # is carried by the complete utterance, not by one fixed separator.
-    return any(term in text for term in ("区别", "不同", "对比", "比较", "关系", "哪个", "哪款", "更适合", "该买", "应该买", "买哪个"))
+    return any(term in text for term in (
+        "区别", "不同", "差异", "对比", "比较", "关系", "同一款", "同款",
+        "同一个产品", "一样", "相同", "哪个", "哪款", "更适合", "该买", "应该买", "买哪个",
+    ))
 
 
 def _is_compare_choice_question(text: str) -> bool:
@@ -4204,6 +4207,18 @@ def _extract_compare_product_refs(text: str) -> list[str]:
     if "和" in text:
         left, right = text.split("和", 1)
         right = right.split("的", 1)[0].split("，", 1)[0].split(",", 1)[0]
+        # In an identity/relation comparison, the right product is followed
+        # directly by the predicate ("A 和 B 是同一款吗").  Bound the product
+        # span before that predicate so model-unavailable fallback can still
+        # seal both catalogue identities instead of treating the whole clause
+        # as a product name.
+        right = re.split(
+            r"(?:是|是否|是不是)?(?:同一款|同款|同一个产品|一样|相同)"
+            r"|(?:有)?(?:什么|哪些)?(?:区别|不同|差异)"
+            r"|[？?。！!；;]",
+            right,
+            maxsplit=1,
+        )[0]
         candidate_refs = [left.strip("「」 ？?"), right.strip("「」 ？?")]
         # The conjunction is not itself evidence of two product identities.
         # In a scenario sentence it commonly joins needs (for example cooking

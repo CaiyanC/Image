@@ -528,6 +528,18 @@ def test_semantic_structured_comparison_overview_is_not_replaced_by_legacy_field
     )
 
 
+def test_explicit_product_identity_question_preserves_direct_answer_obligation():
+    assert customer_service_service._explicit_product_identity_question(
+        "围雪炉酒精版和酒精汽油版是同一款吗？"
+    )
+    assert customer_service_service._explicit_product_identity_question(
+        "这两个 SKU 是不是同一个产品？"
+    )
+    assert not customer_service_service._explicit_product_identity_question(
+        "这两款的材质一样吗？"
+    )
+
+
 def test_semantic_comparison_preserves_explicit_non_decision_flag():
     """Factual differences must not be turned into a product recommendation."""
     preplan = customer_agent_planner_service._validate_semantic_preplan(
@@ -2599,6 +2611,31 @@ def test_semantic_comparison_catalogue_sealing_overrides_provider_ambiguity_flag
     )
 
     assert [contract.resolved_sku for contract in contracts] == ["CS-B15S", "CS-B15SPRO"]
+
+
+def test_deterministic_identity_comparison_fallback_seals_coordinated_names():
+    question = "围雪炉酒精版和酒精汽油版是同一款吗？不要看名字猜，按资料里的产品身份和差异回答。"
+    products = [
+        _product("CS-B15S", "围雪炉-酒精版", "炉具"),
+        _product("CS-B15SPRO", "围雪炉-酒精汽炉版", "炉具"),
+    ]
+    plan = customer_agent_planner_service.plan_customer_question(question)
+
+    assert customer_agent_planner_service._extract_compare_product_refs(question) == [
+        "围雪炉酒精版",
+        "酒精汽油版",
+    ]
+    assert plan["primary_intent"] == "comparison"
+
+    contracts = customer_service_service._apply_deterministic_named_comparison_fallback_plan(
+        question,
+        plan,
+        products,
+    )
+
+    assert [contract.resolved_sku for contract in contracts] == ["CS-B15S", "CS-B15SPRO"]
+    assert plan["product_refs"] == ["CS-B15S", "CS-B15SPRO"]
+    assert plan["comparison_identity_source"] == "deterministic_named_comparison_fallback"
 
 
 def test_semantic_recommendation_rejects_dropped_decimal_measurement():

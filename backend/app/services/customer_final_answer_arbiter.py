@@ -40,6 +40,28 @@ def _deduplicate_lines(answer: str) -> tuple[str, bool]:
     return "\n".join(lines), repaired
 
 
+def _deduplicate_equivalent_missing_boundaries(answer: str) -> tuple[str, bool]:
+    """Keep one unsupported boundary per quoted customer request.
+
+    Upstream semantic and coverage paths can phrase the same missing-data
+    boundary differently.  The quoted request is the stable structural key;
+    this cleanup does not infer facts or rewrite model prose.
+    """
+    lines: list[str] = []
+    seen_requests: set[str] = set()
+    repaired = False
+    for line in str(answer or "").splitlines():
+        match = re.match(r"^关于[“\"](.+?)[”\"]：(.+)$", line.strip())
+        if match and any(term in match.group(2) for term in ("未直接确认", "未找到可直接确认", "无法确认")):
+            request_text = match.group(1).strip()
+            if request_text in seen_requests:
+                repaired = True
+                continue
+            seen_requests.add(request_text)
+        lines.append(line)
+    return "\n".join(lines), repaired
+
+
 def _normalize_skus(values) -> list[str]:
     return list(dict.fromkeys(
         str(item or "").strip().upper()
@@ -63,6 +85,9 @@ def arbitrate_final_answer(agent_result: dict) -> dict:
     answer, deduplicated = _deduplicate_lines(str(result.get("answer") or ""))
     if deduplicated:
         repairs.append("duplicate_line_removed")
+    answer, equivalent_boundary_removed = _deduplicate_equivalent_missing_boundaries(answer)
+    if equivalent_boundary_removed:
+        repairs.append("equivalent_missing_boundary_removed")
 
     coverage = customer_answer_coverage_contract.AnswerCoverageContract.from_dict(
         metadata.get("answer_coverage_contract")
@@ -85,6 +110,13 @@ def arbitrate_final_answer(agent_result: dict) -> dict:
             if boundary not in answer.splitlines():
                 answer = "\n".join(item for item in (answer, boundary) if item)
                 repairs.append("unsupported_boundary_added")
+
+    # Coverage completion can add a canonical boundary after the model has
+    # already stated the same unsupported request in different words.  Run
+    # the structural equivalence pass again after all additions are present.
+    answer, equivalent_boundary_removed = _deduplicate_equivalent_missing_boundaries(answer)
+    if equivalent_boundary_removed:
+        repairs.append("equivalent_missing_boundary_removed")
 
     result["answer"] = answer
     if not answer:

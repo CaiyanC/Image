@@ -2620,6 +2620,17 @@ def _semantic_structured_comparison_overview_contract(preplan: dict | None) -> b
     )
 
 
+def _explicit_product_identity_question(text: str) -> bool:
+    """Whether the customer explicitly asks if products share one identity.
+
+    This does not resolve either product or choose a route.  It only preserves
+    the obligation to answer the customer's yes/no identity question after
+    both participants have independently been sealed to catalogue records.
+    """
+    value = str(text or "")
+    return any(term in value for term in ("同一款", "同款", "同一个产品"))
+
+
 def _should_execute_semantic_catalog_recommendation(preplan: dict | None) -> bool:
     """Allow the catalogue executor only for an unbound semantic recommendation.
 
@@ -3158,6 +3169,51 @@ def _apply_explicit_sku_comparison_plan(
         "must_compare_both_products": True,
         "semantic_comparison_entity_contracts": [contract.to_dict() for contract in contracts],
     })
+    return contracts
+
+
+def _apply_deterministic_named_comparison_fallback_plan(
+    question: str,
+    phase1_plan: dict[str, Any],
+    products: list[Product],
+) -> list[customer_entity_resolution_contract.EntityResolutionContract]:
+    """Seal a strict deterministic comparison only when semantic planning is unavailable.
+
+    The deterministic planner has already required two bounded product-shaped
+    spans plus explicit comparison grammar.  This adapter reuses the same
+    exact/unique-one-edit catalogue sealing as the semantic path; it never
+    chooses products from a broad search or writes an answer.
+    """
+    if phase1_plan.get("semantic_comparison_entity_contracts"):
+        return []
+    if str(phase1_plan.get("primary_intent") or "") not in {"comparison", "product_compare_recommendation"}:
+        return []
+    participants = [
+        str(item or "").strip()
+        for item in (phase1_plan.get("product_refs") or [])
+        if str(item or "").strip()
+    ]
+    if len(participants) < 2:
+        return []
+    fallback_preplan = {
+        "called": True,
+        "route_family": "comparison",
+        "entities": participants,
+        "canonical_fields": [],
+        "confidence": 0.9,
+        "confidence_label": "high",
+        "ambiguity": True,
+        "fallback_reason": "",
+        "decision_requested": bool(phase1_plan.get("must_make_choice")),
+    }
+    contracts = _apply_semantic_comparison_plan(
+        question,
+        phase1_plan,
+        fallback_preplan,
+        products,
+    )
+    if contracts:
+        phase1_plan["comparison_identity_source"] = "deterministic_named_comparison_fallback"
     return contracts
 
 
@@ -11110,12 +11166,17 @@ async def _phase1_compare_choice_result(db: Session, plan: dict) -> dict | None:
     # not a deterministic choice of a field route: show only recorded values
     # that differ across every sealed participant.
     semantic_identity_relation = bool(
-        str(semantic_preplan.get("subtype") or "").strip() == "relation_comparison"
-        and not bool(semantic_preplan.get("decision_requested"))
+        not bool(semantic_preplan.get("decision_requested"))
         and not semantic_comparison_fields
-        and any(
-            term in str(semantic_preplan.get("qa_evidence_query") or "")
-            for term in ("产品身份", "同一款", "同款", "差异")
+        and (
+            _explicit_product_identity_question(raw_question)
+            or (
+                str(semantic_preplan.get("subtype") or "").strip() == "relation_comparison"
+                and any(
+                    term in str(semantic_preplan.get("qa_evidence_query") or "")
+                    for term in ("产品身份", "同一款", "同款", "差异")
+                )
+            )
         )
     )
     if (
@@ -26023,7 +26084,7 @@ async def ask_customer_service(
             )
         if _semantic_pairwise_contract_candidate(semantic_preplan) and _semantic_preplan_confident(
             semantic_preplan,
-            minimum=0.9,
+            minimum=0.65,
         ):
             # Semantic planning owns comparison meaning and the participant
             # spans.  The catalogue is consulted only to validate each span
@@ -27312,6 +27373,12 @@ async def ask_customer_service(
         # label.  Seal each participant now so an invalid semantic preplan
         # cannot send a two-product comparison into single-entity arbitration.
         _apply_explicit_sku_comparison_plan(
+            question,
+            phase1_plan,
+            db.query(Product).order_by(Product.sku.asc()).all(),
+        )
+    if isinstance(phase1_plan, dict) and not phase1_plan.get("semantic_comparison_entity_contracts"):
+        _apply_deterministic_named_comparison_fallback_plan(
             question,
             phase1_plan,
             db.query(Product).order_by(Product.sku.asc()).all(),
