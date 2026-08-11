@@ -260,6 +260,11 @@ _LEGACY_SEMANTIC_FIELD_ALIASES = {
     "stock": "inventory",
     "contents": "accessories",
     "usage": "usage_instruction",
+    # Natural semantic schemas often call after-cleaning preservation
+    # ``storage``. The catalogue's formal field for drying, protection and
+    # storage practices is ``care``; normalize the schema label only.
+    "storage": "care",
+    "maintenance": "care",
     # Providers sometimes emit these natural schema labels even though the
     # formal catalogue stores stove/fuel compatibility in one heat-source
     # field. This is output-schema normalization only; it does not inspect the

@@ -85,7 +85,7 @@ class Settings:
     # recommendation dimensions.  256 tokens can truncate valid JSON into a
     # bare label, which must then fail closed; reserve enough room for the
     # complete structured contract instead of dropping its constraints.
-    SEMANTIC_PREPLAN_MAX_TOKENS: int = int(os.getenv("SEMANTIC_PREPLAN_MAX_TOKENS", "512"))
+    SEMANTIC_PREPLAN_MAX_TOKENS: int = int(os.getenv("SEMANTIC_PREPLAN_MAX_TOKENS", "768"))
     SEMANTIC_PREPLAN_TEMPERATURE: float = float(os.getenv("SEMANTIC_PREPLAN_TEMPERATURE", "0"))
     SEMANTIC_PREPLAN_JSON_MODE: bool = os.getenv("SEMANTIC_PREPLAN_JSON_MODE", "true").lower() == "true"
     SEMANTIC_PREPLAN_THINKING_DISABLED: bool = os.getenv("SEMANTIC_PREPLAN_THINKING_DISABLED", "true").lower() == "true"

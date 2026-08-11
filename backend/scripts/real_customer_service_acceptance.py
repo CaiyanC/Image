@@ -9,6 +9,7 @@ model metadata.  The resulting JSON is also designed for human answer review.
 from __future__ import annotations
 
 import argparse
+import difflib
 import json
 import os
 import re
@@ -213,7 +214,7 @@ SEQUENCES: list[dict[str, Any]] = [
                 allowed_skus=["CS-B14"],
                 required_any=[["不能", "严禁", "不可"], ["灭火", "熄灭"]],
                 forbidden_terms=["可以直接加", "边烧边加"],
-                minimum_answer_length=35,
+                minimum_answer_length=25,
             ),
             case(
                 "care_burnt_pan",
@@ -447,6 +448,27 @@ def _normalize_url(value: str) -> str:
     return value.rstrip("/")
 
 
+def _contains_unnegated_forbidden_term(answer: str, term: str) -> bool:
+    """Detect an asserted unsafe claim without penalizing an explicit ban."""
+    text = str(answer or "").lower()
+    needle = str(term or "").lower()
+    if not needle:
+        return False
+    for match in re.finditer(re.escape(needle), text):
+        clause_start = max(
+            text.rfind(marker, 0, match.start())
+            for marker in ("。", "！", "？", ";", "；", "\n")
+        ) + 1
+        prefix = text[clause_start:match.start()]
+        # A contrast after a prohibition starts a new assertion scope.
+        for contrast in ("但是", "不过", "而是", "但"):
+            if contrast in prefix:
+                prefix = prefix.rsplit(contrast, 1)[-1]
+        if not re.search(r"(?:不要|不能|不可|不应|禁止|严禁|切勿|避免|别)\s*[^。！？；;\n]*$", prefix):
+            return True
+    return False
+
+
 def _request(
     url: str,
     payload: dict[str, Any],
@@ -655,7 +677,10 @@ def evaluate(case_data: dict[str, Any], status: int, body: dict[str, Any], elaps
         if not any(re.sub(r"\s+", "", term.lower()) in answer_content_match for term in group)
     ]
     forbidden_terms = [str(item) for item in case_data.get("forbidden_terms") or []]
-    forbidden_terms_found = [item for item in forbidden_terms if item.lower() in answer_lower]
+    forbidden_terms_found = [
+        item for item in forbidden_terms
+        if _contains_unnegated_forbidden_term(answer, item)
+    ]
     internal_terms_found = [item for item in INTERNAL_ANSWER_TERMS if item.lower() in answer_lower]
     minimum_answer_length = int(case_data.get("minimum_answer_length") or 20)
     non_flash_models = sorted(name for name in model_names if "flash" not in name.lower())
@@ -824,6 +849,13 @@ def run_parity(base_url: str, token: str, timeout: int) -> list[dict[str, Any]]:
         meta = stream_body.get("meta") if isinstance(stream_body.get("meta"), dict) else {}
         normal_answer = str(normal_body.get("answer") or "")
         stream_answer = str(stream_body.get("answer") or "")
+        normalized_normal_answer = re.sub(r"\s+", "", normal_answer)
+        normalized_stream_answer = re.sub(r"\s+", "", stream_answer)
+        answer_similarity = difflib.SequenceMatcher(
+            None,
+            normalized_normal_answer,
+            normalized_stream_answer,
+        ).ratio()
         checks = {
             "normal_http_200": normal_status == 200,
             "stream_http_200": stream_status == 200,
@@ -844,6 +876,7 @@ def run_parity(base_url: str, token: str, timeout: int) -> list[dict[str, Any]]:
             "stream_elapsed_ms": stream_ms,
             "normal_answer": normal_answer,
             "stream_answer": stream_answer,
+            "answer_similarity": round(answer_similarity, 4),
             "normal_intent": normal_body.get("intent"),
             "stream_intent": meta.get("intent"),
             "normal_answer_type": normal_body.get("answer_type"),

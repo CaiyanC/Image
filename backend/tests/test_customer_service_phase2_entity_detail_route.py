@@ -1034,6 +1034,25 @@ def test_semantic_mutually_plausible_fields_fail_closed_with_resolved_entity():
     assert shaped["answer"] == "这个问法可能对应多个字段。请确认你想查容量还是尺寸。"
 
 
+def test_explicit_multi_field_request_is_not_reduced_to_ambiguity_clarification():
+    result = customer_service_service._semantic_field_ambiguity_clarification_result(
+        {
+            "called": True,
+            "route_hint": "product_detail",
+            "canonical_fields": ["capacity", "weight"],
+            "confidence": 0.65,
+            "ambiguity": True,
+        },
+        {},
+        {
+            "source": "deterministic_explicit_multi_field",
+            "canonical_fields": ["capacity", "weight"],
+        },
+    )
+
+    assert result is None
+
+
 def test_true_independent_detail_fields_remain_compound_eligible():
     question = "RT-P2-100容量和重量分别是多少？"
     plan = customer_agent_planner_service.plan_customer_question(question)

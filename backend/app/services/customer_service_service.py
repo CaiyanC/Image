@@ -19384,6 +19384,7 @@ def _phase2_entity_arbitration_signals(
 def _semantic_field_ambiguity_clarification_result(
     semantic_preplan: dict | None,
     entity_resolution_context: dict[str, Any] | None,
+    field_request: dict[str, Any] | None = None,
 ) -> dict | None:
     """Fail closed when semantic planning reports mutually plausible fields."""
     if not isinstance(semantic_preplan, dict) or not semantic_preplan.get("called"):
@@ -19404,6 +19405,24 @@ def _semantic_field_ambiguity_clarification_result(
         if customer_field_contract.is_supported_detail_field(str(item or "").strip())
     ))
     if len(canonical_fields) < 2:
+        return None
+
+    # Multiple independently requested fields are a compound request, not an
+    # ambiguity that requires the customer to choose one. The deterministic
+    # field contract is only a schema-grounded validation of the semantic plan:
+    # it must have found the same explicit fields in the current turn. Genuine
+    # wording ambiguity still fails closed through the clarification path.
+    validated_request = field_request if isinstance(field_request, dict) else {}
+    validated_fields = list(dict.fromkeys(
+        str(item or "").strip()
+        for item in (validated_request.get("canonical_fields") or [])
+        if customer_field_contract.is_supported_detail_field(str(item or "").strip())
+    ))
+    if (
+        validated_request.get("source") == "deterministic_explicit_multi_field"
+        and len(validated_fields) > 1
+        and set(validated_fields) == set(canonical_fields)
+    ):
         return None
 
     context = entity_resolution_context if isinstance(entity_resolution_context, dict) else {}
@@ -26687,6 +26706,7 @@ async def ask_customer_service(
     semantic_field_ambiguity_result = _semantic_field_ambiguity_clarification_result(
         semantic_preplan,
         phase2_entity_context,
+        phase2_field_request,
     )
     if semantic_field_ambiguity_result:
         semantic_field_ambiguity_result = _attach_phase1_plan_and_timing(
@@ -30821,6 +30841,7 @@ def _same_sku_knowledge_evidence_selection_messages(
     sku: str,
     candidates: list[dict[str, Any]],
     *,
+    product_identity: dict[str, Any] | None = None,
     allow_partial_compound: bool = False,
 ) -> list[dict[str, str]]:
     """Build the semantic-only relevance contract for sealed product RAG.
@@ -30840,9 +30861,13 @@ def _same_sku_knowledge_evidence_selection_messages(
         {
             "role": "system",
             "content": (
-                "Return only JSON: {indexes:number[],confidence:high|medium|low}. "
+                "Return only JSON: {indexes:number[],confidence:high|medium|low,identity_consistent:boolean}. "
                 "Select only directly relevant same-product evidence. Same-SKU identity alone is insufficient: "
                 "every selected item must directly respond to the customer's intended question. "
+                "Treat product_identity (canonical product name and catalogue category) as the authority for what physical product is being discussed. "
+                "A stored SKU tag, the customer's wording, and a candidate that repeats the question do not prove that a capability belongs to that product. "
+                "Set identity_consistent=false and indexes=[] when any evidence needed for the answer describes an operation or capability that plainly belongs to a different device, component, or product function not identified by product_identity, "
+                "even when that candidate is tagged with this SKU. Missing identity detail is not itself a conflict, but evidence may never override a clear product identity. "
                 "For a broad overview or decision question, select only complementary product-specific traits, "
                 "capabilities, applicable scenes, compatibility, stated limitations, or trade-offs that help answer it. "
                 "When the customer asks what a set, package, box, or unboxing includes, an evidence item that explicitly says the set includes, "
@@ -30861,7 +30886,15 @@ def _same_sku_knowledge_evidence_selection_messages(
         },
         {
             "role": "user",
-            "content": json.dumps({"question": question, "sku": sku, "candidates": candidates}, ensure_ascii=False),
+            "content": json.dumps(
+                {
+                    "question": question,
+                    "sku": sku,
+                    "product_identity": product_identity or {"sku": sku},
+                    "candidates": candidates,
+                },
+                ensure_ascii=False,
+            ),
         },
     ]
 
@@ -31062,6 +31095,24 @@ async def _try_sealed_same_sku_knowledge_answer(
             break
     if not candidates:
         return None
+    result_rows = safe_missing.get("results") if isinstance(safe_missing.get("results"), list) else []
+    identity_row = next(
+        (
+            item
+            for item in result_rows
+            if isinstance(item, dict) and str(item.get("sku") or "").strip().upper() == sku
+        ),
+        {},
+    )
+    product_identity = {
+        "sku": sku,
+        "canonical_name": str(
+            identity_row.get("product_name_cn")
+            or identity_row.get("product_name_en")
+            or ""
+        ).strip(),
+        "category": str(identity_row.get("category") or "").strip(),
+    }
     explicit_missing_clause_allowed = _semantic_product_qa_allows_explicit_missing_clause(phase1_plan)
     missing_capability_instruction = (
         "The semantic plan identifies multiple independently requested capabilities. Answer only the parts directly supported by the selected evidence. "
@@ -31073,50 +31124,47 @@ async def _try_sealed_same_sku_knowledge_answer(
     )
     runtime = customer_agent_planner_service._semantic_preplan_runtime_settings()
     try:
-        selected = {"indexes": [candidates[0]["index"]], "confidence": "high"} if len(candidates) == 1 else {}
-        selected_indexes = selected.get("indexes")
-        if len(candidates) > 1:
-            # Provider/model variance can make an otherwise relevant,
-            # same-SKU reranker return one transient low-confidence empty
-            # result. Retry only the identical sealed candidate set once;
-            # no route, entity, field, or evidence is changed between votes.
-            for _selection_attempt in range(2):
-                selected = customer_agent_planner_service._extract_json_object(str(
-                    await customer_llm_service.chat_completion(
-                        db,
-                        messages=_same_sku_knowledge_evidence_selection_messages(
-                            question,
-                            sku,
-                            candidates,
-                            allow_partial_compound=explicit_missing_clause_allowed,
-                        ),
-                        temperature=0,
-                        max_tokens=min(int(runtime["max_tokens"]), 120),
-                        purpose="semantic_product_knowledge_evidence_selection",
-                        api_model_override=runtime["model"],
-                        response_format=runtime["response_format"],
-                        thinking=runtime["thinking"],
-                    ) or ""
-                )) or {}
-                selected_indexes = selected.get("indexes")
-                # Accept a prior one-item response shape during the prompt
-                # migration, while relevance remains owned by the selector.
-                if not isinstance(selected_indexes, list) and isinstance(selected.get("index"), int):
-                    selected_indexes = [selected["index"]]
-                if (
-                    str(selected.get("confidence") or "").lower() in {"high", "medium"}
-                    and isinstance(selected_indexes, list)
-                    and selected_indexes
-                    and all(isinstance(index, int) for index in selected_indexes)
-                ):
-                    break
+        selected: dict[str, Any] = {}
+        selected_indexes: Any = None
+        # Even a single same-SKU candidate must pass the semantic identity and
+        # relevance contract. Same-SKU ingestion mistakes are precisely the
+        # case where automatic one-item selection would be unsafe.
+        for _selection_attempt in range(2):
+            selected = customer_agent_planner_service._extract_json_object(str(
+                await customer_llm_service.chat_completion(
+                    db,
+                    messages=_same_sku_knowledge_evidence_selection_messages(
+                        question,
+                        sku,
+                        candidates,
+                        product_identity=product_identity,
+                        allow_partial_compound=explicit_missing_clause_allowed,
+                    ),
+                    temperature=0,
+                    max_tokens=min(int(runtime["max_tokens"]), 120),
+                    purpose="semantic_product_knowledge_evidence_selection",
+                    api_model_override=runtime["model"],
+                    response_format=runtime["response_format"],
+                    thinking=runtime["thinking"],
+                ) or ""
+            )) or {}
+            selected_indexes = selected.get("indexes")
+            if (
+                selected.get("identity_consistent") is True
+                and str(selected.get("confidence") or "").lower() in {"high", "medium"}
+                and isinstance(selected_indexes, list)
+                and selected_indexes
+                and all(isinstance(index, int) for index in selected_indexes)
+            ):
+                break
         # Evidence selection is semantic, not an authorization to state a
         # product fact.  A nonempty medium-confidence selection remains
         # cautiously useful for broad product questions because generation is
         # followed by the independent same-SKU grounding gate below.  Low
         # confidence still fails closed before any answer is drafted.
         if (
-            str(selected.get("confidence") or "").lower() not in {"high", "medium"}
+            selected.get("identity_consistent") is not True
+            or str(selected.get("confidence") or "").lower() not in {"high", "medium"}
             or not isinstance(selected_indexes, list)
             or not selected_indexes
             or not all(isinstance(index, int) for index in selected_indexes)

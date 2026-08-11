@@ -298,7 +298,11 @@ def _semantic_preplan_runtime_settings() -> dict[str, Any]:
     return {
         "model": str(settings.SEMANTIC_PREPLAN_MODEL or "").strip() or None,
         "temperature": float(settings.SEMANTIC_PREPLAN_TEMPERATURE),
-        "max_tokens": max(1, int(settings.SEMANTIC_PREPLAN_MAX_TOKENS)),
+        # The full semantic contract can legitimately contain several fields,
+        # entities and provenance clauses. Provider tokenization has produced
+        # truncated JSON below the historical 512-token cap even with thinking
+        # disabled, so keep enough output room for the contract to close.
+        "max_tokens": max(768, int(settings.SEMANTIC_PREPLAN_MAX_TOKENS)),
         "response_format": {"type": "json_object"} if settings.SEMANTIC_PREPLAN_JSON_MODE else None,
         "thinking": {"type": "disabled"} if settings.SEMANTIC_PREPLAN_THINKING_DISABLED else None,
     }

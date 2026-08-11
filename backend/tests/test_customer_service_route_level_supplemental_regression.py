@@ -325,6 +325,11 @@ def _assert_recommendation_result_rows_stay_in_category_domain(
         }
 
 
+def test_semantic_storage_schema_label_normalizes_to_formal_care_field():
+    assert customer_field_contract.semantic_preplan_field_type("storage") == "care"
+    assert customer_field_contract.semantic_preplan_field_type("maintenance") == "care"
+
+
 def test_semantic_preplan_parser_accepts_code_fence_and_tracks_llm_calls(monkeypatch):
     calls = []
 
@@ -397,12 +402,12 @@ def test_semantic_preplan_parser_accepts_code_fence_and_tracks_llm_calls(monkeyp
     assert calls[0]["model"] is None
     assert calls[0]["api_model_override"] == "deepseek-v4-flash"
     assert calls[0]["temperature"] == 0
-    assert calls[0]["max_tokens"] == 512
+    assert calls[0]["max_tokens"] == 768
     assert calls[0]["response_format"] == {"type": "json_object"}
     assert calls[0]["thinking"] == {"type": "disabled"}
     assert result["preplan_model"] == "deepseek-v4-flash"
     assert result["preplan_temperature"] == 0
-    assert result["preplan_max_tokens"] == 512
+    assert result["preplan_max_tokens"] == 768
     assert result["preplan_json_mode"] is True
     assert result["preplan_thinking_disabled"] is True
     assert result["preplan_latency_ms"] == pytest.approx(123.45)

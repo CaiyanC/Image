@@ -1319,7 +1319,7 @@ def test_same_sku_rag_accessories_contract_rejects_person_count_as_component_evi
     async def fake_completion(_db, *, messages, **_kwargs):
         payload = json.loads(messages[-1]["content"])
         if "candidates" in payload:
-            return '{"indexes":[0],"confidence":"high"}'
+            return '{"indexes":[0],"confidence":"high","identity_consistent":true}'
         return '{"answer":"It includes four cups.","evidence_quotes":["up to 4 people"]}'
 
     async def grounded(*_args, **_kwargs):
@@ -1372,7 +1372,7 @@ def test_same_sku_rag_broad_product_question_merges_multiple_selected_evidence(m
     async def fake_completion(_db, *, messages, **_kwargs):
         prompt = messages[-1]["content"]
         if '"candidates"' in prompt:
-            return '{"indexes":[0,1],"confidence":"high"}'
+            return '{"indexes":[0,1],"confidence":"high","identity_consistent":true}'
         return '{"answer":"Compact and safe for camping and travel.","evidence_quotes":["compact and safe","camping and travel"]}'
 
     async def grounded(*_args, **_kwargs):
@@ -1436,7 +1436,9 @@ def test_same_sku_rag_marketing_claim_is_downgraded_to_safe_missing(monkeypatch)
     async def fake_retrieve(*_args, **_kwargs):
         return rows
 
-    async def fake_completion(_db, *, messages, **_kwargs):
+    async def fake_completion(_db, *, messages, **kwargs):
+        if kwargs.get("purpose") == "semantic_product_knowledge_evidence_selection":
+            return '{"indexes":[0],"confidence":"high","identity_consistent":true}'
         return json.dumps({
             "answer": "品质出众、包装精美，非常适合作为礼物。",
             "evidence_quotes": ["包装精美、品质出众，是送给户外露营爱好者的绝佳礼物"],
@@ -1506,7 +1508,7 @@ def test_same_sku_rag_uses_medium_semantic_selection_only_after_grounding(monkey
     async def fake_completion(_db, *, messages, **_kwargs):
         payload = json.loads(messages[-1]["content"])
         if "candidates" in payload:
-            return '{"indexes":[0,1],"confidence":"medium"}'
+            return '{"indexes":[0,1],"confidence":"medium","identity_consistent":true}'
         return '{"answer":"Compact and convenient for camping trips.","evidence_quotes":["compact and easy to carry","camping and self-drive trips"]}'
 
     async def grounded(*_args, **_kwargs):
@@ -1560,7 +1562,7 @@ def test_same_sku_rag_generation_uses_semantically_selected_broad_evidence(monke
     async def fake_completion(_db, *, messages, **_kwargs):
         payload = json.loads(messages[-1]["content"])
         if "candidates" in payload:
-            return '{"indexes":[0,1],"confidence":"high"}'
+            return '{"indexes":[0,1],"confidence":"high","identity_consistent":true}'
         if "upstream semantic selector has already accepted" in messages[0]["content"]:
             assert "decision-support factors" in messages[0]["content"]
             assert "A listed target audience never excludes an unlisted audience" in messages[0]["content"]
@@ -1639,6 +1641,7 @@ def test_same_sku_rag_retrieval_keeps_semantically_relevant_lower_ranked_evidenc
             ]
             return json.dumps({
                 "indexes": selected,
+                "identity_consistent": True,
                 "confidence": "high" if selected else "low",
             })
         assert "transparent conservative reasoning from an explicit numeric boundary" in messages[0]["content"]
@@ -1718,8 +1721,8 @@ def test_same_sku_rag_retries_a_transient_low_confidence_evidence_selection(monk
         if "candidates" in payload:
             selector_calls += 1
             if selector_calls == 1:
-                return '{"indexes":[],"confidence":"low"}'
-            return '{"indexes":[1],"confidence":"high"}'
+                return '{"indexes":[],"confidence":"low","identity_consistent":false}'
+            return '{"indexes":[1],"confidence":"high","identity_consistent":true}'
         return json.dumps({
             "answer": "\u8bb0\u5f55\u8010\u6e29\u4e0a\u9650\u4e3a140\u00b0F\uff0c\u6cb8\u6c34\u8d85\u51fa\u8be5\u8303\u56f4\uff0c\u4e0d\u5efa\u8bae\u76f4\u63a5\u704c\u88c5\u3002",
             "evidence_quotes": ["32\u00b0F to 140\u00b0F"],
@@ -1892,7 +1895,7 @@ def test_same_sku_rag_keeps_supported_part_of_a_compound_question(monkeypatch):
     async def fake_completion(_db, *, messages, **_kwargs):
         payload = json.loads(messages[-1]["content"])
         if "candidates" in payload:
-            return '{"indexes":[0],"confidence":"high"}'
+            return '{"indexes":[0],"confidence":"high","identity_consistent":true}'
         if "Answer only the parts directly supported" in messages[0]["content"]:
             return '{"answer":"Grinding coarseness can be adjusted.","evidence_quotes":["Grinding coarseness can be adjusted"]}'
         return '{"answer":"NO_EVIDENCE"}'
@@ -1948,7 +1951,7 @@ def test_same_sku_rag_repairs_grounded_draft_that_omits_a_compound_part(monkeypa
         payload = json.loads(messages[-1]["content"])
         instruction = messages[0]["content"]
         if "candidates" in payload:
-            return '{"indexes":[0],"confidence":"high"}'
+            return '{"indexes":[0],"confidence":"high","identity_consistent":true}'
         if "coverage auditor" in instruction:
             coverage_calls += 1
             return '{"complete":false}' if coverage_calls == 1 else '{"complete":true}'
@@ -2045,6 +2048,7 @@ def test_same_sku_knowledge_selection_messages_require_direct_semantic_relevance
         "What product facts matter when deciding whether this item suits a camping trip?",
         "RAG-100",
         [{"index": 0, "content": "Product feature: compact."}],
+        product_identity={"sku": "RAG-100", "canonical_name": "Camping kettle", "category": "cookware"},
     )
 
     system_instruction = messages[0]["content"]
@@ -2054,7 +2058,10 @@ def test_same_sku_knowledge_selection_messages_require_direct_semantic_relevance
     assert "directly respond to the customer's intended question" in system_instruction
     assert "first-use" in system_instruction
     assert "comparison" in system_instruction
+    assert "product_identity" in system_instruction
+    assert "different device" in system_instruction
     assert payload["sku"] == "RAG-100"
+    assert payload["product_identity"]["canonical_name"] == "Camping kettle"
     assert payload["candidates"] == [{"index": 0, "content": "Product feature: compact."}]
 
 
@@ -2178,7 +2185,7 @@ def test_same_sku_rag_repairs_a_citationless_draft_before_safe_missing(monkeypat
         nonlocal calls
         payload = json.loads(messages[-1]["content"])
         if "candidates" in payload:
-            return '{"indexes":[0],"confidence":"high"}'
+            return '{"indexes":[0],"confidence":"high","identity_consistent":true}'
         calls += 1
         if calls == 1:
             return '{"answer":"Compact for camping."}'
@@ -2239,7 +2246,7 @@ def test_same_sku_rag_repair_explains_nonverbatim_quote_failure(monkeypatch):
         nonlocal repair_system_prompt
         payload = json.loads(messages[-1]["content"])
         if "candidates" in payload:
-            return '{"indexes":[0],"confidence":"high"}'
+            return '{"indexes":[0],"confidence":"high","identity_consistent":true}'
         if "previous_draft" not in payload:
             return (
                 '{"answer":"It folds small for travel and is reusable for camping and hiking.",'
@@ -2332,7 +2339,7 @@ def test_same_sku_rag_fails_closed_when_grounded_delivery_cannot_cover_question(
     async def fake_completion(_db, *, messages, **_kwargs):
         payload = json.loads(messages[-1]["content"])
         if "candidates" in payload:
-            return '{"indexes":[0,1],"confidence":"high"}'
+            return '{"indexes":[0,1],"confidence":"high","identity_consistent":true}'
         return json.dumps({
             "answer": "It is definitely ideal for every beginner.",
             "evidence_quotes": [
@@ -2437,7 +2444,7 @@ def test_same_sku_rag_generation_contract_bounds_provenance_output(monkeypatch):
     async def fake_completion(_db, *, messages, **kwargs):
         payload = json.loads(messages[-1]["content"])
         if "candidates" in payload:
-            return '{"indexes":[0],"confidence":"high"}'
+            return '{"indexes":[0],"confidence":"high","identity_consistent":true}'
         generator_request["system"] = messages[0]["content"]
         generator_request["max_tokens"] = kwargs["max_tokens"]
         return '{"answer":"Compact for camping.","evidence_quotes":["compact for camping"]}'
@@ -2499,7 +2506,7 @@ def test_same_sku_rag_adds_authoritative_product_context_when_vector_top_results
         payload = json.loads(messages[-1]["content"])
         if "candidates" in payload:
             selected = next(item for item in payload["candidates"] if item["content"] == profile["content"])
-            return json.dumps({"indexes": [selected["index"]], "confidence": "high"})
+            return json.dumps({"indexes": [selected["index"]], "confidence": "high", "identity_consistent": True})
         return '{"answer":"Compact for camping.","evidence_quotes":["compact for camping"]}'
 
     async def grounded(*_args, **_kwargs):
