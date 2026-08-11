@@ -1050,24 +1050,30 @@ def _validate_semantic_preplan(data: dict[str, Any] | None, *, raw_content: str 
         )
         data["recommendation_constraints"] = raw_constraints
     recommendation_constraints = _validated_recommendation_constraints(data.get("recommendation_constraints"))
-    structured_query_constraints = _validated_structured_query_constraints(
-        data.get("structured_query_constraints"),
-        allow_empty_category_scope=(
-            route_family == "structured_query"
-            and not entities
-            and set(canonical_fields) == {"category"}
-        ),
-        # A collection, brand, or product-level catalogue request names a
-        # stored database value as its retrieval scope.  It is not a numeric
-        # or compatibility predicate, so its validated contract deliberately
-        # carries an empty predicate list and lets the catalogue-value executor
-        # prove the supplied value against the live column.
-        allow_empty_value_scope=(
-            route_family == "structured_query"
-            and not entities
-            and len(canonical_fields) == 1
-            and canonical_fields[0] in {"series", "brand", "product_level"}
-        ),
+    # Predicate objects are executable only on the structured-query route.
+    # Constrained providers occasionally echo this adjacent schema key on a
+    # recommendation or comparison response.  It has no authority there, so
+    # discard it instead of invalidating an independently valid semantic plan.
+    # Actual structured queries retain the full strict shape and span checks.
+    structured_query_constraints = (
+        _validated_structured_query_constraints(
+            data.get("structured_query_constraints"),
+            allow_empty_category_scope=(
+                not entities and set(canonical_fields) == {"category"}
+            ),
+            # A collection, brand, or product-level catalogue request names a
+            # stored database value as its retrieval scope.  It is not a numeric
+            # or compatibility predicate, so its validated contract deliberately
+            # carries an empty predicate list and lets the catalogue-value executor
+            # prove the supplied value against the live column.
+            allow_empty_value_scope=(
+                not entities
+                and len(canonical_fields) == 1
+                and canonical_fields[0] in {"series", "brand", "product_level"}
+            ),
+        )
+        if route_family == "structured_query"
+        else []
     )
     unrepresented_requirements = _validated_unrepresented_recommendation_requirements(
         data.get("unrepresented_recommendation_requirements")

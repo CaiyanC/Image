@@ -1666,6 +1666,32 @@ def test_recommendation_preplan_ignores_irrelevant_evidence_kind_variant():
     assert result["evidence_kind"] == "structured_field"
 
 
+def test_recommendation_preplan_ignores_irrelevant_malformed_structured_query_constraints():
+    result = customer_agent_planner_service._validate_semantic_preplan(
+        {
+            "route_family": "recommendation",
+            "subtype": "product_selection",
+            "entities": [],
+            "subject_text": "锅具",
+            "canonical_fields": [],
+            "confidence": "high",
+            "ambiguity": False,
+            "evidence_required": True,
+            "evidence_kind": "structured_field",
+            "context_usage": "none",
+            "decision_requested": True,
+            "reasoning_summary": "Customer requests evidence-backed cookware options.",
+            "recommendation_constraints": {"subject_kind": "cookware"},
+            "structured_query_constraints": {"field": "heat_source"},
+        }
+    )
+
+    assert result["fallback_reason"] == ""
+    assert result["route_family"] == "recommendation"
+    assert result["recommendation_constraints"]["subject_kind"] == "cookware"
+    assert result["structured_query_constraints"] == []
+
+
 def test_semantic_preplan_prompt_stays_within_live_provider_budget():
     """Route arbitration needs the contract, not a multi-thousand-token handbook."""
     messages = customer_agent_planner_service._semantic_preplan_messages(
