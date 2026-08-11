@@ -2065,6 +2065,33 @@ def test_same_sku_knowledge_selection_messages_require_direct_semantic_relevance
     assert payload["candidates"] == [{"index": 0, "content": "Product feature: compact."}]
 
 
+def test_same_sku_identity_audit_rejects_different_product_function(monkeypatch):
+    calls = []
+
+    async def fake_completion(_db, *, messages, **kwargs):
+        calls.append((messages, kwargs))
+        return '{"identity_consistent":false,"confidence":"high","reason":"different product function"}'
+
+    monkeypatch.setattr(
+        customer_service_service.customer_llm_service,
+        "chat_completion",
+        fake_completion,
+    )
+
+    import asyncio
+
+    accepted = asyncio.run(customer_service_service._same_sku_knowledge_identity_is_consistent(
+        SimpleNamespace(),
+        question="Does this capability work?",
+        product_identity={"sku": "K-1", "canonical_name": "Travel kettle", "category": "waterware"},
+        selected_evidence=[{"index": 0, "content": "Adjust a separate device function."}],
+    ))
+
+    assert accepted is False
+    assert calls[0][1]["purpose"] == "semantic_product_knowledge_identity_consistency"
+    assert "must never redefine the product identity" in calls[0][0][0]["content"]
+
+
 def test_same_sku_knowledge_grounding_messages_validate_faithfulness_without_redeciding_selection():
     """The semantic selector owns question relevance; grounding owns whether
     the drafted customer facts remain faithful to selected same-SKU evidence."""

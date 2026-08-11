@@ -30899,6 +30899,65 @@ def _same_sku_knowledge_evidence_selection_messages(
     ]
 
 
+async def _same_sku_knowledge_identity_is_consistent(
+    db: Session,
+    *,
+    question: str,
+    product_identity: dict[str, Any],
+    selected_evidence: list[dict[str, Any]],
+) -> bool:
+    """Independently audit whether selected claims belong to the product kind."""
+    if not str(product_identity.get("canonical_name") or product_identity.get("category") or "").strip():
+        # Older/migrating records can lack a descriptive identity. The
+        # upstream entity and same-SKU contracts still apply, but an ontology
+        # audit has no authority to compare against in that case.
+        return True
+    runtime = customer_agent_planner_service._semantic_preplan_runtime_settings()
+    try:
+        raw = await customer_llm_service.chat_completion(
+            db,
+            messages=[
+                {
+                    "role": "system",
+                    "content": (
+                        "Return only JSON: {identity_consistent:boolean,confidence:high|medium|low,reason:string}. "
+                        "This is an independent physical-product identity audit. Ignore every prior classification, plan, answer, and relevance decision. "
+                        "Use only product_identity.canonical_name and product_identity.category to determine what physical product the SKU represents. "
+                        "The customer's requested operation and the supplied evidence are claims to audit; they must never redefine the product identity. "
+                        "Set identity_consistent=false when an operation or capability plainly requires a different kind of device or a separate component "
+                        "not identified by the canonical product, even when the evidence repeats the question, asserts the capability, or carries the same SKU. "
+                        "A capability merely being absent from the short canonical name is not by itself a conflict. "
+                        "Do not judge ordinary relevance, completeness, or whether a valid product specification is true."
+                    ),
+                },
+                {
+                    "role": "user",
+                    "content": json.dumps(
+                        {
+                            "question": question,
+                            "product_identity": product_identity,
+                            "candidates": selected_evidence,
+                        },
+                        ensure_ascii=False,
+                    ),
+                },
+            ],
+            temperature=0,
+            max_tokens=100,
+            purpose="semantic_product_knowledge_identity_consistency",
+            api_model_override=runtime["model"],
+            response_format=runtime["response_format"],
+            thinking=runtime["thinking"],
+        )
+    except Exception:
+        return False
+    verdict = customer_agent_planner_service._extract_json_object(str(raw or "")) or {}
+    return bool(
+        verdict.get("identity_consistent") is True
+        and str(verdict.get("confidence") or "").lower() in {"high", "medium"}
+    )
+
+
 def _knowledge_rows_with_approved_qa_provenance(
     db: Session,
     rows: list[dict[str, Any]] | None,
@@ -31173,6 +31232,13 @@ async def _try_sealed_same_sku_knowledge_answer(
         selected_index_set = set(selected_indexes)
         selected_evidence = [item for item in candidates if item["index"] in selected_index_set]
         if len(selected_evidence) != len(selected_index_set):
+            return None
+        if not await _same_sku_knowledge_identity_is_consistent(
+            db,
+            question=question,
+            product_identity=product_identity,
+            selected_evidence=selected_evidence,
+        ):
             return None
         if (
             (
