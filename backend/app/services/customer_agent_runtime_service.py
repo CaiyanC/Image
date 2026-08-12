@@ -5489,7 +5489,7 @@ def _compose_recommendation_answer(
             lines.append(f"{item.get('sku')}\uff0c{item.get('product_name_cn') or item.get('product_name_en') or ''}\uff1a{item_reason}")
     if any(word in question for word in ("\u5496\u5561", "\u6ce1\u5496\u5561", "\u5c0f\u9505")):
         lines.append("\u6211\u5df2\u7ecf\u628a\u7092\u9505\u3001\u714e\u9505\u8fd9\u7c7b\u5bb9\u91cf\u504f\u5927\u6216\u5668\u578b\u4e0d\u9002\u5408\u6ce1\u5496\u5561\u7684\u4ea7\u54c1\u964d\u6743\uff0c\u4e0d\u4f5c\u4e3a\u4f18\u5148\u63a8\u8350\u3002")
-    return "\\n".join(line for line in lines if line.strip())
+    return "\n".join(line for line in lines if line.strip())
 
 
 def _capacity_ml(value: Any) -> float | None:

@@ -168,8 +168,11 @@ SEQUENCES: list[dict[str, Any]] = [
             case(
                 "recommend_pour_over",
                 "咖啡器具里有哪些适合手冲的产品？请给我两三款真正相关的选择，并说明各自适合谁。",
-                require_result_skus=True,
-                required_any=[["手冲", "咖啡"]],
+                expected_answer_type="clarification",
+                expected_result_skus_empty=True,
+                expected_needs_clarification=True,
+                required_all=["适合手冲"],
+                required_any=[["明确标注", "明确标识", "说明"], ["核实", "确认", "清单", "候选"]],
                 minimum_answer_length=100,
                 require_flash=True,
             ),
@@ -684,6 +687,8 @@ def evaluate(case_data: dict[str, Any], status: int, body: dict[str, Any], elaps
     internal_terms_found = [item for item in INTERNAL_ANSWER_TERMS if item.lower() in answer_lower]
     minimum_answer_length = int(case_data.get("minimum_answer_length") or 20)
     non_flash_models = sorted(name for name in model_names if "flash" not in name.lower())
+    expected_answer_type = str(case_data.get("expected_answer_type") or "").strip()
+    expected_needs_clarification = case_data.get("expected_needs_clarification")
 
     checks = {
         "http_200": status == 200,
@@ -699,6 +704,12 @@ def evaluate(case_data: dict[str, Any], status: int, body: dict[str, Any], elaps
         "forbidden_terms_absent": not forbidden_terms_found,
         "internal_terms_absent": not internal_terms_found,
         "result_skus_returned": bool(result_skus) if case_data.get("require_result_skus") else True,
+        "expected_answer_type": not expected_answer_type or body.get("answer_type") == expected_answer_type,
+        "expected_result_skus_empty": not case_data.get("expected_result_skus_empty") or not result_skus,
+        "expected_needs_clarification": (
+            expected_needs_clarification is None
+            or bool(body.get("needs_clarification")) is bool(expected_needs_clarification)
+        ),
         "all_reported_models_are_flash": not non_flash_models,
         "flash_semantic_call_observed": (
             semantic["called"] and bool(model_names) and not non_flash_models

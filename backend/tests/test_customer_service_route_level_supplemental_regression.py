@@ -9,6 +9,7 @@ from app.models import Product, ProductBusiness, ProductQa, ProductSpecs
 from app.services import (
     customer_agent_intent_service,
     customer_agent_planner_service,
+    customer_agent_runtime_service,
     customer_entity_resolution_contract,
     customer_field_contract,
     customer_recommendation_verification_contract,
@@ -5756,6 +5757,183 @@ def test_semantic_preplan_preserves_grounded_requirements_not_representable_by_c
 
     assert plan["fallback_reason"] == ""
     assert plan["unrepresented_recommendation_requirements"] == ["小锅", "煮面"]
+
+
+def test_semantic_preplan_preserves_suitability_evidence_requirement_separately_from_soft_preferences():
+    plan = customer_agent_planner_service._validate_semantic_preplan(
+        {
+            "route_family": "recommendation",
+            "confidence": "high",
+            "recommendation_constraints": {"subject_kind": "coffee_gear"},
+            "recommendation_evidence_requirements": ["适合手冲"],
+            "recommendation_soft_preferences": [],
+        },
+        raw_content="{}",
+    )
+
+    assert plan["fallback_reason"] == ""
+    assert plan["recommendation_evidence_requirements"] == ["适合手冲"]
+    assert plan["recommendation_soft_preferences"] == []
+
+
+def test_recommendation_evidence_gate_fails_closed_when_no_same_sku_support(monkeypatch):
+    async def no_direct_support(*_args, **_kwargs):
+        return []
+
+    monkeypatch.setattr(
+        customer_service_service,
+        "_semantic_recommendation_evidence_gate",
+        no_direct_support,
+    )
+    diagnostics = []
+    result = asyncio.run(customer_service_service._semantic_recommendation_narrative(
+        None,
+        question="有哪些适合手冲的咖啡器具？",
+        rows=[
+            {"sku": "COFFEE-A", "product_name_cn": "咖啡壶A", "features": "天鹅设计"},
+            {"sku": "COFFEE-B", "product_name_cn": "研磨机B", "usage_scenarios": "户外咖啡"},
+        ],
+        verifications=[
+            SimpleNamespace(
+                sku="COFFEE-A",
+                evidence_by_constraint={},
+                unsupported_constraints=[],
+                unsupported_preferences=[],
+            ),
+            SimpleNamespace(
+                sku="COFFEE-B",
+                evidence_by_constraint={},
+                unsupported_constraints=[],
+                unsupported_preferences=[],
+            ),
+        ],
+        evidence_requirements=["适合手冲"],
+        diagnostics=diagnostics,
+    ))
+
+    assert result is None
+    assert diagnostics[-1]["stage"] == "recommendation_evidence_gate"
+    assert diagnostics[-1]["status"] == "no_direct_same_sku_support"
+
+
+def test_recommendation_evidence_gap_answer_stays_semantic_and_mentions_exact_requirement(monkeypatch):
+    async def gap_answer(*_args, **_kwargs):
+        return "你问的是适合手冲的咖啡器具，但当前商品资料没有直接标注适合手冲，因此我不把仅属于咖啡器具类目的商品直接当作适配推荐。你可以补充明确的手冲适配说明，或允许我先列出相关但仍需确认的候选。"
+
+    monkeypatch.setattr(customer_service_service, "_semantic_recommendation_evidence_gap_answer", gap_answer)
+    async def no_direct_support(*_args, **_kwargs):
+        return []
+
+    monkeypatch.setattr(customer_service_service, "_semantic_recommendation_evidence_gate", no_direct_support)
+    rows = [{
+        "sku": "COFFEE-A",
+        "product_name_cn": "咖啡壶A",
+        "category": "咖啡器具",
+        "features": "天鹅设计",
+    }]
+    monkeypatch.setattr(customer_service_service.customer_agent_service, "search_products", lambda *_args, **_kwargs: rows)
+    monkeypatch.setattr(customer_service_service, "_phase1_catalog_rows", lambda *_args, **_kwargs: rows)
+    monkeypatch.setattr(
+        customer_recommendation_verification_contract,
+        "verify_recommendation_candidates",
+        lambda _contract, candidate_rows: [SimpleNamespace(
+            sku=candidate_rows[0]["sku"],
+            verification_level="fully_verified",
+            has_hard_constraint_conflict=False,
+            all_hard_constraints_verified=True,
+            evidence_by_constraint={},
+            verified_preferences=[],
+            unsupported_constraints=[],
+            unsupported_preferences=[],
+            to_dict=lambda: {},
+        )],
+    )
+    result = asyncio.run(customer_service_service._semantic_recommendation_contract_result(
+        None,
+        "有哪些适合手冲的咖啡器具？",
+        {"semantic_preplan": {
+            "called": True,
+            "route_family": "recommendation",
+            "confidence": 0.9,
+            "fallback_reason": "",
+            "ambiguity": False,
+            "recommendation_constraints": {"subject_kind": "coffee_gear"},
+            "recommendation_evidence_requirements": ["适合手冲"],
+            "recommendation_soft_preferences": [],
+            "unrepresented_recommendation_requirements": [],
+        }},
+    ))
+
+    assert result["answer_type"] == "clarification"
+    assert result["result_skus"] == []
+    assert "适合手冲" in result["answer"]
+    assert "人数、炉具、容量" not in result["answer"]
+
+
+def test_recommendation_evidence_gate_remaps_selected_index_to_original_candidate(monkeypatch):
+    async def select_second(*_args, **_kwargs):
+        return [1]
+
+    async def render_selected(*_args, **kwargs):
+        assert kwargs["question"] == "有哪些适合手冲的咖啡器具？"
+        return {
+            "ranked_candidate_indexes": [0],
+            "evidence_usage": [{"candidate_index": 0, "fields": ["content.features"]}],
+            "answer": "研磨机B资料明确写有手冲研磨功能。",
+        }
+
+    monkeypatch.setattr(customer_service_service, "_semantic_recommendation_evidence_gate", select_second)
+    monkeypatch.setattr(customer_service_service, "_semantic_recommendation_final_render", render_selected)
+    async def draft(*_args, **_kwargs):
+        return "{\"ranked_candidate_indexes\":[0],\"evidence_usage\":[{\"candidate_index\":0,\"fields\":[\"content.features\"]}],\"answer\":\"研磨机B资料明确写有手冲研磨功能，可作为相关候选。\"}"
+
+    monkeypatch.setattr(customer_service_service.customer_llm_service, "chat_completion", draft)
+    result = asyncio.run(customer_service_service._semantic_recommendation_narrative(
+        None,
+        question="有哪些适合手冲的咖啡器具？",
+        rows=[
+            {"sku": "COFFEE-A", "product_name_cn": "咖啡壶A", "features": "天鹅设计"},
+            {"sku": "COFFEE-B", "product_name_cn": "研磨机B", "features": "手冲研磨功能"},
+        ],
+        verifications=[
+            SimpleNamespace(
+                sku="COFFEE-A",
+                evidence_by_constraint={},
+                unsupported_constraints=[],
+                unsupported_preferences=[],
+            ),
+            SimpleNamespace(
+                sku="COFFEE-B",
+                evidence_by_constraint={},
+                unsupported_constraints=[],
+                unsupported_preferences=[],
+            ),
+        ],
+        evidence_requirements=["适合手冲"],
+        diagnostics=[],
+    ))
+
+    assert result["ranked_candidate_indexes"] == [1]
+    assert result["evidence_usage"] == [{"candidate_index": 1, "fields": ["content.features"]}]
+
+
+def test_legacy_recommendation_composer_uses_real_line_breaks():
+    answer = customer_agent_runtime_service._compose_recommendation_answer(
+        "推荐咖啡器具",
+        [
+            {"sku": "COFFEE-A", "product_name_cn": "咖啡壶A", "features": "手冲"},
+            {"sku": "COFFEE-B", "product_name_cn": "研磨机B", "features": "便携"},
+        ],
+    )
+
+    assert "\\n" not in answer
+    assert "\n" in answer
+
+
+def test_semantic_recommendation_answer_hides_escaped_catalogue_separators():
+    answer = customer_service_service._normalize_customer_answer_text("适用热源为酒精炉\\n气炉")
+
+    assert answer == "适用热源为酒精炉、气炉"
 
 
 def test_semantic_preplan_recovers_model_unrepresented_requirement_misnested_in_constraints_without_inference():

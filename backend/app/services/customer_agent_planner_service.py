@@ -202,6 +202,7 @@ SEMANTIC_PREPLAN_ALLOWED_KEYS = {
     "recommendation_constraints",
     "structured_query_constraints",
     "unrepresented_recommendation_requirements",
+    "recommendation_evidence_requirements",
     "recommendation_soft_preferences",
     "recommendation_followup_action",
     "information_scope",
@@ -264,6 +265,7 @@ def _empty_semantic_preplan(*, called: bool = False, fallback_reason: str = "") 
         "recommendation_constraints": {},
         "structured_query_constraints": [],
         "unrepresented_recommendation_requirements": [],
+        "recommendation_evidence_requirements": [],
         "recommendation_soft_preferences": [],
         "reasoning_summary": "",
         "field_type": "",
@@ -573,6 +575,18 @@ def _validated_recommendation_soft_preferences(value: Any) -> list[str] | None:
     semantic preplan makes that sentence-level judgement.  Consumers may pass
     these phrases to the evidence-bound narrator, but must never use them to
     assert a product fact or to filter candidates.
+    """
+    return _validated_unrepresented_recommendation_requirements(value)
+
+
+def _validated_recommendation_evidence_requirements(value: Any) -> list[str] | None:
+    """Validate literal evidence gates for a semantic catalogue shortlist.
+
+    These are not hard catalogue filters. They record a customer-stated
+    suitability/capability condition that must be supported by the selected
+    product's own sealed evidence before the product can be shown as a
+    recommendation. Keeping this separate from soft preferences prevents a
+    model from treating a broad category or related use scene as proof.
     """
     return _validated_unrepresented_recommendation_requirements(value)
 
@@ -1078,6 +1092,9 @@ def _validate_semantic_preplan(data: dict[str, Any] | None, *, raw_content: str 
     unrepresented_requirements = _validated_unrepresented_recommendation_requirements(
         data.get("unrepresented_recommendation_requirements")
     )
+    evidence_requirements = _validated_recommendation_evidence_requirements(
+        data.get("recommendation_evidence_requirements")
+    )
     soft_preferences = _validated_recommendation_soft_preferences(
         data.get("recommendation_soft_preferences")
     )
@@ -1136,6 +1153,11 @@ def _validate_semantic_preplan(data: dict[str, Any] | None, *, raw_content: str 
         result = _empty_semantic_preplan(called=True, fallback_reason="invalid_recommendation_soft_preferences")
         result["raw_preview"] = _safe_preview(raw_content)
         return result
+    if evidence_requirements is None:
+        # This optional array is only a literal semantic boundary. A malformed
+        # provider value must not erase the rest of an otherwise valid route,
+        # but it also must never become an inferred product requirement.
+        evidence_requirements = []
     if recommendation_constraints and route_family != "recommendation":
         result = _empty_semantic_preplan(called=True, fallback_reason="recommendation_constraints_outside_recommendation")
         result["raw_preview"] = _safe_preview(raw_content)
@@ -1303,6 +1325,7 @@ def _validate_semantic_preplan(data: dict[str, Any] | None, *, raw_content: str 
             "recommendation_constraints": recommendation_constraints,
             "structured_query_constraints": structured_query_constraints,
             "unrepresented_recommendation_requirements": unrepresented_requirements,
+            "recommendation_evidence_requirements": evidence_requirements,
             "recommendation_soft_preferences": soft_preferences,
             "recommendation_followup_action": recommendation_followup_action,
             "reasoning_summary": str(data.get("reasoning_summary") or data.get("reason") or "").strip()[:300],
@@ -1496,7 +1519,7 @@ def _semantic_preplan_messages(
         "route_family must be one of structured_query,recommendation,comparison,product_bound_qa,product_navigation,"
         "unresolved_product_like,negative_product_like,unknown_realtime,contents_accessories,generic_query,knowledge_base_meta,general_chat,clarification. "
         "Use general_chat for non-catalogue guidance; for an unnamed category hazard use subtype=safety_procedure. A named category's complete range/types/models is structured_query over category. "
-        "Use recommendation only to select catalogue products. recommendation_constraints may contain only subject_kind=cookware|waterware|stove|coffee_gear|accessories, people={min,max}, heat_sources=[card_stove|gas_stove|alcohol_stove|open_flame|induction], scenarios=[camping|hiking|self_drive|seaside|soup], weight_preference=lightweight, price_preference=affordable|premium, storage_preference=compact_storage, or explicit dishwasher_safe=true. Map pot/pan/griddle to cookware, grinder/brewer to coffee_gear, and explicitly requested parts or utensils to accessories. Constraints must be explicitly stated by the customer. Free-text arrays must be exact original-language substrings; never translate, paraphrase, or invent. "
+        "Use recommendation only to select catalogue products. recommendation_constraints may contain only subject_kind=cookware|waterware|stove|coffee_gear|accessories, people={min,max}, heat_sources=[card_stove|gas_stove|alcohol_stove|open_flame|induction], scenarios=[camping|hiking|self_drive|seaside|soup], weight_preference=lightweight, price_preference=affordable|premium, storage_preference=compact_storage, or explicit dishwasher_safe=true. Map pot/pan/griddle to cookware, grinder/brewer to coffee_gear, and explicitly requested parts or utensils to accessories. Constraints must be explicitly stated by the customer. Free-text arrays must be exact original-language substrings; never translate, paraphrase, or invent. For a recommendation phrase that explicitly asks which products are suitable, clearly support, or truly relevant for a stated use/capability, add the exact customer wording to recommendation_evidence_requirements when the use is not represented by an allowlisted constraint. This is an evidence gate, not a product filter: the selected candidate must have same-SKU evidence that directly supports that use, otherwise do not present it as suitable. A contextual use introduced as '主要用于/想用来/希望拿来/帮我选' or a general preference is not by itself an evidence gate; keep it in recommendation_soft_preferences and let the writer recommend from other verified same-SKU facts while disclosing the boundary. "
         "unbound customer request for actual catalogue candidates must use route_family=recommendation; product_bound_qa requires one named product or an entity anchor. "
         "Same/different/related questions about two named products are comparison; split participants into entities. "
         "A named-product question about operating steps, safety rules, prohibited actions, cleaning, maintenance, or any other product field is product_bound_qa even if its answer may later use a manual or knowledge-base document as evidence. subject_text must preserve every customer-stated identity-bearing version or edition, colour, size, capacity, or configuration; never shorten it to a family name. "
@@ -2536,6 +2559,7 @@ async def _semantic_recommendation_requirement_reconciliation(
     question: str,
     proposed_constraints: dict[str, Any],
     unrepresented_requirements: list[str],
+    evidence_requirements: list[str],
     soft_preferences: list[str],
     runtime_settings: dict[str, Any],
 ) -> dict[str, Any] | None:
@@ -2558,12 +2582,15 @@ async def _semantic_recommendation_requirement_reconciliation(
                 "customer phrase supports it. Do not assume an expression is satisfied merely because it sounds typical for a product category or might be mentioned in later content. Put an unmet must-have eligibility condition in unrepresented_recommendation_requirements; put a non-binding desire, use-context, or decision framing in recommendation_soft_preferences. A vague capacity wish without a numeric threshold or explicit non-negotiable wording is soft: for example, 容量别太小 or 容量大一点 belongs in recommendation_soft_preferences, not unrepresented_recommendation_requirements. Soft preferences do not filter candidates and never prove a product fact. Leave requirements unrepresented when the ontology "
                 "cannot express them; do not infer a product, SKU, candidate, database fact, price, "
                 "or answer. An explicit cardinality or group-size phrase is always an independent people constraint when the ontology can represent it; do not let an accompanying scenario, heat source, or subject kind suppress it. A customer-stated intended use that qualifies suitability must never disappear from the partition: use a formal constraint when the ontology represents it, otherwise retain its exact phrase as a soft preference unless the customer makes it non-negotiable, in which case retain it as unrepresented. A wish, preference, or choice-framing phrase is soft unless the customer explicitly makes it non-negotiable; do not turn it into an unmet hard requirement merely because it has no ontology key. When the customer asks how to choose or does not force a single product, contextual storage or space pressure is a soft preference unless they explicitly state it is a must-have eligibility condition. A literal phrase already represented by a retained formal constraint must not be repeated as a soft preference. Allowed constraint schema is exactly: subject_kind "
+                "cannot express them; do not infer a product, SKU, candidate, database fact, price, "
+                "or answer. If the customer asks which products are suitable or truly relevant for a stated use/capability, preserve the exact use phrase in recommendation_evidence_requirements when no formal constraint represents it; this is an evidence gate, not a filter, and a candidate may be recommended only when its same-SKU sealed evidence directly supports that phrase. Keep a merely contextual use or ordinary preference in recommendation_soft_preferences. An explicit cardinality or group-size phrase is always an independent people constraint when the ontology can represent it; do not let an accompanying scenario, heat source, or subject kind suppress it. A customer-stated intended use that qualifies suitability must never disappear from the partition: use a formal constraint when the ontology represents it, otherwise preserve the exact phrase in recommendation_evidence_requirements when it is a suitability request, or in recommendation_soft_preferences when it is only context. A wish, preference, or choice-framing phrase is soft unless the customer explicitly makes it non-negotiable; do not turn it into an unmet hard requirement merely because it has no ontology key. When the customer asks how to choose or does not force a single product, contextual storage or space pressure is a soft preference unless they explicitly state it is a must-have eligibility condition. A literal phrase already represented by a retained formal constraint must not be repeated in a soft preference or evidence requirement. Allowed constraint schema is exactly: subject_kind "
+                "Boundary reminder: '主要用于/想用来/希望拿来/帮我选' describes recommendation context or a soft preference unless the customer also explicitly asks which products are suitable, clearly support, or truly relevant. Only that explicit suitability wording belongs in recommendation_evidence_requirements; otherwise keep the literal use phrase in recommendation_soft_preferences and allow downstream evidence-bound recommendation with a clear uncertainty boundary. "
                 "(cookware|waterware|stove|coffee_gear), people ({min,max}), heat_sources "
                 "(card_stove|gas_stove|alcohol_stove|open_flame|induction), scenarios "
                 "(camping|hiking|self_drive|seaside|soup), weight_preference (lightweight), "
                 "price_preference (affordable|premium), storage_preference (compact_storage), dishwasher_safe (true). For every retained or added constraint, "
                 "evidence_spans must contain exact literal customer substrings. Output exactly "
-                "{\"recommendation_constraints\":{...},\"unrepresented_recommendation_requirements\":[...],\"recommendation_soft_preferences\":[...],"
+                "{\"recommendation_constraints\":{...},\"unrepresented_recommendation_requirements\":[...],\"recommendation_evidence_requirements\":[...],\"recommendation_soft_preferences\":[...],"
                 "\"evidence_spans\":{\"constraint_key\":[\"exact customer words\"]}}."
             ),
         },
@@ -2574,6 +2601,7 @@ async def _semantic_recommendation_requirement_reconciliation(
                     "question": question,
                     "proposed_constraints": proposed_constraints,
                     "unrepresented_recommendation_requirements": unrepresented_requirements,
+                    "recommendation_evidence_requirements": evidence_requirements,
                     "recommendation_soft_preferences": soft_preferences,
                 },
                 ensure_ascii=False,
@@ -2611,6 +2639,8 @@ async def _semantic_recommendation_requirement_reconciliation(
         if not isinstance(data, dict) or set(data) not in (
             {"recommendation_constraints", "unrepresented_recommendation_requirements", "evidence_spans"},
             {"recommendation_constraints", "unrepresented_recommendation_requirements", "recommendation_soft_preferences", "evidence_spans"},
+            {"recommendation_constraints", "unrepresented_recommendation_requirements", "recommendation_evidence_requirements", "evidence_spans"},
+            {"recommendation_constraints", "unrepresented_recommendation_requirements", "recommendation_evidence_requirements", "recommendation_soft_preferences", "evidence_spans"},
         ):
             # A blank or structurally unrelated response contributes no
             # candidate constraint or literal provenance. Retrying that same
@@ -2625,15 +2655,21 @@ async def _semantic_recommendation_requirement_reconciliation(
         reconciled_soft_preferences = _validated_recommendation_soft_preferences(
             data.get("recommendation_soft_preferences")
         )
+        reconciled_evidence_requirements = _validated_recommendation_evidence_requirements(
+            data.get("recommendation_evidence_requirements")
+            if "recommendation_evidence_requirements" in data
+            else evidence_requirements
+        )
         spans = data.get("evidence_spans")
         if (
             constraints is None
             or unrepresented is None
+            or reconciled_evidence_requirements is None
             or reconciled_soft_preferences is None
             or not isinstance(spans, dict)
             or set(spans) != set(constraints)
             or not _recommendation_constraints_preserve_existing(proposed_constraints, constraints)
-            or any(item not in question for item in [*unrepresented, *reconciled_soft_preferences])
+            or any(item not in question for item in [*unrepresented, *reconciled_evidence_requirements, *reconciled_soft_preferences])
             ):
             continue
         normalized_spans: dict[str, list[str]] = {}
@@ -2652,6 +2688,7 @@ async def _semantic_recommendation_requirement_reconciliation(
         return {
             "recommendation_constraints": constraints,
             "unrepresented_recommendation_requirements": unrepresented,
+            "recommendation_evidence_requirements": reconciled_evidence_requirements,
             "recommendation_soft_preferences": reconciled_soft_preferences,
             "evidence_spans": normalized_spans,
         }
@@ -3094,6 +3131,17 @@ async def plan_customer_question_semantic(
         str(item) not in text for item in initial_soft_preferences
     ):
         initial_soft_preferences = []
+    initial_evidence_requirements = (
+        _validated_recommendation_evidence_requirements(
+            initial_semantic_data.get("recommendation_evidence_requirements")
+        )
+        if isinstance(initial_semantic_data, dict)
+        else []
+    )
+    if initial_evidence_requirements is None or any(
+        str(item) not in text for item in initial_evidence_requirements
+    ):
+        initial_evidence_requirements = []
     # A comparison route is semantic intent. If that route is explicit but the
     # model omitted participant slots, preserve only literal SKU tokens from
     # the current utterance for later EntityResolution; no field, product fact,
@@ -3565,6 +3613,8 @@ async def plan_customer_question_semantic(
             # must not erase an already validated semantic soft preference,
             # because no deterministic layer is permitted to recreate it.
             result["recommendation_soft_preferences"] = initial_soft_preferences
+        if initial_evidence_requirements and not result.get("fallback_reason"):
+            result["recommendation_evidence_requirements"] = initial_evidence_requirements
         if result.get("fallback_reason") and preserved_pairwise_repair_intent is not None:
             # The initial semantic response had already identified the two
             # participant spans.  If repair cannot express a formal criterion,
@@ -3589,6 +3639,7 @@ async def plan_customer_question_semantic(
     proposed_constraints = result.get("recommendation_constraints")
     unrepresented_requirements = result.get("unrepresented_recommendation_requirements") or []
     soft_preferences = result.get("recommendation_soft_preferences") or []
+    evidence_requirements = result.get("recommendation_evidence_requirements") or []
     if (
         result.get("route_family") == "recommendation"
         and isinstance(proposed_constraints, dict)
@@ -3603,6 +3654,7 @@ async def plan_customer_question_semantic(
                 question=text,
                 proposed_constraints=proposed_constraints,
                 unrepresented_requirements=unrepresented_requirements,
+                evidence_requirements=evidence_requirements,
                 soft_preferences=soft_preferences,
                 runtime_settings=runtime_settings,
             )
@@ -3615,12 +3667,22 @@ async def plan_customer_question_semantic(
             result["unrepresented_recommendation_requirements"] = reconciliation[
                 "unrepresented_recommendation_requirements"
             ]
+            result["recommendation_evidence_requirements"] = reconciliation[
+                "recommendation_evidence_requirements"
+            ]
             result["recommendation_soft_preferences"] = reconciliation[
                 "recommendation_soft_preferences"
             ]
             result["recommendation_requirement_reconciliation"] = "validated_semantic_reconciliation"
             result["recommendation_constraint_evidence_spans"] = reconciliation["evidence_spans"]
         proposed_constraints = result.get("recommendation_constraints")
+        evidence_requirements = result.get("recommendation_evidence_requirements") or []
+    if initial_evidence_requirements and not result.get("fallback_reason"):
+        # A route/schema repair may omit this optional evidence boundary. The
+        # initial semantic response already supplied exact customer spans, so
+        # preserve them without reinterpreting their meaning in deterministic
+        # code.
+        result["recommendation_evidence_requirements"] = initial_evidence_requirements
     # The initial semantic preplan is the sole authority for whether a literal
     # customer requirement has no formal representation.  A second, isolated
     # model pass receives neither candidate evidence nor the first model's

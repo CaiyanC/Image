@@ -10229,6 +10229,129 @@ async def _semantic_recommendation_candidate_selection(
     )
 
 
+async def _semantic_recommendation_evidence_gate(
+    db: Session,
+    *,
+    question: str,
+    candidates: list[dict[str, Any]],
+    evidence_requirements: list[str],
+) -> list[int] | None:
+    """Ask Flash which sealed candidates directly satisfy semantic use gates.
+
+    A category label, adjacent usage scene, or a convenient numeric value is
+    not enough for a suitability request. The model receives only the sealed
+    same-SKU packet and returns handles; deterministic code validates the
+    closed shape and never chooses a product itself.
+    """
+    runtime = customer_agent_planner_service._semantic_preplan_runtime_settings()
+    messages = [
+        {
+            "role": "system",
+            "content": (
+                "Return only JSON. Determine which sealed catalogue candidates directly satisfy every explicit "
+                "customer suitability/evidence requirement. This is an evidence gate, not a ranking task. "
+                "Use only each candidate's own sealed_evidence. A generic category label, a nearby use scene, "
+                "a numeric value, or a product name that merely sounds related does not prove the requested "
+                "capability or suitability. Return an empty array when no candidate has direct same-SKU support. "
+                "Do not infer a product fact, answer, ranking, SKU, or candidate outside the supplied handles. "
+                "Schema exactly: {\"eligible_candidate_indexes\":[integer]}."
+            ),
+        },
+        {
+            "role": "user",
+            "content": json.dumps(
+                {
+                    "question": question,
+                    "evidence_requirements": list(evidence_requirements),
+                    "sealed_candidates": candidates,
+                },
+                ensure_ascii=False,
+            ),
+        },
+    ]
+    try:
+        content = await customer_llm_service.chat_completion(
+            db,
+            messages=messages,
+            temperature=0,
+            max_tokens=160,
+            purpose="semantic_recommendation_evidence_gate",
+            api_model_override=runtime["model"],
+            response_format={"type": "json_object"} if settings.SEMANTIC_PREPLAN_JSON_MODE else None,
+            thinking={"type": "disabled"} if settings.SEMANTIC_PREPLAN_THINKING_DISABLED else None,
+        )
+    except Exception:
+        return None
+    parsed = _parse_semantic_json_object(content)
+    if not isinstance(parsed, dict) or set(parsed) != {"eligible_candidate_indexes"}:
+        return None
+    eligible = parsed.get("eligible_candidate_indexes")
+    if not isinstance(eligible, list) or len(eligible) > min(len(candidates), 5):
+        return None
+    if any(type(index) is not int or not (0 <= index < len(candidates)) for index in eligible):
+        return None
+    if len(set(eligible)) != len(eligible):
+        return None
+    return list(eligible)
+
+
+async def _semantic_recommendation_evidence_gap_answer(
+    db: Session,
+    *,
+    question: str,
+    evidence_requirements: list[str],
+) -> str | None:
+    """Explain an evidence gap without inventing a product or a new filter."""
+    runtime = customer_agent_planner_service._semantic_preplan_runtime_settings()
+    messages = [
+        {
+            "role": "system",
+            "content": (
+                "Return only JSON. Write a concise, natural Chinese customer-service clarification for a product "
+                "recommendation whose requested suitability/capability has no direct same-SKU support in the "
+                "current catalogue. Acknowledge the customer's exact purpose, say that the catalogue does not "
+                "directly establish that suitability, and do not list products, SKUs, prices, or unrelated filters. "
+                "Do not turn a category label or nearby usage scene into proof. Offer one relevant next step: the "
+                "customer may provide a source/explicit marking to verify, or allow a broader related shortlist "
+                "that is clearly marked as needing confirmation. Never mention internal models, gates, or contracts. "
+                "Schema exactly: {\"answer\":\"natural Chinese clarification\"}."
+            ),
+        },
+        {
+            "role": "user",
+            "content": json.dumps(
+                {
+                    "question": question,
+                    "evidence_requirements": list(evidence_requirements),
+                },
+                ensure_ascii=False,
+            ),
+        },
+    ]
+    try:
+        content = await customer_llm_service.chat_completion(
+            db,
+            messages=messages,
+            temperature=0,
+            max_tokens=220,
+            purpose="semantic_recommendation_evidence_gap_answer",
+            api_model_override=runtime["model"],
+            response_format={"type": "json_object"} if settings.SEMANTIC_PREPLAN_JSON_MODE else None,
+            thinking={"type": "disabled"} if settings.SEMANTIC_PREPLAN_THINKING_DISABLED else None,
+        )
+    except Exception:
+        return None
+    parsed = _parse_semantic_json_object(content)
+    answer = str(parsed.get("answer") or "").strip() if isinstance(parsed, dict) else ""
+    if not (25 <= len(answer) <= 700):
+        return None
+    if any(term in answer.lower() for term in ("candidate", "recommendation_contract", "semantic_preplan", "sku:")):
+        return None
+    if evidence_requirements and not any(item in answer for item in evidence_requirements):
+        return None
+    return answer
+
+
 async def _semantic_recommendation_narrative(
     db: Session,
     *,
@@ -10236,8 +10359,10 @@ async def _semantic_recommendation_narrative(
     rows: list[dict[str, Any]],
     verifications: list[Any],
     soft_preferences: list[str] | None = None,
+    evidence_requirements: list[str] | None = None,
     required_customer_dimensions: list[str] | None = None,
     diagnostics: list[dict[str, Any]] | None = None,
+    _evidence_gate_checked: bool = False,
 ) -> dict[str, Any] | None:
     runtime = customer_agent_planner_service._semantic_preplan_runtime_settings()
     verification_by_sku = {str(item.sku or "").strip().upper(): item for item in verifications}
@@ -10313,6 +10438,80 @@ async def _semantic_recommendation_narrative(
             ],
             "uncertainties": list(dict.fromkeys([*verification.unsupported_constraints, *verification.unsupported_preferences])),
         })
+    normalized_evidence_requirements = [
+        str(item or "").strip()
+        for item in (evidence_requirements or [])
+        if str(item or "").strip()
+    ]
+    if normalized_evidence_requirements and not _evidence_gate_checked:
+        eligible_indexes = await _semantic_recommendation_evidence_gate(
+            db,
+            question=question,
+            candidates=candidates,
+            evidence_requirements=normalized_evidence_requirements,
+        )
+        if diagnostics is not None:
+            diagnostics.append({
+                "stage": "recommendation_evidence_gate",
+                "status": (
+                    "provider_error_or_invalid_schema"
+                    if eligible_indexes is None
+                    else "no_direct_same_sku_support"
+                    if not eligible_indexes
+                    else "approved"
+                ),
+                "evidence_requirements": normalized_evidence_requirements,
+                "eligible_candidate_indexes": list(eligible_indexes or []),
+            })
+        if not eligible_indexes:
+            return None
+        selected_rows = [rows[index] for index in eligible_indexes]
+        selected_skus = {
+            str(row.get("sku") or "").strip().upper()
+            for row in selected_rows
+            if str(row.get("sku") or "").strip()
+        }
+        if not selected_skus:
+            return None
+        # Render only the semantically eligible subset. Preserve the original
+        # index mapping because the outer service still owns the original
+        # returned_rows list when it assembles result cards and evidence.
+        original_index_by_selected_index = {
+            selected_index: original_index
+            for selected_index, original_index in enumerate(eligible_indexes)
+        }
+        selected_verifications = [
+            item for item in verifications
+            if str(item.sku or "").strip().upper() in selected_skus
+        ]
+        nested = await _semantic_recommendation_narrative(
+            db,
+            question=question,
+            rows=selected_rows,
+            verifications=selected_verifications,
+            soft_preferences=soft_preferences,
+            evidence_requirements=normalized_evidence_requirements,
+            required_customer_dimensions=required_customer_dimensions,
+            diagnostics=diagnostics,
+            _evidence_gate_checked=True,
+        )
+        if nested is None:
+            return None
+        nested["ranked_candidate_indexes"] = [
+            original_index_by_selected_index[index]
+            for index in nested.get("ranked_candidate_indexes") or []
+            if index in original_index_by_selected_index
+        ]
+        nested["evidence_usage"] = [
+            {
+                **item,
+                "candidate_index": original_index_by_selected_index[item["candidate_index"]],
+            }
+            for item in nested.get("evidence_usage") or []
+            if isinstance(item, dict)
+            and item.get("candidate_index") in original_index_by_selected_index
+        ]
+        return nested
     messages = [
         {
             "role": "system",
@@ -10336,7 +10535,7 @@ async def _semantic_recommendation_narrative(
                 "Select evidence by its direct practical connection to that purpose before generic labels: an included vessel, capacity, heat compatibility, packing form, or stated operation is more useful than a broad outdoor scenario when it explains the customer's intended workflow. "
                 "When using content.usage_scenarios, state the relevant listed scenario and connect it only to the narrow condition it supports. "
                 "When the question asks to choose between product directions, you may give a conditional choice only when the condition is a narrow literal restatement of that selected candidate's sealed evidence; state the condition and cite the evidence, never call it an unconditional best choice. "
-                "soft_customer_preferences are literal customer priorities that the semantic preplan classified as non-binding. They may guide the explanation's tone or a transparent caveat, but never prove, filter, rank, or assert a product fact. When an exact preference phrase occurs verbatim in a sealed title or content field, you may say only that the catalogue field contains that phrase and explain the narrow relevance; distinguish a title/marketing label from a verified capability. If it does not occur in sealed evidence, state the uncertainty when it matters instead of silently replacing the customer's purpose. Never introduce a product, SKU, price, stock, certification, warranty, or factual claim outside the input. "
+                "soft_customer_preferences are literal customer priorities that the semantic preplan classified as non-binding. They may guide the explanation's tone or a transparent caveat, but never prove, filter, rank, or assert a product fact. When an exact preference phrase occurs verbatim in a sealed title or content field, you may say only that the catalogue field contains that phrase and explain the narrow relevance; distinguish a title/marketing label from a verified capability. If it does not occur in sealed evidence, state the uncertainty when it matters instead of silently replacing the customer's purpose. evidence_requirements are stronger semantic suitability gates: every selected product has already passed a direct same-SKU evidence check for each one. Never call a product suitable for an evidence requirement unless the sealed evidence directly supports it. Never introduce a product, SKU, price, stock, certification, warranty, or factual claim outside the input. "
                 "candidate_index is an internal JSON handle only: never mention a candidate index, ranking index, or ordinal label in answer; refer to the product_name instead. "
                 "You may name only the product_name belonging to your ranked_candidate_indexes; never describe or name a different sealed candidate. "
                 "For every evidence_usage item, fields must be exact key strings that are actually present in that same candidate's sealed_evidence object. Do not copy an evidence key from another candidate, invent a content.* key, or cite a field merely because a similar candidate has it. "
@@ -10346,6 +10545,7 @@ async def _semantic_recommendation_narrative(
         {"role": "user", "content": json.dumps({
             "question": question,
             "soft_customer_preferences": list(soft_preferences or []),
+            "evidence_requirements": normalized_evidence_requirements,
             "required_customer_dimensions": list(required_customer_dimensions or []),
             "sealed_candidates": candidates,
         }, ensure_ascii=False)},
@@ -15673,6 +15873,11 @@ async def _semantic_recommendation_contract_result(
         for item in (preplan.get("unrepresented_recommendation_requirements") or [])
         if str(item or "").strip()
     ]
+    evidence_requirements = [
+        str(item or "").strip()
+        for item in (preplan.get("recommendation_evidence_requirements") or [])
+        if str(item or "").strip()
+    ]
     semantic_soft_preferences = [
         str(item or "").strip()
         for item in (preplan.get("recommendation_soft_preferences") or [])
@@ -15856,6 +16061,7 @@ async def _semantic_recommendation_contract_result(
                 "agent_mode": "semantic_recommendation_unrepresented_requirement_clarification",
                 "semantic_constraints": dict(constraints or {}),
                 "unrepresented_recommendation_requirements": unrepresented_requirements,
+                "recommendation_evidence_requirements": evidence_requirements,
                 "semantic_soft_preferences": semantic_soft_preferences,
             },
             "answer_metadata": {"source": "validated_semantic_preplan_unrepresented_requirement_clarification"},
@@ -16061,6 +16267,9 @@ async def _semantic_recommendation_contract_result(
                 text = str(span or "").strip()
                 if text and text not in condition_labels:
                     condition_labels.append(text)
+        for requirement in evidence_requirements:
+            if requirement not in condition_labels:
+                condition_labels.append(requirement)
         condition_summary = "、".join(f"“{item}”" for item in condition_labels[:3]) or "你提出的条件"
         return {
             "intent": "recommendation",
@@ -16082,6 +16291,7 @@ async def _semantic_recommendation_contract_result(
             "answer_metadata": {
                 "source": "validated_semantic_preplan_insufficient_verified_evidence",
                 "recommendation_contract": contract.to_dict(),
+                "recommendation_evidence_requirements": evidence_requirements,
                 "fully_verified_count": 0,
                 "partially_verified_count": sum(item.verification_level == "partially_verified" for item in verifications),
                 "rejected_count": sum(item.verification_level == "rejected" for item in verifications),
@@ -16185,6 +16395,7 @@ async def _semantic_recommendation_contract_result(
             rows=returned_rows,
             verifications=verifications,
             soft_preferences=semantic_soft_preferences,
+            evidence_requirements=evidence_requirements,
             required_customer_dimensions=required_customer_dimensions,
             diagnostics=narrative_diagnostics,
         )
@@ -16270,6 +16481,67 @@ async def _semantic_recommendation_contract_result(
         if narrative:
             narrative_source = "verified_candidate_evidence_fallback_after_narrative_rejection"
     if not narrative:
+        if evidence_requirements and any(
+            isinstance(item, dict)
+            and item.get("stage") == "recommendation_evidence_gate"
+            and item.get("status") == "no_direct_same_sku_support"
+            for item in narrative_diagnostics
+        ):
+            gap_answer = await _semantic_recommendation_evidence_gap_answer(
+                db,
+                question=question,
+                evidence_requirements=evidence_requirements,
+            )
+            if gap_answer:
+                return {
+                    "intent": "recommendation",
+                    "answer_type": "clarification",
+                    "answer": gap_answer,
+                    "results": [],
+                    "result_skus": [],
+                    "candidate_skus": [],
+                    "evidence": [],
+                    "needs_clarification": True,
+                    "debug": {
+                        "agent_mode": "semantic_recommendation_evidence_gap_clarification",
+                        "semantic_constraints": dict(constraints),
+                        "recommendation_evidence_requirements": evidence_requirements,
+                        "recommendation_narrative_diagnostics": narrative_diagnostics,
+                    },
+                    "answer_metadata": {
+                        "source": "validated_semantic_recommendation_evidence_gap_clarification",
+                        "recommendation_contract": contract.to_dict(),
+                        "recommendation_evidence_requirements": evidence_requirements,
+                    },
+                    "skip_polish": True,
+                }
+            requirement_labels = "、".join(f"“{item}”" for item in evidence_requirements[:3])
+            return {
+                "intent": "recommendation",
+                "answer_type": "clarification",
+                "answer": (
+                    f"你要求的是{requirement_labels}，但当前商品资料没有直接核验这些用途，"
+                    "我不把仅属于相关品类或邻近场景的商品直接当作适配推荐。"
+                    "如果你能提供明确的适配标注，我可以继续核对；也可以允许我先列出相关但仍需确认的候选。"
+                ),
+                "results": [],
+                "result_skus": [],
+                "candidate_skus": [],
+                "evidence": [],
+                "needs_clarification": True,
+                "debug": {
+                    "agent_mode": "semantic_recommendation_evidence_gap_clarification_fallback",
+                    "semantic_constraints": dict(constraints),
+                    "recommendation_evidence_requirements": evidence_requirements,
+                    "recommendation_narrative_diagnostics": narrative_diagnostics,
+                },
+                "answer_metadata": {
+                    "source": "validated_semantic_recommendation_evidence_gap_clarification_fallback",
+                    "recommendation_contract": contract.to_dict(),
+                    "recommendation_evidence_requirements": evidence_requirements,
+                },
+                "skip_polish": True,
+            }
         if _explicit_single_recommendation_request(question) and contract.capacity_requirement == "numeric":
             fallback_row = next((row for row in returned_rows if str(row.get("capacity") or "").strip()), None)
             if fallback_row is not None:
@@ -16296,6 +16568,7 @@ async def _semantic_recommendation_contract_result(
                 "agent_mode": "semantic_recommendation_narrative_unavailable",
                 "semantic_constraints": dict(constraints),
                 "semantic_soft_preferences": semantic_soft_preferences,
+                "recommendation_evidence_requirements": evidence_requirements,
                 "verified_candidate_count": len(fully_verified),
                 "recommendation_narrative_diagnostics": narrative_diagnostics,
             },
@@ -16309,7 +16582,7 @@ async def _semantic_recommendation_contract_result(
         }
     ranked_indexes = list(narrative.get("ranked_candidate_indexes") or [])
     ranked_rows = [returned_rows[index] for index in ranked_indexes]
-    answer = str(narrative.get("answer") or "")
+    answer = _normalize_customer_answer_text(narrative.get("answer") or "")
     # Only the products explicitly selected and cited by the approved semantic
     # narrative are recommendation results.  Other fully verified rows remain
     # diagnostic candidates, but must not become hidden recommendations for
@@ -16382,6 +16655,7 @@ async def _semantic_recommendation_contract_result(
             ),
             "semantic_constraints": dict(constraints),
             "semantic_soft_preferences": semantic_soft_preferences,
+            "recommendation_evidence_requirements": evidence_requirements,
             "candidate_verifications": [
                 item.to_dict()
                 for item in verifications
@@ -16393,6 +16667,7 @@ async def _semantic_recommendation_contract_result(
         "answer_metadata": {
             "source": "validated_semantic_preplan_then_same_sku_verification",
             "recommendation_contract": contract.to_dict(),
+            "recommendation_evidence_requirements": evidence_requirements,
             "semantic_soft_preferences": semantic_soft_preferences,
             "recommendation_narrative": {
                 "source": narrative_source,
@@ -18378,6 +18653,13 @@ def _compound_display_value(value: Any) -> str:
     # value a customer should see.
     text = text.replace("\\n", "、")
     return re.sub(r"[、；;]{2,}", "、", text).strip("、；; ")
+
+
+def _normalize_customer_answer_text(value: Any) -> str:
+    """Hide escaped catalogue separators without changing customer facts."""
+    text = str(value or "")
+    text = text.replace("\\r\\n", "、").replace("\\n", "、").replace("\\r", "、")
+    return re.sub(r"、{2,}", "、", text)
 
 
 def _record_semantic_compound_child(
