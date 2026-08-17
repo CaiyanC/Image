@@ -1124,7 +1124,7 @@ def test_bound_product_identity_trusts_explicit_and_context_provenance():
         "named_product_canonical_exact",
         "named_product_alias_exact",
         "recommendation_context_anchor",
-        "recommendation_context_ordinal",
+        "recommendation_context_result_reference",
         "recommendation_context_pronoun",
         "phase2_resolved_entity",
     ):

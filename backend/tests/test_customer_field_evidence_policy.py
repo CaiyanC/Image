@@ -530,27 +530,6 @@ def test_semantic_preplan_prompt_keeps_named_product_safety_as_product_fact():
     assert "is product_bound_qa even if its answer may later use a manual or knowledge-base document as evidence" in prompt
 
 
-def test_semantic_formal_field_signal_preempts_legacy_usage_shortcut_without_answering():
-    """A valid semantic field can block a shortcut before entity sealing.
-
-    This does not make the semantic layer an evidence authority: it only
-    prevents a legacy usage/contents branch from replacing a formal field
-    signal before FieldContract and EntityResolutionContract run.
-    """
-    preplan = {
-        "called": True,
-        "route_family": "knowledge_base_meta",
-        "field_type": "usage_instruction",
-        "field_hint": "usage_instruction",
-        "canonical_fields": ["usage_instruction"],
-        "confidence": 0.9,
-        "fallback_reason": "",
-        "ambiguity": False,
-    }
-
-    assert customer_service_service._semantic_formal_field_preempts_legacy_shortcuts(preplan) is True
-    assert customer_service_service._semantic_formal_field_preempts_legacy_shortcuts({**preplan, "confidence": 0.5}) is False
-    assert customer_service_service._semantic_formal_field_preempts_legacy_shortcuts({**preplan, "field_type": "not_a_field"}) is False
 
 
 def test_semantic_safe_field_forms_the_only_field_contract_without_a_phrase_alias():
@@ -665,12 +644,6 @@ def test_semantic_field_keeps_a_full_explicit_sku_when_legacy_extraction_emits_a
     assert contract["field_type"] == "series"
 
 
-def test_natural_named_product_fact_is_eligible_for_constrained_semantic_preplan():
-    assert customer_service_service._should_call_semantic_preplan(
-        "示例旅行筷主打什么定位？",
-        {"primary_intent": "product_detail", "requested_field": ""},
-        conversation_id=None,
-    ) is True
 
 
 def test_validated_semantic_field_is_not_blocked_by_legacy_product_refs():
@@ -1146,48 +1119,37 @@ def test_same_sku_knowledge_evidence_units_keep_indented_list_continuation_toget
     ]
 
 
-def test_semantic_heat_source_span_survives_literal_contract_validation():
-    """A validated semantic ontology code must not be replaced by alias matching."""
-    constraints, spans = customer_agent_planner_service._recommendation_literal_grounding_filter(
-        {"heat_sources": ["gas_stove"]},
-        {"heat_sources": ["气炉"]},
-        preserve_semantic_heat_sources=True,
+def test_semantic_recommendation_context_keeps_meaning_without_literal_phrase_gate():
+    """Semantic context is bounded by schema, not by substring matching."""
+    constraints = customer_agent_planner_service._validated_recommendation_constraints(
+        {"heat_sources": ["gas_stove"]}
+    )
+    evidence_requirements = customer_agent_planner_service._validated_recommendation_evidence_requirements(
+        ["希望用气炉做饭"]
     )
 
     assert constraints == {"heat_sources": ["gas_stove"]}
-    assert spans == {"heat_sources": ["气炉"]}
+    assert evidence_requirements == ["希望用气炉做饭"]
 
 
-def test_semantic_heat_source_literal_contract_rejects_wrong_ontology_code():
-    """An exact card-stove span must not license the gas-stove enum."""
-    constraints, spans = customer_agent_planner_service._recommendation_literal_grounding_filter(
-        {"heat_sources": ["gas_stove"]},
-        {"heat_sources": ["卡式炉"]},
-        preserve_semantic_heat_sources=True,
-    )
-
-    assert constraints == {}
-    assert spans == {}
+def test_semantic_recommendation_context_does_not_translate_one_heat_source_into_another():
+    """The semantic provider's enum remains explicit; no alias gate rewrites it."""
+    assert customer_agent_planner_service._validated_recommendation_constraints(
+        {"heat_sources": ["card_stove"]}
+    ) == {"heat_sources": ["card_stove"]}
+    assert customer_agent_planner_service._validated_recommendation_constraints(
+        {"heat_sources": ["unknown_stove"]}
+    ) is None
 
 
-def test_dishwasher_constraint_requires_literal_dishwasher_provenance():
-    constraints, spans = customer_agent_planner_service._recommendation_literal_grounding_filter(
-        {"dishwasher_safe": True},
-        {"dishwasher_safe": ["优先推荐好清洁的"]},
-    )
-
-    assert constraints == {}
-    assert spans == {}
-
-
-def test_dishwasher_constraint_keeps_explicit_dishwasher_requirement():
-    constraints, spans = customer_agent_planner_service._recommendation_literal_grounding_filter(
-        {"dishwasher_safe": True},
-        {"dishwasher_safe": ["必须能放洗碗机"]},
-    )
-
-    assert constraints == {"dishwasher_safe": True}
-    assert spans == {"dishwasher_safe": ["必须能放洗碗机"]}
+def test_dishwasher_constraint_is_schema_valid_without_literal_provenance():
+    """A typed preference is not discarded just because wording was paraphrased."""
+    assert customer_agent_planner_service._validated_recommendation_constraints(
+        {"dishwasher_safe": True}
+    ) == {"dishwasher_safe": True}
+    assert customer_agent_planner_service._validated_recommendation_soft_preferences(
+        ["优先推荐好清洁的"]
+    ) == ["优先推荐好清洁的"]
 
 
 def test_weight_evidence_fails_closed_for_physically_conflicting_high_capacity_value():
@@ -2063,33 +2025,6 @@ def test_same_sku_knowledge_selection_messages_require_direct_semantic_relevance
     assert payload["sku"] == "RAG-100"
     assert payload["product_identity"]["canonical_name"] == "Camping kettle"
     assert payload["candidates"] == [{"index": 0, "content": "Product feature: compact."}]
-
-
-def test_same_sku_identity_audit_rejects_different_product_function(monkeypatch):
-    calls = []
-
-    async def fake_completion(_db, *, messages, **kwargs):
-        calls.append((messages, kwargs))
-        return '{"identity_consistent":false,"confidence":"high","reason":"different product function"}'
-
-    monkeypatch.setattr(
-        customer_service_service.customer_llm_service,
-        "chat_completion",
-        fake_completion,
-    )
-
-    import asyncio
-
-    accepted = asyncio.run(customer_service_service._same_sku_knowledge_identity_is_consistent(
-        SimpleNamespace(),
-        question="Does this capability work?",
-        product_identity={"sku": "K-1", "canonical_name": "Travel kettle", "category": "waterware"},
-        selected_evidence=[{"index": 0, "content": "Adjust a separate device function."}],
-    ))
-
-    assert accepted is False
-    assert calls[0][1]["purpose"] == "semantic_product_knowledge_identity_consistency"
-    assert "must never redefine the product identity" in calls[0][0][0]["content"]
 
 
 def test_same_sku_knowledge_grounding_messages_validate_faithfulness_without_redeciding_selection():

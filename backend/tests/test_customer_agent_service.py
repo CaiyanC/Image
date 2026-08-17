@@ -1745,39 +1745,6 @@ class CustomerAgentRuntimeServiceTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result["answer_type"], "comparison")
         self.assertIn("材质", result["answer"])
 
-    def test_ordinal_reference_selects_entity_by_conversation_order(self):
-        stack = [
-            {"sku": "CW-C01-37", "name": "1-2人野营锅7件套", "turn": 4, "role": "current"},
-            {"sku": "CW-C93", "name": "行山单锅", "turn": 1, "role": "current"},
-            {"sku": "CS-B14", "name": "旋焰酒精炉", "turn": 0, "role": "current"},
-        ]
-
-        first = customer_agent_runtime_service._ordinal_skus_from_entity_stack("我最开始问的那个产品是什么材质？", stack)
-        latest = customer_agent_runtime_service._ordinal_skus_from_entity_stack("最后那个是什么材质？", stack)
-        second = customer_agent_runtime_service._ordinal_skus_from_entity_stack("第二个是什么材质？", stack)
-
-        self.assertEqual(first, ["CW-C01-37"])
-        self.assertEqual(latest, ["CS-B14"])
-        self.assertEqual(second, ["CW-C93"])
-
-    def test_last_asked_product_reference_uses_last_entity_in_stack(self):
-        stack = [
-            {"sku": "CW-C83", "name": "炊墨套锅", "turn": 0, "role": "current"},
-            {"sku": "TW-502", "name": "悦享杯套装", "turn": 1, "role": "current"},
-        ]
-
-        latest = customer_agent_runtime_service._ordinal_skus_from_entity_stack(
-            "最后一个问的那个产品，手柄是什么材质？",
-            stack,
-        )
-        direct = customer_agent_runtime_service._entity_stack_direct_detail_skus(
-            "最后一个问的那个产品，手柄是什么材质？",
-            stack,
-        )
-
-        self.assertEqual(latest, ["CW-C83"])
-        self.assertEqual(direct, ["CW-C83"])
-
     def test_question_entities_for_entity_stack_prefers_exact_sku_over_broad_name_prefix(self):
         product = Product(
             id="id-CW-C05-37",
@@ -1804,60 +1771,6 @@ class CustomerAgentRuntimeServiceTest(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual([item["sku"] for item in entities], ["CW-C05-37"])
 
-    def test_conversation_history_ordinal_prefers_first_explicit_sku(self):
-        history = [
-            {"role": "user", "content": "「2-4人野餐锅10件套」(CW-C05-37)配件有哪些"},
-            {"role": "assistant", "content": "关于 CW-C65-1 的回答"},
-            {"role": "user", "content": "「旋焰酒精炉」(CS-B14)炉体是304不锈钢吗，耐腐蚀吗"},
-            {"role": "assistant", "content": "关于 CS-B14 的回答"},
-        ]
-
-        first = customer_agent_runtime_service._ordinal_skus_from_conversation_history(
-            "第一个产品有没有FDA认证",
-            history,
-        )
-
-        self.assertEqual(first, ["CW-C05-37"])
-
-    def test_non_numeric_ordinal_context_is_deferred_to_runtime(self):
-        intent = customer_agent_intent_service.CustomerIntent(
-            intent="product_detail",
-            target_skus=["CS-B14"],
-            requested_fields=["材质"],
-        )
-
-        self.assertTrue(
-            customer_agent_intent_service._should_defer_ordinal_context_to_runtime(
-                "我最开始问的那个产品是什么材质？",
-                intent,
-                ["CS-B14"],
-            )
-        )
-        self.assertTrue(
-            customer_agent_intent_service._should_defer_ordinal_context_to_runtime(
-                "最后那个是什么材质？",
-                intent,
-                ["CS-B14"],
-            )
-        )
-
-    def test_numeric_ordinal_field_followup_is_deferred_to_runtime_even_with_previous_results(self):
-        intent = customer_agent_intent_service.CustomerIntent(
-            intent="product_detail",
-            target_skus=["CW-C05-37", "CS-B14"],
-            requested_fields=["认证"],
-            source_context="previous_results",
-            is_single_field_sufficient=False,
-        )
-
-        self.assertTrue(
-            customer_agent_intent_service._should_defer_ordinal_context_to_runtime(
-                "第一个产品有没有FDA认证",
-                intent,
-                ["CW-C05-37", "CS-B14"],
-            )
-        )
-
     def test_parse_intent_extracts_material_filter_for_stainless_stove_query(self):
         intent = customer_agent_intent_service.parse_intent("你们有没有不锈钢材质的炉具")
 
@@ -1870,16 +1783,6 @@ class CustomerAgentRuntimeServiceTest(unittest.IsolatedAsyncioTestCase):
         fields = customer_agent_tool_service.query_fields_from_text("刚才说的炊墨套锅，它的表面处理是什么工艺")
 
         self.assertIn("specs.surface_finish", fields)
-
-    def test_direct_detail_can_bypass_route_intent_when_field_followup_is_clear(self):
-        self.assertTrue(
-            customer_agent_runtime_service._can_use_entity_stack_direct_detail(
-                "第一个产品有没有FDA认证",
-                {"intent": "recommendation"},
-                {"intent": "recommend_products", "result_skus": ["CW-C05-37", "CS-B14"]},
-                ["CW-C05-37"],
-            )
-        )
 
     def test_explicit_quoted_product_reference_does_not_reuse_previous_context_shortcut(self):
         self.assertTrue(customer_agent_runtime_service._has_explicit_product_reference("「悠然杯」颜色"))
@@ -10181,6 +10084,54 @@ class CustomerServiceServiceTest(unittest.IsolatedAsyncioTestCase):
             customer_dialogue_state.product_scope_from_text("你们有哪些锅具类产品"),
         )
 
+    def test_latest_candidate_context_keeps_newer_comparison_choice(self):
+        conversation = CustomerServiceConversation(id="conv-candidate-context-choice", user_id="user-1", title="对比选择会话")
+        self.db.add(conversation)
+        self.db.add_all([
+            CustomerServiceMessage(
+                conversation_id=conversation.id,
+                role="assistant",
+                content="先比较两款。",
+                created_at=datetime(2026, 1, 1, 10, 0, 0),
+                sources_json=json.dumps([
+                    {
+                        "type": "agent_meta",
+                        "candidate_context": {
+                            "candidate_skus": ["SKU-A", "SKU-B"],
+                            "ordered_result_skus": ["SKU-A", "SKU-B"],
+                            "source": "comparison",
+                            "final_choice_sku": None,
+                        },
+                    }
+                ]),
+            ),
+            CustomerServiceMessage(
+                conversation_id=conversation.id,
+                role="assistant",
+                content="我建议第二款。",
+                created_at=datetime(2026, 1, 1, 10, 1, 0),
+                sources_json=json.dumps([
+                    {
+                        "type": "agent_meta",
+                        "candidate_context": {
+                            "candidate_skus": ["SKU-A", "SKU-B"],
+                            "ordered_result_skus": ["SKU-A", "SKU-B"],
+                            "source": "comparison",
+                            "final_choice_sku": "SKU-B",
+                        },
+                    }
+                ]),
+            ),
+        ])
+        self.db.commit()
+
+        context = customer_service_service._latest_candidate_context_for_sources(
+            self.db,
+            conversation.id,
+        )
+
+        self.assertEqual(context["final_choice_sku"], "SKU-B")
+
     async def test_explanation_followup_for_plural_recommendations_uses_previous_recommended_skus(self):
         conversation = CustomerServiceConversation(id="conv-followup-explain-plural", user_id="user-1", title="explain plural")
         self.db.add(conversation)
@@ -10560,145 +10511,8 @@ class CustomerServiceServiceTest(unittest.IsolatedAsyncioTestCase):
         self.db.commit()
 
         stack = customer_service_service._latest_entity_stack(self.db, "conv-first-reference", "user-1")
-        first = customer_agent_runtime_service._ordinal_skus_from_entity_stack("我最开始问的那个产品是什么材质？", stack)
-
         self.assertEqual([item["sku"] for item in stack[:5]], ["CW-C83-1", "CW-C93", "CW-C05-37", "CS-B14", "CW-C83"])
-        self.assertEqual(first, ["CW-C83-1"])
-
-    def test_legacy_rule_miss_is_deferred_for_first_mentioned_context_question(self):
-        self.assertTrue(
-            customer_service_service._should_defer_legacy_rule_result_to_runtime(
-                "我最开始问的那个产品是什么材质",
-                {
-                    "answer": "没有找到类目/资料包含“什么材质”的产品。",
-                    "intent": None,
-                    "answer_type": None,
-                    "sku": None,
-                    "results": [],
-                    "actions": [],
-                },
-            )
-        )
-
-    def test_context_field_followup_bypasses_preruntime_for_runtime_detail(self):
-        self.assertTrue(
-            customer_service_service._should_bypass_preruntime_for_runtime_direct_detail(
-                self.db,
-                question="刚才说的炊墨套锅，它的表面处理是什么工艺",
-                entity_stack=[{"sku": "CW-C83", "name": "炊墨套锅", "turn": 0, "role": "current"}],
-                conversation_history=[],
-            )
-        )
-
-    async def test_ask_customer_service_bypasses_preruntime_for_ordinal_certification_followup(self):
-        conversation = CustomerServiceConversation(id="conv-ordinal-fda", user_id="user-1", title="ordinal fda")
-        self.db.add(conversation)
-        self.db.add(CustomerServiceMessage(
-            conversation_id="conv-ordinal-fda",
-            role="user",
-            content="「2-4人野餐锅10件套」(CW-C05-37)配件有哪些",
-        ))
-        self.db.add(CustomerServiceMessage(
-            conversation_id="conv-ordinal-fda",
-            role="assistant",
-            content="CW-C05-37 的配件包含锅、浅锅和煎盘。",
-            sku="CW-C05-37",
-            sources_json=json.dumps([
-                {
-                    "type": "agent_context",
-                    "turn_index": 0,
-                    "result_skus": ["CW-C05-37", "CW-C65-1"],
-                    "entities": [
-                        {"sku": "CW-C05-37", "name": "2-4人野餐锅10件套", "turn": 0, "role": "current", "source": "results"},
-                        {"sku": "CW-C65-1", "name": "备选锅具", "turn": 0, "role": "result", "source": "results"},
-                    ],
-                }
-            ], ensure_ascii=False),
-        ))
-        self.db.add(CustomerServiceMessage(
-            conversation_id="conv-ordinal-fda",
-            role="user",
-            content="「旋焰酒精炉」(CS-B14)炉体是304不锈钢吗，耐腐蚀吗",
-        ))
-        self.db.add(CustomerServiceMessage(
-            conversation_id="conv-ordinal-fda",
-            role="assistant",
-            content="CS-B14（旋焰酒精炉）：炉体材质是304不锈钢；当前资料未明确说明耐腐蚀性能。",
-            sku="CS-B14",
-            sources_json=json.dumps([
-                {
-                    "type": "agent_context",
-                    "turn_index": 1,
-                    "current_sku": "CS-B14",
-                    "result_skus": ["CS-B14"],
-                    "entities": [
-                        {"sku": "CS-B14", "name": "旋焰酒精炉", "turn": 1, "role": "current", "source": "results"},
-                    ],
-                }
-            ], ensure_ascii=False),
-        ))
-        self.db.commit()
-
-        calls: list[str] = []
-        original_intent = customer_agent_intent_service.process_intent_request
-        original_runtime = customer_agent_runtime_service.process_agent_request
-        try:
-            async def fake_intent(*args, **kwargs):
-                calls.append("intent")
-                return {
-                    "answer": "上一轮第一个推荐的是旋焰酒精炉（CS-B14）。",
-                    "intent": "recommendation",
-                    "answer_type": "recommendation",
-                    "confidence": "low",
-                    "uncertainty": "context_conflict",
-                    "sources": [],
-                    "actions": [],
-                    "results": [{"sku": "CS-B14"}],
-                    "steps": [],
-                    "warnings": [],
-                    "evidence": [],
-                    "debug": {"agent_mode": "llm_tool_calling"},
-                    "skip_polish": True,
-                    "sku": "CS-B14",
-                }
-
-            async def fake_runtime(db, **kwargs):
-                calls.append("runtime")
-                self.assertIn("CW-C05-37", [item["sku"] for item in kwargs.get("entity_stack") or []])
-                return {
-                    "answer": "2-4人野餐锅10件套（CW-C05-37）：当前资料未明确提供 FDA 认证信息。",
-                    "intent": "product_detail",
-                    "answer_type": "product_detail",
-                    "confidence": "high",
-                    "uncertainty": "missing_field",
-                    "sources": [],
-                    "actions": [],
-                    "results": [{"sku": "CW-C05-37", "product_name_cn": "2-4人野餐锅10件套"}],
-                    "steps": [],
-                    "warnings": [],
-                    "evidence": [],
-                    "debug": {"agent_mode": "deterministic_entity_stack_detail"},
-                    "skip_polish": True,
-                    "sku": "CW-C05-37",
-                }
-
-            customer_agent_intent_service.process_intent_request = fake_intent
-            customer_agent_runtime_service.process_agent_request = fake_runtime
-
-            result = await customer_service_service.ask_customer_service(
-                self.db,
-                user_id="user-1",
-                question="第一个产品有没有FDA认证",
-                conversation_id="conv-ordinal-fda",
-            )
-        finally:
-            customer_agent_intent_service.process_intent_request = original_intent
-            customer_agent_runtime_service.process_agent_request = original_runtime
-
-        self.assertEqual(result["intent"], "product_detail")
-        self.assertEqual(result["sku"], "CW-C05-37")
-        self.assertIn("CW-C05-37", result["answer"])
-        self.assertEqual(calls, ["runtime"])
+        self.assertEqual([item["sku"] for item in stack[:2]], ["CW-C83-1", "CW-C93"])
 
     async def test_explicit_sku_requested_field_question_stays_product_detail(self):
         self.db.add(Product(

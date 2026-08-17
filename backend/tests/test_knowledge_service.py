@@ -25,6 +25,31 @@ class KnowledgeServiceTest(unittest.TestCase):
     def tearDown(self):
         self.db.close()
 
+    def test_merge_retrieval_rows_keeps_product_keyword_evidence_when_vectors_exist(self):
+        vector_rows = [{
+            "source_type": "file",
+            "sku": None,
+            "content": "generic outdoor guidance",
+            "metadata": {"source_id": "file:1"},
+            "score": 0.99,
+        }]
+        keyword_rows = [{
+            "source_type": "product",
+            "sku": "CW-C83",
+            "content": "CW-C83 表面工艺：水性不沾",
+            "metadata": {"source_id": "product:CW-C83:profile"},
+            "score": 4.0,
+        }]
+
+        rows = knowledge_service.merge_retrieval_rows(
+            vector_rows,
+            keyword_rows,
+            limit=2,
+            prefer_product_sources=True,
+        )
+
+        self.assertEqual([row["sku"] for row in rows], ["CW-C83", None])
+
     def test_health_report_surfaces_enterprise_readiness(self):
         self.db.add(Product(
             id="product-1",

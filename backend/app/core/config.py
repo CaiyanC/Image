@@ -75,7 +75,13 @@ class Settings:
     ALGORITHM: str = "HS256"
     ENABLE_PUBLIC_REGISTRATION: bool = os.getenv("ENABLE_PUBLIC_REGISTRATION", "false").lower() == "true"
     ACCESS_TOKEN_EXPIRE_MINUTES: int = int(os.getenv("ACCESS_TOKEN_EXPIRE_MINUTES", "1440"))
-    AI_REQUEST_TIMEOUT_SECONDS: int = int(os.getenv("AI_REQUEST_TIMEOUT_SECONDS", "30"))
+    # Flash preplanning and the bounded answer writer can occasionally need
+    # more than the old 30-second transport window. A premature timeout is
+    # more damaging here than a modestly slower answer because it activates
+    # the outage compatibility layer and can discard the semantic result.
+    # Keep the value environment-overridable for deployments with a different
+    # latency SLO.
+    AI_REQUEST_TIMEOUT_SECONDS: int = int(os.getenv("AI_REQUEST_TIMEOUT_SECONDS", "45"))
     AI_REQUEST_QUEUE_TIMEOUT_SECONDS: float = float(os.getenv("AI_REQUEST_QUEUE_TIMEOUT_SECONDS", "8"))
     EMBEDDING_REQUEST_TIMEOUT_SECONDS: int = int(os.getenv("EMBEDDING_REQUEST_TIMEOUT_SECONDS", "8"))
     AI_MAX_CONCURRENT_REQUESTS: int = int(os.getenv("AI_MAX_CONCURRENT_REQUESTS", "10"))

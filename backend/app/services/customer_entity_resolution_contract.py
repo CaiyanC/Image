@@ -127,6 +127,12 @@ _STRONG_SINGLE_PRODUCT_MATCH_LEVELS = {
     "normalized_sku_exact",
     "canonical_name_exact",
     "normalized_alias_exact",
+    # These are server-sealed conversation identities.  The model supplies
+    # only an opaque prior-result position; the service resolves that position
+    # to a live SKU before constructing the contract.
+    "recommendation_context_anchor",
+    "recommendation_context_result_reference",
+    "recommendation_context_pronoun",
 }
 
 _TRUSTED_BOUND_PRODUCT_IDENTITY_SOURCES = {
@@ -136,7 +142,7 @@ _TRUSTED_BOUND_PRODUCT_IDENTITY_SOURCES = {
     "named_product_canonical_exact",
     "named_product_alias_exact",
     "recommendation_context_anchor",
-    "recommendation_context_ordinal",
+    "recommendation_context_result_reference",
     "recommendation_context_pronoun",
     "phase2_resolved_entity",
     "field_evidence_repair",
@@ -208,6 +214,9 @@ def identity_provenance_from_entity_contract(
         "normalized_sku_exact": "normalized_sku_exact",
         "canonical_name_exact": "named_product_canonical_exact",
         "normalized_alias_exact": "named_product_alias_exact",
+        "recommendation_context_anchor": "recommendation_context_anchor",
+        "recommendation_context_result_reference": "recommendation_context_result_reference",
+        "recommendation_context_pronoun": "recommendation_context_pronoun",
     }
     return BoundProductIdentityProvenance(
         source=source_by_match[entity_contract.matched_by],

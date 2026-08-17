@@ -714,6 +714,11 @@ def _dimension_scope(label: str) -> str:
     value = str(label or "").strip()
     if any(term in value for term in ("收纳袋", "收纳包", "内袋", "外袋")):
         return "component"
+    # A recorded dimension such as “收纳带手柄” describes the packed/stored
+    # product itself, not a separate storage accessory. Keep this schema
+    # normalization independent from the customer's wording.
+    if any(term in value for term in ("收纳", "收起")):
+        return "subject"
     if value in {"", "尺寸", "大小", "长宽高", "展开尺寸", "收纳尺寸", "展开后尺寸", "收起后尺寸"}:
         return "subject"
     if any(term in value for term in ("包装", "外箱", "包裹")):
@@ -725,6 +730,8 @@ def _dimension_subtype(label: str) -> str | None:
     value = str(label or "").strip()
     if any(term in value for term in ("收纳袋", "收纳包", "内袋", "外袋")):
         return None
+    if any(term in value for term in ("收纳", "收起")):
+        return "storage"
     if any(term in value for term in ("酒精", "木炭", "燃料槽", "燃料仓", "燃料盒")):
         return "fuel_holder"
     if any(term in value for term in ("包装", "外箱", "包裹")):
@@ -1981,7 +1988,6 @@ def _validated_semantic_field_candidate(
         preplan.get("semantic_adapter_source") == "validated_pairwise_recommendation_constraints"
         and semantic_shape[0] == "recommendation"
         and len(preplan.get("entities") or []) >= 2
-        and preplan.get("recommendation_constraint_grounding") == "validated_semantic_grounding"
     )
     comparison_shape = semantic_shape == ("comparison", "comparison", "relation_comparison")
     field_type = str(preplan.get("field_type") or preplan.get("field_hint") or "").strip()
@@ -2102,7 +2108,6 @@ def _validated_semantic_field_candidates(
         preplan.get("semantic_adapter_source") == "validated_pairwise_recommendation_constraints"
         and semantic_shape[0] == "recommendation"
         and len(preplan.get("entities") or []) >= 2
-        and preplan.get("recommendation_constraint_grounding") == "validated_semantic_grounding"
     )
     allowed_shapes = {
         ("product_bound_qa", "field", "known_detail"),

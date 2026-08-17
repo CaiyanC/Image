@@ -822,14 +822,23 @@ def evaluate_structured_row(row: dict[str, Any], contract: StructuredQueryContra
             )
             condition_proofs.append(evaluate_structured_row(row, sub_contract))
         matched = all(item.get("matched") for item in condition_proofs)
+        proof_by_field = {
+            str(condition.get("field") or ""): proof
+            for condition, proof in zip(contract.conditions, condition_proofs)
+            if str(condition.get("field") or "")
+        }
         return {
             "sku": str(row.get("sku") or "").strip().upper(),
             "subject_match": all(item.get("subject_match") for item in condition_proofs),
             "field_source": "compound",
-            "raw_value": {item.get("field"): item.get("raw_value") for item in condition_proofs},
-            "normalized_value": {item.get("field"): item.get("normalized_value") for item in condition_proofs},
+            "raw_value": {field: proof.get("raw_value") for field, proof in proof_by_field.items()},
+            "normalized_value": {field: proof.get("normalized_value") for field, proof in proof_by_field.items()},
             "operator": "and",
-            "target": {item.get("field"): item.get("target") for item in condition_proofs},
+            "target": {
+                str(condition.get("field") or ""): condition.get("value")
+                for condition in contract.conditions
+                if str(condition.get("field") or "")
+            },
             "matched": matched,
             "condition_proofs": condition_proofs,
             "excluded_reason": None if matched else "condition_not_met",

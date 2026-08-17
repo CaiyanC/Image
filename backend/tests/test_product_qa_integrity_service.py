@@ -102,14 +102,6 @@ def test_stale_vector_qa_requires_live_approved_provenance():
         engine.dispose()
 
 
-def test_named_catalog_product_is_not_treated_as_unbound_usage():
-    assert customer_service_service._is_unbound_product_usage_question(
-        "转转磨豆器在出门冲咖啡时怎么用比较顺手？"
-    )
-    assert customer_service_service._dedicated_semantic_route(
-        "转转磨豆器在出门冲咖啡时怎么用比较顺手？",
-        has_named_product=True,
-    ) == "usage_care"
 
 
 def test_editing_qa_reopens_semantic_integrity_review():

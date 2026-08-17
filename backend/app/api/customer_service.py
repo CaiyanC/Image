@@ -42,6 +42,11 @@ _PARITY_CANONICAL_FIELDS = (
     "skip_polish",
 )
 
+# A parity snapshot is a public-response cache, not durable conversation
+# state.  Bump this when the answer contract changes so a worker reload cannot
+# serve a response shaped by an older semantic-recovery implementation.
+_PARITY_RESULT_SNAPSHOT_SCHEMA_VERSION = "20260817-semantic-rag-scoped-parity-v48"
+
 
 def _parity_isolation_enabled(request: Request) -> bool:
     return str(request.headers.get("X-Customer-Service-Parity-Isolation") or "").strip().lower() in {
@@ -51,16 +56,27 @@ def _parity_isolation_enabled(request: Request) -> bool:
     }
 
 
+def _parity_isolation_scope(request: Request) -> str:
+    value = str(request.headers.get("X-Customer-Service-Parity-Scope") or "").strip()
+    return value[:120]
+
+
 def _parity_result_snapshot_key(
     user_id: str,
     body: "CustomerServiceAskRequest",
     *,
     parity_isolation: bool = False,
+    parity_scope: str = "",
 ) -> str | None:
-    if not parity_isolation:
+    # A persisted conversation changes the meaning of an otherwise identical
+    # question. Parity snapshots are only for pairing independent normal/SSE
+    # probes and must never overwrite a fresh context-bound result.
+    if not parity_isolation or body.conversation_id:
         return None
     return customer_cache_service.make_key(
         "customer_service_parity_result_snapshot",
+        _PARITY_RESULT_SNAPSHOT_SCHEMA_VERSION,
+        str(parity_scope or "default").strip(),
         user_id,
         customer_cache_service.normalize_text(body.question),
         str(body.sku or "").strip().upper(),
@@ -73,10 +89,16 @@ def _canonicalize_parity_result(
     result: dict,
     *,
     parity_isolation: bool = False,
+    parity_scope: str = "",
 ) -> dict:
     if not parity_isolation or not isinstance(result, dict):
         return result
-    key = _parity_result_snapshot_key(user_id, body, parity_isolation=parity_isolation)
+    key = _parity_result_snapshot_key(
+        user_id,
+        body,
+        parity_isolation=parity_isolation,
+        parity_scope=parity_scope,
+    )
     if not key:
         return result
     snapshot = customer_cache_service.parity_result_snapshot_cache.get(key)
@@ -265,6 +287,7 @@ async def ask(
     customer_perf_service.log_stage("ask_api.precheck", precheck_start, permission_checked=True, rate_limit_checked=True)
     service_start = perf_counter()
     parity_isolation = _parity_isolation_enabled(request)
+    parity_scope = _parity_isolation_scope(request)
     governance_token = customer_llm_service.set_governed_customer_user(current_user)
     try:
         result = await customer_service_service.ask_customer_service(
@@ -281,6 +304,7 @@ async def ask(
         body,
         result,
         parity_isolation=parity_isolation,
+        parity_scope=parity_scope,
     )
     _cache_recommendation_response(
         current_user.id,
@@ -333,6 +357,7 @@ async def ask_stream(
             planned_start = perf_counter()
             delta_queue: asyncio.Queue[str] = asyncio.Queue()
             parity_isolation = _parity_isolation_enabled(request)
+            parity_scope = _parity_isolation_scope(request)
             buffered_answer_deltas: list[str] = []
             first_delta_logged = False
 
@@ -383,6 +408,7 @@ async def ask_stream(
                 body,
                 result,
                 parity_isolation=parity_isolation,
+                parity_scope=parity_scope,
             )
             if parity_isolation and str(result.get("answer") or ""):
                 customer_perf_service.mark_first_answer_delta()

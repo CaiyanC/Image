@@ -444,6 +444,82 @@ def test_parity_isolation_canonicalizes_independent_recommendation_decisions(cli
     assert "SKU-B" not in stream_payload["answer"]
 
 
+def test_parity_scope_does_not_reuse_snapshot_from_an_earlier_probe(client_and_token, monkeypatch):
+    client, headers = client_and_token
+    from app.api import customer_service as customer_service_api
+
+    calls = []
+
+    async def fake_ask_customer_service(_db, **_kwargs):
+        calls.append(len(calls) + 1)
+        selected_sku = f"SKU-{len(calls)}"
+        return {
+            "conversation_id": f"scope-conversation-{len(calls)}",
+            "message_id": f"scope-message-{len(calls)}",
+            "intent": "recommendation",
+            "answer_type": "recommendation",
+            "answer": f"推荐 {selected_sku}。",
+            "result_skus": [selected_sku],
+            "candidate_skus": [selected_sku],
+            "results": [], "sources": [], "actions": [], "steps": [], "warnings": [], "evidence": [],
+        }
+
+    monkeypatch.setattr(customer_service_api.customer_service_service, "ask_customer_service", fake_ask_customer_service)
+    first_headers = {
+        **headers,
+        "X-Customer-Service-Parity-Isolation": "true",
+        "X-Customer-Service-Parity-Scope": "probe-one",
+    }
+    second_headers = {
+        **headers,
+        "X-Customer-Service-Parity-Isolation": "true",
+        "X-Customer-Service-Parity-Scope": "probe-two",
+    }
+
+    first = client.post("/api/customer-service/ask", json={"question": Q15_1}, headers=first_headers)
+    second = client.post("/api/customer-service/ask", json={"question": Q15_1}, headers=second_headers)
+
+    assert first.status_code == second.status_code == 200
+    assert first.json()["result_skus"] == ["SKU-1"]
+    assert second.json()["result_skus"] == ["SKU-2"]
+
+
+def test_parity_snapshot_never_overwrites_conversation_bound_turn(client_and_token, monkeypatch):
+    client, headers = client_and_token
+    from app.api import customer_service as customer_service_api
+
+    calls = []
+
+    async def fake_ask_customer_service(_db, **_kwargs):
+        calls.append(len(calls) + 1)
+        selected_sku = f"CONTEXT-{len(calls)}"
+        return {
+            "conversation_id": "persisted-conversation",
+            "message_id": f"context-message-{len(calls)}",
+            "intent": "recommendation",
+            "answer_type": "recommendation",
+            "answer": f"推荐 {selected_sku}。",
+            "result_skus": [selected_sku],
+            "candidate_skus": [selected_sku],
+            "results": [], "sources": [], "actions": [], "steps": [], "warnings": [], "evidence": [],
+        }
+
+    monkeypatch.setattr(customer_service_api.customer_service_service, "ask_customer_service", fake_ask_customer_service)
+    parity_headers = {
+        **headers,
+        "X-Customer-Service-Parity-Isolation": "true",
+        "X-Customer-Service-Parity-Scope": "same-probe",
+    }
+    payload = {"question": Q15_3, "conversation_id": "persisted-conversation"}
+
+    first = client.post("/api/customer-service/ask", json=payload, headers=parity_headers)
+    second = client.post("/api/customer-service/ask", json=payload, headers=parity_headers)
+
+    assert first.status_code == second.status_code == 200
+    assert first.json()["result_skus"] == ["CONTEXT-1"]
+    assert second.json()["result_skus"] == ["CONTEXT-2"]
+
+
 def test_parity_isolation_serializes_runtime_only_nested_values(client_and_token, monkeypatch):
     client, headers = client_and_token
     from app.api import customer_service as customer_service_api

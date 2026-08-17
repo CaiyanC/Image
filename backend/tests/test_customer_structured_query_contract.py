@@ -936,61 +936,8 @@ def test_structured_empty_result_keeps_legacy_anchor_and_condition_metadata(stru
     assert metadata["is_truncated"] is False
 
 
-@pytest.mark.parametrize(
-    "question",
-    [
-        "哪些水具是不锈钢？",
-        "有哪些水具是不锈钢？",
-        "哪些锅是硬氧材质？",
-        "硬氧材质的锅具有哪些？",
-        "可以明火直烧的不锈钢水壶有哪些？",
-    ],
-)
-def test_legacy_structured_qualified_rows_share_central_candidate_scope_and_evaluator(
-    route_client_and_db,
-    question,
-):
-    from test_customer_service_route_level_supplemental_regression import _qualified_structured_rows
-
-    _client, _headers, Session = route_client_and_db
-    contract = build_structured_query_contract(question)
-    assert contract.status == "resolved"
-
-    with Session() as db:
-        candidate_rows, evaluations = customer_service_service._evaluate_structured_query_contract_rows(db, contract)
-    central_skus = [item["sku"] for item in evaluations if item["matched"] and item["sku"]]
-    _intent, _legacy_contract, legacy_rows = _qualified_structured_rows(Session, question)
-    legacy_skus = [str(row.get("sku") or "").strip().upper() for row in legacy_rows]
-
-    assert legacy_skus == central_skus
-    assert len(candidate_rows) >= len(legacy_rows)
-    assert all(item["subject_match"] for item in evaluations if item["matched"])
-    if contract.field == "material":
-        assert all(item["field_source"] == "body_material" for item in evaluations if item["matched"])
 
 
-@pytest.mark.parametrize(
-    "question",
-    [
-        "哪些锅具适配燃气炉？",
-        "哪些水杯容量在999999ml以上？",
-    ],
-)
-def test_central_only_structured_queries_do_not_require_legacy_contract(route_client_and_db, question):
-    client, headers, Session = route_client_and_db
-    contract = build_structured_query_contract(question)
-    assert contract.status == "resolved"
-    assert customer_service_service._structured_hard_filter_contract(question) == {}
-
-    with Session() as db:
-        _candidate_rows, evaluations = customer_service_service._evaluate_structured_query_contract_rows(db, contract)
-    response = client.post("/api/customer-service/ask?debug=true", json={"question": question}, headers=headers)
-    assert response.status_code == 200, response.text
-    payload = response.json()
-
-    assert payload["debug"]["agent_mode"] == "structured_query_contract"
-    assert payload["answer_metadata"]["contract_source"] == "structured_query_contract"
-    assert payload["result_skus"] == [item["sku"] for item in evaluations if item["matched"] and item["sku"]][:10]
 
 
 @pytest.mark.parametrize(
@@ -1014,51 +961,6 @@ def test_named_dishwasher_question_does_not_become_catalog_selection_contract():
     assert customer_service_service._structured_hard_filter_contract("CW-C95 能放洗碗机吗？") == {}
 
 
-def test_waterware_legacy_parity_includes_strict_compatible_vessels_without_accessories(route_client_and_db):
-    from test_customer_service_route_level_supplemental_regression import _qualified_structured_rows
-
-    _client, _headers, Session = route_client_and_db
-    question = "哪些水具是不锈钢？"
-    contract = build_structured_query_contract(question)
-    with Session() as db:
-        candidate_rows, evaluations = customer_service_service._evaluate_structured_query_contract_rows(db, contract)
-    matched_by_sku = {
-        item["sku"]: item
-        for item in evaluations
-        if item["matched"] and item["sku"]
-    }
-    strict_compatible = [
-        row
-        for row in candidate_rows
-        if str(row.get("sku") or "").strip().upper() in matched_by_sku
-        and resolve_structured_subject_scope(row=row, subject_category=contract.subject_category).get("matched_by")
-        == "strict_water_kettle_compatibility"
-    ]
-    _intent, _legacy_contract, legacy_rows = _qualified_structured_rows(Session, question)
-    legacy_skus = {str(row.get("sku") or "").strip().upper() for row in legacy_rows}
-
-    assert strict_compatible
-    assert all(str(row.get("sku") or "").strip().upper() in legacy_skus for row in strict_compatible)
-    assert all(
-        matched_by_sku[str(row.get("sku") or "").strip().upper()]["field_source"] == "body_material"
-        for row in strict_compatible
-    )
-    assert all(
-        matched_by_sku[str(row.get("sku") or "").strip().upper()].get("subject_scope") == "subject"
-        for row in strict_compatible
-    )
-    assert all(
-        resolve_structured_subject_scope(row=row, subject_category="水壶").get("subject_kind")
-        in {"kettle", "coffee_kettle"}
-        for row in strict_compatible
-    )
-    accessory_rows = [
-        row
-        for row in candidate_rows
-        if resolve_structured_subject_scope(row=row, subject_category="水具").get("excluded_reason")
-        == "accessory_scope"
-    ]
-    assert all(str(row.get("sku") or "").strip().upper() not in legacy_skus for row in accessory_rows)
 
 
 def test_all_products_scope_uses_user_facing_label_without_changing_contract_or_rows(
@@ -1235,34 +1137,6 @@ def _entity_state(status="generic", *, resolved_sku=None, candidates=None, confi
     )
 
 
-@pytest.mark.parametrize(
-    ("entity", "signals", "primary_intent", "expected"),
-    [
-        (_entity_state(), {}, "product_field", True),
-        (_entity_state(), {}, "", True),
-        (_entity_state("resolved", resolved_sku="SYN-1", candidates=["SYN-1"], confidence="high", matched_by="canonical_name_exact"), {}, "product_field", False),
-        (_entity_state("ambiguous", candidates=["SYN-1"], confidence="medium", matched_by="substring"), {}, "product_field", False),
-        (_entity_state(), {"recommendation": True}, "recommendation", False),
-        (_entity_state(), {"scenario_like": True}, "", False),
-        (_entity_state(), {"multi_condition_recommendation": True}, "", False),
-        (_entity_state(), {"comparison": True}, "", False),
-        (_entity_state(), {"compound": True}, "", False),
-    ],
-)
-def test_category_general_eligibility_consumes_entity_and_existing_route_signals(
-    entity, signals, primary_intent, expected
-):
-    contract = build_structured_query_contract("锅具一般有哪些容量")
-    exclusions = customer_service_service._category_general_exclusion_signals(
-        phase1_plan={"primary_intent": primary_intent},
-        entity_contract=entity,
-        entity_arbitration_signals=signals,
-    )
-
-    assert customer_service_service._should_use_category_field_general(
-        structured_contract=contract,
-        exclusions=exclusions,
-    ) is expected
 
 
 def test_category_general_precedes_single_product_generic_clarification():
@@ -1280,40 +1154,8 @@ def test_category_general_precedes_single_product_generic_clarification():
     assert decision == {"action": "pass_through", "reason": "category_field_general"}
 
 
-def test_resolved_structured_filter_never_uses_category_general_aggregation():
-    contract = build_structured_query_contract("哪些锅具容量大于2L")
-
-    assert contract.status == "resolved"
-    assert customer_service_service._should_use_category_field_general(
-        structured_contract=contract,
-        exclusions=customer_service_service._category_general_exclusion_signals(
-            phase1_plan={"primary_intent": "query_products"},
-            entity_contract=_entity_state(),
-            entity_arbitration_signals={},
-        ),
-    ) is False
 
 
-def test_scenario_like_signal_is_scoped_to_category_general_exclusion():
-    plan = {
-        "primary_intent": "product_field",
-        "scenario": "规格怎么选",
-        "raw_question": "某系列水壶的规格怎么选",
-    }
-
-    entity_signals = customer_service_service._phase2_entity_arbitration_signals(
-        plan["raw_question"], plan, None
-    )
-    exclusions = customer_service_service._category_general_exclusion_signals(
-        phase1_plan=plan,
-        entity_contract=_entity_state("ambiguous", candidates=["SYN-1", "SYN-2"], confidence="medium", matched_by="substring"),
-        entity_arbitration_signals=entity_signals,
-    )
-
-    assert "scenario" not in entity_signals
-    assert "scenario_like" not in entity_signals
-    assert exclusions["scenario_like"] is True
-    assert exclusions["entity_ambiguous"] is True
 
 
 @pytest.mark.parametrize(

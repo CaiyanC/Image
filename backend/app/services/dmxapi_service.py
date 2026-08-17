@@ -789,6 +789,19 @@ async def chat_completion(
 
     response = await _run_ai_request(_request)
     if response.status_code >= 400:
+        if isinstance(response_metadata, dict):
+            # Keep provider outage diagnosis available to the semantic
+            # planner without retaining the response body (which can contain
+            # provider-specific request details).  The caller only needs the
+            # status code and the model slot to distinguish a routing bug
+            # from an upstream availability/configuration failure.
+            response_metadata.update(
+                {
+                    "provider_status_code": response.status_code,
+                    "provider_model": None,
+                    "request_model": body.get("model"),
+                }
+            )
         raise httpx.HTTPStatusError(
             f"聊天模型请求失败: {response.status_code} - {response.text[:500]}",
             request=response.request,

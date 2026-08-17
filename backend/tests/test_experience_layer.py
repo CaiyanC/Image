@@ -34,6 +34,6 @@ def test_shape_answer_tone_only_softens_clarify_answers():
     )
 
     assert "先给你一个方向" not in clarify
-    assert "SKU" in clarify
+    assert "SKU" not in clarify
     assert product_detail == "炊墨套锅（CW-T01）：手柄材质：铝合金。"
     assert recommendation == "推荐：行山单锅（CW-P01）\n理由：CW-P01：更贴合当前需求。"

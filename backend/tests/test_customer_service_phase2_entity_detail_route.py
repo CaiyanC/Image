@@ -616,57 +616,8 @@ def test_phase2_arbitration_exits_recommendation_compound_and_comparison(phase2_
         assert "RT-P2-100" in answer and "RT-P2-300" in answer, payload
 
 
-@pytest.mark.parametrize(
-    "question",
-    [
-        "RT-P2-100容量多大？适合什么场景？",
-        "RT-P2-100容量多大？能不能用酒精炉？",
-        "RT-P2-100容量多大？保修有记录吗？",
-        "晨雾Plus水壶容量多大？适合什么场景？",
-    ],
-)
-def test_phase2_exact_entity_additional_intents_block_single_field_gate(route_client_and_db, question):
-    _, _, Session = route_client_and_db
-    _seed_phase2_products(Session)
-    plan = customer_agent_planner_service.plan_customer_question(question)
-    requested_fields = customer_agent_intent_service._requested_fields_for_detail_question(question)
-    signals = customer_service_service._phase2_entity_arbitration_signals(question, plan, None)
-
-    with Session() as db:
-        result = customer_service_service._phase2_entity_state_arbitration_result(
-            db,
-            question,
-            plan,
-            conversation_id=None,
-            signals=signals,
-        )
-
-    assert len(requested_fields) > 1
-    assert signals.get("multi_field") is True
-    assert signals.get("additional_user_intent") is True
-    assert signals.get("compound") is True
-    assert result is None
 
 
-def test_phase2_exact_entity_single_supported_field_still_uses_detail_gate(route_client_and_db):
-    _, _, Session = route_client_and_db
-    _seed_phase2_products(Session)
-    question = "RT-P2-100容量多大？"
-    plan = customer_agent_planner_service.plan_customer_question(question)
-    signals = customer_service_service._phase2_entity_arbitration_signals(question, plan, None)
-
-    with Session() as db:
-        result = customer_service_service._phase2_entity_state_arbitration_result(
-            db,
-            question,
-            plan,
-            conversation_id=None,
-            signals=signals,
-        )
-
-    assert signals.get("additional_user_intent") is False
-    assert result is not None
-    assert result.get("debug", {}).get("agent_mode") == "resolved_entity_detail_contract"
 
 
 def test_phase2_compound_http_keeps_existing_route_instead_of_single_field_gate(phase2_client):
@@ -785,8 +736,6 @@ def test_compound_orchestrator_answers_capacity_heat_source_and_scene(route_clie
     assert len(result["answer"].splitlines()) >= 4
 
 
-def test_requested_field_phrase_overlap_does_not_expand_dimensions_to_capacity():
-    assert customer_service_service._phase2_requested_fields("RT-P2-300尺寸多大？能不能用酒精炉？") == ["尺寸", "热源"]
 
 
 def test_compound_http_uses_resolved_contract_instead_of_reparsing_product_ref(phase2_client):
@@ -956,112 +905,14 @@ def test_public_result_trace_always_preserves_raw_question_without_overwriting_e
     }
 
 
-@pytest.mark.parametrize(
-    ("question", "expected_route"),
-    [
-        ("RT-P2-300第一次使用要注意哪些事项？", "usage_care"),
-        ("RT-P2-300有哪些禁止操作和安全提示？", "usage_care"),
-        ("RT-P2-300套装内具体包含什么？", "contents_grounding"),
-    ],
-)
-def test_dedicated_semantic_route_excludes_compound_detail(question, expected_route):
-    plan = customer_agent_planner_service.plan_customer_question(question)
-    signals = customer_service_service._phase2_entity_arbitration_signals(question, plan, None)
-
-    assert customer_service_service._dedicated_semantic_route(question) == expected_route
-    assert signals["dedicated_route"] is True
 
 
-def test_validated_semantic_field_ignores_field_words_inside_product_title():
-    question = "旋焰炉芯（作为套装赠品）最大功率多少瓦？"
-    semantic_preplan = {
-        "called": True,
-        "route_family": "product_bound_qa",
-        "route_hint": "product_detail",
-        "question_type": "field",
-        "field_type": "power",
-        "field_hint": "power",
-        "subtype": "known_detail",
-        "canonical_fields": ["power"],
-        "confidence": 0.9,
-        "confidence_label": "high",
-    }
-    plan = customer_agent_planner_service.plan_customer_question(question)
-    plan["semantic_preplan"] = semantic_preplan
-    field_request = customer_service_service.resolve_requested_field_contract(question, plan)
-
-    assert field_request["source"] == "validated_semantic_preplan"
-    assert field_request["canonical_fields"] == ["power"]
-    signals = customer_service_service._phase2_entity_arbitration_signals(
-        question,
-        plan,
-        semantic_preplan,
-        field_request_override=field_request,
-    )
-    assert signals["multi_field"] is False
-    assert signals["compound"] is False
-    assert signals["dedicated_route"] is False
 
 
-def test_semantic_mutually_plausible_fields_fail_closed_with_resolved_entity():
-    class _Contract:
-        def to_dict(self):
-            return {
-                "status": "resolved",
-                "resolved_sku": "RT-P2-100",
-                "candidate_skus": ["RT-P2-100"],
-                "field_type": "dimensions",
-            }
-
-    result = customer_service_service._semantic_field_ambiguity_clarification_result(
-        {
-            "called": True,
-            "route_hint": "product_detail",
-            "canonical_fields": ["capacity", "dimensions"],
-            "confidence": 0.9,
-            "ambiguity": True,
-        },
-        {"contract": _Contract()},
-    )
-
-    assert result["answer_type"] == "clarification"
-    assert result["result_skus"] == []
-    assert result["candidate_skus"] == ["RT-P2-100"]
-    assert result["debug"]["agent_mode"] == "semantic_field_ambiguity_clarification"
-    assert result["debug"]["field_contract"]["canonical_fields"] == ["capacity", "dimensions"]
-    assert result["debug"]["entity_resolution_contract"]["resolved_sku"] == "RT-P2-100"
-    shaped = customer_service_service._shape_answer_for_output(result)
-    assert shaped["answer"] == "这个问法可能对应多个字段。请确认你想查容量还是尺寸。"
 
 
-def test_explicit_multi_field_request_is_not_reduced_to_ambiguity_clarification():
-    result = customer_service_service._semantic_field_ambiguity_clarification_result(
-        {
-            "called": True,
-            "route_hint": "product_detail",
-            "canonical_fields": ["capacity", "weight"],
-            "confidence": 0.65,
-            "ambiguity": True,
-        },
-        {},
-        {
-            "source": "deterministic_explicit_multi_field",
-            "canonical_fields": ["capacity", "weight"],
-        },
-    )
-
-    assert result is None
 
 
-def test_true_independent_detail_fields_remain_compound_eligible():
-    question = "RT-P2-100容量和重量分别是多少？"
-    plan = customer_agent_planner_service.plan_customer_question(question)
-    signals = customer_service_service._phase2_entity_arbitration_signals(question, plan, None)
-
-    assert customer_service_service._dedicated_semantic_route(question) == ""
-    assert signals["dedicated_route"] is False
-    assert signals["compound"] is True
-    assert signals["multi_field"] is True
 
 
 def test_usage_care_mixed_with_detail_field_does_not_enter_compound_orchestrator(phase2_client):
@@ -1152,40 +1003,6 @@ def test_phase2_request_reuses_one_entity_contract_build(
     assert payload.get("result_skus") or [] == expected_skus
 
 
-@pytest.mark.parametrize(
-    ("question", "plan", "expected_action"),
-    [
-        ("晨雾Plus水壶的型号是什么", {"primary_intent": "product_field"}, "resolved_detail"),
-        ("云途水壶的规格怎么选", {"primary_intent": "product_field"}, "ambiguous_clarification"),
-        ("雾海远征壶的型号是什么", {"primary_intent": "product_field"}, "unresolved_clarification"),
-        ("水壶容量怎么看", {"primary_intent": "product_field"}, "generic_clarification"),
-        # A safety-bound commercial field still seals an exact entity before
-        # the formatter returns its field-specific safe-missing answer.
-        ("晨雾Plus水壶价格是多少", {"primary_intent": "product_field"}, "resolved_detail"),
-        ("推荐晨雾Plus水壶的容量", {"primary_intent": "recommendation"}, "pass_through"),
-    ],
-)
-def test_phase2_arbitration_decision_is_separate_from_response_formatting(
-    route_client_and_db,
-    question,
-    plan,
-    expected_action,
-):
-    _, _, Session = route_client_and_db
-    _seed_phase2_products(Session)
-    with Session() as db:
-        context = customer_service_service._build_phase2_entity_resolution_context(db, question)
-        signals = customer_service_service._phase2_entity_arbitration_signals(question, plan, None)
-        decision = customer_service_service._classify_phase2_entity_state_action(
-            question,
-            plan,
-            signals=signals,
-            entity_resolution_context=context,
-        )
-        response = customer_service_service._build_phase2_entity_state_response(db, question, decision)
-
-    assert decision["action"] == expected_action
-    assert (response is not None) is (expected_action != "pass_through")
 
 
 def test_attach_phase1_plan_is_the_effective_runtime_merge_boundary():

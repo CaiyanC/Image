@@ -49,6 +49,7 @@ class RecommendationRequestContract:
     confidence: str = "medium"
     source_spans: dict[str, Any] = field(default_factory=dict)
     field_provenance: dict[str, dict[str, Any]] = field(default_factory=dict)
+    predicate_constraints: list[dict[str, Any]] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -326,9 +327,15 @@ def _parse_people(text: str) -> tuple[int | None, int | None, tuple[int, int] | 
 
 def _parse_numeric_limit(text: str, field_name: str) -> tuple[float | None, float | None, tuple[int, int] | None]:
     field_terms = "容量" if field_name == "capacity" else "重量"
-    unit_pattern = r"(ml|毫升|l|升)" if field_name == "capacity" else r"(g|克|kg|千克|公斤)"
+    unit_pattern = r"(?:ml|毫升|l|升)" if field_name == "capacity" else r"(?:g|克|kg|千克|公斤)"
+    before_operator_pattern = r"至少|不低于|不少于|大于|超过|不超过|至多|小于|低于"
+    after_operator_pattern = r"以上|及以上|或以上|起|以下|及以下|以内"
     match = re.search(
-        rf"{field_terms}[^，。；;]{{0,8}}?(至少|不低于|不少于|大于|超过|不超过|至多|小于|低于)?\s*(\d+(?:\.\d+)?)\s*{unit_pattern}",
+        rf"{field_terms}[^，。；;]{{0,8}}?"
+        rf"(?P<before>{before_operator_pattern})?\s*"
+        rf"(?P<value>\d+(?:\.\d+)?)\s*"
+        rf"(?P<unit>{unit_pattern})\s*"
+        rf"(?P<after>{after_operator_pattern})?",
         text,
         re.IGNORECASE,
     )
@@ -356,6 +363,20 @@ def _parse_numeric_limit(text: str, field_name: str) -> tuple[float | None, floa
         # Keep the tolerance bounded so it remains usable by the existing
         # same-SKU numeric verifier rather than becoming a vague preference.
         if field_name == "capacity":
+            threshold = re.search(
+                rf"(?P<value>\d+(?:\.\d+)?)\s*(?P<unit>{unit_pattern})\s*"
+                rf"(?P<operator>{after_operator_pattern})",
+                text,
+                re.IGNORECASE,
+            )
+            if threshold:
+                value = float(threshold.group("value"))
+                if threshold.group("unit").lower() in {"l", "升"}:
+                    value *= 1000
+                operator = threshold.group("operator")
+                if operator in {"以上", "及以上", "或以上", "起"}:
+                    return value, None, threshold.span()
+                return None, value, threshold.span()
             approximate = re.search(
                 r"(\d+(?:\.\d+)?)\s*(ml|毫升|l|升)\s*(?:左右|上下|约|大约)",
                 text,
@@ -367,16 +388,18 @@ def _parse_numeric_limit(text: str, field_name: str) -> tuple[float | None, floa
                     value *= 1000
                 return value * 0.8, value * 1.2, approximate.span()
         return None, None, None
-    operator = match.group(1) or "="
-    value = float(match.group(2))
-    unit = match.group(3).lower()
+    before = match.group("before") or ""
+    after = match.group("after") or ""
+    operator = before or after or "="
+    value = float(match.group("value"))
+    unit = match.group("unit").lower()
     if field_name == "capacity" and unit in {"l", "升"}:
         value *= 1000
     if field_name == "weight" and unit in {"kg", "千克", "公斤"}:
         value *= 1000
-    if operator in {"至少", "不低于", "不少于", "大于", "超过"}:
+    if operator in {"至少", "不低于", "不少于", "大于", "超过", "以上", "及以上", "或以上", "起"}:
         return value, None, match.span()
-    if operator in {"不超过", "至多", "小于", "低于"}:
+    if operator in {"不超过", "至多", "小于", "低于", "以下", "及以下", "以内"}:
         return None, value, match.span()
     return value, value, match.span()
 
@@ -493,7 +516,12 @@ def _recommendation_contract_from_validated_semantic_constraints(
         if price_preference not in {"affordable", "premium"}:
             return None
         contract.budget_level = price_preference
-        _append_unique(contract.hard_constraints, "price_positioning")
+        # A semantic affordability preference is useful for ranking and
+        # explanation, but it is not a product eligibility fact unless the
+        # customer supplies a concrete price ceiling or an explicit recorded
+        # price-positioning requirement.  Product catalogue rows do not carry
+        # live prices reliably enough to reject every candidate here.
+        _append_unique(contract.soft_preferences, "budget")
     storage_preference = constraints.get("storage_preference")
     if storage_preference is not None:
         if storage_preference != "compact_storage":
@@ -527,6 +555,298 @@ def _recommendation_contract_from_validated_semantic_constraints(
             contract.field_provenance[key] = {"source_turn": 1, "provenance": "validated_semantic_preplan"}
     signal_count = len(contract.hard_constraints) + len(contract.soft_preferences)
     contract.confidence = "high" if contract.subject_category and signal_count >= 2 else "medium"
+    return contract
+
+
+_SEMANTIC_RECOMMENDATION_PREDICATE_OPERATORS = {
+    "material": {"contains"},
+    "surface_finish": {"contains", "="},
+    "capacity": {">=", ">", "<=", "<", "=", "between"},
+    "weight": {">=", ">", "<=", "<", "=", "between"},
+    "dimensions": {"contains", "="},
+    "people": {">=", ">", "<=", "<", "=", "between"},
+    "color": {"contains", "="},
+    "heat_source": {"supports", "not_supports"},
+    "usage_scene": {"contains"},
+    "waterproof": {"="},
+}
+
+# These fields are customer-language properties rather than closed numeric or
+# compatibility values.  A literal mismatch is not negative evidence: the
+# same-SKU semantic evidence packet may contain a valid paraphrase such as
+# “陶瓷不沾” for a request for a non-stick coating.
+_SEMANTIC_TEXT_PREDICATE_FIELDS = {
+    "material",
+    "surface_finish",
+    "dimensions",
+    "color",
+    "usage_scene",
+}
+
+# Flash uses stable ontology values for closed compatibility predicates while
+# the evidence span remains in the customer's language.  This is a schema
+# adapter, not an intent router: it only proves that a typed heat-source value
+# such as ``alcohol_stove`` is anchored by the current-turn phrase ``酒精炉``.
+_SEMANTIC_HEAT_SOURCE_LABELS = {
+    "card_stove": "卡式炉",
+    "gas_stove": "燃气炉",
+    "alcohol_stove": "酒精炉",
+    "open_flame": "明火",
+    "charcoal": "炭火",
+    "induction": "电磁炉",
+}
+
+
+def _semantic_predicate_span_anchors_field(
+    evidence_span: str,
+    *,
+    field_name: str,
+    normalized_value: Any,
+    unit: str | None,
+) -> bool:
+    """Prove that a model predicate came from the same kind of customer fact.
+
+    An exact substring proves turn provenance but not ontology: a planner can
+    otherwise cite ``露营`` while inventing ``heat_source=户外炉具``. This
+    check validates only field shape (numeric unit/count or the normalized
+    textual value), never rediscovers intent or maps product aliases.
+    """
+    span = str(evidence_span or "").strip().casefold()
+    if not span:
+        return False
+    quantity = r"(?:\d+(?:\.\d+)?|[零〇一二两三四五六七八九十百千万半]+)"
+    if field_name == "people":
+        return bool(re.search(rf"(?:{quantity}\s*(?:个)?人|单人|双人)", span))
+    if field_name == "capacity":
+        return bool(re.search(rf"{quantity}\s*(?:ml|毫升|l|升)", span, re.I))
+    if field_name == "weight":
+        return bool(re.search(rf"{quantity}\s*(?:g|克|kg|千克|公斤)", span, re.I))
+    if field_name == "dimensions":
+        return bool(re.search(rf"{quantity}\s*(?:mm|毫米|cm|厘米|m|米|寸|英寸)", span, re.I))
+    if field_name == "waterproof":
+        return "防水" in span or "不防水" in span
+    if field_name == "heat_source":
+        expected = _SEMANTIC_HEAT_SOURCE_LABELS.get(
+            str(normalized_value or "").strip(),
+            str(normalized_value or "").strip(),
+        )
+        return bool(expected and expected.casefold() in span)
+    if isinstance(normalized_value, str):
+        normalized_text = normalized_value.strip().casefold()
+        return bool(normalized_text and normalized_text in span)
+    return False
+
+
+def _normalize_semantic_predicate_value(
+    value: Any,
+    *,
+    field_name: str,
+    unit: str | None,
+) -> tuple[Any, str | None] | None:
+    """Normalize a model-authored typed value without interpreting wording."""
+    normalized_unit = str(unit or "").strip().casefold()
+
+    def normalize_number(item: Any) -> float | int | None:
+        if type(item) not in {int, float}:
+            return None
+        number = float(item)
+        if number < 0:
+            return None
+        if field_name == "capacity":
+            if normalized_unit in {"l", "升"}:
+                number *= 1000
+            return number
+        if field_name == "weight":
+            if normalized_unit in {"kg", "千克", "公斤"}:
+                number *= 1000
+            return number
+        if field_name == "people":
+            return int(number) if number.is_integer() and number >= 1 else None
+        return number
+
+    if field_name in {"capacity", "weight", "people"}:
+        if isinstance(value, list):
+            if len(value) != 2:
+                return None
+            normalized_values = [normalize_number(item) for item in value]
+            if any(item is None for item in normalized_values):
+                return None
+            if normalized_values[0] > normalized_values[1]:
+                return None
+            normalized_value: Any = normalized_values
+        else:
+            normalized_value = normalize_number(value)
+            if normalized_value is None:
+                return None
+        canonical_unit = "ml" if field_name == "capacity" else "g" if field_name == "weight" else None
+        return normalized_value, canonical_unit
+    if field_name == "waterproof":
+        return (True, None) if value is True else None
+    if not isinstance(value, str) or not value.strip():
+        return None
+    return value.strip(), str(unit or "").strip() or None
+
+
+_SEMANTIC_SUBJECT_IDENTITY_ALIASES = {
+    # These are canonical subject labels emitted by the semantic preplan.  The
+    # adapter is deliberately applied to that already-validated field rather
+    # than scanning the raw customer question, so it binds SKU identity
+    # without recreating the old phrase-based intent route.
+    "水杯": ("水具", "waterware", "cup"),
+    "杯子": ("水具", "waterware", "cup"),
+    "保温杯": ("水具", "waterware", "cup"),
+    "水壶": ("水具", "waterware", "kettle"),
+    "烧水壶": ("水具", "waterware", "kettle"),
+    "茶壶": ("水具", "waterware", "kettle"),
+    "水具": ("水具", "waterware", None),
+}
+
+
+def _semantic_subject_identity(
+    subject_text: str | None,
+) -> tuple[str, str, str | None] | None:
+    """Resolve a small typed identity from the semantic subject field only."""
+    normalized = re.sub(r"\s+", "", str(subject_text or "").strip().casefold())
+    return _SEMANTIC_SUBJECT_IDENTITY_ALIASES.get(normalized)
+
+
+def build_semantic_recommendation_request_contract(
+    *,
+    question: str,
+    semantic_constraints: dict[str, Any] | None,
+    predicate_constraints: list[dict[str, Any]] | None,
+    semantic_subject_text: str | None = None,
+) -> RecommendationRequestContract | None:
+    """Build the live recommendation contract only from Flash semantics.
+
+    The question is used solely to prove that each model-supplied evidence span
+    belongs to the current customer turn.  No keyword, alias, or regex is used
+    to rediscover the customer's meaning.  ``semantic_subject_text`` is the
+    already-validated subject identity from the same semantic preplan; its
+    narrow ontology adapter keeps a cup and kettle from crossing SKU scope.
+    """
+    contract = _recommendation_contract_from_validated_semantic_constraints(
+        semantic_constraints
+    ) or RecommendationRequestContract()
+    subject_identity = _semantic_subject_identity(semantic_subject_text)
+    if subject_identity is not None:
+        subject_category, subject_kind, subject_subtype = subject_identity
+        if contract.subject_kind and contract.subject_kind != subject_kind:
+            # Contradictory semantic fields must fail closed rather than let a
+            # broad model kind override the more specific subject identity.
+            return None
+        contract.subject_category = contract.subject_category or subject_category
+        contract.subject_kind = contract.subject_kind or subject_kind
+        if subject_subtype and not contract.subject_subtype:
+            contract.subject_subtype = subject_subtype
+        contract.field_provenance["subject_category"] = {
+            "source_turn": 1,
+            "provenance": "validated_semantic_subject",
+        }
+    raw_predicates = predicate_constraints or []
+    if not isinstance(raw_predicates, list) or len(raw_predicates) > 8:
+        return None
+    text = str(question or "")
+    normalized_predicates: list[dict[str, Any]] = []
+    for index, raw in enumerate(raw_predicates):
+        if not isinstance(raw, dict):
+            return None
+        field_name = str(raw.get("field") or "").strip()
+        operator = str(raw.get("operator") or "").strip()
+        evidence_span = str(raw.get("evidence_span") or "").strip()
+        # Older semantic plans did not carry an importance field. Preserve
+        # their former behavior for typed numeric/compatibility predicates,
+        # while treating an unannotated textual property as ranking context;
+        # a newer plan can explicitly promote that property to required.
+        default_importance = (
+            "preferred"
+            if field_name in {"material", "surface_finish", "dimensions", "color", "usage_scene"}
+            else "required"
+        )
+        importance = str(raw.get("importance") or default_importance).strip().lower()
+        if (
+            field_name not in _SEMANTIC_RECOMMENDATION_PREDICATE_OPERATORS
+            or operator not in _SEMANTIC_RECOMMENDATION_PREDICATE_OPERATORS[field_name]
+            or importance not in {"required", "preferred"}
+        ):
+            return None
+        if not evidence_span or evidence_span not in text:
+            # A model may express the same customer meaning with a normalized
+            # or paraphrased span.  Do not let the retired literal-evidence
+            # gate reject the whole semantic request in that case.  The
+            # structured semantic constraints and the later same-SKU
+            # coverage adjudicator remain authoritative; this individual
+            # predicate simply cannot become a deterministic hard filter
+            # without a current-turn anchor.
+            continue
+        normalized = _normalize_semantic_predicate_value(
+            raw.get("value"),
+            field_name=field_name,
+            unit=raw.get("unit"),
+        )
+        if normalized is None:
+            return None
+        value, unit = normalized
+        if not _semantic_predicate_span_anchors_field(
+            evidence_span,
+            field_name=field_name,
+            normalized_value=value,
+            unit=unit,
+        ):
+            # Preserve the semantic recommendation but drop a fabricated hard
+            # field. The complete-question coverage model can still interpret
+            # the customer's purpose; this predicate simply cannot authorize
+            # deterministic candidate rejection.
+            continue
+        predicate = {
+            "field": field_name,
+            "operator": operator,
+            "value": value,
+            "unit": unit,
+            "evidence_span": evidence_span,
+        }
+        if "importance" in raw:
+            predicate["importance"] = importance
+        normalized_predicates.append(predicate)
+        label = f"predicate:{index}:{field_name}"
+        # Numeric/boolean predicates and explicit heat-source compatibility
+        # have deterministic same-SKU evaluators. Other textual predicates
+        # remain semantic because catalogue wording may be a valid paraphrase
+        # rather than a literal substring.
+        # Textual product properties are intentionally left to the semantic
+        # same-SKU evidence adjudicator.  A local literal mismatch is not a
+        # factual contradiction: for example, “陶瓷不沾” may establish a
+        # customer's request for a non-stick coating.  Numeric and closed
+        # compatibility predicates still use this deterministic hard boundary.
+        if importance == "required" and field_name not in _SEMANTIC_TEXT_PREDICATE_FIELDS:
+            _append_unique(contract.hard_constraints, label)
+        contract.source_spans[label] = (
+            text.index(evidence_span),
+            text.index(evidence_span) + len(evidence_span),
+        )
+        contract.field_provenance[label] = {
+            "source_turn": 1,
+            "provenance": "validated_semantic_predicate",
+        }
+    contract.predicate_constraints = normalized_predicates
+    # The abstract constraint object and the typed predicates are two views of
+    # the same Flash interpretation.  Do not let an unanchored heat-source
+    # value in the abstract view become a hard catalogue filter when the typed
+    # view was dropped for lack of a customer span.  This is especially
+    # important for cooking actions: boiling water or cooking noodles does not
+    # name a gas, alcohol, open-flame, or induction source.
+    if contract.heat_sources and not any(
+        str(item.get("field") or "").strip() == "heat_source"
+        for item in normalized_predicates
+        if isinstance(item, dict)
+    ):
+        contract.heat_sources = []
+        contract.hard_constraints = [
+            item for item in contract.hard_constraints if item != "heat_source"
+        ]
+        contract.field_provenance.pop("heat_sources", None)
+    signal_count = len(contract.hard_constraints) + len(contract.soft_preferences)
+    contract.confidence = "high" if (contract.subject_category or contract.subject_kind) and signal_count else "medium"
     return contract
 
 
@@ -892,7 +1212,7 @@ def build_recommendation_request_contract(
         contract.budget_level = "relative"
     elif any(term in text for term in ("预算中等", "中等预算")):
         contract.budget_level = "medium"
-    elif any(term in text for term in ("预算别太高", "预算不高", "低预算", "便宜点", "性价比")):
+    elif any(term in text for term in ("预算别太高", "预算不高", "预算有限", "预算紧", "预算不多", "低预算", "便宜点", "性价比")):
         contract.budget_level = "low"
     if contract.budget_level:
         _append_unique(contract.soft_preferences, "budget")
@@ -1300,17 +1620,164 @@ def _capacity_consistent_with_product_identity(row: dict[str, Any]) -> bool:
         )
     )
     identity_values = set(_numeric_values(identity_text, kind="capacity"))
-    return not (
+    if (
         len(identity_values) == 1
         and capacity_values
         and next(iter(identity_values)) not in capacity_values
+    ):
+        return False
+
+    # Imported rows occasionally attach the wrong size label to a numeric
+    # value (for example, a smaller value labelled as "小锅" than the value
+    # labelled "大锅").  Do not let the numeric verifier quietly use that
+    # malformed cell to satisfy a capacity request.
+    labelled_values: dict[str, list[float]] = {"大锅": [], "小锅": []}
+    patterns = (
+        r"(?P<value>\d+(?:\.\d+)?)\s*(?P<unit>ml|毫升|l|升)\s*(?P<label>大锅|小锅)",
+        r"(?P<label>大锅|小锅)\s*(?P<value>\d+(?:\.\d+)?)\s*(?P<unit>ml|毫升|l|升)",
     )
+    for pattern in patterns:
+        for match in re.finditer(pattern, str(row.get("capacity") or ""), flags=re.IGNORECASE):
+            amount = float(match.group("value"))
+            if match.group("unit").casefold() in {"l", "升"}:
+                amount *= 1000
+            labelled_values[match.group("label")].append(amount)
+    if labelled_values["大锅"] and labelled_values["小锅"]:
+        return max(labelled_values["大锅"]) >= max(labelled_values["小锅"])
+    return True
 
 
 def _condition(status: str, source: str = "", raw: Any = None, **extra: Any) -> dict[str, Any]:
     result = {"status": status, "field_source": source, "raw_value": raw}
     result.update(extra)
     return result
+
+
+def _compare_semantic_predicate(actual: Any, operator: str, target: Any) -> bool:
+    if operator == "not_supports":
+        return str(target or "").casefold() not in str(actual or "").casefold()
+    if operator in {"contains", "supports", "="} and not isinstance(target, (int, float, list)):
+        actual_text = str(actual or "").casefold().replace("粘", "沾")
+        target_text = str(target or "").casefold().replace("粘", "沾")
+        return bool(target_text and target_text in actual_text)
+    try:
+        number = float(actual)
+    except (TypeError, ValueError):
+        return False
+    if operator == ">=":
+        return number >= float(target)
+    if operator == ">":
+        return number > float(target)
+    if operator == "<=":
+        return number <= float(target)
+    if operator == "<":
+        return number < float(target)
+    if operator == "between":
+        return float(target[0]) <= number <= float(target[1])
+    return number == float(target)
+
+
+def _semantic_predicate_evidence(
+    row: dict[str, Any],
+    predicate: dict[str, Any],
+) -> dict[str, Any]:
+    """Evaluate one typed predicate against only the candidate's own field."""
+    field_name = str(predicate.get("field") or "")
+    operator = str(predicate.get("operator") or "")
+    target = predicate.get("value")
+    if field_name == "heat_source":
+        # The planner's closed ontology is intentionally kept separate from
+        # the catalogue's Chinese evidence text.  Normalize only this typed
+        # relation before comparing; do not reinterpret any free-form request.
+        target = _SEMANTIC_HEAT_SOURCE_LABELS.get(
+            str(target or "").strip(),
+            target,
+        )
+    source_map = {
+        "material": "body_material",
+        "surface_finish": "surface_finish",
+        "capacity": "capacity",
+        "weight": "gross_weight_g",
+        "dimensions": "size_info",
+        "people": "target_audience",
+        "color": "color",
+        "heat_source": "heat_source",
+        "usage_scene": "usage_scenarios",
+        "waterproof": "waterproof",
+    }
+    source = source_map.get(field_name, "")
+    raw = row.get(source) if source else None
+    actual: Any = raw
+    if field_name == "capacity":
+        values = (
+            _numeric_values(raw, kind="capacity")
+            if _capacity_consistent_with_product_identity(row)
+            else []
+        )
+        actual = max(values) if values else None
+    elif field_name == "weight":
+        values = _numeric_values(raw, kind="weight")
+        if not values and isinstance(raw, (int, float)):
+            values = [float(raw)]
+        actual = values[0] if values else None
+    elif field_name == "people":
+        row_min, row_max, _, people_source = _people_range(row)
+        source = people_source or source
+        if row_min is None or row_max is None:
+            actual = None
+        elif operator in {">=", ">"}:
+            actual = row_max
+        elif operator in {"<=", "<"}:
+            actual = row_min
+        elif operator == "between":
+            low, high = target
+            matched = row_min <= float(low) and row_max >= float(high)
+            return _condition(
+                "verified" if matched else "conflict",
+                source,
+                raw,
+                normalized_range=[row_min, row_max],
+                target=target,
+                operator=operator,
+            )
+        else:
+            matched = row_min <= float(target) <= row_max
+            return _condition(
+                "verified" if matched else "conflict",
+                source,
+                raw,
+                normalized_range=[row_min, row_max],
+                target=target,
+                operator=operator,
+            )
+    elif field_name == "waterproof":
+        if raw is None:
+            actual = None
+        elif isinstance(raw, bool):
+            actual = raw
+        else:
+            normalized = str(raw).strip().casefold()
+            actual = normalized in {"true", "1", "yes", "是"}
+    if actual is None or not _usable(raw):
+        return _condition("unknown", source, raw, target=target, operator=operator)
+    matched = _compare_semantic_predicate(actual, operator, target)
+    if not matched and field_name in _SEMANTIC_TEXT_PREDICATE_FIELDS:
+        return _condition(
+            "unknown",
+            source,
+            raw,
+            target=target,
+            operator=operator,
+            semantic_match_pending=True,
+        )
+    return _condition(
+        "verified" if matched else "conflict",
+        source,
+        raw,
+        normalized_value=actual,
+        target=target,
+        operator=operator,
+    )
 
 
 def verify_recommendation_candidates(
@@ -1545,27 +2012,49 @@ def verify_recommendation_candidates(
                 if not positive:
                     rejection_reasons.append("dishwasher_condition_not_met")
 
-        if contract.budget_level in {"affordable", "premium"}:
+        if contract.budget_level:
             raw_price_positioning = str(row.get("price_positioning") or "").strip()
             if not _usable(raw_price_positioning):
                 evidence["price_positioning"] = _condition("unknown")
+                unsupported_preferences.append("budget")
             else:
-                matched = (
-                    any(value in raw_price_positioning for value in ("入门", "中端"))
-                    if contract.budget_level == "affordable"
-                    else "高端" in raw_price_positioning
-                )
+                matched = {
+                    "low": any(value in raw_price_positioning for value in ("入门", "中端", "基础", "性价比")),
+                    "affordable": any(value in raw_price_positioning for value in ("入门", "中端", "基础", "性价比")),
+                    "medium": "中端" in raw_price_positioning,
+                    "premium": "高端" in raw_price_positioning,
+                }.get(contract.budget_level, False)
                 evidence["price_positioning"] = _condition(
                     "verified" if matched else "conflict",
                     "price_positioning",
                     raw_price_positioning,
                     preference=contract.budget_level,
                 )
+                # Price positioning is a preference signal, not a live-price
+                # fact or a hard eligibility condition. Preserve the mismatch
+                # for semantic ranking/explanation but never reject the SKU.
                 if not matched:
-                    rejection_reasons.append("price_positioning_condition_not_met")
-        elif contract.budget_level or contract.relative_price_preference:
-            evidence["budget"] = _condition("unsupported")
+                    unsupported_preferences.append("budget")
+        elif contract.relative_price_preference:
+            evidence["price_positioning"] = _condition("unknown")
             unsupported_preferences.append("budget")
+
+        for index, predicate in enumerate(contract.predicate_constraints or []):
+            field_name = str(predicate.get("field") or "")
+            label = f"predicate:{index}:{field_name}"
+            predicate_evidence = _semantic_predicate_evidence(row, predicate)
+            evidence[label] = predicate_evidence
+            if label in contract.hard_constraints and predicate_evidence.get("status") == "conflict":
+                rejection_reasons.append(f"{field_name}_predicate_not_met")
+            elif label not in contract.hard_constraints:
+                # Preferred predicates influence semantic ranking and answer
+                # evidence, but they do not reject a candidate that lacks or
+                # conflicts with the preference. Preserve only a verified
+                # same-SKU match as positive evidence.
+                if predicate_evidence.get("status") == "verified":
+                    verified_preferences.append(label)
+                elif predicate_evidence.get("status") in {"unknown", "conflict"}:
+                    unsupported_preferences.append(label)
 
         for label, required, fields in (
             ("stability", contract.stability_required, ("features", "positioning")),
@@ -1662,6 +2151,8 @@ def verify_recommendation_candidates(
 def select_recommendation_candidates(
     candidate_rows: list[dict[str, Any]],
     verifications: list[CandidateVerification],
+    *,
+    retain_non_conflicting_partials: bool = False,
 ) -> list[dict[str, Any]]:
     verification_by_sku = {item.sku: item for item in verifications}
     fully_verified = [
@@ -1684,11 +2175,25 @@ def select_recommendation_candidates(
         if verification_by_sku.get(str(row.get("sku") or "").strip().upper())
         and verification_by_sku[str(row.get("sku") or "").strip().upper()].verification_level == "partially_verified"
     ]
+    # A partial candidate is useful only when the unresolved hard fact is the
+    # customer's group size.  That is a presentation uncertainty that can be
+    # stated conditionally.  An unknown heat source, capacity, material,
+    # structure, or scenario is different: showing that row would turn an
+    # unverified requirement into an apparent recommendation, especially when
+    # no fully verified row exists.  Keep this policy at the evidence contract
+    # boundary so semantic wording remains free-form and does not need a
+    # phrase-specific answer route.
+    safe_partial_unknowns = {"people"}
+    safe_partials = [
+        row
+        for row in partially_verified
+        if set(
+            verification_by_sku[str(row.get("sku") or "").strip().upper()].unsupported_constraints
+            or []
+        ).issubset(safe_partial_unknowns)
+    ]
     if not fully_verified:
-        return [
-            row for row in partially_verified
-            if "accessory" not in (verification_by_sku[str(row.get("sku") or "").strip().upper()].unsupported_constraints or [])
-        ]
+        return safe_partials
     # A missing people-range label is safe to disclose as uncertainty behind a
     # fully verified candidate.  Missing heat-source, material, capacity, or
     # other safety-relevant hard evidence must not be reinserted when a fully
@@ -1700,6 +2205,15 @@ def select_recommendation_candidates(
             verification_by_sku[str(row.get("sku") or "").strip().upper()].unsupported_constraints
         ).issubset({"people"})
     ]
+    if retain_non_conflicting_partials:
+        # A semantic evidence gate needs to see the same-SKU content that can
+        # explain a qualitative request (for example, a capacity + camping
+        # scenario explaining why a pot may work for a group), even when the
+        # catalogue has not maintained an explicit people-range label.  Keep
+        # only non-conflicting rows; the gate and the narrative still receive
+        # the uncertainty and must phrase the conclusion conditionally.
+        non_conflicting_partials = safe_partials
+        return [*fully_verified, *non_conflicting_partials]
     return [*fully_verified, *safely_supplemental]
 
 

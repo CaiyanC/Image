@@ -179,7 +179,14 @@ def create_document(
     return doc
 
 
-def keyword_retrieve(db: Session, query: str, sku: str | None = None, limit: int = 5) -> list[dict]:
+def keyword_retrieve(
+    db: Session,
+    query: str,
+    sku: str | None = None,
+    limit: int = 5,
+    *,
+    skus: list[str] | None = None,
+) -> list[dict]:
     query_text = query.strip()
     if not query_text:
         return []
@@ -187,6 +194,15 @@ def keyword_retrieve(db: Session, query: str, sku: str | None = None, limit: int
     db_query = db.query(KnowledgeChunk)
     if sku:
         db_query = db_query.filter(_chunk_matches_sku_sql(sku))
+    elif skus:
+        normalized_skus = list(dict.fromkeys(
+            str(item or "").strip().upper()
+            for item in skus
+            if str(item or "").strip()
+        ))
+        if not normalized_skus:
+            return []
+        db_query = db_query.filter(KnowledgeChunk.sku.in_(normalized_skus))
     if tokens:
         conditions = [KnowledgeChunk.content.ilike(f"%{token}%") for token in tokens[:8]]
         db_query = db_query.filter(or_(*conditions))
@@ -222,18 +238,106 @@ def keyword_retrieve(db: Session, query: str, sku: str | None = None, limit: int
     ]
 
 
-async def semantic_retrieve(db: Session, query: str, sku: str | None = None, limit: int = 5) -> list[dict]:
+def merge_retrieval_rows(
+    primary_rows: list[dict] | None,
+    supplemental_rows: list[dict] | None,
+    *,
+    limit: int,
+    prefer_product_sources: bool = False,
+) -> list[dict]:
+    """Merge semantic and lexical evidence without dropping product chunks.
+
+    A vector index can be only partially populated while product chunks are
+    still searchable by keyword.  The old implementation returned the vector
+    page as soon as it had any rows, so an unrelated file chunk could hide the
+    exact product evidence that was already available.  This helper keeps the
+    two retrieval signals separate and only promotes SKU-bound product rows
+    when the caller is doing product retrieval; generic knowledge search keeps
+    the vector order and receives lexical rows as additional evidence.
+    """
+    if limit <= 0:
+        return []
+    combined: list[tuple[int, int, dict]] = []
+    seen: set[tuple[str, str, str, str]] = set()
+    for origin, rows in enumerate((primary_rows or [], supplemental_rows or [])):
+        for index, raw_row in enumerate(rows):
+            if not isinstance(raw_row, dict):
+                continue
+            row = dict(raw_row)
+            metadata = row.get("metadata") if isinstance(row.get("metadata"), dict) else {}
+            source_id = str(metadata.get("source_id") or metadata.get("source_id_hash") or "").strip()
+            identity = (
+                str(row.get("source_type") or "").strip(),
+                str(row.get("sku") or "").strip().upper(),
+                source_id,
+                str(row.get("content") or "").strip(),
+            )
+            if identity in seen:
+                continue
+            seen.add(identity)
+            combined.append((origin, index, row))
+
+    if prefer_product_sources:
+        # Vector similarity and lexical match scores have different scales;
+        # comparing their raw numbers made a keyword score such as 4.0 always
+        # outrank a cosine score in [0, 1].  Fuse source ranks instead.  This
+        # keeps semantic and lexical retrieval as independent signals and does
+        # not encode any product phrase or category preference.
+        rank_score_by_sku: dict[str, float] = {}
+        for origin, rows in enumerate((primary_rows or [], supplemental_rows or [])):
+            best_rank_in_source: dict[str, int] = {}
+            for index, row in enumerate(rows):
+                if not isinstance(row, dict):
+                    continue
+                sku = str(row.get("sku") or "").strip().upper()
+                if sku and sku not in best_rank_in_source:
+                    best_rank_in_source[sku] = index
+            for sku, rank in best_rank_in_source.items():
+                rank_score_by_sku[sku] = rank_score_by_sku.get(sku, 0.0) + 1.0 / (20.0 + rank)
+        combined.sort(
+            key=lambda item: (
+                0 if str(item[2].get("sku") or "").strip() else 1,
+                -rank_score_by_sku.get(str(item[2].get("sku") or "").strip().upper(), 0.0),
+                item[0],
+                item[1],
+            )
+        )
+    return [row for _origin, _index, row in combined[:limit]]
+
+
+async def semantic_retrieve(
+    db: Session,
+    query: str,
+    sku: str | None = None,
+    limit: int = 5,
+    *,
+    prefer_product_sources: bool = False,
+    skus: list[str] | None = None,
+) -> list[dict]:
     if not query.strip():
         return []
     query_key = customer_cache_service.normalize_text(query)
-    cache_key = customer_cache_service.make_key("semantic_retrieve", id(db), query_key, sku, limit)
+    normalized_skus = tuple(dict.fromkeys(
+        str(item or "").strip().upper()
+        for item in (skus or [])
+        if str(item or "").strip()
+    ))
+    cache_key = customer_cache_service.make_key(
+        "semantic_retrieve",
+        id(db),
+        query_key,
+        sku,
+        limit,
+        prefer_product_sources,
+        normalized_skus,
+    )
     cached = customer_cache_service.recommendation_candidate_cache.get(cache_key)
     if cached is not None:
         return cached
     try:
         status = vector_status(db)
         if not status.get("available"):
-            rows = keyword_retrieve(db, query, sku=sku, limit=limit)
+            rows = keyword_retrieve(db, query, sku=sku, limit=limit, skus=list(normalized_skus))
             customer_cache_service.recommendation_candidate_cache.set(cache_key, rows)
             return rows
         embedding_key = customer_cache_service.make_key("embedding", id(db), query_key)
@@ -250,6 +354,13 @@ async def semantic_retrieve(db: Session, query: str, sku: str | None = None, lim
             )
             params["sku"] = sku
             params["sku_json_quoted"] = f'%"{sku}"%'
+        elif normalized_skus:
+            placeholders = []
+            for index, allowed_sku in enumerate(normalized_skus):
+                key = f"allowed_sku_{index}"
+                placeholders.append(f":{key}")
+                params[key] = allowed_sku
+            where += f" AND c.sku IN ({', '.join(placeholders)})"
         rows = db.execute(text(
             "SELECT c.source_type, c.sku, c.content, c.metadata_json, d.source_id AS document_source_id, "
             "c.embedding <=> CAST(:embedding AS vector) AS distance "
@@ -260,10 +371,10 @@ async def semantic_retrieve(db: Session, query: str, sku: str | None = None, lim
             "LIMIT :limit"
         ), params).mappings().all()
         if not rows:
-            rows = keyword_retrieve(db, query, sku=sku, limit=limit)
+            rows = keyword_retrieve(db, query, sku=sku, limit=limit, skus=list(normalized_skus))
             customer_cache_service.recommendation_candidate_cache.set(cache_key, rows)
             return rows
-        result = [
+        vector_result = [
             {
                 "source_type": row["source_type"],
                 "sku": row["sku"],
@@ -276,6 +387,22 @@ async def semantic_retrieve(db: Session, query: str, sku: str | None = None, lim
             }
             for row in rows
         ]
+        # Keep lexical product chunks in the same retrieval pass.  This is
+        # essential during an incremental embedding sync: vector retrieval can
+        # be healthy while the newest product records are still pending.
+        keyword_rows = keyword_retrieve(
+            db,
+            query,
+            sku=sku,
+            limit=max(limit * 3, limit),
+            skus=list(normalized_skus),
+        )
+        result = merge_retrieval_rows(
+            vector_result,
+            keyword_rows,
+            limit=limit,
+            prefer_product_sources=prefer_product_sources,
+        )
         customer_cache_service.recommendation_candidate_cache.set(cache_key, result)
         return result
     except Exception:
@@ -284,7 +411,7 @@ async def semantic_retrieve(db: Session, query: str, sku: str | None = None, lim
         # fallback may fail for the same reason; structured product retrieval
         # must still be able to finish safely without knowledge rows.
         try:
-            rows = keyword_retrieve(db, query, sku=sku, limit=limit)
+            rows = keyword_retrieve(db, query, sku=sku, limit=limit, skus=list(normalized_skus))
         except Exception:
             rows = []
         customer_cache_service.recommendation_candidate_cache.set(cache_key, rows)

@@ -191,6 +191,8 @@ async def chat_completion(
                     "completion_tokens_est": None,
                     "timeout": isinstance(exc, TimeoutError),
                     "error": str(exc),
+                    "provider_status_code": response_metadata.get("provider_status_code"),
+                    "provider_model": response_metadata.get("provider_model"),
                 }
             )
         is_timeout = isinstance(exc, (TimeoutError, dmxapi_service.httpx.TimeoutException))

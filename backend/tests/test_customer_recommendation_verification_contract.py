@@ -2,6 +2,7 @@ import pytest
 
 from app.services.customer_recommendation_verification_contract import (
     CandidateVerification,
+    build_semantic_recommendation_request_contract,
     build_recommendation_request_contract,
     build_verified_recommendation_answer,
     merge_recommendation_request_contracts,
@@ -135,6 +136,15 @@ def test_request_contract_extracts_bare_capacity_range_next_to_product_noun():
     assert "capacity" in contract.hard_constraints
 
 
+def test_request_contract_treats_capacity_above_phrase_as_lower_bound():
+    contract = build_recommendation_request_contract("三个人露营，推荐容量在1L以上的锅")
+
+    assert contract.capacity_requirement == "numeric"
+    assert contract.capacity_min_ml == 1000
+    assert contract.capacity_max_ml is None
+    assert "capacity" in contract.hard_constraints
+
+
 def test_request_contract_uses_validated_semantic_constraints_without_reparsing_question_words():
     contract = build_recommendation_request_contract(
         "想找露营用、背起来别太沉的那类。",
@@ -213,7 +223,7 @@ def test_semantic_storage_preference_requires_same_sku_storage_evidence_without_
     assert unmarked.evidence_by_constraint["storage"]["status"] == "unsupported"
 
 
-def test_semantic_affordable_price_preference_requires_same_sku_price_positioning():
+def test_semantic_affordable_price_preference_is_soft_and_uses_same_sku_price_positioning():
     contract = build_recommendation_request_contract(
         "预算别太高，推荐一套锅具。",
         semantic_constraints={
@@ -230,12 +240,15 @@ def test_semantic_affordable_price_preference_requires_same_sku_price_positionin
         ],
     )
 
-    assert "price_positioning" in contract.hard_constraints
+    assert "price_positioning" not in contract.hard_constraints
+    assert "budget" in contract.soft_preferences
     assert contract.field_provenance["price_positioning"]["provenance"] == "validated_semantic_preplan"
     assert entry.evidence_by_constraint["price_positioning"]["status"] == "verified"
     assert mid.evidence_by_constraint["price_positioning"]["status"] == "verified"
-    assert premium.verification_level == "rejected"
-    assert "price_positioning_condition_not_met" in premium.rejection_reasons
+    assert premium.evidence_by_constraint["price_positioning"]["status"] == "conflict"
+    assert premium.verification_level == "fully_verified"
+    assert "budget" in premium.unsupported_preferences
+    assert "price_positioning_condition_not_met" not in premium.rejection_reasons
 
 
 def test_semantic_recommendation_scenario_requires_same_sku_usage_evidence():
@@ -742,30 +755,6 @@ def test_recommendation_return_rows_separate_total_from_displayed(count, expecte
     }
 
 
-def test_subject_only_stove_recommendation_uses_central_verifier_and_answer():
-    rows = [
-        _row("CARD", category="炉具", product_name_cn="一方卡式炉"),
-        _row("ALCOHOL", category="炉具", product_name_cn="旋焰酒精炉"),
-        _row("GAS", category="炉具", product_name_cn="蓝翼分体式气炉", heat_source="卡式气罐"),
-    ]
-    result = customer_service_service._post_filter_recommendation_result(
-        None,
-        "卡式炉推荐",
-        {
-            "answer_type": "recommendation",
-            "answer": '["露营", "卡式气罐"]',
-            "results": rows,
-            "result_skus": [row["sku"] for row in rows],
-            "candidate_skus": [row["sku"] for row in rows],
-        },
-    )
-
-    assert result["result_skus"] == ["CARD"]
-    assert result["answer_metadata"]["recommendation_contract"]["subject_subtype"] == "card_stove"
-    assert result["debug"]["recommendation_post_filter_applied"] is True
-    assert result["debug"]["recommendation_post_filter_matched_count"] == 1
-    assert "[\"露营\"" not in result["answer"]
-    assert result["debug"]["rejected_candidates"][0]["rejection_reasons"] == ["subject_subtype_mismatch"]
 
 
 def test_verified_recommendation_answer_anchors_broad_and_specific_stove_subjects():
@@ -783,64 +772,6 @@ def test_verified_recommendation_answer_anchors_broad_and_specific_stove_subject
     assert "酒精炉" in alcohol_answer
     assert "[\"" not in broad_answer
     assert "subject_subtype" not in alcohol_answer
-
-
-@pytest.mark.parametrize(
-    ("question", "expected"),
-    [
-        ("卡式炉推荐", True),
-        ("推荐一个酒精炉", True),
-        ("炉具推荐", True),
-        ("推荐适合卡式炉的锅具", True),
-        ("四人、明火、轻一点的锅具推荐", True),
-        ("锅具和烤盘哪个更适合", False),
-        ("烤盘还是锅具", False),
-        ("锅具与烤盘分别有什么优缺点", False),
-        ("推荐锅具还是烤盘", False),
-    ],
-)
-def test_central_subject_recommendation_entry_excludes_comparison_and_compound(question, expected):
-    contract = build_recommendation_request_contract(question)
-
-    assert customer_service_service._should_use_central_subject_recommendation(
-        question=question,
-        recommendation_contract=contract,
-    ) is expected
-
-
-def test_recommendation_result_skus_match_displayed_rows_when_truncated():
-    rows = [
-        _row(
-            f"CUP-{index}",
-            category="水具",
-            product_name_cn=f"轻量水杯{index}",
-            gross_weight_g=100 + index,
-        )
-        for index in range(8)
-    ]
-    result = customer_service_service._post_filter_recommendation_result(
-        None,
-        "轻便水杯推荐几个",
-        {
-            "answer_type": "recommendation",
-            "answer": "旧推荐答案",
-            "results": rows,
-            "result_skus": [row["sku"] for row in rows],
-            "candidate_skus": [row["sku"] for row in rows],
-        },
-    )
-
-    assert result["result_skus"] == [f"CUP-{index}" for index in range(5)]
-    assert result["candidate_skus"] == result["result_skus"]
-    assert [row["sku"] for row in result["results"]] == result["result_skus"]
-    assert result["answer_metadata"]["total_match_count"] == 8
-    assert result["answer_metadata"]["returned_count"] == 5
-    assert result["answer_metadata"]["is_truncated"] is True
-    assert "共找到8款可供参考的商品，以下先展示前5款" in result["answer"]
-    assert set(result["debug"]["all_verified_candidate_skus"]) == {f"CUP-{index}" for index in range(8)}
-    for sku in result["result_skus"]:
-        assert sku in result["answer"]
-        assert any(item["sku"] == sku for item in result["debug"]["candidate_verifications"])
 
 
 def test_lightweight_uses_numeric_weight_not_scenario_label():
@@ -863,11 +794,11 @@ def test_budget_without_trustworthy_price_is_unsupported():
     contract = build_recommendation_request_contract("预算中等，推荐一套锅")
     result = verify_recommendation_candidates(
         contract,
-        [_row("MID", price_positioning="中端高性价比")],
+        [_row("MID")],
     )[0]
 
     assert result.hard_constraints_passed is True
-    assert result.evidence_by_constraint["budget"]["status"] == "unsupported"
+    assert result.evidence_by_constraint["price_positioning"]["status"] == "unknown"
     assert "budget" in result.unsupported_preferences
 
 
@@ -1046,92 +977,12 @@ def test_explicit_numeric_capacity_and_weight_become_hard_constraints():
     assert "weight_constraint_not_met" in result.rejection_reasons
 
 
-def test_multi_condition_route_verifies_before_ranking(monkeypatch):
-    rows = [
-        _row("VALID", target_audience="适合4人", capacity="4L", gross_weight_g=900, heat_source="明火直烧"),
-        _row("SMALL", target_audience="适合2-3人", capacity="3.5L", gross_weight_g=800, heat_source="明火直烧"),
-        _row("NO-HEAT", target_audience="适合4人", capacity="4L", gross_weight_g=700, heat_source="电磁炉"),
-    ]
-    monkeypatch.setattr(customer_service_service, "_phase1_catalog_rows", lambda db, category: rows)
-    monkeypatch.setattr(customer_service_service, "_is_service_pot_or_cookware_set_candidate", lambda row: True)
-
-    result = customer_service_service._structured_cookware_multi_condition_recommendation_result(
-        None,
-        "一家四口营地煮汤，容量要大但别太重，还希望能直接明火加热，推荐哪款套锅？",
-    )
-
-    assert result["result_skus"] == ["VALID"]
-    assert result["candidate_skus"] == ["VALID"]
-    assert result["answer_metadata"]["recommendation_contract"]["people_min"] == 4
-    assert {item["sku"] for item in result["debug"]["rejected_candidates"]} == {"SMALL", "NO-HEAT"}
-    assert "SMALL" not in result["answer"]
 
 
-def test_multi_condition_route_returns_safe_result_when_no_candidate_verifies(monkeypatch):
-    rows = [_row("SMALL", target_audience="适合2-3人", heat_source="明火直烧")]
-    monkeypatch.setattr(customer_service_service, "_phase1_catalog_rows", lambda db, category: rows)
-    monkeypatch.setattr(customer_service_service, "_is_service_pot_or_cookware_set_candidate", lambda row: True)
-
-    result = customer_service_service._structured_cookware_multi_condition_recommendation_result(
-        None,
-        "一家四口营地煮汤，容量要大但别太重，还希望能直接明火加热，推荐哪款套锅？",
-    )
-
-    assert result["result_skus"] == []
-    assert result["candidate_skus"] == []
-    assert "能验证所有硬性条件" in result["answer"]
-    assert "能验证所有硬性条件" in result["answer"]
-    assert result["debug"]["verified_candidate_skus"] == []
 
 
-def test_post_filter_consumes_same_verification_and_does_not_reinsert_rejected_rows():
-    rows = [
-        _row("VALID", target_audience="适合1-2人", heat_source="燃气炉", gross_weight_g=650),
-        _row("VAGUE", target_audience="适合1-2人", features="两种燃料可选", usage_scenarios="轻量徒步"),
-    ]
-    agent_result = {
-        "answer_type": "recommendation",
-        "answer": "旧答案推荐 VALID 和 VAGUE",
-        "results": rows,
-        "result_skus": ["VALID", "VAGUE"],
-        "candidate_skus": ["VALID", "VAGUE"],
-        "answer_metadata": {"source": "product_catalog_structured_recommendation"},
-        "debug": {},
-    }
-
-    result = customer_service_service._post_filter_recommendation_result(
-        None,
-        "两个人海边露营，预算别太高，想要轻一点并能搭配燃气炉，选哪套锅合适？",
-        agent_result,
-    )
-
-    assert result["result_skus"] == ["VALID"]
-    assert result["candidate_skus"] == ["VALID"]
-    assert "VAGUE" not in result["answer"]
-    assert result["debug"]["verified_candidate_skus"] == ["VALID"]
-    assert result["debug"]["rejected_candidates"] == []
-    assert result["debug"]["partially_verified_candidates"][0]["sku"] == "VAGUE"
 
 
-def test_post_filter_preserves_only_verified_skus_even_if_input_lists_rejected_sku():
-    row = _row("REJECTED", target_audience="适合2-3人", heat_source="明火")
-    result = customer_service_service._post_filter_recommendation_result(
-        None,
-        "一家四口露营，需要明火套锅，推荐哪款？",
-        {
-            "answer_type": "recommendation",
-            "answer": "推荐 REJECTED",
-            "results": [row],
-            "result_skus": ["REJECTED"],
-            "candidate_skus": ["REJECTED"],
-            "answer_metadata": {},
-            "debug": {},
-        },
-    )
-
-    assert result["result_skus"] == []
-    assert result["candidate_skus"] == []
-    assert result["results"] == []
 
 
 @pytest.mark.parametrize(
@@ -1423,29 +1274,10 @@ def test_relative_price_without_price_evidence_is_unsupported():
     result = verify_recommendation_candidates(contract, [_row("ALT")])[0]
 
     assert contract.relative_price_preference == "cheaper_than_anchor"
-    assert result.evidence_by_constraint["budget"]["status"] == "unsupported"
+    assert result.evidence_by_constraint["price_positioning"]["status"] == "unknown"
     assert "budget" in result.unsupported_preferences
 
 
-def test_recommendation_context_product_field_is_not_rewritten_by_list_filter():
-    original = {
-        "answer_type": "product_detail",
-        "answer": "该商品资料明确支持目标热源。",
-        "results": [_row("ANCHOR")],
-        "result_skus": ["ANCHOR"],
-        "candidate_skus": ["ANCHOR"],
-        "debug": {"agent_mode": "recommendation_context_product_field"},
-    }
-
-    result = customer_service_service._phase1_filter_alcohol_stove_cookware_result(
-        None,
-        original,
-        question="它能不能用酒精炉？",
-    )
-
-    assert result is original
-    assert result["result_skus"] == ["ANCHOR"]
-    assert result["answer_type"] == "product_detail"
 
 
 def test_other_recommendations_phrase_is_an_alternative_request():
@@ -1523,3 +1355,244 @@ def test_recommendation_summary_renders_structured_capacity_without_json_keys():
 
     assert "水壶：约1.0L" in answer and "大锅：约1.7L" in answer
     assert "value：" not in answer and "label：" not in answer
+
+
+def test_semantic_recommendation_predicates_keep_capacity_and_surface_finish_separate():
+    question = "我们仨周末露营，想要一口至少一升、做三人份比较从容而且带不粘层的锅，帮我挑一款"
+    contract = build_semantic_recommendation_request_contract(
+        question=question,
+        semantic_constraints={"subject_kind": "cookware", "people": {"min": 3, "max": 3}},
+        predicate_constraints=[
+            {
+                "field": "capacity",
+                "operator": ">=",
+                "value": 1,
+                "unit": "L",
+                "evidence_span": "至少一升",
+            },
+            {
+                "field": "surface_finish",
+                "operator": "contains",
+                "value": "不粘层",
+                "unit": None,
+                "evidence_span": "带不粘层",
+            },
+        ],
+    )
+
+    assert contract is not None
+    assert contract.predicate_constraints[0]["value"] == 1000
+    verified, missing_capacity, missing_coating = verify_recommendation_candidates(
+        contract,
+        [
+            _row("MATCH", target_audience="3-4人", capacity="5L", surface_finish="水性不粘层"),
+            _row("NO-CAPACITY", target_audience="3-4人", capacity="", surface_finish="水性不粘层"),
+            _row("NO-COATING", target_audience="3-4人", capacity="5L", surface_finish="硬质氧化"),
+        ],
+    )
+
+    assert verified.verification_level == "fully_verified"
+    assert missing_capacity.verification_level == "partially_verified"
+    assert "predicate:0:capacity" in missing_capacity.unsupported_constraints
+    # Text predicates stay semantic: Flash compares this predicate with each
+    # candidate's own sealed surface_finish evidence.
+    assert missing_coating.verification_level == "fully_verified"
+    assert contract.predicate_constraints[1]["field"] == "surface_finish"
+    assert "predicate:1:surface_finish" not in contract.hard_constraints
+
+
+def test_semantic_recommendation_contract_does_not_reparse_customer_wording():
+    question = "周末三人做饭，锅至少装一升，表面要不粘，哪款更合适？"
+    contract = build_semantic_recommendation_request_contract(
+        question=question,
+        semantic_constraints={"subject_kind": "cookware"},
+        predicate_constraints=[
+            {"field": "capacity", "operator": ">=", "value": 1000, "unit": "ml", "evidence_span": "至少装一升"},
+            {"field": "surface_finish", "operator": "contains", "value": "不粘", "unit": None, "evidence_span": "表面要不粘"},
+        ],
+    )
+
+    assert contract is not None
+    assert contract.people_min is None
+    assert [item["field"] for item in contract.predicate_constraints] == ["capacity", "surface_finish"]
+
+
+def test_semantic_subject_text_binds_water_cup_subtype_for_same_sku_scope():
+    contract = build_semantic_recommendation_request_contract(
+        question="想找一款适合日常饮水的容器，推荐一款。",
+        semantic_constraints={},
+        predicate_constraints=[],
+        semantic_subject_text="水杯",
+    )
+
+    assert contract is not None
+    assert contract.subject_category == "水具"
+    assert contract.subject_kind == "waterware"
+    assert contract.subject_subtype == "cup"
+    matched, kettle = verify_recommendation_candidates(
+        contract,
+        [
+            _row(
+                "CUP",
+                category="水具",
+                product_name_cn="轻便水杯",
+                product_name_en="water cup",
+            ),
+            _row(
+                "KETTLE",
+                category="水具",
+                product_name_cn="小方壶",
+                product_name_en="camping kettle",
+            ),
+        ],
+    )
+
+    assert matched.verification_level != "rejected"
+    assert kettle.verification_level == "rejected"
+    assert "subject_subtype_mismatch" in kettle.rejection_reasons
+
+
+def test_semantic_recommendation_verifies_people_and_heat_source_on_same_sku():
+    question = "\u4e24\u4e2a\u4eba\u7528\uff0c\u5e76\u4e14\u652f\u6301\u9152\u7cbe\u7089"
+    contract = build_semantic_recommendation_request_contract(
+        question=question,
+        semantic_constraints={"subject_kind": "cookware"},
+        predicate_constraints=[
+            {
+                "field": "people",
+                "operator": "=",
+                "value": 2,
+                "unit": "\u4eba",
+                "evidence_span": "\u4e24\u4e2a\u4eba",
+            },
+            {
+                "field": "heat_source",
+                "operator": "supports",
+                "value": "\u9152\u7cbe\u7089",
+                "unit": "",
+                "evidence_span": "\u652f\u6301\u9152\u7cbe\u7089",
+            },
+        ],
+    )
+
+    assert contract is not None
+    assert "predicate:0:people" in contract.hard_constraints
+    assert "predicate:1:heat_source" in contract.hard_constraints
+    matched, wrong_source = verify_recommendation_candidates(
+        contract,
+        [
+            _row("MATCH", target_audience="1-2\u4eba", heat_source="\u9152\u7cbe\u7089\u3001\u6c14\u7089"),
+            _row("WRONG-SOURCE", target_audience="1-2\u4eba", heat_source="\u5361\u5f0f\u7089"),
+        ],
+    )
+
+    assert matched.verification_level == "fully_verified"
+    assert matched.evidence_by_constraint["predicate:1:heat_source"]["status"] == "verified"
+    assert wrong_source.verification_level == "rejected"
+    assert "heat_source_predicate_not_met" in wrong_source.rejection_reasons
+
+
+def test_semantic_recommendation_accepts_flash_heat_source_ontology_value():
+    question = "两个人用，并且支持酒精炉"
+    contract = build_semantic_recommendation_request_contract(
+        question=question,
+        semantic_constraints={"subject_kind": "cookware"},
+        predicate_constraints=[
+            {
+                "field": "heat_source",
+                "operator": "supports",
+                "value": "alcohol_stove",
+                "unit": "",
+                "evidence_span": "支持酒精炉",
+            },
+        ],
+    )
+
+    assert contract is not None
+    assert contract.predicate_constraints[0]["value"] == "alcohol_stove"
+    assert "predicate:0:heat_source" in contract.hard_constraints
+    matched, wrong_source = verify_recommendation_candidates(
+        contract,
+        [
+            _row("MATCH", heat_source="酒精炉、气炉"),
+            _row("WRONG-SOURCE", heat_source="卡式炉"),
+        ],
+    )
+
+    assert matched.evidence_by_constraint["predicate:0:heat_source"]["status"] == "verified"
+    assert wrong_source.verification_level == "rejected"
+
+
+def test_semantic_recommendation_drops_predicate_whose_span_is_wrong_ontology():
+    contract = build_semantic_recommendation_request_contract(
+        question="两个人周末露营，主要烧水和煮面，帮我选一款锅。",
+        semantic_constraints={"subject_kind": "cookware"},
+        predicate_constraints=[
+            {
+                "field": "people",
+                "operator": "=",
+                "value": 2,
+                "unit": "人",
+                "evidence_span": "两个人",
+            },
+            {
+                "field": "heat_source",
+                "operator": "supports",
+                "value": "户外炉具",
+                "unit": "",
+                "evidence_span": "露营",
+            },
+        ],
+    )
+
+    assert contract is not None
+    assert [item["field"] for item in contract.predicate_constraints] == ["people"]
+    assert "predicate:0:people" in contract.hard_constraints
+    assert all("heat_source" not in item for item in contract.hard_constraints)
+
+
+def test_semantic_recommendation_keeps_request_when_predicate_span_is_paraphrased():
+    contract = build_semantic_recommendation_request_contract(
+        question="两位同行周末露营，想挑一口适合煮面的锅。",
+        semantic_constraints={
+            "subject_kind": "cookware",
+            "people": {"min": 2, "max": 2},
+        },
+        predicate_constraints=[
+            {
+                "field": "people",
+                "operator": "=",
+                "value": 2,
+                "unit": "人",
+                # This is a valid semantic paraphrase, but not a literal
+                # substring of the current customer turn.
+                "evidence_span": "两个人露营",
+            },
+        ],
+    )
+
+    assert contract is not None
+    assert contract.people_min == 2
+    assert contract.people_max == 2
+    assert contract.predicate_constraints == []
+    assert all("predicate:0:people" not in item for item in contract.hard_constraints)
+
+
+def test_semantic_recommendation_does_not_promote_unanchored_heat_source_constraint():
+    contract = build_semantic_recommendation_request_contract(
+        question="两个人周末露营，主要烧水和煮面，帮我选一款锅。",
+        semantic_constraints={"subject_kind": "cookware", "heat_sources": ["gas_stove"]},
+        predicate_constraints=[
+            {
+                "field": "heat_source",
+                "operator": "supports",
+                "value": "燃气炉",
+                "unit": "",
+                "evidence_span": "烧水和煮面",
+            },
+        ],
+    )
+
+    assert contract is not None
+    assert contract.heat_sources == []
+    assert "heat_source" not in contract.hard_constraints

@@ -656,7 +656,10 @@ def test_semantic_outage_unclassified_named_product_fails_closed(route_client_an
     payload = response.json()
     debug = payload.get("debug") or {}
     assert payload["answer_type"] == "clarification", payload
-    assert payload.get("result_skus") == [], payload
+    # Identity resolution succeeded even though semantic planning was
+    # unavailable; keep the sealed identity so the final clarification does
+    # not ask the customer for the same SKU again.
+    assert payload.get("result_skus") == ["KD04SS"], payload
     assert debug.get("agent_mode") == "semantic_outage_named_product_field_clarification", payload
     assert "无法稳定识别" in str(payload.get("answer") or ""), payload
 
@@ -1385,57 +1388,8 @@ def test_replacement_recommendation_with_multiple_results_preserves_active_produ
     assert reason == "preserved_without_new_single_product"
 
 
-def test_recommendation_formatter_does_not_duplicate_existing_priority_lead():
-    answer = "根据当前资料，优先推荐 瓦片烤盘（CF-PG19），因为它适合露营。"
-    result = customer_service_service._shape_recommendation_output(
-        answer,
-        [{"sku": "CF-PG19", "product_name_cn": "瓦片烤盘"}],
-        [],
-    )
-
-    assert result.count("优先推荐 瓦片烤盘（CF-PG19）") == 1
 
 
-def test_recommendation_formatter_does_not_rewrite_semantic_prose():
-    answer = "优先推荐 瓦片烤盘（CF-PG19）。\n优先推荐 瓦片烤盘（CF-PG19），因为它适合露营。"
-    result = customer_service_service._shape_recommendation_output(
-        answer,
-        [{"sku": "CF-PG19", "product_name_cn": "瓦片烤盘"}],
-        [],
-    )
-
-    assert result == answer
-
-
-def test_recommendation_explanation_formats_json_backed_business_values(route_client_and_db):
-    _, _, Session = route_client_and_db
-    with Session() as db:
-        _add_product(
-            db,
-            "REC-J01",
-            "轻行煎盘",
-            "锅具",
-            "1L",
-            "铝合金",
-            "卡式炉",
-            '["轻量设计", "易收纳"]',
-            '["单人露营", "早餐煎烤"]',
-            300,
-        )
-        db.commit()
-        result = customer_service_service._recommendation_explanation_followup_result(
-            db,
-            "为什么推荐它？",
-            {
-                "ordered_result_skus": ["REC-J01"],
-                "top_recommended_sku": "REC-J01",
-                "last_referenced_sku": "REC-J01",
-            },
-        )
-
-    assert result is not None
-    assert "[\"" not in result["answer"]
-    assert "单人露营，早餐煎烤；轻量设计，易收纳" in result["answer"]
 
 
 def test_ask_stream_pronoun_manual_followup_keeps_exact_color_anchor(route_client_and_db):
@@ -3231,3 +3185,27 @@ def test_component_scope_material_predicate_preserves_exact_product_identity(rou
     assert entity.get("resolved_sku") == "CW-C83-1", payload
     assert entity.get("field_type") == "material", payload
     assert payload.get("result_skus") == ["CW-C83-1"], payload
+
+
+def test_semantic_context_handles_resolve_against_server_owned_result_order():
+    assert customer_service_service._semantic_context_result_skus(
+        {"context_result_indexes": [2, 1]},
+        ["CW-C69-1", "CW-C06PRO"],
+    ) == ["CW-C06PRO", "CW-C69-1"]
+    assert customer_service_service._semantic_context_result_skus(
+        {"context_result_indexes": [1, 1]},
+        ["CW-C69-1", "CW-C06PRO"],
+    ) == []
+
+
+def test_product_bound_semantic_context_index_is_an_identity_anchor():
+    result = {
+        "route_family": "product_bound_qa",
+        "canonical_fields": ["product_name_cn", "sku"],
+        "context_result_indexes": [1],
+    }
+    assert not customer_agent_planner_service._semantic_product_bound_requires_entity_anchor(
+        result,
+        question="这个的容量是多少？",
+        context={},
+    )

@@ -22,14 +22,7 @@ CONTEXT_WORDS = (
     # substring matching would classify ordinary words such as ``其他的`` as
     # a previous-result reference and incorrectly short-circuit fresh requests.
     "它", "这个", "这款", "该产品", "这个产品", "这产品", "这些", "那些", "刚才那些", "上面这些", "刚才的", "刚才说的",
-    "上一轮", "之前", "前面", "最开始", "第一个", "第一款", "上一个", "这一批", "这批", "这几个", "那几个", "里面",
-)
-ORDINAL_CONTEXT_PATTERNS = tuple(
-    re.compile(pattern)
-    for pattern in (
-        r"(?:刚才|上面|前面)?最后(?:一个|一款|那个|那款|的)",
-        r"(?:刚才|上面|前面)?最后推荐的",
-    )
+    "上一轮", "之前", "前面", "这一批", "这批", "这几个", "那几个", "里面",
 )
 QUESTION_WORDS = ("哪些", "有哪些", "多少", "分别", "列出", "查询", "找", "是什么")
 COMPARE_WORDS = ("对比", "比较", "区别", "差异", "分别")
@@ -456,7 +449,6 @@ _EXPLICIT_SINGLE_PRODUCT_BINDINGS = {
     "explicit_sku",
     "resolved_entity_contract",
     "previous_single_entity",
-    "ordinal_selection",
 }
 _SEARCH_SINGLE_PRODUCT_PROMOTIONS = {
     "search_top1",
@@ -479,7 +471,7 @@ def _can_promote_candidate_to_single_product(
         return bool(explicit_sku)
     if provenance == "resolved_entity_contract":
         return bool(resolved_sku)
-    if provenance in {"previous_single_entity", "ordinal_selection"}:
+    if provenance == "previous_single_entity":
         return bool(previous_single_sku or resolved_sku)
     if provenance in _SEARCH_SINGLE_PRODUCT_PROMOTIONS:
         return bool(allow_search_top1_promotion)
@@ -610,12 +602,6 @@ async def process_intent_request(
             intent = _sanitize_intent(llm_intent)
     if not intent:
         return None
-    if (
-        not scoped_comparison_candidates
-        and _should_defer_ordinal_context_to_runtime(question, intent, previous_result_skus)
-    ):
-        return None
-
     fuzzy_people_cookware_subject = _fuzzy_people_cookware_subject(question)
     if fuzzy_people_cookware_subject and any(marker in question for marker in ("主体材质", "材质", "材料")):
         fuzzy_rows = customer_agent_service.search_products(db, fuzzy_people_cookware_subject, limit=5, filters={})
@@ -881,10 +867,10 @@ def _compose_safety_usage_care_answer(question: str) -> str:
     text = str(question or "")
     if _looks_like_environmental_fuel_safety_question(text):
         return (
-            "安全结论：不要在帐篷内或其他密闭、通风不足的空间使用酒精炉、燃气炉等燃烧型炉具；"
-            "燃烧会消耗氧气，并可能产生一氧化碳和可燃蒸气。"
-            "应在安全开放环境中保持充分通风，远离易燃物；"
-            "出现异味、头晕、烟气、泄漏或火焰异常时，立即熄火、离开现场并到新鲜空气处。"
+            "安全结论：不要在帐篷、房间、车辆等封闭空间使用酒精炉、燃气炉或其他燃烧型炉具；"
+            "即使开窗或通风，也不能消除火灾和一氧化碳中毒风险。"
+            "如果已经点燃，在确保自身安全的前提下先熄火，立即离开到新鲜空气和开放安全环境；"
+            "闻到异味、发现泄漏、烟气或火焰异常时不要继续操作。"
             "具体炉具的燃料兼容性仍需提供 SKU 后按同款说明书核对。"
         )
     if _looks_like_full_unit_wash_question(text):
@@ -2445,32 +2431,6 @@ def _is_recommendation_change_followup_text(text: str) -> bool:
             "更轻",
         )
     )
-
-
-def _should_defer_ordinal_context_to_runtime(
-    question: str,
-    intent: CustomerIntent,
-    previous_result_skus: list[str] | None,
-) -> bool:
-    text = str(question or "")
-    has_numeric_ordinal = bool(
-        re.search(r"第\s*(?:\d+|[一二三四五六七八九十两])\s*(?:个|款|套|只|把|口)", text)
-    )
-    has_named_ordinal = any(
-        term in text
-        for term in ("最开始", "最早问", "第一个", "第一款", "最后一个", "最后一款", "最后那个", "上一个")
-    )
-    if not has_numeric_ordinal and not has_named_ordinal:
-        return False
-    if _extract_skus(text):
-        return False
-    if getattr(intent, "requested_fields", None):
-        return True
-    if has_named_ordinal:
-        return len(previous_result_skus or []) <= 1
-    if getattr(intent, "target_skus", None):
-        return False
-    return len(previous_result_skus or []) <= 1
 
 
 def _looks_like_recommendation_question(text: str) -> bool:
@@ -9133,6 +9093,30 @@ def _looks_like_usage_care_question(text: str) -> bool:
     value = str(text or "").strip()
     if not value:
         return False
+    # A product-selection sentence can mention a care-related property as a
+    # preference (for example, “推荐一款带不粘涂层的锅”), but that does not ask
+    # how to clean, maintain, or troubleshoot the product.  Keep the explicit
+    # purchase/selection purpose in charge unless the same sentence contains a
+    # concrete care action.  This is a language boundary, not a product route:
+    # the semantic planner still decides what the customer actually wants.
+    selection_markers = (
+        "推荐", "怎么选", "帮我选", "帮我挑", "选一款", "选哪款",
+        "想要一款", "想找一款", "需要一款", "买一款", "买个", "买口",
+    )
+    product_markers = (
+        "锅", "套锅", "单锅", "烤盘", "煎盘", "炉具", "水壶", "餐具",
+        "套装", "杯", "收纳包", "收纳袋",
+    )
+    care_action_markers = (
+        "清洗", "清洁", "怎么洗", "保养", "护理", "养护", "粘锅", "糊锅",
+        "烧焦", "使用后", "钢丝球", "硬物刮擦", "骤冷骤热", "怎么处理",
+    )
+    if (
+        any(marker in value for marker in selection_markers)
+        and any(marker in value for marker in product_markers)
+        and not any(marker in value for marker in care_action_markers)
+    ):
+        return False
     # “带/有点火装置吗” asks for a catalogue capability, not an ignition
     # procedure or failure diagnosis.  Keep it on the formal feature contract
     # so a page-bound SKU can answer the exact field.  The same boundary covers
@@ -10313,8 +10297,6 @@ def _should_force_rebuild_recommendation_answer(question: str) -> bool:
     blocked_terms = (
         "为什么推荐",
         "推荐理由",
-        "第一个",
-        "第二个",
         "这些里面",
         "上面这些",
         "这几个",
@@ -11165,7 +11147,7 @@ def _has_context_reference(text: str) -> bool:
     # but a raw substring check also matches the ordinary word “其他”.  Keep
     # the pronoun only when it is not immediately preceded by “其”.
     has_pronoun = bool(re.search(r"(?<!其)他", value))
-    return has_pronoun or any(word in value for word in CONTEXT_WORDS) or any(pattern.search(value) for pattern in ORDINAL_CONTEXT_PATTERNS)
+    return has_pronoun or any(word in value for word in CONTEXT_WORDS)
 
 
 def _extract_skus(text: str) -> list[str]:
