@@ -186,12 +186,26 @@ def keyword_retrieve(
     limit: int = 5,
     *,
     skus: list[str] | None = None,
+    sections: list[str] | None = None,
 ) -> list[dict]:
     query_text = query.strip()
     if not query_text:
         return []
     tokens = _query_tokens(query_text)
     db_query = db.query(KnowledgeChunk)
+    normalized_sections = tuple(dict.fromkeys(
+        str(section or "").strip()
+        for section in (sections or [])
+        if str(section or "").strip()
+    ))
+    if normalized_sections:
+        db_query = db_query.join(
+            KnowledgeDocument,
+            KnowledgeDocument.id == KnowledgeChunk.document_id,
+        ).filter(or_(*[
+            KnowledgeDocument.source_id.like(f"%:{section}")
+            for section in normalized_sections
+        ]))
     if sku:
         db_query = db_query.filter(_chunk_matches_sku_sql(sku))
     elif skus:
@@ -204,11 +218,17 @@ def keyword_retrieve(
             return []
         db_query = db_query.filter(KnowledgeChunk.sku.in_(normalized_skus))
     if tokens:
-        conditions = [KnowledgeChunk.content.ilike(f"%{token}%") for token in tokens[:8]]
+        # Natural Chinese questions are tokenless from SQL's point of view. The
+        # tokenizer below emits bounded character n-grams, so keep a wider
+        # lexical window than the old eight-token slice; otherwise the first
+        # few generic fragments can hide the product term that appears later
+        # in the question. This is still only a lexical recall signal: the
+        # semantic layer and same-SKU binding remain the answer authority.
+        conditions = [KnowledgeChunk.content.ilike(f"%{token}%") for token in tokens[:32]]
         db_query = db_query.filter(or_(*conditions))
     else:
         db_query = db_query.filter(KnowledgeChunk.content.ilike(f"%{query_text}%"))
-    chunks = db_query.order_by(KnowledgeChunk.updated_at.desc()).limit(max(limit * 4, limit)).all()
+    chunks = db_query.order_by(KnowledgeChunk.updated_at.desc()).limit(max(limit * 8, limit)).all()
     ranked = sorted(
         chunks,
         key=lambda item: (_keyword_score(query_text, tokens, item.content), item.updated_at),
@@ -313,6 +333,7 @@ async def semantic_retrieve(
     *,
     prefer_product_sources: bool = False,
     skus: list[str] | None = None,
+    sections: list[str] | None = None,
 ) -> list[dict]:
     if not query.strip():
         return []
@@ -322,6 +343,11 @@ async def semantic_retrieve(
         for item in (skus or [])
         if str(item or "").strip()
     ))
+    normalized_sections = tuple(dict.fromkeys(
+        str(section or "").strip()
+        for section in (sections or [])
+        if str(section or "").strip()
+    ))
     cache_key = customer_cache_service.make_key(
         "semantic_retrieve",
         id(db),
@@ -330,6 +356,7 @@ async def semantic_retrieve(
         limit,
         prefer_product_sources,
         normalized_skus,
+        normalized_sections,
     )
     cached = customer_cache_service.recommendation_candidate_cache.get(cache_key)
     if cached is not None:
@@ -337,7 +364,14 @@ async def semantic_retrieve(
     try:
         status = vector_status(db)
         if not status.get("available"):
-            rows = keyword_retrieve(db, query, sku=sku, limit=limit, skus=list(normalized_skus))
+            rows = keyword_retrieve(
+                db,
+                query,
+                sku=sku,
+                limit=limit,
+                skus=list(normalized_skus),
+                sections=list(normalized_sections),
+            )
             customer_cache_service.recommendation_candidate_cache.set(cache_key, rows)
             return rows
         embedding_key = customer_cache_service.make_key("embedding", id(db), query_key)
@@ -361,6 +395,13 @@ async def semantic_retrieve(
                 placeholders.append(f":{key}")
                 params[key] = allowed_sku
             where += f" AND c.sku IN ({', '.join(placeholders)})"
+        if normalized_sections:
+            section_placeholders = []
+            for index, section in enumerate(normalized_sections):
+                key = f"source_id_section_{index}"
+                section_placeholders.append(f"d.source_id LIKE :{key}")
+                params[key] = f"%:{section}"
+            where += f" AND ({' OR '.join(section_placeholders)})"
         rows = db.execute(text(
             "SELECT c.source_type, c.sku, c.content, c.metadata_json, d.source_id AS document_source_id, "
             "c.embedding <=> CAST(:embedding AS vector) AS distance "
@@ -371,7 +412,14 @@ async def semantic_retrieve(
             "LIMIT :limit"
         ), params).mappings().all()
         if not rows:
-            rows = keyword_retrieve(db, query, sku=sku, limit=limit, skus=list(normalized_skus))
+            rows = keyword_retrieve(
+                db,
+                query,
+                sku=sku,
+                limit=limit,
+                skus=list(normalized_skus),
+                sections=list(normalized_sections),
+            )
             customer_cache_service.recommendation_candidate_cache.set(cache_key, rows)
             return rows
         vector_result = [
@@ -396,6 +444,7 @@ async def semantic_retrieve(
             sku=sku,
             limit=max(limit * 3, limit),
             skus=list(normalized_skus),
+            sections=list(normalized_sections),
         )
         result = merge_retrieval_rows(
             vector_result,
@@ -411,7 +460,14 @@ async def semantic_retrieve(
         # fallback may fail for the same reason; structured product retrieval
         # must still be able to finish safely without knowledge rows.
         try:
-            rows = keyword_retrieve(db, query, sku=sku, limit=limit, skus=list(normalized_skus))
+            rows = keyword_retrieve(
+                db,
+                query,
+                sku=sku,
+                limit=limit,
+                skus=list(normalized_skus),
+                sections=list(normalized_sections),
+            )
         except Exception:
             rows = []
         customer_cache_service.recommendation_candidate_cache.set(cache_key, rows)
@@ -502,21 +558,43 @@ def _query_tokens(query: str) -> list[str]:
         "年轻人", "送礼", "露营", "泡咖啡", "咖啡", "便携", "轻量", "轻便", "多人", "三人",
         "一个人", "情侣", "家庭", "锅具", "炉具", "容量", "材质", "颜值", "场景",
     )
+    def add_token(value: str) -> None:
+        token = str(value or "").strip()
+        if not token or token in stopwords or not re.search(r"[\u4e00-\u9fffA-Za-z0-9]", token):
+            return
+        if token not in tokens:
+            tokens.append(token)
+
     for word in domain_words:
         if word in query:
-            tokens.append(word)
+            add_token(word)
     for item in raw:
         if item in stopwords:
             continue
         if len(item) >= 2:
-            tokens.append(item)
-    if len(tokens) <= 1:
-        for size in (4, 3, 2):
-            for index in range(0, max(len(query) - size + 1, 0)):
-                token = query[index:index + size].strip()
-                if token and token not in stopwords and re.search(r"[\u4e00-\u9fffA-Za-z0-9]", token):
-                    tokens.append(token)
-    return list(dict.fromkeys(tokens))[:12]
+            # Keep short Chinese terms and explicit non-Chinese terms intact.
+            # A long Chinese item is usually an entire natural-language clause;
+            # its character n-grams below are much more useful for recall.
+            if not re.fullmatch(r"[\u4e00-\u9fff]+", item) or len(item) <= 6:
+                add_token(item)
+
+    # Do not require the whole query to collapse to one token before falling
+    # back to n-grams. Chinese has no whitespace boundary, so a multi-clause
+    # question such as “想找能把一套餐具收在一起的收纳包” must expose generic
+    # terms like “餐具” and “收纳包” even when other clauses are present.
+    # Generate per contiguous Han run so punctuation/Latin SKU boundaries do
+    # not create artificial tokens. Three-character grams carry most meaning;
+    # two-character grams cover compact catalogue terms such as 水杯/收纳.
+    han_runs = re.findall(r"[\u3400-\u4dbf\u4e00-\u9fff]+", query)
+    for size in (3, 2):
+        for run in han_runs:
+            for index in range(0, max(len(run) - size + 1, 0)):
+                add_token(run[index:index + size])
+
+    # Bound SQL predicate growth while retaining all short terms and a useful
+    # spread of n-grams from natural questions. This is language-agnostic
+    # tokenization, not a product/category vocabulary or a routing rule.
+    return tokens[:32]
 
 
 def _keyword_score(query: str, tokens: list[str], content: str) -> float:

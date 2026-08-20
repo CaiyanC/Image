@@ -1,15 +1,17 @@
-# 智能客服正式上线检查清单
+# 语义 RAG 智能客服正式上线检查清单
 
 ## 目标
 
-正式上线前，每次修改智能客服、产品导入、QA 导入、向量同步、确认修改/删除流程后，都要跑一遍回归测试集。
+正式上线前，以 Flash 语义理解、RAG 召回/重排和同 SKU 事实绑定为主链完成开发环境验收。旧版固定词、答案字数、平均分和规则路由测试不再作为发布依据。
 
 ## 自动测试
 
-### 1. 基础单元测试
+### 1. 当前语义 RAG 单元测试
 
 ```powershell
-$env:PYTHONPATH='backend'; python -m unittest backend.tests.test_customer_agent_service backend.tests.test_agent_action_service backend.tests.test_product_service backend.tests.test_product_vector_index_service backend.tests.test_agent_trace_service backend.tests.test_customer_service_regression_cases
+cd backend
+$env:PYTHONPATH='.'
+python -m pytest tests/test_customer_semantic_rag_recall.py tests/test_semantic_rag_deep_audit.py tests/test_semantic_rag_release_gate.py -q
 ```
 
 ### 2. 前端构建
@@ -19,47 +21,32 @@ cd frontend
 npm run build
 ```
 
-### 3. 智能客服真实接口回归
+### 3. 开发环境真实 HTTP 深度抽检
 
-先启动后端，然后准备登录 token：
+只允许对开发后端 `8001` 执行。脚本会覆盖自然问法、推荐、对比、上下文、知识库、安全和普通/SSE 一致性，并保存完整答案与 trace：
 
 ```powershell
-$env:CUSTOMER_SERVICE_TOKEN="你的登录 token"
-python scripts/customer_service_regression_runner.py --base-url http://127.0.0.1:8001
+cd backend
+python scripts/semantic_rag_deep_audit.py http://127.0.0.1:8001
 ```
 
-只检查测试集格式：
+逐条人工检查报告中的答案可用性与事实一致性后，再执行当前 RAG 离线发布门槛：
 
 ```powershell
-python scripts/customer_service_regression_runner.py --dry-run
-```
-
-只跑前 5 条快速冒烟：
-
-```powershell
-python scripts/customer_service_regression_runner.py --limit 5
+python scripts/semantic_rag_release_gate.py reports/semantic_rag_deep_audit_YYYYMMDD_HHMMSS.json
 ```
 
 ## 通过标准
 
-- 单元测试全部通过。
+- Flash 完成语义计划，不能以旧关键词路由替代正常自然问法理解。
+- 商品结果、公开证据、最终答案审计必须保持同 SKU 绑定。
+- 容量、重量、功率、热源等硬事实与开发库及 RAG evidence 一致，不能在润色时升级成无依据结论。
+- 推荐、对比和多轮追问中的商品身份连续且可解释；无匹配时不得发布候选 SKU。
+- 安全问题不采纳提示注入或危险指令，知识缺口要明确说明。
+- 普通接口与 SSE 的答案和 `result_skus` 一致。
+- 深度抽检报告逐条人工复核可用，且 `semantic_rag_release_gate.py` 通过。
 - 前端构建通过。
-- 回归测试平均分 `>= 0.90`。
-- 写库类问题只生成待确认动作，不直接承诺已修改。
-- 修改/删除确认后，知识库/向量同步结果要进入动作结果；失败不能阻断主写库，但必须记录 error。
-- 推荐类问题必须有依据和查询结果，不能复读上一轮无关场景。
 
-## 当前测试集覆盖
+## 发布边界
 
-测试集位置：`docs/customer_service_regression_cases.json`
-
-覆盖范围：
-
-- 模糊推荐：露营、泡咖啡、四人做饭、送礼、单人徒步。
-- 多轮上下文：这些、他的、切换场景、不锁旧 SKU。
-- 产品详情：按名称、SKU、缺失 SKU 查询。
-- 产品对比：显式 SKU 对比、上一轮候选继续对比。
-- 写库动作：修改、批量修改、删除产品、清空字段。
-- 数据质量：尺寸 unit、缺失资料不编造。
-- 安全风控：不能绕过确认、不能编造库存价格。
-- 前端体验：回答后必须有来源和查询结果。
+未经明确“发布”或“更新生产”，不得合并 `master`、重启生产服务或访问生产后端 `8000` 做写操作。开发验收通过也不自动授权发布。

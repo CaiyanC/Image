@@ -2,6 +2,7 @@ import unittest
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
+from fastapi import HTTPException
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
@@ -164,6 +165,18 @@ class ProductServiceVectorSyncTest(unittest.TestCase):
         self.assertTrue(product_service.get_product_by_sku(self.db, "PENDING-1").sync_flag)
         self.assertFalse(product_service.get_product_by_sku(self.db, "FAILED-1").sync_flag)
 
+    def test_update_product_rejects_sku_rename(self):
+        with self.assertRaises(HTTPException) as raised:
+            product_service.update_product(
+                self.db,
+                "PENDING-1",
+                {"sku": "RENAMED-1", "product_name_cn": "新名称"},
+            )
+
+        self.assertEqual(raised.exception.status_code, 400)
+        self.assertIsNotNone(product_service.get_product_by_sku(self.db, "PENDING-1"))
+        self.assertIsNone(product_service.get_product_by_sku(self.db, "RENAMED-1"))
+
     def test_sync_product_preserves_file_knowledge_for_same_sku(self):
         file_document = KnowledgeDocument(
             id="file-document",
@@ -194,11 +207,12 @@ class ProductServiceVectorSyncTest(unittest.TestCase):
                 product_service.product_vector_index_service,
                 "embed_pending_chunks",
                 new=AsyncMock(return_value={"total": 0, "embedded": 0, "failed": 0}),
-            ),
+            ) as embed_pending,
         ):
             result = product_service.sync_product_to_vector_db(self.db, "PENDING-1")
 
         self.assertNotIn("error", result)
+        embed_pending.assert_awaited_once_with(self.db, sku="PENDING-1")
         self.assertIsNotNone(self.db.get(KnowledgeDocument, file_document.id))
         self.assertIsNotNone(self.db.get(KnowledgeChunk, file_chunk.id))
 
@@ -296,6 +310,18 @@ class ProductServiceSpecsUpdateTest(unittest.TestCase):
                 },
             },
         )
+        product = product_service.get_product_by_sku(self.db, "SPECS-JSON-1")
+        self.qa = ProductQa(
+            id="specs-json-approved-qa",
+            product_id=product.id,
+            question="容量是多少？",
+            answer="容量为1000ML。",
+            integrity_status="approved",
+            integrity_reason="previous semantic audit",
+            integrity_model="deepseek-v4-flash",
+        )
+        self.db.add(self.qa)
+        self.db.commit()
 
     def tearDown(self):
         customer_cache_service.product_detail_cache.clear()
@@ -325,6 +351,31 @@ class ProductServiceSpecsUpdateTest(unittest.TestCase):
 
         detail_after_update = product_service.get_product_detail(self.db, "SPECS-JSON-1")
         self.assertEqual(detail_after_update["specs"]["capacity"], [{"label": "锅", "value": "2000ML"}])
+        self.db.refresh(self.qa)
+        self.assertEqual(self.qa.integrity_status, "review")
+        self.assertIsNone(self.qa.integrity_reason)
+        self.assertIsNone(self.qa.integrity_model)
+        self.assertIsNone(self.qa.integrity_audited_at)
+
+    def test_same_specs_value_does_not_reopen_approved_qa(self):
+        product_service.update_product_specs(
+            self.db,
+            "SPECS-JSON-1",
+            {"capacity": [{"label": "锅", "value": "1000ML"}]},
+        )
+
+        self.db.refresh(self.qa)
+        self.assertEqual(self.qa.integrity_status, "approved")
+
+    def test_identity_update_reopens_qa_against_new_same_sku_evidence(self):
+        product_service.update_product(
+            self.db,
+            "SPECS-JSON-1",
+            {"product_name_cn": "规格更新后的测试产品"},
+        )
+
+        self.db.refresh(self.qa)
+        self.assertEqual(self.qa.integrity_status, "review")
 
 
 class ProductImportSafetyTest(unittest.TestCase):

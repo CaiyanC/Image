@@ -1452,6 +1452,65 @@ def test_semantic_subject_text_binds_water_cup_subtype_for_same_sku_scope():
     assert "subject_subtype_mismatch" in kettle.rejection_reasons
 
 
+def test_semantic_untyped_subject_leaves_catalogue_scope_to_same_sku_coverage():
+    contract = build_semantic_recommendation_request_contract(
+        question="户外餐具收纳包有推荐吗？",
+        semantic_constraints={},
+        predicate_constraints=[],
+        semantic_subject_text="户外餐具收纳包",
+    )
+
+    assert contract is not None
+    assert contract.subject_category is None
+    assert contract.subject_scope_open is True
+    match = verify_recommendation_candidates(
+        contract,
+        [
+            _row(
+                "BAG",
+                category="配件",
+                product_name_cn="29L户外收纳包",
+                title_cn="户外炊具餐具收纳包",
+            ),
+        ],
+    )[0]
+
+    assert match.subject_eligible is True
+    assert match.verification_level == "fully_verified"
+
+
+def test_selector_can_preserve_rag_input_order_after_fact_verification():
+    rows = [_row("RAG-FIRST"), _row("RAG-SECOND")]
+    verifications = [
+        CandidateVerification(
+            sku="RAG-FIRST",
+            subject_eligible=True,
+            hard_constraints_passed=True,
+            verification_level="fully_verified",
+        ),
+        CandidateVerification(
+            sku="RAG-SECOND",
+            subject_eligible=True,
+            hard_constraints_passed=True,
+            verification_level="fully_verified",
+            verified_preferences=["weight"],
+        ),
+    ]
+
+    assert [row["sku"] for row in select_recommendation_candidates(rows, verifications)] == [
+        "RAG-SECOND",
+        "RAG-FIRST",
+    ]
+    assert [
+        row["sku"]
+        for row in select_recommendation_candidates(
+            rows,
+            verifications,
+            preserve_input_order=True,
+        )
+    ] == ["RAG-FIRST", "RAG-SECOND"]
+
+
 def test_semantic_recommendation_verifies_people_and_heat_source_on_same_sku():
     question = "\u4e24\u4e2a\u4eba\u7528\uff0c\u5e76\u4e14\u652f\u6301\u9152\u7cbe\u7089"
     contract = build_semantic_recommendation_request_contract(
@@ -1521,6 +1580,49 @@ def test_semantic_recommendation_accepts_flash_heat_source_ontology_value():
 
     assert matched.evidence_by_constraint["predicate:0:heat_source"]["status"] == "verified"
     assert wrong_source.verification_level == "rejected"
+
+
+def test_semantic_recommendation_binds_gas_stove_enum_to_natural_qi_stove_exclusion():
+    question = "三个人露营想买锅，只要明确支持酒精炉的，不要气炉，推荐一款。"
+    contract = build_semantic_recommendation_request_contract(
+        question=question,
+        semantic_constraints={"subject_kind": "cookware"},
+        predicate_constraints=[
+            {
+                "field": "heat_source",
+                "operator": "supports",
+                "value": "alcohol_stove",
+                "unit": "",
+                "evidence_span": "明确支持酒精炉",
+            },
+            {
+                "field": "heat_source",
+                "operator": "not_supports",
+                "value": "gas_stove",
+                "unit": "",
+                "evidence_span": "不要气炉",
+            },
+        ],
+    )
+
+    assert contract is not None
+    assert [item["value"] for item in contract.predicate_constraints] == [
+        "alcohol_stove",
+        "gas_stove",
+    ]
+    matched, mixed_heat_sources, gas_only = verify_recommendation_candidates(
+        contract,
+        [
+            _row("MATCH", heat_source="酒精炉"),
+            _row("MIXED", heat_source="酒精炉\n气炉"),
+            _row("GAS", heat_source="气炉"),
+        ],
+    )
+
+    assert matched.verification_level == "fully_verified"
+    assert mixed_heat_sources.verification_level == "rejected"
+    assert gas_only.verification_level == "rejected"
+    assert "predicate:1:heat_source" in mixed_heat_sources.conflicts
 
 
 def test_semantic_recommendation_drops_predicate_whose_span_is_wrong_ontology():

@@ -205,6 +205,145 @@ class KnowledgeServiceTest(unittest.TestCase):
         self.assertEqual(rows[0]["metadata"]["related_skus"], ["CW-C93", "CS-B14"])
         self.assertEqual(rows[0]["metadata"]["document_id"], doc.id)
 
+    def test_keyword_retrieve_can_limit_results_to_recommendation_documents(self):
+        recommendation = KnowledgeDocument(
+            id="doc-recommendation",
+            source_type="product",
+            source_id="product:CUP-1:recommendation",
+            sku="CUP-1",
+            title="CUP-1 recommendation",
+            content="small outdoor drinking cup",
+        )
+        profile = KnowledgeDocument(
+            id="doc-profile",
+            source_type="product",
+            source_id="product:POT-1:profile",
+            sku="POT-1",
+            title="POT-1 profile",
+            content="small outdoor drinking cup mentioned in a pot profile",
+        )
+        self.db.add_all([recommendation, profile])
+        self.db.add_all([
+            KnowledgeChunk(
+                id="chunk-recommendation",
+                document_id=recommendation.id,
+                sku="CUP-1",
+                source_type="product",
+                chunk_index=0,
+                content=recommendation.content,
+                embedding_status="pending",
+            ),
+            KnowledgeChunk(
+                id="chunk-profile",
+                document_id=profile.id,
+                sku="POT-1",
+                source_type="product",
+                chunk_index=0,
+                content=profile.content,
+                embedding_status="pending",
+            ),
+        ])
+        self.db.commit()
+
+        rows = knowledge_service.keyword_retrieve(
+            self.db,
+            "outdoor drinking cup",
+            limit=5,
+            sections=["recommendation"],
+        )
+
+        self.assertEqual([row["sku"] for row in rows], ["CUP-1"])
+
+    def test_keyword_retrieve_uses_generic_cjk_ngrams_for_natural_product_questions(self):
+        documents = [
+            KnowledgeDocument(
+                id="doc-bag-29l",
+                source_type="product",
+                source_id="product:AC-Z07:recommendation",
+                sku="AC-Z07",
+                title="29L outdoor storage bag",
+                content="户外收纳包，含厨具餐具包，支持分类收纳和多隔层整理。",
+            ),
+            KnowledgeDocument(
+                id="doc-bag-17l",
+                source_type="product",
+                source_id="product:AC-Z09:recommendation",
+                sku="AC-Z09",
+                title="17L outdoor storage pouch",
+                content="户外收纳袋，适合收纳餐具包，可分类整理户外用品。",
+            ),
+            KnowledgeDocument(
+                id="doc-cup-tw502",
+                source_type="product",
+                source_id="product:TW-502:recommendation",
+                sku="TW-502",
+                title="small outdoor cup",
+                content="户外水杯，小杯子，便于随身携带和饮水。",
+            ),
+            KnowledgeDocument(
+                id="doc-cup-t13",
+                source_type="product",
+                source_id="product:CT-T13:recommendation",
+                sku="CT-T13",
+                title="compact drinking cup",
+                content="便携水杯，适合户外饮水，占用空间较小。",
+            ),
+        ]
+        self.db.add_all(documents)
+        self.db.add_all([
+            KnowledgeChunk(
+                id="chunk-bag-29l",
+                document_id="doc-bag-29l",
+                sku="AC-Z07",
+                source_type="product",
+                chunk_index=0,
+                content=documents[0].content,
+                embedding_status="pending",
+            ),
+            KnowledgeChunk(
+                id="chunk-bag-17l",
+                document_id="doc-bag-17l",
+                sku="AC-Z09",
+                source_type="product",
+                chunk_index=0,
+                content=documents[1].content,
+                embedding_status="pending",
+            ),
+            KnowledgeChunk(
+                id="chunk-cup-tw502",
+                document_id="doc-cup-tw502",
+                sku="TW-502",
+                source_type="product",
+                chunk_index=0,
+                content=documents[2].content,
+                embedding_status="pending",
+            ),
+            KnowledgeChunk(
+                id="chunk-cup-t13",
+                document_id="doc-cup-t13",
+                sku="CT-T13",
+                source_type="product",
+                chunk_index=0,
+                content=documents[3].content,
+                embedding_status="pending",
+            ),
+        ])
+        self.db.commit()
+
+        bag_rows = knowledge_service.keyword_retrieve(
+            self.db,
+            "户外餐具收纳包有推荐吗？我想要能把一套餐具收在一起的。",
+            limit=5,
+        )
+        cup_rows = knowledge_service.keyword_retrieve(
+            self.db,
+            "户外喝水用的小杯子，有没有不占地方的？",
+            limit=5,
+        )
+
+        self.assertTrue({"AC-Z07", "AC-Z09"}.issubset({row["sku"] for row in bag_rows}))
+        self.assertTrue({"TW-502", "CT-T13"}.issubset({row["sku"] for row in cup_rows}))
+
 
 if __name__ == "__main__":
     unittest.main()

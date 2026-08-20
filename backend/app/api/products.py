@@ -37,7 +37,7 @@ ALLOWED_PRODUCT_VIDEO_SUFFIXES = {".mp4", ".mov", ".webm"}
 ALLOWED_PRODUCT_VIDEO_MIME_TYPES = {"video/mp4", "video/quicktime", "video/webm"}
 
 
-async def _audit_review_product_qas(db: Session, product) -> list[dict[str, str]]:
+async def _audit_review_product_qas(db: Session, product, current_user: User) -> list[dict[str, str]]:
     """Semantically audit review-state QA before it can enter customer retrieval."""
     qa_items = [
         item
@@ -46,7 +46,12 @@ async def _audit_review_product_qas(db: Session, product) -> list[dict[str, str]
     ]
     verdicts = []
     for qa in qa_items:
-        verdict = await product_qa_integrity_service.audit_product_qa_item(db, product, qa)
+        verdict = await product_qa_integrity_service.audit_product_qa_item(
+            db,
+            product,
+            qa,
+            user=current_user,
+        )
         verdicts.append({"qa_id": str(qa.id), **verdict})
     if qa_items:
         db.commit()
@@ -182,7 +187,7 @@ async def create_product(
     product = product_service.create_product(
         db, product_data.model_dump(), creator_id=current_user.id
     )
-    await _audit_review_product_qas(db, product)
+    await _audit_review_product_qas(db, product, current_user)
     after_data = product_service.get_product_detail(db, product.sku)
     log = operation_log_service.log_operation(
         db,
@@ -202,7 +207,7 @@ async def create_product(
 
 
 @router.put("/{sku}")
-def update_product(
+async def update_product(
     sku: str,
     product_update: ProductUpdate,
     request: Request,
@@ -212,6 +217,7 @@ def update_product(
     payload = product_update.model_dump(exclude_unset=True)
     before_data = _snapshot_product_detail(db, sku)
     product = product_service.update_product(db, sku, payload)
+    await _audit_review_product_qas(db, product, current_user)
     after_data = product_service.get_product_detail(db, product.sku)
     log = operation_log_service.log_operation(
         db,
@@ -252,7 +258,7 @@ async def update_product_full(
         body,
         creator_id=current_user.id,
     )
-    await _audit_review_product_qas(db, product)
+    await _audit_review_product_qas(db, product, current_user)
     after_data = product_service.get_product_detail(db, product.sku)
     log = operation_log_service.log_operation(
         db,
@@ -343,7 +349,7 @@ def _record_product_snapshot(
 
 
 @router.put("/{sku}/specs")
-def update_product_specs(
+async def update_product_specs(
     sku: str,
     body: dict,
     request: Request,
@@ -352,6 +358,8 @@ def update_product_specs(
 ):
     before_data = _snapshot_product_detail(db, sku)
     result = product_service.update_product_specs(db, sku, body)
+    product = product_service.get_product_by_sku(db, sku)
+    await _audit_review_product_qas(db, product, current_user)
     after_data = _snapshot_product_detail(db, sku)
     log = operation_log_service.log_operation(
         db,
@@ -365,15 +373,14 @@ def update_product_specs(
         request=request,
     )
     _record_product_snapshot(db, log, current_user.id, sku, "update", before_data, after_data)
-    # Auto-sync affected products to vector DB
-    for item in result.get("results", []):
-        if item.get("status") == "success":
-            product_service.sync_product_to_vector_db(db, item["sku"])
+    # Reindex only after the refreshed QA verdicts are persisted, so an old
+    # approved chunk cannot outlive the product evidence that invalidated it.
+    product_service.sync_product_to_vector_db(db, sku)
     return result
 
 
 @router.put("/{sku}/business")
-def update_product_business(
+async def update_product_business(
     sku: str,
     body: dict,
     request: Request,
@@ -382,6 +389,8 @@ def update_product_business(
 ):
     before_data = _snapshot_product_detail(db, sku)
     result = product_service.update_product_business(db, sku, body)
+    product = product_service.get_product_by_sku(db, sku)
+    await _audit_review_product_qas(db, product, current_user)
     after_data = _snapshot_product_detail(db, sku)
     log = operation_log_service.log_operation(
         db,
@@ -395,15 +404,12 @@ def update_product_business(
         request=request,
     )
     _record_product_snapshot(db, log, current_user.id, sku, "update", before_data, after_data)
-    # Auto-sync affected products to vector DB
-    for item in result.get("results", []):
-        if item.get("status") == "success":
-            product_service.sync_product_to_vector_db(db, item["sku"])
+    product_service.sync_product_to_vector_db(db, sku)
     return result
 
 
 @router.put("/{sku}/content")
-def update_product_content(
+async def update_product_content(
     sku: str,
     body: dict,
     request: Request,
@@ -412,6 +418,8 @@ def update_product_content(
 ):
     before_data = _snapshot_product_detail(db, sku)
     result = product_service.update_product_content(db, sku, body)
+    product = product_service.get_product_by_sku(db, sku)
+    await _audit_review_product_qas(db, product, current_user)
     after_data = _snapshot_product_detail(db, sku)
     log = operation_log_service.log_operation(
         db,
@@ -425,10 +433,7 @@ def update_product_content(
         request=request,
     )
     _record_product_snapshot(db, log, current_user.id, sku, "update", before_data, after_data)
-    # Auto-sync affected products to vector DB
-    for item in result.get("results", []):
-        if item.get("status") == "success":
-            product_service.sync_product_to_vector_db(db, item["sku"])
+    product_service.sync_product_to_vector_db(db, sku)
     return result
 
 
@@ -473,7 +478,7 @@ async def import_qa_batch(
         if item.get("status") == "success":
             product = product_service.get_product_by_sku(db, item["sku"])
             if product is not None:
-                item["integrity_audit"] = await _audit_review_product_qas(db, product)
+                item["integrity_audit"] = await _audit_review_product_qas(db, product, current_user)
             product_service.sync_product_to_vector_db(db, item["sku"])
     return result
 
@@ -488,7 +493,7 @@ async def add_qa(
 ):
     qa = product_service.add_qa_item(db, sku, body.model_dump())
     product = product_service.get_product_by_sku(db, sku)
-    await product_qa_integrity_service.audit_product_qa_item(db, product, qa)
+    await product_qa_integrity_service.audit_product_qa_item(db, product, qa, user=current_user)
     db.commit()
     product_service.invalidate_product_detail_cache(db, sku)
     operation_log_service.log_operation(
@@ -519,7 +524,7 @@ async def update_qa(
     if product is None or not any(str(item.id) == str(qa_id) for item in product_service.get_qa_items(db, sku)):
         raise HTTPException(status_code=404, detail="QA item not found for product")
     qa = product_service.update_qa_item(db, qa_id, body)
-    await product_qa_integrity_service.audit_product_qa_item(db, product, qa)
+    await product_qa_integrity_service.audit_product_qa_item(db, product, qa, user=current_user)
     db.commit()
     product_service.invalidate_product_detail_cache(db, sku)
     operation_log_service.log_operation(

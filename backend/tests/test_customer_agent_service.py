@@ -9955,6 +9955,33 @@ class CustomerServiceServiceTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(meta["recommendation_context"]["recommended_skus"], ["CW-S10-A"])
         self.assertEqual(meta["recommendation_context"]["product_scope"], "\u9505")
 
+    def test_category_clarification_promotes_pending_scope_into_recommendation_context(self):
+        sources = customer_service_service._sources_with_result_context(
+            {
+                "intent": "recommendation",
+                "answer_type": "clarification",
+                "needs_clarification": True,
+                "answer": "请再说明想看的品类。",
+                "results": [],
+                "sources": [],
+            },
+            user_question="锅具",
+            inherited_recommendation_context={
+                "recommended_skus": ["AC-Z14"],
+                "ordered_result_skus": ["AC-Z14"],
+                "product_scope": "配件",
+                "user_question": "送新手一件露营礼物",
+            },
+        )
+
+        meta = next(item for item in sources if item.get("type") == "agent_meta")
+        self.assertEqual(meta["pending_clarification_context"]["product_scope"], "锅具")
+        self.assertEqual(meta["recommendation_context"]["product_scope"], "锅具")
+        self.assertEqual(
+            meta["recommendation_context"]["scope_context_source"],
+            "pending_clarification_context",
+        )
+
     def test_latest_recommendation_context_reads_agent_meta_before_agent_context(self):
         conversation = CustomerServiceConversation(id="conv-recommendation-context-order", user_id="user-1", title="推荐会话")
         self.db.add(conversation)

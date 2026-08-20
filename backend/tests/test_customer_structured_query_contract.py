@@ -15,7 +15,7 @@ from app.services.customer_structured_query_contract import (
     resolve_structured_subject_scope,
     validate_structured_evidence,
 )
-from test_customer_service_route_level_regression import _add_product, route_client_and_db
+from customer_service_test_support import _add_product
 
 
 @pytest.fixture(autouse=True)

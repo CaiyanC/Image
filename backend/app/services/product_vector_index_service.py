@@ -3,7 +3,7 @@ import json
 import uuid
 from typing import Any
 
-from sqlalchemy import text
+from sqlalchemy import or_, text
 from sqlalchemy.orm import Session
 
 from ..models.knowledge_base import KnowledgeChunk, KnowledgeDocument
@@ -12,6 +12,7 @@ from . import dmxapi_service, product_service
 
 
 PRODUCT_SOURCE_TYPE = "product"
+RECOMMENDATION_SECTION = "recommendation"
 
 
 def customer_visible_usage_instruction(
@@ -48,6 +49,10 @@ def build_product_documents(detail: dict[str, Any]) -> list[dict[str, Any]]:
         return []
 
     docs: list[dict[str, Any]] = []
+
+    recommendation_doc = build_product_recommendation_document(detail)
+    if recommendation_doc:
+        docs.append(recommendation_doc)
 
     profile_lines = _compact_lines([
         ("SKU", sku),
@@ -153,6 +158,66 @@ def build_product_documents(detail: dict[str, Any]) -> list[dict[str, Any]]:
     return [item for item in docs if item["content"].strip()]
 
 
+def build_product_recommendation_document(
+    detail: dict[str, Any],
+) -> dict[str, Any] | None:
+    """Build one compact retrieval-only document for a catalogue SKU.
+
+    The document makes product identity, form, use, audience and maintained
+    specifications available to semantic recall. It is not an answer evidence
+    source; customer-service verification still binds claims to the product row.
+    """
+    sku = str(detail.get("sku") or "").strip()
+    if not sku:
+        return None
+
+    specs = dict(detail.get("specs") or {})
+    business = dict(detail.get("business") or {})
+    content = dict(detail.get("content") or {})
+    lines = _compact_lines([
+        ("SKU", sku),
+        ("商品名称", detail.get("product_name_cn")),
+        ("英文名称", detail.get("product_name_en")),
+        ("商品类目", detail.get("category")),
+        ("商品子类", detail.get("sub_category")),
+        ("系列", detail.get("series")),
+        ("中文标题", content.get("title_cn")),
+        ("官网标题", content.get("website_title")),
+        ("Amazon 标题", content.get("amazon_title")),
+        ("检索关键词", content.get("search_keywords")),
+        # Content is included here as semantic recall context.  The document
+        # remains retrieval-only (fact_authority=False); final answers still
+        # bind claims to the live same-SKU evidence packet.
+        ("中文描述", content.get("long_description_cn")),
+        ("英文描述", content.get("long_description_en")),
+        ("中文 Listing", content.get("listing_cn")),
+        ("英文 Listing", content.get("listing_en")),
+        ("五点描述", content.get("bullet_points")),
+        ("核心卖点", business.get("top_selling_points")),
+        ("商品定位", business.get("positioning")),
+        ("使用场景", business.get("usage_scenarios")),
+        ("目标人群", business.get("target_audience")),
+        ("容量", specs.get("capacity")),
+        ("尺寸", specs.get("size_info")),
+        ("重量", specs.get("gross_weight_g")),
+        ("材质", specs.get("body_material")),
+        ("表面工艺", specs.get("surface_finish")),
+        ("适用热源", specs.get("heat_source")),
+    ])
+    if not lines:
+        return None
+    return _doc(
+        sku,
+        RECOMMENDATION_SECTION,
+        f"{sku} 推荐召回画像",
+        lines,
+        metadata={
+            "retrieval_role": "recommendation_candidate_recall",
+            "fact_authority": False,
+        },
+    )
+
+
 def index_all_products(db: Session) -> dict[str, int]:
     products = db.query(Product).order_by(Product.sku.asc()).all()
     indexed = 0
@@ -164,6 +229,59 @@ def index_all_products(db: Session) -> dict[str, int]:
         documents += result["documents"]
         chunks += result["chunks"]
     return {"products": indexed, "documents": documents, "chunks": chunks}
+
+
+def index_all_product_recommendations(db: Session) -> dict[str, int]:
+    products = db.query(Product).order_by(Product.sku.asc()).all()
+    indexed = 0
+    for product in products:
+        result = index_product_recommendation(db, product.sku)
+        indexed += result["documents"]
+    return {"products": len(products), "documents": indexed, "chunks": indexed}
+
+
+def index_product_recommendation(db: Session, sku: str) -> dict[str, int]:
+    detail = product_service.get_product_detail(db, sku)
+    item = build_product_recommendation_document(detail)
+    if not item:
+        return {"documents": 0, "chunks": 0}
+
+    doc = db.query(KnowledgeDocument).filter(
+        KnowledgeDocument.source_type == PRODUCT_SOURCE_TYPE,
+        KnowledgeDocument.sku == sku,
+        KnowledgeDocument.source_id == item["source_id"],
+    ).first()
+    if not doc:
+        doc = KnowledgeDocument(
+            source_type=PRODUCT_SOURCE_TYPE,
+            source_id=item["source_id"],
+            sku=sku,
+            title=item["title"],
+            content=item["content"],
+            metadata_json=json.dumps(item["metadata"], ensure_ascii=False),
+        )
+        db.add(doc)
+        db.flush()
+    else:
+        doc.title = item["title"]
+        doc.content = item["content"]
+        doc.metadata_json = json.dumps(item["metadata"], ensure_ascii=False)
+        db.query(KnowledgeChunk).filter(
+            KnowledgeChunk.document_id == doc.id
+        ).delete()
+
+    db.add(KnowledgeChunk(
+        id=str(uuid.uuid4()),
+        document_id=doc.id,
+        sku=sku,
+        source_type=PRODUCT_SOURCE_TYPE,
+        chunk_index=0,
+        content=item["content"],
+        metadata_json=json.dumps(item["metadata"], ensure_ascii=False),
+        embedding_status="pending",
+    ))
+    db.commit()
+    return {"documents": 1, "chunks": 1}
 
 
 def index_product(db: Session, sku: str) -> dict[str, int]:
@@ -235,10 +353,33 @@ async def embed_pending_chunks(
     limit: int | None = None,
     model: str | None = None,
     document_id: str | None = None,
+    sku: str | None = None,
+    sections: list[str] | None = None,
 ) -> dict[str, int]:
     query = db.query(KnowledgeChunk).filter(KnowledgeChunk.embedding_status != "synced")
     if document_id:
         query = query.filter(KnowledgeChunk.document_id == document_id)
+    normalized_sku = str(sku or "").strip().upper()
+    if normalized_sku:
+        # Product updates replace only this SKU's product documents.  Keep the
+        # embedding worker scoped to the same identity so one QA edit cannot
+        # consume every pending chunk in the knowledge base.
+        query = query.filter(KnowledgeChunk.sku == normalized_sku)
+    normalized_sections = [
+        str(section or "").strip()
+        for section in (sections or [])
+        if str(section or "").strip()
+    ]
+    if normalized_sections:
+        query = query.join(
+            KnowledgeDocument,
+            KnowledgeDocument.id == KnowledgeChunk.document_id,
+        ).filter(
+            or_(*[
+                KnowledgeDocument.source_id.like(f"%:{section}")
+                for section in normalized_sections
+            ])
+        )
     chunks = query.order_by(KnowledgeChunk.updated_at.asc()).limit(limit).all() if limit else query.all()
     embedded = 0
     failed = 0
@@ -320,18 +461,40 @@ def run_embed_pending_chunks(
     limit: int | None = None,
     model: str | None = None,
     document_id: str | None = None,
+    sku: str | None = None,
+    sections: list[str] | None = None,
 ) -> dict[str, int]:
-    return asyncio.run(embed_pending_chunks(db, limit=limit, model=model, document_id=document_id))
+    return asyncio.run(embed_pending_chunks(
+        db,
+        limit=limit,
+        model=model,
+        document_id=document_id,
+        sku=sku,
+        sections=sections,
+    ))
 
 
-def _doc(sku: str, section: str, title: str, lines: list[str]) -> dict[str, Any]:
+def _doc(
+    sku: str,
+    section: str,
+    title: str,
+    lines: list[str],
+    *,
+    metadata: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     source_id = f"product:{sku}:{section}"
     return {
         "source_id": source_id,
         "sku": sku,
         "title": title,
         "content": "\n".join(line for line in lines if line).strip(),
-        "metadata": {"sku": sku, "section": section, "title": title, "source_id": source_id},
+        "metadata": {
+            "sku": sku,
+            "section": section,
+            "title": title,
+            "source_id": source_id,
+            **(metadata or {}),
+        },
     }
 
 

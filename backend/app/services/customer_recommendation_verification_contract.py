@@ -13,6 +13,13 @@ class RecommendationRequestContract:
     subject_category: str | None = None
     subject_kind: str | None = None
     subject_subtype: str | None = None
+    # A semantic recommendation may carry a meaning-bearing subject_text
+    # without Flash confidently assigning one of the closed catalogue kinds.
+    # In that case the semantic coverage model must adjudicate product form
+    # from the same-SKU packet; the structured verifier must not silently
+    # treat an accessory row as a conflict merely because no typed scope was
+    # supplied.
+    subject_scope_open: bool = False
     excluded_categories: list[str] = field(default_factory=list)
     scenario: list[str] = field(default_factory=list)
     people_min: int | None = None
@@ -588,13 +595,25 @@ _SEMANTIC_TEXT_PREDICATE_FIELDS = {
 # adapter, not an intent router: it only proves that a typed heat-source value
 # such as ``alcohol_stove`` is anchored by the current-turn phrase ``酒精炉``.
 _SEMANTIC_HEAT_SOURCE_LABELS = {
-    "card_stove": "卡式炉",
-    "gas_stove": "燃气炉",
-    "alcohol_stove": "酒精炉",
-    "open_flame": "明火",
-    "charcoal": "炭火",
-    "induction": "电磁炉",
+    # Flash emits the stable enum; the customer can use an ordinary Chinese
+    # variant such as “气炉”.  These are typed schema aliases used only to
+    # bind that enum to the customer's evidence and the same-SKU heat field;
+    # they are not an intent or route detector.
+    "card_stove": ("卡式炉", "卡式灶"),
+    "gas_stove": ("燃气炉", "燃气灶", "气炉", "气灶"),
+    "alcohol_stove": ("酒精炉", "酒精灶"),
+    "open_flame": ("明火", "明火直烧"),
+    "charcoal": ("炭火", "木炭", "竹炭"),
+    "induction": ("电磁炉", "电磁灶"),
 }
+
+
+def _semantic_heat_source_labels(value: Any) -> tuple[str, ...]:
+    canonical = str(value or "").strip()
+    labels = _SEMANTIC_HEAT_SOURCE_LABELS.get(canonical)
+    if labels:
+        return tuple(labels)
+    return (canonical,) if canonical else ()
 
 
 def _semantic_predicate_span_anchors_field(
@@ -626,11 +645,10 @@ def _semantic_predicate_span_anchors_field(
     if field_name == "waterproof":
         return "防水" in span or "不防水" in span
     if field_name == "heat_source":
-        expected = _SEMANTIC_HEAT_SOURCE_LABELS.get(
-            str(normalized_value or "").strip(),
-            str(normalized_value or "").strip(),
+        return any(
+            label.casefold() in span
+            for label in _semantic_heat_source_labels(normalized_value)
         )
-        return bool(expected and expected.casefold() in span)
     if isinstance(normalized_value, str):
         normalized_text = normalized_value.strip().casefold()
         return bool(normalized_text and normalized_text in span)
@@ -743,6 +761,11 @@ def build_semantic_recommendation_request_contract(
             "source_turn": 1,
             "provenance": "validated_semantic_subject",
         }
+    if not contract.subject_category and not contract.subject_kind:
+        # Keep an untyped semantic subject open for RAG recall and Flash's
+        # same-SKU product-form adjudication. This is a contract state, not a
+        # lexical fallback to a guessed product category.
+        contract.subject_scope_open = True
     raw_predicates = predicate_constraints or []
     if not isinstance(raw_predicates, list) or len(raw_predicates) > 8:
         return None
@@ -1481,6 +1504,9 @@ def _subject_evidence(contract: RecommendationRequestContract, row: dict[str, An
         evidence["status"] = "conflict"
         evidence["excluded_category"] = list(contract.excluded_categories)
         return False, evidence, "excluded_category"
+    if contract.subject_scope_open:
+        evidence["scope"] = "semantic_open"
+        return True, evidence, None
     if contract.subject_category == "配件":
         if scope == "accessory" or "配件" in category:
             if contract.subject_subtype == "storage_bag":
@@ -1655,8 +1681,24 @@ def _condition(status: str, source: str = "", raw: Any = None, **extra: Any) -> 
 
 def _compare_semantic_predicate(actual: Any, operator: str, target: Any) -> bool:
     if operator == "not_supports":
-        return str(target or "").casefold() not in str(actual or "").casefold()
-    if operator in {"contains", "supports", "="} and not isinstance(target, (int, float, list)):
+        actual_text = str(actual or "").casefold()
+        labels = (
+            tuple(target)
+            if isinstance(target, (list, tuple, set))
+            else (str(target or ""),)
+        )
+        return bool(labels and any(label.strip() for label in labels)) and not any(
+            str(label or "").strip().casefold() in actual_text
+            for label in labels
+        )
+    if operator == "supports" and isinstance(target, (list, tuple, set)):
+        actual_text = str(actual or "").casefold()
+        return any(
+            str(label or "").strip().casefold() in actual_text
+            for label in target
+            if str(label or "").strip()
+        )
+    if operator in {"contains", "supports", "="} and not isinstance(target, (int, float, list, tuple, set)):
         actual_text = str(actual or "").casefold().replace("粘", "沾")
         target_text = str(target or "").casefold().replace("粘", "沾")
         return bool(target_text and target_text in actual_text)
@@ -1685,14 +1727,12 @@ def _semantic_predicate_evidence(
     field_name = str(predicate.get("field") or "")
     operator = str(predicate.get("operator") or "")
     target = predicate.get("value")
+    comparison_target = target
     if field_name == "heat_source":
         # The planner's closed ontology is intentionally kept separate from
         # the catalogue's Chinese evidence text.  Normalize only this typed
         # relation before comparing; do not reinterpret any free-form request.
-        target = _SEMANTIC_HEAT_SOURCE_LABELS.get(
-            str(target or "").strip(),
-            target,
-        )
+        comparison_target = _semantic_heat_source_labels(target)
     source_map = {
         "material": "body_material",
         "surface_finish": "surface_finish",
@@ -1760,7 +1800,7 @@ def _semantic_predicate_evidence(
             actual = normalized in {"true", "1", "yes", "是"}
     if actual is None or not _usable(raw):
         return _condition("unknown", source, raw, target=target, operator=operator)
-    matched = _compare_semantic_predicate(actual, operator, target)
+    matched = _compare_semantic_predicate(actual, operator, comparison_target)
     if not matched and field_name in _SEMANTIC_TEXT_PREDICATE_FIELDS:
         return _condition(
             "unknown",
@@ -2153,6 +2193,7 @@ def select_recommendation_candidates(
     verifications: list[CandidateVerification],
     *,
     retain_non_conflicting_partials: bool = False,
+    preserve_input_order: bool = False,
 ) -> list[dict[str, Any]]:
     verification_by_sku = {item.sku: item for item in verifications}
     fully_verified = [
@@ -2193,7 +2234,19 @@ def select_recommendation_candidates(
         ).issubset(safe_partial_unknowns)
     ]
     if not fully_verified:
-        return safe_partials
+        selected_rows = safe_partials
+        if preserve_input_order:
+            selected_skus = {
+                str(row.get("sku") or "").strip().upper()
+                for row in selected_rows
+                if str(row.get("sku") or "").strip()
+            }
+            return [
+                row
+                for row in candidate_rows
+                if str(row.get("sku") or "").strip().upper() in selected_skus
+            ]
+        return selected_rows
     # A missing people-range label is safe to disclose as uncertainty behind a
     # fully verified candidate.  Missing heat-source, material, capacity, or
     # other safety-relevant hard evidence must not be reinserted when a fully
@@ -2213,8 +2266,21 @@ def select_recommendation_candidates(
         # only non-conflicting rows; the gate and the narrative still receive
         # the uncertainty and must phrase the conclusion conditionally.
         non_conflicting_partials = safe_partials
-        return [*fully_verified, *non_conflicting_partials]
-    return [*fully_verified, *safely_supplemental]
+        selected_rows = [*fully_verified, *non_conflicting_partials]
+    else:
+        selected_rows = [*fully_verified, *safely_supplemental]
+    if preserve_input_order:
+        selected_skus = {
+            str(row.get("sku") or "").strip().upper()
+            for row in selected_rows
+            if str(row.get("sku") or "").strip()
+        }
+        return [
+            row
+            for row in candidate_rows
+            if str(row.get("sku") or "").strip().upper() in selected_skus
+        ]
+    return selected_rows
 
 
 _CONSTRAINT_LABELS = {

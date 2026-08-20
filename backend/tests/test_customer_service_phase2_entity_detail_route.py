@@ -6,7 +6,7 @@ import pytest
 from app.models import Product, ProductSpecs
 from app.services import customer_agent_intent_service, customer_agent_planner_service, customer_service_service
 from app.services.customer_field_contract import is_supported_detail_field
-from test_customer_service_route_level_regression import _add_product, route_client_and_db
+from customer_service_test_support import _add_product
 
 
 def _seed_phase2_products(Session):

@@ -421,6 +421,19 @@ async def ask_stream(
                 intent=result.get("intent"),
                 agent_mode=(result.get("debug") or {}).get("agent_mode"),
             )
+            # The stream response exposes the same semantic provenance as the
+            # normal response.  The service trace is already complete here;
+            # attach it before emitting ``meta`` so an SSE client/audit cannot
+            # mistake a Flash-owned RAG turn for an untraced route response.
+            trace_state = customer_perf_service.get_state() or {}
+            _attach_debug_trace(result, {
+                "trace_id": customer_perf_service.get_trace_id() or trace_state.get("trace_id") or "",
+                "extra": {
+                    "llm_call_count": len(trace_state.get("llm_calls") or []),
+                    "llm_calls": trace_state.get("llm_calls") or [],
+                    "stages": trace_state.get("stages") or [],
+                },
+            })
             yield _sse("status", {"message": "agent_reasoning", "label": "正在基于资料推理回复"})
             operation_log_service.log_operation(
                 db,

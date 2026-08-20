@@ -15,6 +15,7 @@ from app.core.config import database_name_from_url, settings
 from app.core.database import SessionLocal
 from app.models.product import Product
 from app.models.product_qa import ProductQa
+from app.models.user import User
 from app.services import product_qa_integrity_service, product_vector_index_service
 
 
@@ -41,11 +42,23 @@ async def audit_history(
     if limit:
         query = query.limit(limit)
     rows = query.all()
+    audit_user = (
+        db.query(User)
+        .filter(User.username == "admin", User.is_active.is_(True))
+        .first()
+    )
+    if audit_user is None:
+        raise RuntimeError("Development QA audit requires an active admin user.")
     ledger: list[dict[str, str]] = []
     changed_skus: set[str] = set()
     for qa, product in rows:
         previous_status = str(qa.integrity_status or "")
-        verdict = await product_qa_integrity_service.audit_product_qa_item(db, product, qa)
+        verdict = await product_qa_integrity_service.audit_product_qa_item(
+            db,
+            product,
+            qa,
+            user=audit_user,
+        )
         status = verdict["status"]
         if status != previous_status:
             changed_skus.add(str(product.sku))

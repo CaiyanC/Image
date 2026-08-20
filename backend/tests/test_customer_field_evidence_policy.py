@@ -18,7 +18,7 @@ from app.services.customer_field_contract import (
     qa_evidence_matches_field,
     select_dimension_evidence,
 )
-from test_customer_service_route_level_regression import _add_product, _add_product_qa, route_client_and_db
+from customer_service_test_support import _add_product, _add_product_qa
 
 
 @pytest.fixture()
@@ -1119,6 +1119,48 @@ def test_same_sku_knowledge_evidence_units_keep_indented_list_continuation_toget
     ]
 
 
+def test_same_sku_knowledge_evidence_units_split_labelled_profile_fields():
+    """A labelled product profile must not remain one multi-field RAG unit."""
+    content = (
+        "使用场景: 轻量徒步, 背包旅行\n"
+        "目标人群: 1-2 人露营者\n"
+        "容量: 大锅约3.0L, 小锅约1.7L\n"
+        "尺寸: 收纳尺寸约22x21x13.5cm\n"
+        "重量: 1150g\n"
+        "材质: 铝合金"
+    )
+
+    units = customer_service_service._same_sku_knowledge_evidence_units(content)
+
+    assert units == [
+        "使用场景: 轻量徒步, 背包旅行",
+        "目标人群: 1-2 人露营者",
+        "容量: 大锅约3.0L, 小锅约1.7L",
+        "尺寸: 收纳尺寸约22x21x13.5cm",
+        "重量: 1150g",
+        "材质: 铝合金",
+    ]
+
+
+def test_same_sku_comparison_selector_separates_storage_from_carrying_burden():
+    """Storage RAG must not treat weight/portability marketing as storage evidence."""
+    messages = customer_service_service._same_sku_knowledge_evidence_selection_messages(
+        "收纳负担和打包空间怎么比？",
+        "RAG-STORAGE-100",
+        [
+            {"index": 0, "content": "重量: 1150g"},
+            {"index": 1, "content": "套娃式收纳不占空间。"},
+        ],
+        comparison_supplemental=True,
+        comparison_excluded_fields=["weight"],
+    )
+
+    instruction = messages[0]["content"]
+    assert "携带负担" in instruction
+    assert "轻量化" in instruction
+    assert "smallest directly useful unit" in instruction
+
+
 def test_semantic_recommendation_context_keeps_meaning_without_literal_phrase_gate():
     """Semantic context is bounded by schema, not by substring matching."""
     constraints = customer_agent_planner_service._validated_recommendation_constraints(
@@ -1293,7 +1335,11 @@ def test_same_sku_rag_accessories_contract_rejects_person_count_as_component_evi
     monkeypatch.setattr(customer_service_service.knowledge_service, "semantic_retrieve", fake_retrieve)
     monkeypatch.setattr(customer_service_service.knowledge_service, "same_sku_customer_context", lambda *_args, **_kwargs: [])
     monkeypatch.setattr(customer_service_service.customer_llm_service, "chat_completion", fake_completion)
-    monkeypatch.setattr(customer_service_service, "_same_sku_evidence_answer_is_grounded", grounded)
+    monkeypatch.setattr(
+        customer_service_service,
+        "_same_sku_rag_answer_is_grounded_after_quote_validation",
+        grounded,
+    )
     monkeypatch.setattr(customer_service_service, "_same_sku_rag_answer_covers_question", covered)
 
     import asyncio
@@ -1306,7 +1352,10 @@ def test_same_sku_rag_accessories_contract_rejects_person_count_as_component_evi
         )
     )
 
-    assert result is None
+    assert result is not None
+    assert result["answer"] == "safe missing"
+    assert result.get("evidence", []) == []
+    assert result["answer_metadata"]["retrieval_missing_reason"] == "package_evidence_incomplete"
 
 
 def test_same_sku_rag_broad_product_question_merges_multiple_selected_evidence(monkeypatch):
@@ -1365,6 +1414,130 @@ def test_same_sku_rag_broad_product_question_merges_multiple_selected_evidence(m
     assert "Usage scene" in selected_values
     assert "Weight" not in selected_values
     assert result["debug"]["knowledge_evidence_selector"]["selected_count"] == 2
+
+
+def test_same_sku_selector_exposes_source_provenance_for_conflicting_numeric_values():
+    """Flash must see provenance when same-SKU records disagree numerically."""
+    messages = customer_service_service._same_sku_knowledge_evidence_selection_messages(
+        "CW-S10-1 容量是多少？",
+        "CW-S10-1",
+        [
+            {
+                "index": 0,
+                "content": "锅：1400ML",
+                "source_type": "knowledge_chunk",
+                "source_section": "profile",
+            },
+            {
+                "index": 1,
+                "content": "1.1.4L大容量满足双人需求",
+                "source_type": "product_qa",
+                "source_section": "qa:technical_advantage",
+            },
+        ],
+        product_identity={"sku": "CW-S10-1", "canonical_name": "激川单锅", "category": "锅具"},
+    )
+
+    payload = json.loads(messages[1]["content"])
+
+    assert payload["candidates"][0]["source_type"] == "knowledge_chunk"
+    assert payload["candidates"][0]["source_section"] == "profile"
+    assert payload["candidates"][1]["source_type"] == "product_qa"
+    assert payload["candidates"][1]["source_section"] == "qa:technical_advantage"
+    assert "incompatible numeric values" in messages[0]["content"]
+    assert "direct specification or direct field QA" in messages[0]["content"]
+
+
+def test_same_sku_rag_repairs_conflicting_capacity_without_repeating_secondary_number(monkeypatch):
+    """A conflicting QA rendering must be repaired semantically, not dropped."""
+    sku = "CW-S10-1"
+    safe_missing = {
+        "sku": sku,
+        "answer": "safe missing",
+        "results": [{"sku": sku, "product_name_cn": "激川单锅", "category": "锅具"}],
+        "debug": {"agent_mode": "sealed_product_qa_safe_missing"},
+    }
+    rows = [
+        {
+            "sku": sku,
+            "content": "锅：1400ML",
+            "metadata": {"section": "profile"},
+        },
+        {
+            "sku": sku,
+            "content": "1.1.4L大容量满足双人需求",
+            "metadata": {"section": "qa:technical_advantage"},
+        },
+    ]
+    captured: dict[str, dict] = {}
+
+    monkeypatch.setattr(
+        customer_service_service,
+        "_sealed_semantic_product_qa_entity_guard",
+        lambda *_args, **_kwargs: safe_missing.copy(),
+    )
+
+    async def fake_retrieve(*_args, **_kwargs):
+        return rows
+
+    async def fake_completion(_db, *, messages, purpose, **_kwargs):
+        payload = json.loads(messages[-1]["content"])
+        if purpose == "semantic_product_knowledge_evidence_selection":
+            return '{"indexes":[0,1],"confidence":"high","identity_consistent":true}'
+        captured[purpose] = payload
+        if purpose == "sealed_same_sku_knowledge_answer":
+            return json.dumps({
+                "answer": "容量为1400ML，1.1.4L大容量满足双人需求。",
+                "evidence_quotes": ["锅：1400ML", "满足双人需求"],
+            }, ensure_ascii=False)
+        if purpose == "sealed_same_sku_knowledge_answer_repair":
+            return json.dumps({
+                "answer": "容量为1400ML，资料描述满足双人需求。",
+                "evidence_quotes": ["锅：1400ML", "满足双人需求"],
+            }, ensure_ascii=False)
+        raise AssertionError(f"unexpected LLM purpose: {purpose}")
+
+    async def grounded(_db, _question, answer, _payload, _evidence):
+        return "1.1.4L" not in answer
+
+    async def covered(*_args, **_kwargs):
+        return True
+
+    monkeypatch.setattr(customer_service_service.knowledge_service, "semantic_retrieve", fake_retrieve)
+    monkeypatch.setattr(
+        customer_service_service.knowledge_service,
+        "same_sku_customer_context",
+        lambda *_args, **_kwargs: [],
+    )
+    monkeypatch.setattr(customer_service_service.customer_llm_service, "chat_completion", fake_completion)
+    monkeypatch.setattr(
+        customer_service_service,
+        "_same_sku_rag_answer_is_grounded_after_quote_validation",
+        grounded,
+    )
+    monkeypatch.setattr(customer_service_service, "_same_sku_rag_answer_covers_question", covered)
+
+    import asyncio
+
+    result = asyncio.run(
+        customer_service_service._try_sealed_same_sku_knowledge_answer(
+            SimpleNamespace(),
+            "CW-S10-1 容量是多少？",
+            {"semantic_preplan": {}},
+        )
+    )
+
+    assert result is not None
+    assert result["answer"] == "容量为1400ML，资料描述满足双人需求。"
+    assert "1.1.4L" not in result["answer"]
+    provenance = captured["sealed_same_sku_knowledge_answer"]["evidence_provenance"]
+    repair_provenance = captured["sealed_same_sku_knowledge_answer_repair"]["evidence_provenance"]
+    assert [(item["source_type"], item["source_section"]) for item in provenance] == [
+        ("knowledge_chunk", "profile"),
+        ("product_qa", "qa:technical_advantage"),
+    ]
+    assert repair_provenance == provenance
+    assert result["answer_metadata"]["evidence_status"] == "matched"
 
 
 def test_same_sku_rag_marketing_claim_is_downgraded_to_safe_missing(monkeypatch):
@@ -1783,6 +1956,134 @@ def test_same_sku_structured_best_effort_answers_only_from_selected_evidence(mon
     assert result["debug"]["agent_mode"] == "sealed_same_sku_structured_best_effort"
 
 
+def test_same_sku_structured_best_effort_accepts_labelled_literal_quote(monkeypatch):
+    product = SimpleNamespace(
+        sku="BEST-101",
+        product_name_cn="测试单锅",
+        product_name_en="",
+    )
+    monkeypatch.setattr(
+        customer_service_service,
+        "_phase1_product_bundle_by_ref",
+        lambda *_args, **_kwargs: (product, None, None, None),
+    )
+    monkeypatch.setattr(
+        customer_service_service,
+        "_structured_product_field_evidence",
+        lambda field, **_kwargs: (
+            ("锅：1400ML", "specs.capacity")
+            if field == "capacity"
+            else ("", None)
+        ),
+    )
+    evidence_id = customer_service_service.customer_evidence_bundle.stable_customer_evidence_id(
+        namespace="structured",
+        sku="BEST-101",
+        value="capacity|锅：1400ML",
+    )
+
+    async def fake_completion(*_args, **_kwargs):
+        return json.dumps({
+            "answer": "容量为1400ML。",
+            "evidence_ids": [evidence_id],
+            "evidence_quotes": ["容量：锅：1400ML"],
+        }, ensure_ascii=False)
+
+    async def grounded(*_args, **_kwargs):
+        return True
+
+    monkeypatch.setattr(
+        customer_service_service.customer_llm_service,
+        "chat_completion",
+        fake_completion,
+    )
+    monkeypatch.setattr(
+        customer_service_service,
+        "_same_sku_rag_answer_is_grounded_after_quote_validation",
+        grounded,
+    )
+
+    import asyncio
+
+    result = asyncio.run(
+        customer_service_service._try_same_sku_structured_best_effort_answer(
+            SimpleNamespace(),
+            question="这款容量多少？",
+            safe_missing={
+                "result_skus": ["BEST-101"],
+                "results": [{"sku": "BEST-101", "product_name_cn": "测试单锅"}],
+                "debug": {"agent_mode": "sealed_product_qa_safe_missing"},
+            },
+            semantic_preplan={"evidence_kind": "product_qa"},
+        )
+    )
+
+    assert result is not None
+    assert result["answer"] == "容量为1400ML。"
+
+
+def test_same_sku_structured_best_effort_accepts_natural_answer_without_quote(monkeypatch):
+    product = SimpleNamespace(
+        sku="BEST-102",
+        product_name_cn="测试单锅",
+        product_name_en="",
+    )
+    monkeypatch.setattr(
+        customer_service_service,
+        "_phase1_product_bundle_by_ref",
+        lambda *_args, **_kwargs: (product, None, None, None),
+    )
+    monkeypatch.setattr(
+        customer_service_service,
+        "_structured_product_field_evidence",
+        lambda field, **_kwargs: (
+            ("1400ML", "specs.capacity")
+            if field == "capacity"
+            else ("", None)
+        ),
+    )
+    evidence_id = customer_service_service.customer_evidence_bundle.stable_customer_evidence_id(
+        namespace="structured",
+        sku="BEST-102",
+        value="capacity|1400ML",
+    )
+
+    async def fake_completion(*_args, **_kwargs):
+        return json.dumps({
+            "answer": "这款容量是1400ML。",
+            "evidence_ids": [evidence_id],
+            "evidence_quotes": [],
+        }, ensure_ascii=False)
+
+    async def grounded(*_args, **_kwargs):
+        return True
+
+    monkeypatch.setattr(customer_service_service.customer_llm_service, "chat_completion", fake_completion)
+    monkeypatch.setattr(
+        customer_service_service,
+        "_same_sku_rag_answer_is_grounded_after_quote_validation",
+        grounded,
+    )
+
+    import asyncio
+
+    result = asyncio.run(
+        customer_service_service._try_same_sku_structured_best_effort_answer(
+            SimpleNamespace(),
+            question="这款容量多少？",
+            safe_missing={
+                "result_skus": ["BEST-102"],
+                "results": [{"sku": "BEST-102", "product_name_cn": "测试单锅"}],
+                "debug": {"agent_mode": "sealed_product_qa_safe_missing"},
+            },
+            semantic_preplan={"evidence_kind": "product_qa"},
+        )
+    )
+
+    assert result is not None
+    assert result["answer"] == "这款容量是1400ML。"
+
+
 def test_same_sku_structured_best_effort_rejects_adjacent_evidence(monkeypatch):
     product = SimpleNamespace(
         sku="BEST-200",
@@ -2086,6 +2387,21 @@ def test_same_sku_knowledge_grounding_payload_keeps_question_for_claim_entailmen
     assert payload["evidence"] == "Core points: converts the gas-canister interface; simple installation."
 
 
+def test_same_sku_entailment_keeps_group_fit_separate_from_task_sufficiency():
+    messages = customer_service_service._same_sku_knowledge_strict_entailment_messages(
+        "CW-S10-1 容量够不够两个人煮面？",
+        "容量为1400ML，适用1-2人，因此足够两人煮面；但具体水量仍未直接确认。",
+        "容量：锅：1400ML\n目标人群：1-2 人露营者",
+    )
+
+    system_instruction = messages[0]["content"].lower()
+
+    assert "particular food" in system_instruction
+    assert "task-specific outcome" in system_instruction
+    assert "grounded=false" in system_instruction
+    assert "caveat cannot cancel" in system_instruction
+
+
 def test_same_sku_knowledge_grounding_requires_explicit_support_for_negative_claims():
     """A missing capability is not proof that the product cannot do it."""
     messages = customer_service_service._same_sku_knowledge_grounding_messages(
@@ -2099,10 +2415,8 @@ def test_same_sku_knowledge_grounding_requires_explicit_support_for_negative_cla
     assert "absence of evidence never proves a negative claim" in system_instruction.lower()
 
 
-def test_same_sku_rag_answer_requires_verbatim_selected_evidence_quotes():
-    """A same-SKU RAG draft cannot turn unselected retrieval memory into a
-    customer fact: every returned provenance quote must occur in the selected
-    evidence payload before the draft can reach the grounding gate."""
+def test_same_sku_rag_reports_optional_verbatim_selected_evidence_quotes():
+    """Exact excerpts remain useful provenance, but are not answer gating."""
     evidence = "Core points: vintage enamel is durable; easy to clean."
 
     assert customer_service_service._same_sku_rag_answer_has_selected_quotes(
@@ -2121,10 +2435,8 @@ def test_same_sku_rag_answer_requires_verbatim_selected_evidence_quotes():
     ) is False
 
 
-def test_same_sku_rag_repairs_a_citationless_draft_before_safe_missing(monkeypatch):
-    """A model formatting omission is not evidence absence: a same-SKU draft
-    without provenance must be repaired under the same selected-evidence seal,
-    and only then may the route safely return missing."""
+def test_same_sku_rag_delivers_a_grounded_citationless_draft(monkeypatch):
+    """Natural paraphrase does not need an exact source substring to ship."""
     safe_missing = {
         "sku": "RAG-QUOTE-100",
         "answer": "safe missing",
@@ -2176,14 +2488,89 @@ def test_same_sku_rag_repairs_a_citationless_draft_before_safe_missing(monkeypat
     )
 
     assert result is not None
-    assert calls == 2
+    assert result["answer"] == "Compact for camping."
+    assert calls == 1
 
 
-def test_same_sku_rag_repair_explains_nonverbatim_quote_failure(monkeypatch):
-    """A grounded same-SKU draft must not become missing merely because the
-    generator abbreviated one provenance quote.  The repair has to receive
-    the precise contract failure and return literal selected-evidence text;
-    it may not relax the quote boundary."""
+def test_same_sku_rag_repairs_group_fit_upgrade_to_task_bound_answer(monkeypatch):
+    """A group-fit fact must not be upgraded into a dish-specific guarantee."""
+    sku = "RAG-TASK-BOUND-100"
+    safe_missing = {
+        "sku": sku,
+        "answer": "safe missing",
+        "debug": {"agent_mode": "sealed_product_qa_safe_missing"},
+    }
+    row = {
+        "sku": sku,
+        "content": "Capacity: 1400ML\nTarget audience: 1-2 campers",
+    }
+    repair_seen = False
+
+    monkeypatch.setattr(
+        customer_service_service,
+        "_sealed_semantic_product_qa_entity_guard",
+        lambda *_args, **_kwargs: safe_missing.copy(),
+    )
+
+    async def fake_retrieve(*_args, **_kwargs):
+        return [row]
+
+    async def fake_completion(_db, *, messages, **_kwargs):
+        nonlocal repair_seen
+        payload = json.loads(messages[-1]["content"])
+        if "candidates" in payload:
+            return '{"indexes":[0],"confidence":"high","identity_consistent":true}'
+        if "previous_draft" in payload:
+            repair_seen = True
+            return json.dumps({
+                "answer": (
+                    "The record lists 1400ML and a 1-2-person target audience; "
+                    "it does not directly confirm the water amount for two-person noodles."
+                ),
+                "evidence_quotes": ["Capacity: 1400ML", "Target audience: 1-2 campers"],
+            })
+        return json.dumps({
+            "answer": (
+                "The 1400ML capacity is enough for two people cooking noodles, "
+                "but the exact water amount is not directly confirmed."
+            ),
+            "evidence_quotes": ["Capacity: 1400ML"],
+        })
+
+    async def grounded(_db, _question, answer, _payload, _evidence, **_kwargs):
+        return "enough for two people cooking noodles" not in answer.lower()
+
+    async def covered(*_args, **_kwargs):
+        return True
+
+    monkeypatch.setattr(customer_service_service.knowledge_service, "semantic_retrieve", fake_retrieve)
+    monkeypatch.setattr(customer_service_service.knowledge_service, "same_sku_customer_context", lambda *_args, **_kwargs: [])
+    monkeypatch.setattr(customer_service_service.customer_llm_service, "chat_completion", fake_completion)
+    monkeypatch.setattr(
+        customer_service_service,
+        "_same_sku_rag_answer_is_grounded_after_quote_validation",
+        grounded,
+    )
+    monkeypatch.setattr(customer_service_service, "_same_sku_rag_answer_covers_question", covered)
+
+    import asyncio
+
+    result = asyncio.run(
+        customer_service_service._try_sealed_same_sku_knowledge_answer(
+            SimpleNamespace(),
+            "CW-S10-1 capacity enough for two people cooking noodles?",
+            {"semantic_preplan": {}},
+        )
+    )
+
+    assert result is not None
+    assert repair_seen is True
+    assert "does not directly confirm" in result["answer"]
+    assert "enough for two people cooking noodles" not in result["answer"].lower()
+
+
+def test_same_sku_rag_does_not_repair_a_grounded_natural_paraphrase_for_quote_shape(monkeypatch):
+    """A paraphrase with an imperfect receipt is still judged by grounding."""
     safe_missing = {
         "sku": "RAG-QUOTE-EXACT-100",
         "answer": "safe missing",
@@ -2242,7 +2629,8 @@ def test_same_sku_rag_repair_explains_nonverbatim_quote_failure(monkeypatch):
     )
 
     assert result is not None
-    assert "literal uninterrupted substring" in repair_system_prompt
+    assert result["answer"] == "It folds small for travel and is reusable for camping and hiking."
+    assert repair_system_prompt == ""
 
 
 def test_same_sku_rag_rejects_one_false_grounding_verdict_after_quote_validation(monkeypatch):
@@ -2316,7 +2704,11 @@ def test_same_sku_rag_fails_closed_when_grounded_delivery_cannot_cover_question(
     monkeypatch.setattr(customer_service_service.knowledge_service, "semantic_retrieve", fake_retrieve)
     monkeypatch.setattr(customer_service_service.knowledge_service, "same_sku_customer_context", lambda *_args, **_kwargs: [])
     monkeypatch.setattr(customer_service_service.customer_llm_service, "chat_completion", fake_completion)
-    monkeypatch.setattr(customer_service_service, "_same_sku_evidence_answer_is_grounded", rejected)
+    monkeypatch.setattr(
+        customer_service_service,
+        "_same_sku_rag_answer_is_grounded_after_quote_validation",
+        rejected,
+    )
 
     import asyncio
 
@@ -2328,7 +2720,10 @@ def test_same_sku_rag_fails_closed_when_grounded_delivery_cannot_cover_question(
         )
     )
 
-    assert result is None
+    assert result is not None
+    assert result["answer"] == "safe missing"
+    assert result.get("evidence", []) == []
+    assert result["answer_metadata"]["retrieval_missing_reason"] == "answer_grounding_failed"
 
 
 def test_same_sku_rag_uses_strict_entailment_as_the_claim_delivery_gate(monkeypatch):
@@ -2355,6 +2750,32 @@ def test_same_sku_rag_uses_strict_entailment_as_the_claim_delivery_gate(monkeypa
 
     assert result is True
     assert seen_kwargs == [{"strict_entailment": True}]
+
+
+def test_same_sku_rag_grounding_does_not_require_an_exact_quote(monkeypatch):
+    """Strict entailment, not substring shape, decides answer delivery."""
+    seen: list[tuple[str, str]] = []
+
+    async def grounded(_db, question, answer, evidence, **_kwargs):
+        seen.append((question, evidence))
+        return True
+
+    monkeypatch.setattr(customer_service_service, "_same_sku_evidence_answer_is_grounded", grounded)
+
+    import asyncio
+
+    result = asyncio.run(
+        customer_service_service._same_sku_rag_answer_is_grounded_after_quote_validation(
+            SimpleNamespace(),
+            "这款适合露营吗？",
+            "资料显示它便于露营携带。",
+            {},
+            "记录：适合露营，便于携带。",
+        )
+    )
+
+    assert result is True
+    assert seen == [("这款适合露营吗？", "记录：适合露营，便于携带。")]
 
 
 def test_same_sku_rag_grounding_receives_the_complete_sealed_selection(monkeypatch):

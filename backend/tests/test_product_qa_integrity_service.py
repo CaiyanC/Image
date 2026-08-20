@@ -271,6 +271,274 @@ def test_same_sku_supplemental_fact_is_approved_without_master_field(monkeypatch
         engine.dispose()
 
 
+def test_subjective_outcome_inferred_from_weight_is_rejected(monkeypatch):
+    """A measurement cannot silently authorize a separate burden conclusion."""
+    engine = create_engine("sqlite:///:memory:", connect_args={"check_same_thread": False})
+    Base.metadata.create_all(engine, tables=[
+        Product.__table__, ProductQa.__table__, ProductSpecs.__table__,
+        ProductBusiness.__table__, ProductContent.__table__,
+    ])
+    db = sessionmaker(bind=engine)()
+    try:
+        product = Product(
+            id="qa-integrity-inference-product",
+            sku="QA-INTEGRITY-INFERENCE",
+            barcode="000000000077",
+            product_name_cn="测试套锅",
+            brand="alocs",
+            category="套锅",
+        )
+        qa = ProductQa(
+            id="qa-integrity-inference-qa",
+            product_id=product.id,
+            question="这款套锅有多重？",
+            answer="整套约1.32kg（含包装），户外携带无负担。",
+        )
+        specs = ProductSpecs(product_id=product.id, gross_weight_g=1320)
+        db.add_all([product, qa, specs])
+        db.commit()
+        calls = 0
+        audit_user = object()
+
+        async def semantic_audit(_db, messages, **kwargs):
+            nonlocal calls
+            calls += 1
+            assert kwargs["user"] is audit_user
+            if calls == 1:
+                return '{"status":"approved","conflict_type":"none","reason":"Identity matches."}'
+            payload = __import__("json").loads(messages[1]["content"])
+            assert payload["supplemental_context"]["specs"]["weight_g"] == 1320
+            assert "subjective outcome" in messages[0]["content"]
+            return (
+                '{"status":"rejected","conflict_type":"unsupported_inference",'
+                '"reason":"Weight does not establish carrying burden.",'
+                '"evidence_quote":"户外携带无负担","evidence_dimension":"weight"}'
+            )
+
+        monkeypatch.setattr(
+            product_qa_integrity_service.customer_llm_service,
+            "chat_completion",
+            semantic_audit,
+        )
+        verdict = asyncio.run(
+            product_qa_integrity_service.audit_product_qa_item(
+                db,
+                product,
+                qa,
+                user=audit_user,
+            )
+        )
+
+        assert verdict == {
+            "status": "rejected",
+            "reason": "Weight does not establish carrying burden.",
+        }
+        assert qa.integrity_status == "rejected"
+        assert qa.answer == "整套约1.32kg（含包装），户外携带无负担。"
+    finally:
+        db.close()
+        engine.dispose()
+
+
+def test_authoritative_weight_rejects_different_same_sku_qa_value(monkeypatch):
+    """Flash receives the live formal value and rejects an older numeric snapshot."""
+    engine = create_engine("sqlite:///:memory:", connect_args={"check_same_thread": False})
+    Base.metadata.create_all(engine, tables=[
+        Product.__table__, ProductQa.__table__, ProductSpecs.__table__,
+        ProductBusiness.__table__, ProductContent.__table__,
+    ])
+    db = sessionmaker(bind=engine)()
+    try:
+        product = Product(
+            id="qa-integrity-weight-product",
+            sku="CW-C73",
+            barcode="000000000078",
+            product_name_cn="1L单锅（套装款）",
+            brand="alocs",
+            category="锅具",
+        )
+        qa = ProductQa(
+            id="qa-integrity-weight-qa",
+            product_id=product.id,
+            question="这款锅有多重？",
+            answer="净重约300g，非常轻便。",
+        )
+        specs = ProductSpecs(product_id=product.id, gross_weight_g=225)
+        db.add_all([product, qa, specs])
+        db.commit()
+        calls = 0
+
+        async def semantic_audit(_db, messages, **_kwargs):
+            nonlocal calls
+            calls += 1
+            if calls == 1:
+                assert "must not judge whether a weight" in messages[0]["content"]
+                return '{"status":"approved","conflict_type":"none","reason":"Identity matches."}'
+            payload = __import__("json").loads(messages[1]["content"])
+            assert payload["supplemental_context"]["specs"]["weight_g"] == 225
+            formal_weight = payload["supplemental_context"]["authoritative_formal_facts"]["weight"]
+            assert formal_weight == {
+                "value": 225.0,
+                "unit": "g",
+                "display": "225 g",
+                "source": "product_specs.gross_weight_g",
+            }
+            assert "authoritative_formal_facts contains weight=225 g" in messages[0]["content"]
+            return __import__("json").dumps({
+                "status": "rejected",
+                "conflict_type": "direct_conflict",
+                "reason": "The QA weight conflicts with the live same-SKU weight.",
+                "evidence_quote": formal_weight["display"],
+                "evidence_dimension": "weight",
+            })
+
+        monkeypatch.setattr(
+            product_qa_integrity_service.customer_llm_service,
+            "chat_completion",
+            semantic_audit,
+        )
+
+        verdict = asyncio.run(
+            product_qa_integrity_service.audit_product_qa_item(db, product, qa)
+        )
+
+        assert verdict["status"] == "rejected"
+        assert qa.integrity_status == "rejected"
+        assert calls == 2
+    finally:
+        db.close()
+        engine.dispose()
+
+
+def test_integrity_verdict_reloads_qa_after_provider_releases_session(monkeypatch):
+    """Provider network I/O may detach ORM rows; the verdict must still persist."""
+    engine = create_engine("sqlite:///:memory:", connect_args={"check_same_thread": False})
+    Base.metadata.create_all(engine, tables=[
+        Product.__table__, ProductQa.__table__, ProductSpecs.__table__,
+        ProductBusiness.__table__, ProductContent.__table__,
+    ])
+    db = sessionmaker(bind=engine, expire_on_commit=False)()
+    try:
+        product = Product(
+            id="qa-integrity-detach-product",
+            sku="QA-INTEGRITY-DETACH",
+            barcode="000000000080",
+            product_name_cn="测试锅",
+            brand="alocs",
+            category="锅具",
+        )
+        qa = ProductQa(
+            id="qa-integrity-detach-qa",
+            product_id=product.id,
+            question="重量是多少？",
+            answer="重量为300g。",
+            integrity_status="approved",
+        )
+        specs = ProductSpecs(product_id=product.id, gross_weight_g=225)
+        db.add_all([product, qa, specs])
+        db.commit()
+        calls = 0
+
+        async def releasing_provider(session, messages=None, **_kwargs):
+            nonlocal calls
+            calls += 1
+            session.close()
+            if calls == 1:
+                return '{"status":"approved","conflict_type":"none","reason":"Identity matches."}'
+            return (
+                '{"status":"rejected","conflict_type":"direct_conflict",'
+                '"reason":"300g conflicts with 225g.","evidence_quote":"225 g",'
+                '"evidence_dimension":"weight"}'
+            )
+
+        monkeypatch.setattr(
+            product_qa_integrity_service.customer_llm_service,
+            "chat_completion",
+            releasing_provider,
+        )
+
+        verdict = asyncio.run(
+            product_qa_integrity_service.audit_product_qa_item(db, product, qa)
+        )
+        db.commit()
+        db.expire_all()
+        persisted = db.get(ProductQa, qa.id)
+
+        assert verdict["status"] == "rejected"
+        assert qa in db
+        assert qa.integrity_status == "rejected"
+        assert persisted.integrity_status == "rejected"
+        assert persisted.integrity_reason == "300g conflicts with 225g."
+    finally:
+        db.close()
+        engine.dispose()
+
+
+def test_closed_heat_source_dimension_rejects_unproved_specific_extension(monkeypatch):
+    """A broad listed source cannot be semantically upgraded to alcohol-stove support."""
+    engine = create_engine("sqlite:///:memory:", connect_args={"check_same_thread": False})
+    Base.metadata.create_all(engine, tables=[
+        Product.__table__, ProductQa.__table__, ProductSpecs.__table__,
+        ProductBusiness.__table__, ProductContent.__table__,
+    ])
+    db = sessionmaker(bind=engine)()
+    try:
+        product = Product(
+            id="qa-integrity-heat-product",
+            sku="CW-C73",
+            barcode="000000000079",
+            product_name_cn="1L单锅（套装款）",
+            brand="alocs",
+            category="锅具",
+        )
+        qa = ProductQa(
+            id="qa-integrity-heat-qa",
+            product_id=product.id,
+            question="支持哪些炉具？",
+            answer="兼容酒精炉、燃气炉等多种热源。",
+        )
+        specs = ProductSpecs(
+            product_id=product.id,
+            heat_source="明火直烧、卡式炉、分体炉、一体炉",
+        )
+        db.add_all([product, qa, specs])
+        db.commit()
+        calls = 0
+
+        async def semantic_audit(_db, messages, **_kwargs):
+            nonlocal calls
+            calls += 1
+            if calls == 1:
+                assert "Mentioning an external compatibility target does not" in messages[0]["content"]
+                return '{"status":"approved","conflict_type":"none","reason":"Identity matches."}'
+            payload = __import__("json").loads(messages[1]["content"])
+            assert payload["supplemental_context"]["specs"]["heat_source"] == "明火直烧、卡式炉、分体炉、一体炉"
+            assert payload["supplemental_context"]["authoritative_formal_facts"]["heat_source"]["source"] == "product_specs.heat_source"
+            assert "does not by itself prove alcohol-stove compatibility" in messages[0]["content"]
+            return (
+                '{"status":"rejected","conflict_type":"unsupported_extension",'
+                '"reason":"The listed heat sources do not establish alcohol-stove compatibility",'
+                '"evidence_quote":"兼容酒精炉","evidence_dimension":"heat_source"}'
+            )
+
+        monkeypatch.setattr(
+            product_qa_integrity_service.customer_llm_service,
+            "chat_completion",
+            semantic_audit,
+        )
+
+        verdict = asyncio.run(
+            product_qa_integrity_service.audit_product_qa_item(db, product, qa)
+        )
+
+        assert verdict["status"] == "rejected"
+        assert qa.integrity_status == "rejected"
+        assert calls == 2
+    finally:
+        db.close()
+        engine.dispose()
+
+
 def test_direct_conflict_qa_is_rejected(monkeypatch):
     """Concrete same-SKU evidence rejects incompatible stove-use advice."""
     engine = create_engine("sqlite:///:memory:", connect_args={"check_same_thread": False})
@@ -308,7 +576,7 @@ def test_direct_conflict_qa_is_rejected(monkeypatch):
             calls += 1
             if calls == 1:
                 return '{"status":"approved","conflict_type":"none","reason":"The QA belongs to the water cup."}'
-            return '{"status":"rejected","conflict_type":"direct_conflict","reason":"Evidence says no open flame.","evidence_quote":"Not suitable for open-flame stove use."}'
+            return '{"status":"rejected","conflict_type":"direct_conflict","reason":"Evidence says no open flame.","evidence_quote":"Not suitable for open-flame stove use.","evidence_dimension":"heat_source"}'
 
         monkeypatch.setattr(
             product_qa_integrity_service.customer_llm_service,
@@ -408,7 +676,8 @@ def test_cross_category_audit_prioritizes_product_identity_over_contaminated_det
             prompt = messages[0]["content"]
             payload = __import__("json").loads(messages[1]["content"])
             calls.append(payload)
-            assert "product identity only" in prompt
+            assert "Audit only whether the supplied QA is about this product identity" in prompt
+            assert "grinder adjustment on a moka pot" in prompt
             assert payload["product_identity"]["category"] == "coffee equipment"
             assert "supplemental_context" not in payload
             return '{"status":"rejected","conflict_type":"cross_category","reason":"A moka pot cannot provide grinder adjustment."}'
@@ -546,6 +815,7 @@ def test_unverifiable_direct_conflict_remains_review():
             "conflict_type": "direct_conflict",
             "reason": "Claimed material conflict.",
             "evidence_quote": "PTFE coating",
+            "evidence_dimension": "material",
         },
         question="What is the surface finish?",
         answer="It uses a matte finish.",
@@ -553,6 +823,35 @@ def test_unverifiable_direct_conflict_remains_review():
     )
 
     assert verdict["status"] == "review"
+
+
+def test_direct_conflict_binds_semantic_dimension_without_literal_quote_gate():
+    verdict = product_qa_integrity_service._normalize_supplemental_verdict(
+        {
+            "status": "rejected",
+            "conflict_type": "direct_conflict",
+            "reason": "300g conflicts with the live 225g value.",
+            "evidence_quote": "225g",
+            "evidence_dimension": "weight",
+        },
+        question="这款多重？",
+        answer="净重约300g。",
+        evidence={
+            "authoritative_formal_facts": {
+                "weight": {
+                    "value": 225.0,
+                    "unit": "g",
+                    "display": "225 g",
+                    "source": "product_specs.gross_weight_g",
+                }
+            }
+        },
+    )
+
+    assert verdict == {
+        "status": "rejected",
+        "reason": "300g conflicts with the live 225g value.",
+    }
 
 
 def test_rejected_qa_is_excluded_from_customer_matching_and_vector_documents():

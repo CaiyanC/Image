@@ -64,11 +64,19 @@ def sync_product_to_vector_db(db: Session, sku: str) -> dict:
             try:
                 asyncio.get_running_loop()
             except RuntimeError:
-                asyncio.run(product_vector_index_service.embed_pending_chunks(db))
+                asyncio.run(
+                    product_vector_index_service.embed_pending_chunks(
+                        db,
+                        sku=sku,
+                    )
+                )
             else:
                 import concurrent.futures
                 with concurrent.futures.ThreadPoolExecutor() as executor:
-                    future = executor.submit(asyncio.run, product_vector_index_service.embed_pending_chunks(db))
+                    future = executor.submit(
+                        asyncio.run,
+                        product_vector_index_service.embed_pending_chunks(db, sku=sku),
+                    )
                     future.result(timeout=30)
         except Exception:
             pass  # Embedding failure is OK, keyword search still works
@@ -928,10 +936,33 @@ def create_product(
     return product
 
 
+def invalidate_product_qa_integrity(
+    db: Session,
+    product_id: str,
+) -> int:
+    """Fail closed when the same-SKU product evidence behind QA has changed."""
+    if not inspect(db.get_bind()).has_table(ProductQa.__tablename__):
+        return 0
+    qa_items = db.query(ProductQa).filter(ProductQa.product_id == product_id).all()
+    for qa in qa_items:
+        qa.integrity_status = "review"
+        qa.integrity_reason = None
+        qa.integrity_model = None
+        qa.integrity_audited_at = None
+    return len(qa_items)
+
+
 def update_product(db: Session, sku: str, update_data: dict) -> Product:
     product = get_product_by_sku(db, sku)
     if not product:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Product not found")
+
+    requested_sku = str(update_data.get("sku") or sku).strip()
+    if requested_sku != sku:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="SKU is an immutable product identity; create a new product instead",
+        )
 
     old_sku = product.sku
     field_map = {
@@ -939,17 +970,20 @@ def update_product(db: Session, sku: str, update_data: dict) -> Product:
         "category", "sub_category", "product_level", "lifecycle_status",
         "person_in_charge", "active_flag", "sync_flag", "quality_note", "status_note", "barcode",
     }
+    evidence_changed = False
     for key, value in update_data.items():
         if key in field_map and value is not None:
-            setattr(product, key, value)
-        elif key == "sku" and value and value != sku:
-            if get_product_by_sku(db, value):
-                raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="SKU already exists")
-            product.sku = value
+            if getattr(product, key) != value:
+                setattr(product, key, value)
+                evidence_changed = True
         elif key == "launch_date" and value is not None:
             parsed = _parse_date(value)
-            if parsed is not None:
+            if parsed is not None and product.launch_date != parsed:
                 product.launch_date = parsed
+                evidence_changed = True
+
+    if evidence_changed:
+        invalidate_product_qa_integrity(db, product.id)
 
     db.commit()
     db.refresh(product)
@@ -1113,7 +1147,14 @@ def update_product_specs(db: Session, sku: str, data: dict) -> dict:
     if "gross_weight_g" in data and data["gross_weight_g"] is not None:
         fields["gross_weight_g"] = data["gross_weight_g"]
 
+    existing = db.query(ProductSpecs).filter(ProductSpecs.product_id == product.id).first()
+    evidence_changed = bool(fields) and (
+        existing is None
+        or any(getattr(existing, key, None) != value for key, value in fields.items())
+    )
     _upsert_sub(db, ProductSpecs, product.id, fields)
+    if evidence_changed:
+        invalidate_product_qa_integrity(db, product.id)
     db.commit()
     invalidate_product_detail_cache(db, sku)
     return get_product_detail(db, sku)
@@ -1135,7 +1176,14 @@ def update_product_business(db: Session, sku: str, data: dict) -> dict:
         if k in data and data[k] is not None:
             fields[k] = data[k]
 
+    existing = db.query(ProductBusiness).filter(ProductBusiness.product_id == product.id).first()
+    evidence_changed = bool(fields) and (
+        existing is None
+        or any(getattr(existing, key, None) != value for key, value in fields.items())
+    )
     _upsert_sub(db, ProductBusiness, product.id, fields)
+    if evidence_changed:
+        invalidate_product_qa_integrity(db, product.id)
     db.commit()
     invalidate_product_detail_cache(db, sku)
     return get_product_detail(db, sku)
@@ -1161,7 +1209,14 @@ def update_product_content(db: Session, sku: str, data: dict) -> dict:
         if k in data and data[k] is not None:
             fields[k] = data[k]
 
+    existing = db.query(ProductContent).filter(ProductContent.product_id == product.id).first()
+    evidence_changed = bool(fields) and (
+        existing is None
+        or any(getattr(existing, key, None) != value for key, value in fields.items())
+    )
     _upsert_sub(db, ProductContent, product.id, fields)
+    if evidence_changed:
+        invalidate_product_qa_integrity(db, product.id)
     db.commit()
     invalidate_product_detail_cache(db, sku)
     return get_product_detail(db, sku)
