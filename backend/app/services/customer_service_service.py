@@ -13060,31 +13060,70 @@ async def _semantic_recommendation_narrative(
             if excerpts
         }
         writer_verified_fields_by_index[index] = set(candidate["sealed_evidence"])
-        decision_factor_status = [
-            {
-                "factor": str(factor.get("factor") or "").strip(),
-                "factor_type": str(factor.get("factor_type") or "factual").strip(),
-                "dimension": str(factor.get("dimension") or "").strip(),
-                "decision_kind": str(factor.get("decision_kind") or "").strip(),
-                "importance": str(factor.get("importance") or "").strip(),
-                "status": next(
-                    (
-                        status
-                        for status, field in (
-                            ("supported", "supported_candidate_indexes"),
-                            ("bounded", "bounded_candidate_indexes"),
-                            ("partial", "partial_candidate_indexes"),
-                            ("unverified", "unverified_candidate_indexes"),
-                        )
-                        if index in set(factor.get(field) or [])
-                    ),
-                    "unverified",
+        decision_factor_status: list[dict[str, Any]] = []
+        semantic_factor_evidence: list[dict[str, Any]] = []
+        for factor in list((coverage or {}).get("decision_factors") or []):
+            if not isinstance(factor, dict):
+                continue
+            factor_name = str(factor.get("factor") or "").strip()
+            if not factor_name:
+                continue
+            factor_type = str(factor.get("factor_type") or "factual").strip()
+            dimension = str(factor.get("dimension") or "").strip()
+            decision_kind = str(factor.get("decision_kind") or "").strip()
+            importance = str(factor.get("importance") or "").strip()
+            status = next(
+                (
+                    label
+                    for label, field in (
+                        ("supported", "supported_candidate_indexes"),
+                        ("bounded", "bounded_candidate_indexes"),
+                        ("partial", "partial_candidate_indexes"),
+                        ("unverified", "unverified_candidate_indexes"),
+                    )
+                    if index in set(factor.get(field) or [])
                 ),
-            }
-            for factor in list((coverage or {}).get("decision_factors") or [])
-            if isinstance(factor, dict) and str(factor.get("factor") or "").strip()
-        ]
+                "unverified",
+            )
+            decision_factor_status.append({
+                "factor": factor_name,
+                "factor_type": factor_type,
+                "dimension": dimension,
+                "decision_kind": decision_kind,
+                "importance": importance,
+                "status": status,
+            })
+            factor_evidence: list[dict[str, str]] = []
+            for usage in factor.get("evidence_usage") or []:
+                if not isinstance(usage, dict) or usage.get("candidate_index") != index:
+                    continue
+                for evidence_item in usage.get("evidence") or []:
+                    if not isinstance(evidence_item, dict):
+                        continue
+                    field = str(evidence_item.get("field") or "").strip()
+                    excerpt = str(evidence_item.get("excerpt") or "").strip()
+                    if field and excerpt:
+                        factor_evidence.append({"field": field, "excerpt": excerpt})
+            semantic_factor_evidence.append({
+                "factor": factor_name,
+                "customer_basis": str(factor.get("customer_basis") or "").strip(),
+                "factor_type": factor_type,
+                "dimension": dimension,
+                "decision_kind": decision_kind,
+                "importance": importance,
+                "status": status,
+                "evidence": list({
+                    (item["field"], item["excerpt"]): item
+                    for item in factor_evidence
+                }.values()),
+            })
         candidate["decision_factor_status"] = decision_factor_status
+        # Keep the coverage model's semantic relation beside the same-SKU
+        # packet for the presentation writer. This is explanatory RAG
+        # provenance only: it cannot add facts, change eligibility, or select
+        # a candidate, and it avoids reducing a semantic judgement to a field
+        # or phrase match in the next Flash call.
+        candidate["semantic_factor_evidence"] = semantic_factor_evidence
         candidate["non_positive_decision_factors"] = [
             item["factor"]
             for item in decision_factor_status
@@ -13147,6 +13186,7 @@ async def _semantic_recommendation_narrative(
                         for field, value in (candidate.get("sealed_evidence") or {}).items()
                     },
                     "decision_factor_status": candidate.get("decision_factor_status"),
+                    "semantic_factor_evidence": candidate.get("semantic_factor_evidence") or [],
                     "budget_evidence_boundary": candidate.get("budget_evidence_boundary") or {},
                 }
                 for candidate in writer_candidates
@@ -13167,7 +13207,7 @@ async def _semantic_recommendation_narrative(
                 "You may combine several same-SKU facts into a useful, bounded practical recommendation, but keep customer-dependent outcomes conditional and say briefly when an important requested point is not established. A practical_fit factor marked supported is the upstream semantic adjudicator's narrow evidence-backed relation: state that factor positively with its cited same-SKU basis, without demanding that one catalogue sentence repeat the customer's wording. It does not authorize a stronger quantity, guarantee, personal outcome, or whole-plan claim: '可用于烧水/煮面' may stay at that ordinary capability, but do not rewrite it as '没问题/完全可以/满足烧水煮面需求' or '满足两人使用'; a recorded light/轻量 descriptor may stay product-level, but do not rewrite it as '携带负担小/不累/无负担' or '整体平衡'. "
                  + _SEMANTIC_RECOMMENDATION_GROUP_TASK_BOUNDARY
                  + "Use decision_factor_status as the semantic assessment of how each candidate relates to the customer's priorities; it does not create new product facts. A bounded practical factor may be used for a transparent conditional recommendation based on its cited same-SKU traits; partial and unverified factors must not appear as positive product claims. Treat non_positive_decision_factors as a diagnostic list, not as a reason to discard a candidate or erase its directly recorded evidence. "
-                 "Treat unverified_customer_outcomes as an explicit semantic prohibition: do not affirm any listed outcome in any paraphrase. Recommend the candidate only through its recorded same-SKU traits, then leave the listed outcome conditional or unconfirmed. "
+                 "Treat unverified_customer_outcomes as an explicit semantic prohibition: do not affirm any listed outcome in any paraphrase. Recommend the candidate only through its recorded same-SKU traits, then leave the listed outcome conditional or unconfirmed. semantic_factor_evidence is the upstream RAG adjudicator's explanation of how each factor relates to this candidate's same-SKU evidence; use it to preserve the semantic boundary, not as a literal phrase-matching rule, and never treat it as permission to add facts or change the selected candidate. "
                  "Treat bounded_customer_outcomes as an equally important semantic boundary: a bounded practical-fit relation is not proof that the customer outcome is true. For every factor listed there, do not turn a number, capacity, usage scene, or nearby product trait into ‘够用’/‘足够’/‘满足’/‘无负担’ or another outcome conclusion. Report the directly recorded fact and, if needed, say that the personal outcome still depends on actual use; do not assert that the bounded outcome holds. Preserve evidence granularity: if the packet separately records ‘小巧轻便’ and ‘易携带’, keep them as separate attributed traits rather than fusing them into ‘小巧轻便易携带’. "
                  "For a bounded task or group-fit factor, do not state a concrete capability such as ‘可用于烧水/煮面’ merely from a people range, capacity, or broad usage scene. Use that capability only when the same-SKU evidence explicitly records it; otherwise report the recorded scene/number and say the named task is not directly confirmed. If the same-SKU record explicitly uses a qualitative product descriptor such as ‘小巧轻便’, it may be retained only with clear source attribution such as ‘资料标注为“小巧轻便”’; do not present it as your own personal judgement, and do not turn numeric size into ‘不占地方’. Include only facts that answer the customer's stated priorities or explain the selected choice; omit unrelated weight, portability, storage, or selling-point details. "
                  "When the customer asks you to choose or recommend one product and one candidate is selected, lead with a clear recommendation such as '推荐这款' or '可以先看这款'; do not use a vague opening such as '这是不错的选择' without an explicit recommendation action. "
@@ -13711,6 +13751,7 @@ async def _semantic_naturalize_recommendation_fallback(
             },
             "same_sku_evidence": evidence,
             "decision_factor_status": coverage_status_by_index.get(index, []),
+            "semantic_factor_evidence": writer_packet.get("semantic_factor_evidence") or [],
             "non_positive_decision_factors": [
                 item["factor"]
                 for item in coverage_status_by_index.get(index, [])
@@ -13741,6 +13782,7 @@ async def _semantic_naturalize_recommendation_fallback(
             "sealed_evidence": evidence,
             "evidence_boundaries": sealed_products[-1].get("evidence_boundaries") or {},
             "decision_factor_status": sealed_products[-1].get("decision_factor_status") or [],
+            "semantic_factor_evidence": sealed_products[-1].get("semantic_factor_evidence") or [],
             "non_positive_decision_factors": sealed_products[-1].get("non_positive_decision_factors") or [],
             "unverified_customer_outcomes": sealed_products[-1].get("unverified_customer_outcomes") or [],
             "bounded_customer_outcomes": sealed_products[-1].get("bounded_customer_outcomes") or [],
@@ -13766,7 +13808,7 @@ async def _semantic_naturalize_recommendation_fallback(
                 + _SEMANTIC_RECOMMENDATION_GROUP_TASK_BOUNDARY
                 + "Keep actual portions conditional and retain the recommendation when the evidence supports a narrower practical fit. "
             + recovery_budget_instruction
-        + "Use decision_factor_status as the boundary for each customer priority: supported may be positive; bounded, partial, or unverified must not be stated as a positive customer outcome during recovery. For those non-supported statuses, either omit the outcome or say that the same-SKU record does not directly confirm it; do not turn a conditional factor into a categorical suitability, portability, lightness, ease, or task-result claim. Treat unverified_customer_outcomes and bounded_customer_outcomes as explicit prohibitions on affirming those outcomes, even when the sentence is phrased as a recommendation. For a bounded task or group-fit factor, do not say 可用于烧水/煮面 merely from a people range, capacity, or broad usage scene unless the same-SKU evidence explicitly records that capability; report the recorded scene/number and keep the named task unconfirmed. If the same-SKU record explicitly uses a qualitative product descriptor such as 小巧轻便, retain it only with source attribution such as 资料标注为“小巧轻便”; do not present it as a personal judgement, and do not turn numeric size into 不占地方. A capacity, people range, audience label, or broad usage scene does not by itself establish a separately named recipe, food, amount, or task; when the supplied same-SKU evidence does not name that task, keep the recommendation but say that the specific task is not directly confirmed. Candidate evidence_boundaries likewise prohibit repeating a disputed field value embedded in a product name or RAG text; use the SKU or a neutral form instead. Include only facts that answer the customer's stated priorities; omit unrelated weight, portability, storage, or selling-point details. "
+        + "Use decision_factor_status as the boundary for each customer priority: supported may be positive; bounded, partial, or unverified must not be stated as a positive customer outcome during recovery. For those non-supported statuses, either omit the outcome or say that the same-SKU record does not directly confirm it; do not turn a conditional factor into a categorical suitability, portability, lightness, ease, or task-result claim. Treat unverified_customer_outcomes and bounded_customer_outcomes as explicit prohibitions on affirming those outcomes, even when the sentence is phrased as a recommendation. semantic_factor_evidence is the upstream RAG adjudicator's explanation of each factor-to-evidence relation; preserve that semantic interpretation during recovery, without treating its fields or excerpts as literal wording gates or using it to add facts. For a bounded task or group-fit factor, do not say 可用于烧水/煮面 merely from a people range, capacity, or broad usage scene unless the same-SKU evidence explicitly records that capability; report the recorded scene/number and keep the named task unconfirmed. If the same-SKU record explicitly uses a qualitative product descriptor such as 小巧轻便, retain it only with clear source attribution such as 资料标注为“小巧轻便”; do not present it as a personal judgement, and do not turn numeric size into 不占地方. A capacity, people range, audience label, or broad usage scene does not by itself establish a separately named recipe, food, amount, or task; when the supplied same-SKU evidence does not name that task, keep the recommendation but say that the specific task is not directly confirmed. Candidate evidence_boundaries likewise prohibit repeating a disputed field value embedded in a product name or RAG text; use the SKU or a neutral form instead. Include only facts that answer the customer's stated priorities; omit unrelated weight, portability, storage, or selling-point details. "
           "Do not introduce storage, cleaning, safety, performance, environment, or another use unless the question asks for it and the supplied same_sku_evidence was cited for that factor. When a requested factor is only partial or unverified, state the narrower recorded property or disclose the gap; never upgrade portability into storage, material into ease of use, or a broad audience into a guarantee. A numeric measurement is safe to report as a measurement, but not to label as lighter, relatively light, suitable for a lightweight preference, easy to carry, or a comparison winner unless the same packet explicitly supports that qualitative or comparative meaning. "
          + _SEMANTIC_MEASUREMENT_SUBJECTIVITY_BOUNDARY
           + "Previous semantic audit feedback is supplied separately as repair context. Treat it as model-generated evidence-boundary feedback: remove every rejected meaning, keep the same selected SKU, and do not turn the feedback into a new route, filter, or customer-facing explanation. When the feedback says a numeric measurement does not entail a qualitative or personal outcome, write only the measurement. Never mention internal routing, retrieval, evidence, validation, candidate indexes, or this recovery."
