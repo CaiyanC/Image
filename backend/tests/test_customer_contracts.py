@@ -920,6 +920,19 @@ def test_semantic_preplan_prompt_keeps_unrepresented_capabilities_in_product_qa(
     assert "Preserve every independent customer requirement" in system
 
 
+def test_semantic_preplan_prompt_does_not_infer_gift_recipient_as_headcount():
+    messages = customer_agent_planner_service._semantic_preplan_messages(
+        question="朋友刚开始露营，想送一件实用礼物",
+        deterministic_plan={},
+        context={},
+    )
+
+    system = messages[0]["content"]
+    assert "Do not infer a diner/user headcount from a recipient" in system
+    assert "A friend who is new to camping is audience/context, not people=1" in system
+    assert "do not turn an unverified preference into a hard no-match" in system
+
+
 def test_semantic_repair_prompt_keeps_typed_preferences_out_of_formal_fields(monkeypatch):
     responses = iter(
         [
@@ -1082,6 +1095,35 @@ def test_semantic_preplan_repairs_compound_component_field_mirror_into_rag():
             "reasoning_summary": "The component values need product QA retrieval.",
         },
         customer_question="CW-C95 的煮锅、煎盘和水壶分别多大？",
+    )
+
+    assert preplan["fallback_reason"] == ""
+    assert preplan["evidence_kind"] == "product_qa"
+    assert preplan["canonical_fields"] == []
+    assert preplan["field_type"] == ""
+    assert preplan["field_hint"] is None
+
+
+def test_semantic_preplan_normalizes_empty_product_bound_shape_to_same_sku_rag():
+    """A provider transport label must not drop an explicit product identity."""
+    preplan = customer_agent_planner_service._validate_semantic_preplan(
+        {
+            "route_family": "product_bound_qa",
+            "route_hint": "product_detail",
+            "question_type": "field",
+            "entities": ["CW-C78"],
+            "subject_text": "CW-C78",
+            "canonical_fields": [],
+            "field_type": "",
+            "field_hint": None,
+            "evidence_kind": "structured_field",
+            "confidence": "high",
+            "ambiguity": False,
+            "evidence_required": True,
+            "context_usage": "none",
+            "reasoning_summary": "The named product needs same-SKU evidence.",
+        },
+        customer_question="CW-C78 好不好收纳？",
     )
 
     assert preplan["fallback_reason"] == ""

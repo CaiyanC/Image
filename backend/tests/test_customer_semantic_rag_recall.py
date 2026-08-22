@@ -2741,6 +2741,96 @@ def test_budget_fact_fallback_does_not_turn_single_cookware_weight_into_set_clai
     assert "整套约" not in fallback["answer"]
 
 
+def test_fact_fallback_drops_fields_attached_to_unverified_scenario_factor():
+    fallback = service._sealed_recommendation_fact_fallback(
+        question="想选一套适合短途露营的锅具",
+        fallback={"ranked_candidate_indexes": [0]},
+        rows=[{
+            "sku": "SET-1",
+            "product_name_cn": "测试套锅",
+            "usage_scenarios": "轻量徒步、单人露营",
+            "target_audience": "1-2人露营者",
+            "capacity": "大锅1.7L、水壶1.0L",
+            "gross_weight_g": 960,
+        }],
+        coverage={
+            "decision_factors": [{
+                "factor": "短途露营场景",
+                "dimension": "scenario",
+                "factor_type": "practical_fit",
+                "decision_kind": "scenario_fit",
+                "importance": "required",
+                "supported_candidate_indexes": [],
+                "bounded_candidate_indexes": [],
+                "partial_candidate_indexes": [],
+                "unverified_candidate_indexes": [0],
+                "evidence_usage": [{
+                    "candidate_index": 0,
+                    "evidence": [{
+                        "field": "content.usage_scenarios",
+                        "excerpt": "轻量徒步、单人露营",
+                    }],
+                }],
+            }],
+        },
+    )
+
+    assert fallback is not None
+    assert "轻量徒步" not in fallback["answer"]
+    assert "容量" in fallback["answer"]
+    assert "\u8fd9\u4e00\u70b9" in fallback["answer"]
+
+
+def test_fact_fallback_prioritizes_supported_heat_source_and_keeps_task_gap():
+    fallback = service._sealed_recommendation_fact_fallback(
+        question="\u5df2\u6709\u9152\u7cbe\u7089\uff0c\u60f3\u627e\u9002\u5408\u4e24\u4eba\u716e\u9762\u7684\u9505",
+        fallback={"ranked_candidate_indexes": [0]},
+        rows=[{
+            "sku": "POT-1",
+            "product_name_cn": "\u6d4b\u8bd5\u5355\u9505",
+            "usage_scenarios": "\u53cc\u4eba\u9732\u8425",
+            "target_audience": "1-2\u4eba\u9732\u8425\u8005",
+            "capacity": "1400ML",
+            "gross_weight_g": 300,
+            "heat_source": "\u9152\u7cbe\u7089",
+        }],
+        coverage={
+            "decision_factors": [
+                {
+                    "factor": "\u652f\u6301\u9152\u7cbe\u7089",
+                    "factor_type": "factual",
+                    "importance": "required",
+                    "supported_candidate_indexes": [0],
+                    "evidence_usage": [{
+                        "candidate_index": 0,
+                        "evidence": [{"field": "specs.heat_source", "excerpt": "\u9152\u7cbe\u7089"}],
+                    }],
+                },
+                {
+                    "factor": "\u9002\u5408\u4e24\u4eba\u716e\u9762",
+                    "factor_type": "practical_fit",
+                    "decision_kind": "scenario_fit",
+                    "importance": "preferred",
+                    "supported_candidate_indexes": [],
+                    "bounded_candidate_indexes": [0],
+                    "evidence_usage": [{
+                        "candidate_index": 0,
+                        "evidence": [
+                            {"field": "specs.capacity", "excerpt": "1400ML"},
+                            {"field": "content.usage_scenarios", "excerpt": "\u53cc\u4eba\u9732\u8425"},
+                        ],
+                    }],
+                },
+            ],
+        },
+    )
+
+    assert fallback is not None
+    assert "\u9152\u7cbe\u7089" in fallback["answer"]
+    assert "\u716e\u9762" in fallback["answer"]
+    assert "\u672a\u76f4\u63a5\u786e\u8ba4" in fallback["answer"]
+
+
 def test_factor_contract_separates_catalogue_portability_from_personal_burden(monkeypatch):
     captured = {}
 
@@ -2836,6 +2926,26 @@ def test_required_scenario_fit_does_not_reopen_unverified_rag_pool():
         coverage,
         question="咖啡器具里请推荐真正适合手冲的产品",
     ) == []
+
+
+def test_required_scenario_fit_keeps_only_positive_coverage_subset():
+    coverage = {
+        "ordinarily_usable_candidate_indexes": [0, 1, 2],
+        "decision_factors": [{
+            "factor": "短途露营场景",
+            "factor_type": "practical_fit",
+            "decision_kind": "scenario_fit",
+            "importance": "required",
+            "supported_candidate_indexes": [1, 2],
+            "bounded_candidate_indexes": [],
+            "partial_candidate_indexes": [],
+        }],
+    }
+
+    assert service._semantic_recommendation_preference_only_candidate_indexes(
+        coverage,
+        question="想选一套适合短途露营的锅具",
+    ) == [1, 2]
 
 
 def test_required_scenario_bounded_evidence_cannot_reopen_rag_pool():
@@ -4163,6 +4273,7 @@ def test_recommendation_final_audits_receive_writer_outcome_boundaries(monkeypat
     assert captured["comparison_context"]["reference_sku"] == "CW-C78"
     assert captured["comparison_context"]["reference_weight_g"] == 1320.0
     assert "No typed budget decision factor exists" in captured["writer_system"]
+    assert "budget/price language" in captured["writer_system"]
     assert "a single pot, 320g" in captured["writer_system"]
     assert "PERFECT GIFT" in captured["writer_system"]
     assert "target audience, usage scene" in captured["writer_system"]
@@ -4498,6 +4609,39 @@ def test_general_guidance_safety_review_preserves_approved_draft(monkeypatch):
 
     assert answer == draft
     assert audit["status"] == "approved"
+
+
+def test_general_guidance_safety_review_rejects_unanchored_capability_without_evidence(monkeypatch):
+    async def fake_chat_completion(_db, messages, **kwargs):
+        assert kwargs["purpose"] == "semantic_general_guidance_safety_review"
+        payload = json.loads(messages[-1]["content"])
+        assert payload["direct_evidence_available"] is False
+        assert payload["semantic_question_scope"]["field_type"] == "heat_source"
+        return json.dumps(
+            {
+                "safe": False,
+                "answer": "当前没有具体型号或直接资料，无法确认这类锅具是否支持明火；请按具体型号说明书核对。",
+                "reason": "The draft asserted compatibility without direct evidence.",
+            },
+            ensure_ascii=False,
+        )
+
+    monkeypatch.setattr(
+        service.customer_llm_service,
+        "chat_completion",
+        fake_chat_completion,
+    )
+
+    answer, audit = asyncio.run(service._semantic_general_guidance_safety_review(
+        object(),
+        question="铝合金锅可以用明火吗？",
+        draft_answer="铝合金锅可以用明火，但要控制火候。",
+        semantic_question_scope={"field_type": "heat_source"},
+        direct_evidence_available=False,
+    ))
+
+    assert "无法确认" in answer
+    assert audit["status"] == "repaired"
 
 
 def test_alternative_followup_gets_flash_relative_dimension_review():
@@ -4862,6 +5006,48 @@ def test_semantic_comparison_narrative_recovery_reuses_the_same_sealed_packet(mo
     assert "draft_answer" not in captured["payload"]
     assert captured["payload"]["sealed_evidence"] == packet
     assert captured["grounding_kwargs"]["strict_entailment"] is True
+
+
+def test_unanchored_product_qa_missing_recovery_reviews_preserved_scope(monkeypatch):
+    captured = {}
+
+    async def fake_chat_completion(_db, messages, **kwargs):
+        captured["purpose"] = kwargs["purpose"]
+        captured["payload"] = json.loads(messages[-1]["content"])
+        return json.dumps(
+            {
+                "safe": False,
+                "answer": "\u5f53\u524d\u6ca1\u6709\u5177\u4f53\u578b\u53f7\u6216\u76f4\u63a5\u8d44\u6599\uff0c\u65e0\u6cd5\u786e\u8ba4\u8fd9\u4e00\u6761\u4ef6\u3002",
+                "reason": "adjacent procedure",
+            },
+            ensure_ascii=False,
+        )
+
+    monkeypatch.setattr(
+        service.customer_llm_service,
+        "chat_completion",
+        fake_chat_completion,
+    )
+    result = asyncio.run(service._semantic_review_product_qa_missing_recovery(
+        object(),
+        question="\u5f97\u7528\u9632\u98ce\u6253\u706b\u673a\u5427\uff1f",
+        semantic_preplan={
+            "route_family": "general_chat",
+            "semantic_original_product_qa_scope": {
+                "route_family": "product_bound_qa",
+                "question_type": "usage",
+                "field_type": "heat_source",
+                "evidence_kind": "product_qa",
+            },
+        },
+        natural_missing={"answer": "\u5efa\u8bae\u7528\u6e29\u6c34\u548c\u8f6f\u5e03\u6e05\u6d01\u3002"},
+    ))
+
+    assert captured["purpose"] == "semantic_general_guidance_safety_review"
+    assert captured["payload"]["semantic_question_scope"]["route_family"] == "product_bound_qa"
+    assert captured["payload"]["semantic_question_scope"]["field_type"] == "heat_source"
+    assert result["debug"]["missing_recovery_scope_review"]["status"] == "repaired"
+    assert "\u65e0\u6cd5\u786e\u8ba4" in result["answer"]
 
 
 def test_semantic_comparison_narrative_recovery_does_not_bypass_strict_grounding(monkeypatch):

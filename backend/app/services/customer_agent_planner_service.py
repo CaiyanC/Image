@@ -803,6 +803,19 @@ def _validated_structured_query_constraints(
         if unit is not None and (not isinstance(unit, str) or len(unit.strip()) > 12):
             return None
         normalized_unit = unit.strip() if isinstance(unit, str) else None
+        unit_kind = normalized_unit.casefold() if normalized_unit else ""
+        # Keep the semantic field ontology typed: a headcount is not a volume
+        # and a volume/mass unit is not a headcount.  This rejects a malformed
+        # provider envelope so the semantic repair pass can reread the turn;
+        # it does not inspect customer wording or choose a route.
+        if (
+            field == "capacity"
+            and unit_kind in {"people", "person", "\u4eba", "\u4eba\u4efd"}
+        ) or (
+            field == "people"
+            and unit_kind in {"ml", "l", "\u6beb\u5347", "\u5347", "g", "kg", "\u514b", "\u5343\u514b"}
+        ):
+            return None
         normalized = {
             "field": field,
             "operator": operator,
@@ -1019,6 +1032,17 @@ def _validate_semantic_preplan(
         or entity_scope_lower in {"result_context", "result_set"}
     ):
         entity_scope = "prior_results"
+    elif entity_scope_lower in {
+        "category",
+        "category_scope",
+        "catalogue_category",
+        "catalogue_scope",
+        "catalogue_category_scope",
+    }:
+        # Flash may use the descriptive transport label ``category`` for the
+        # public category-scope enum. This preserves model-owned catalogue
+        # meaning; it does not identify a product or choose rows.
+        entity_scope = "category_scope"
     information_scope = str(data.get("information_scope") or "").strip()
     field_type = str(data.get("field_type") or "").strip()
     decision_requested = (
@@ -1084,6 +1108,36 @@ def _validate_semantic_preplan(
         and (not normalized_item or normalized_item not in SEMANTIC_PREPLAN_FIELD_TYPES)
     ]
     canonical_fields = list(dict.fromkeys(item for item in normalized_canonical_fields if item in SEMANTIC_PREPLAN_FIELD_TYPES and item))
+    catalogue_scope_fields = {"category", "product_name_cn", "product_name_en", "sku"}
+    category_scope_accessory_shape = bool(
+        route_family == "structured_query"
+        and question_type == "contents_accessories"
+        and set(canonical_fields) == {"accessories"}
+    )
+    category_scope_shape = bool(
+        route_family == "structured_query"
+        and entity_scope == "category_scope"
+        and str(data.get("subject_text") or "").strip()
+        and (
+            set(canonical_fields).issubset(catalogue_scope_fields)
+            or category_scope_accessory_shape
+        )
+        and not decision_requested
+        and confidence >= 0.9
+        and not any(
+            EXPLICIT_SKU_RE.search(entity) or PLAIN_EXPLICIT_SKU_RE.search(entity)
+            for entity in entities
+        )
+    )
+    if category_scope_shape:
+        # Display-column hints do not change a category filter and must not
+        # trigger the named-product/non-filter guard below.
+        canonical_fields = ["category"]
+        data["canonical_fields"] = ["category"]
+        field_type = "category"
+        field_hint = "category"
+        data["field_type"] = "category"
+        data["field_hint"] = "category"
     # Catalogue listings may ask for display columns such as product name and
     # SKU. Those columns describe how returned rows should be presented; they
     # are not product-bound identity fields and are not executable filters.
@@ -1167,10 +1221,20 @@ def _validate_semantic_preplan(
     # required key, a product-bound plan with no canonical field was already
     # the model's only way to say “use same-SKU QA”.  Preserve that semantic
     # decision rather than allowing aliases to reclassify it as a column.
-    evidence_kind = raw_evidence_kind or (
+    # A product-bound plan with no canonical field or field mirror has no
+    # scalar column to execute. It is the semantic shape for same-SKU RAG,
+    # even when Flash fills the transport envelope with
+    # ``evidence_kind=structured_field``. Letting that incidental label win
+    # drops the named product before entity resolution. Normalize the
+    # internally coherent typed plan here; this does not inspect customer
+    # wording, choose a field, or select a product/evidence row.
+    evidence_kind = (
         "product_qa"
-        if route_family == "product_bound_qa" and not canonical_fields and not field_type and not field_hint
-        else "structured_field"
+        if route_family == "product_bound_qa"
+        and not canonical_fields
+        and not field_type
+        and not field_hint
+        else (raw_evidence_kind or "structured_field")
     )
     # Recommendation selection has its own request/evidence contract.
     # This product-fact retrieval label must not invalidate a complete plan.
@@ -1676,12 +1740,92 @@ def _validate_semantic_preplan(
                 # malformed multi-condition semantic plan.
                 result["semantic_route_family_hint"] = "structured_query"
                 result["semantic_confidence_hint"] = confidence
+                subject_text = str(data.get("subject_text") or "").strip()
+                raw_scope_predicates = (
+                    raw_predicate_constraints
+                    if isinstance(raw_predicate_constraints, dict)
+                    else None
+                )
+                raw_category_predicates = (
+                    isinstance(raw_predicate_constraints, list)
+                    and bool(raw_predicate_constraints)
+                    and all(
+                        isinstance(item, dict)
+                        and str(item.get("field") or "").strip() == "category"
+                        for item in raw_predicate_constraints
+                    )
+                )
+                scope_only_predicate_shape = bool(
+                    raw_scope_predicates
+                    and set(raw_scope_predicates).issubset(
+                        {"subject_kind", "subject_kinds"}
+                    )
+                ) or raw_category_predicates
+                raw_recommendation_scope = (
+                    raw_constraints
+                    if isinstance(raw_constraints, dict)
+                    else {}
+                )
+                recommendation_scope_only = set(raw_recommendation_scope).issubset(
+                    {"subject_kind", "subject_kinds"}
+                )
+                # Flash can occasionally echo the recommendation-only
+                # compound scope object (subject_kinds) into the structured
+                # predicate slot while still correctly identifying a
+                # category browse.  That transport error must not erase the
+                # independent category meaning.  Preserve only the typed,
+                # unconstrained category scope; live catalogue resolution
+                # still has to prove the subject before rows are returned.
+                if (
+                    subject_text
+                    and (
+                        category_scope_shape
+                        or canonical_fields == ["category"]
+                    )
+                    and not decision_requested
+                    and confidence >= 0.9
+                    and not unrepresented_requirements
+                    and not evidence_requirements
+                    and not soft_preferences
+                    and recommendation_scope_only
+                    and (
+                        raw_predicate_constraints in (None, [], {})
+                        or scope_only_predicate_shape
+                    )
+                ):
+                    result.update({
+                        "route_family": "structured_query",
+                        "route_hint": "query_products",
+                        "question_type": "filter",
+                        "entities": entities,
+                        "subject_text": subject_text[:200],
+                        "canonical_fields": ["category"],
+                        "ambiguity": bool(data.get("ambiguity")),
+                        "evidence_required": False,
+                        "evidence_kind": "structured_field",
+                        "decision_requested": False,
+                        "recommendation_constraints": {},
+                        "predicate_constraints": [],
+                        "structured_query_constraints": [],
+                        "subtype": "category_browse",
+                        "confidence": max(0.0, min(1.0, confidence)),
+                        "confidence_label": confidence_label,
+                        "reason": str(data.get("reason") or "")[:300],
+                        "accepted_or_overridden": "schema_salvaged_category_scope",
+                        "override_reason": (
+                            "malformed_structured_scope_predicate_preserved_category"
+                        ),
+                        "fallback_reason": "",
+                        "semantic_category_scope_salvaged": True,
+                        "catalogue_field_candidate": "category",
+                    })
+                    result["raw_preview"] = _safe_preview(raw_content)
+                    return result
                 # A malformed filter predicate does not invalidate the model's
                 # independent recognition of one formal field and its textual
                 # subject.  Preserve that candidate for the service layer to
                 # validate against an EntityResolutionContract; it cannot select
                 # an SKU, evidence, or answer on its own.
-                subject_text = str(data.get("subject_text") or "").strip()
                 if (
                     subject_text
                     and len(canonical_fields) == 1
@@ -1801,6 +1945,7 @@ def _validate_semantic_preplan(
             catalogue_display_listing_shape
             and canonical_fields == ["category"]
         )
+        and not category_scope_shape
     ):
         result = _empty_semantic_preplan(
             called=True,
@@ -2322,8 +2467,11 @@ def _semantic_preplan_messages(
         "recommendation_followup_action,unsafe_or_fabricated_answer_requested,qa_or_usage_care,unknown_field,reason,reasoning_summary. "
         f"route_family must be one of: {route_families}. Use recommendation when the customer wants the assistant to "
         "choose or prioritize actual catalogue products; use structured_query for browsing/listing/counting a set "
-        "without asking the assistant to choose; use comparison for two or more product participants; use "
+        "without asking the assistant to choose. When buying or finding options for a named use, capability, "
+        "compatibility, or combined product forms, use recommendation and preserve the base form plus the requirement; "
+        "structured_query is only an unconstrained category/collection browse. Use comparison for two or more product participants; use "
         "product_bound_qa for a fact, capability, procedure, judgement, or overview about one named or anchored product; "
+        "For unanchored accessory options/listing, use structured_query as a category browse; asking what accessories belong to an unspecified product is clarification. Do not default an available-options question to clarification solely because identity is omitted. "
         "a named-product question about operating steps, safety rules, prohibited actions is product_bound_qa even if its answer may later use a manual or knowledge-base document as evidence; "
         "use knowledge_base_meta for a request explicitly bounded to a supplied knowledge source; use general_chat for "
         "non-catalogue guidance; use unknown_realtime for current commercial information; use clarification only when "
@@ -2405,6 +2553,29 @@ def _semantic_preplan_messages(
         system,
         count=1,
         flags=re.DOTALL,
+    )
+    # The method-suitability sentence is inserted between the numeric-field
+    # distinctions in some source revisions.  Match the whole semantic block
+    # by its stable beginning/end so the live prompt budget does not depend on
+    # that internal wording layout.
+    system = re.sub(
+        r"recommendation_evidence_requirements and recommendation_soft_preferences are short strings, not nested objects\..*?Other casual context remains soft\. ",
+        "recommendation_evidence_requirements and recommendation_soft_preferences are short strings. Requirements/preferences come from current or prior customer meaning; gift use does not imply appearance or packaging. A container, bag, or case that can hold a full set of tableware is a required same-SKU capability, as is explicitly required/dedicated use. Selecting products by suitability for a named method is required product-fit evidence; background use is soft. Keep capacity, weight, dimensions, heating compatibility, material, and surface finish distinct. ",
+        system,
+        count=1,
+        flags=re.DOTALL,
+    )
+    system = system.replace(
+        "Keep capacity, weight, dimensions, heating compatibility, material, and surface finish distinct. ",
+        "Keep capacity, weight, dimensions, heating compatibility, material, and surface finish distinct. Headcount belongs to people, while capacity is volume; never encode a people count as a capacity value or invent a numeric weight threshold from a qualitative request such as light/easy to carry. ",
+        1,
+    )
+    # Keep common social context from becoming fabricated catalogue filters.
+    # This is semantic guidance for Flash's typed plan, not a customer-word
+    # route: the model still decides whether the turn expresses a real
+    # headcount, price condition, or product capability.
+    system += (
+        " Do not infer a diner/user headcount from a recipient, friendship, a single gift, or singular product wording; people means the number of users/diners only when the customer explicitly states that group size or makes it a non-negotiable eligibility condition. A friend who is new to camping is audience/context, not people=1. Do not infer price/affordability, dishwasher compatibility, or other formal product fields from words such as gift, practical, low-regret, beginner-friendly, or easy to store. Preserve those meanings as semantic recommendation factors or soft preferences, and do not turn an unverified preference into a hard no-match. "
     )
     user = {
         "question": question,
@@ -2737,7 +2908,14 @@ async def _repair_semantic_preplan_output(
             "heat_sources and scenarios contain only their declared enum values; "
             "dishwasher_safe is either true or omitted. Omit unused optional keys "
             "instead of emitting empty strings, false, or empty arrays. The three "
-            "recommendation semantic context fields are arrays, never scalar strings."
+            "recommendation semantic context fields are arrays, never scalar strings. "
+            "Keep typed meanings distinct: people is a headcount, capacity is volume, "
+            "and weight is mass. A qualitative request for lightness must not become an "
+            "invented numeric weight threshold. A gift request that mentions a friend, "
+            "a beginner audience, one gift, practicality, low choice risk, or storage "
+            "does not by itself state dishwasher compatibility, a budget/affordability "
+            "condition, or a people headcount; omit those typed keys unless the complete "
+            "customer turn explicitly expresses them."
         )
     elif failure_reason == "missing_recommendation_semantic_context":
         messages[0]["content"] += (
@@ -3182,6 +3360,18 @@ async def _repair_semantic_preplan_output(
                 "requested canonical field. Use structured_query only when the "
                 "customer independently asks to filter a catalogue set."
             )
+        messages[0]["content"] += (
+            " Final semantic recovery check: do not preserve structured_query merely because the previous JSON named "
+            "a product category. Re-read the complete customer turn. If the customer is trying to buy, find, or "
+            "prioritize actual items for a named use, required capability, compatibility, or combination of product "
+            "forms, return route_family=recommendation with decision_requested=true, preserve the base product form "
+            "in subject_text, and put the named use/capability in recommendation_evidence_requirements or "
+            "unrepresented_recommendation_requirements. A compound subject_kinds value is retrieval scope only and "
+            "must stay inside recommendation_constraints; it is never a predicate field. Use structured_query only "
+            "when the customer is genuinely browsing a broad category or collection without asking whether items "
+            "satisfy a product-fit condition. Do not create a composite database category, select a product, or "
+            "invent a fact."
+        )
     if failure_reason == "missing_recommendation_constraints":
         messages[0]["content"] += (
             " This is a high-confidence recommendation whose route was valid "
@@ -3803,6 +3993,11 @@ async def _repair_semantic_recommendation_constraint_partition(
             ),
         },
     ]
+    messages[0]["content"] += (
+        " Keep typed meanings distinct: people is a headcount, capacity is volume, "
+        "and weight is mass. Never encode a people count as a capacity predicate, and "
+        "never invent a numeric weight threshold from a qualitative light/easy-to-carry request."
+    )
     for attempt in range(2):
         attempt_messages = [dict(message) for message in messages]
         if attempt:
@@ -3952,6 +4147,11 @@ async def _semantic_recommendation_constraint_grounding(
                 "using a dishwasher or dishwasher compatibility; cleaning ease, "
                 "a non-stick finish, maintenance, or saying something is not "
                 "complicated does not imply dishwasher compatibility. A named "
+                "gift recipient, beginner audience, singular gift, practical wording, "
+                "low-choice-risk wording, or storage preference likewise does not imply "
+                "dishwasher compatibility, affordability, or a people headcount; omit "
+                "those typed values unless the complete turn explicitly states the "
+                "corresponding meaning. "
                 "heat source must retain its actual meaning: do not change a "
                 "card stove into a gas stove or the reverse. "
                 "recommendation_constraints uses only the declared abstract "
@@ -4004,6 +4204,14 @@ async def _semantic_recommendation_constraint_grounding(
             ),
         },
     ]
+    messages[0]["content"] += (
+        " Keep typed meanings distinct while grounding: people is a headcount, capacity is volume, "
+        "and weight is mass. Reject a capacity predicate carrying a people unit, and do not invent a "
+        "numeric weight threshold from a qualitative light/easy-to-carry request. A gift recipient, "
+        "beginner audience, singular gift, practical/low-regret wording, or storage preference is not "
+        "evidence for dishwasher_safe, price_preference, or people; remove those proposed typed values "
+        "unless the complete question explicitly states the relevant condition."
+    )
     try:
         raw = await customer_llm_service.chat_completion(
             db,
@@ -4783,18 +4991,14 @@ async def plan_customer_question_semantic(
     # grounding pass for predicates and any additional constraint (heat source,
     # material, compatibility, etc.) where a second semantic reading can
     # prevent a malformed enum from becoming a hard requirement.
+    # All non-scope typed constraints need the same semantic grounding pass.
+    # The previous exclusion of people/scenario/price/storage/dishwasher fields
+    # treated the allowlist as proof that Flash had actually expressed them,
+    # so an unrequested optional enum could become a hard filter. Subject scope
+    # remains preserved; fit constraints are re-read by Flash against the
+    # complete turn before RAG consumes them.
     constraint_grounding_needed = bool(result.get("predicate_constraints")) or bool(
-        proposed_constraint_keys
-        - {
-            "subject_kind",
-            "subject_kinds",
-            "people",
-            "scenarios",
-            "weight_preference",
-            "price_preference",
-            "storage_preference",
-            "dishwasher_safe",
-        }
+        proposed_constraint_keys - {"subject_kind", "subject_kinds"}
     )
     if (
         not result.get("fallback_reason")

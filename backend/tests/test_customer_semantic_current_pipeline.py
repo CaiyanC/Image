@@ -63,6 +63,36 @@ def test_semantic_preplan_normalizes_scalar_people_transport_shape():
     }
 
 
+def test_semantic_predicate_keeps_headcount_and_volume_units_distinct():
+    malformed = customer_agent_planner_service._validated_structured_query_constraints(
+        [{
+            "field": "capacity",
+            "operator": ">=",
+            "value": 2,
+            "unit": "people",
+            "evidence_span": "两个人",
+        }]
+    )
+    valid = customer_agent_planner_service._validated_structured_query_constraints(
+        [{
+            "field": "people",
+            "operator": ">=",
+            "value": 2,
+            "unit": "people",
+            "evidence_span": "两个人",
+        }]
+    )
+
+    assert malformed is None
+    assert valid == [{
+        "field": "people",
+        "operator": ">=",
+        "value": 2,
+        "unit": "people",
+        "evidence_span": "两个人",
+    }]
+
+
 def test_semantic_preplan_lifts_malformed_storage_enum_to_soft_context():
     provider_shape = {
         "route_family": "recommendation",
@@ -97,6 +127,147 @@ def test_semantic_preplan_lifts_malformed_storage_enum_to_soft_context():
         "\u5b9e\u7528",
         "easy_to_store",
     ]
+
+
+def test_semantic_preplan_normalizes_catalogue_category_scope_transport():
+    provider_shape = {
+        "route_family": "structured_query",
+        "route_hint": "query_products",
+        "question_type": "contents_accessories",
+        "entities": [],
+        "subject_text": "\u9644\u4ef6",
+        "entity_scope": "catalogue_category",
+        "canonical_fields": ["accessories"],
+        "confidence": "high",
+        "ambiguity": False,
+        "evidence_required": True,
+        "evidence_kind": "structured_field",
+        "decision_requested": False,
+        "predicate_constraints": [],
+        "structured_query_constraints": [],
+    }
+
+    result = customer_agent_planner_service._validate_semantic_preplan(
+        provider_shape,
+        raw_content=json.dumps(provider_shape, ensure_ascii=False),
+        customer_question="\u9644\u4ef6\u6709\u54ea\u4e9b\u53ef\u9009\uff1f",
+    )
+
+    assert result["fallback_reason"] == ""
+    assert result["entity_scope"] == "category_scope"
+    assert result["canonical_fields"] == ["category"]
+
+
+def test_unanchored_accessory_browse_is_recovered_by_flash_and_live_category(monkeypatch):
+    calls = []
+
+    async def fake_chat(_db, _messages, **kwargs):
+        calls.append(kwargs.get("purpose"))
+        assert "有哪些配件可选" in _messages[0]["content"]
+        assert "category browse" in _messages[0]["content"]
+        return json.dumps(
+            {
+                "route_family": "structured_query",
+                "set_field": "category",
+                "subject_text": "\u914d\u4ef6",
+                "subject_kind": "",
+                "unrepresented_requirements": [],
+            },
+            ensure_ascii=False,
+        )
+
+    monkeypatch.setattr(
+        customer_service_service.customer_llm_service,
+        "chat_completion",
+        fake_chat,
+    )
+    monkeypatch.setattr(
+        customer_service_service,
+        "_phase1_catalog_rows",
+        lambda _db, _ref: [{"category": "\u914d\u4ef6"}],
+    )
+    monkeypatch.setattr(
+        customer_service_service,
+        "_database_category_scope_ref",
+        lambda _rows, subject: "\u914d\u4ef6" if subject == "\u914d\u4ef6" else "",
+    )
+
+    result = asyncio.run(
+        customer_service_service._semantic_unanchored_catalogue_category_recovery(
+            object(),
+            "\u914d\u4ef6\u6709\u54ea\u4e9b\u53ef\u9009\uff1f",
+            {
+                "called": True,
+                "route_family": "clarification",
+                "route_hint": "clarification",
+                "question_type": "contents_accessories",
+                "subtype": "contents_accessories",
+                "entities": [],
+                "subject_text": "",
+                "canonical_fields": ["accessories"],
+                "field_type": "accessories",
+                "field_hint": "accessories",
+                "context_usage": "none",
+                "context_result_indexes": [],
+                "llm_call_count": 1,
+                "llm_call_count_delta": 1,
+            },
+        )
+    )
+
+    assert result is not None
+    assert result["route_family"] == "structured_query"
+    assert result["canonical_fields"] == ["category"]
+    assert result["subject_text"] == "\u914d\u4ef6"
+    assert result["catalogue_category_ref"] == "\u914d\u4ef6"
+    assert result["semantic_adapter_source"] == (
+        "semantic_unanchored_catalogue_category_recovery"
+    )
+    assert result["llm_call_count"] == 2
+    assert calls == ["semantic_unanchored_catalogue_scope_recovery"]
+
+
+def test_unanchored_accessory_scope_does_not_bypass_identity_safety(monkeypatch):
+    async def fake_chat(_db, _messages, **kwargs):
+        assert kwargs.get("purpose") == "semantic_unanchored_catalogue_scope_recovery"
+        return json.dumps(
+            {
+                "route_family": "clarification",
+                "set_field": "",
+                "subject_text": "",
+                "subject_kind": "",
+                "unrepresented_requirements": [],
+            },
+            ensure_ascii=False,
+        )
+
+    monkeypatch.setattr(
+        customer_service_service.customer_llm_service,
+        "chat_completion",
+        fake_chat,
+    )
+    result = asyncio.run(
+        customer_service_service._semantic_unanchored_catalogue_category_recovery(
+            object(),
+            "\u8fd9\u4e2a\u4ea7\u54c1\u6709\u54ea\u4e9b\u914d\u4ef6\uff1f",
+            {
+                "called": True,
+                "route_family": "product_bound_qa",
+                "route_hint": "accessory",
+                "question_type": "contents_accessories",
+                "subtype": "contents_accessories",
+                "entities": [],
+                "subject_text": "",
+                "canonical_fields": ["accessories"],
+                "field_type": "accessories",
+                "field_hint": "accessories",
+                "context_usage": "none",
+                "context_result_indexes": [],
+            },
+        )
+    )
+
+    assert result is None
 
 
 def test_unresolved_factor_cannot_authorize_an_adjacent_writer_field():
@@ -196,6 +367,77 @@ def test_category_subject_preserves_prior_recommendation_context(monkeypatch):
     assert normalized["recommendation_constraints"]["subject_kind"] == "cookware"
     assert normalized["decision_requested"] is True
     assert normalized["recommendation_soft_preferences"] == ["作为礼物"]
+
+
+def test_natural_category_browse_uses_live_catalogue_scope(monkeypatch):
+    monkeypatch.setattr(
+        customer_service_service,
+        "_phase1_catalog_rows",
+        lambda *_args: [{"category": "\u9505\u5177"}],
+    )
+    monkeypatch.setattr(
+        customer_service_service,
+        "_database_category_scope_ref",
+        lambda _rows, _subject: "\u9505\u5177",
+    )
+
+    normalized = customer_service_service._normalize_semantic_catalogue_continuation(
+        object(),
+        {
+            "route_family": "structured_query",
+            "route_hint": "query_products",
+            "question_type": "filter",
+            "subject_text": "\u9505\u5177",
+            "entities": ["\u9505\u5177"],
+            "canonical_fields": [],
+            "structured_query_constraints": [],
+            "predicate_constraints": [],
+            "recommendation_constraints": {},
+            "decision_requested": False,
+        },
+        None,
+        question="\u6211\u60f3\u770b\u9505\u5177\uff0c\u6709\u54ea\u4e9b\u53ef\u9009\uff1f",
+    )
+
+    assert normalized["route_family"] == "structured_query"
+    assert normalized["route_hint"] == "query_products"
+    assert normalized["canonical_fields"] == ["category"]
+    assert normalized["catalogue_category_ref"] == "\u9505\u5177"
+    assert normalized["accepted_or_overridden"] == "catalogue_category_continuation"
+
+
+def test_structured_category_scope_survives_flash_scope_shape_in_predicate_slot():
+    provider_shape = {
+        "route_family": "structured_query",
+        "route_hint": "query_products",
+        "question_type": "filter",
+        "entities": ["\u9505\u5177"],
+        "subject_text": "\u9505\u5177",
+        "canonical_fields": ["category"],
+        "confidence": 0.9,
+        "ambiguity": False,
+        "evidence_required": False,
+        "evidence_kind": "structured_field",
+        "decision_requested": False,
+        "recommendation_constraints": {"subject_kinds": ["cookware"]},
+        "structured_query_constraints": {"subject_kinds": ["cookware"]},
+        "recommendation_evidence_requirements": [],
+        "recommendation_soft_preferences": [],
+        "unrepresented_recommendation_requirements": [],
+    }
+
+    result = customer_agent_planner_service._validate_semantic_preplan(
+        provider_shape,
+        raw_content=json.dumps(provider_shape, ensure_ascii=False),
+        customer_question="\u6211\u60f3\u770b\u9505\u5177\uff0c\u6709\u54ea\u4e9b\u53ef\u9009\uff1f",
+    )
+
+    assert result["fallback_reason"] == ""
+    assert result["route_family"] == "structured_query"
+    assert result["subject_text"] == "\u9505\u5177"
+    assert result["canonical_fields"] == ["category"]
+    assert result["structured_query_constraints"] == []
+    assert result["semantic_category_scope_salvaged"] is True
 
 
 def test_bare_category_context_marks_copied_soft_preferences_as_scope_only(monkeypatch):
@@ -746,6 +988,38 @@ def test_unresolved_generic_product_safety_uses_general_guidance_shape(monkeypat
     assert normalized["route_family"] == "general_chat"
     assert normalized["entities"] == []
     assert normalized["evidence_required"] is False
+    assert normalized["semantic_original_product_qa_scope"]["question_type"] == "usage"
+
+
+def test_product_bound_missing_recovery_does_not_authorize_adjacent_care_procedure(monkeypatch):
+    captured = {}
+
+    async def fake_chat_completion(_db, messages, **_kwargs):
+        captured["system"] = messages[0]["content"]
+        return json.dumps({"answer": "这个使用条件目前没有直接确认记录。"}, ensure_ascii=False)
+
+    monkeypatch.setattr(
+        customer_service_service.customer_llm_service,
+        "chat_completion",
+        fake_chat_completion,
+    )
+    result = asyncio.run(
+        customer_service_service._semantic_owned_missing_result_with_llm(
+            object(),
+            "得用防风打火机吧？",
+            {
+                "route_family": "product_bound_qa",
+                "question_type": "usage",
+                "subject_text": "",
+                "entities": [],
+            },
+            reason="product_qa_evidence_missing",
+        )
+    )
+
+    assert result["answer"] == "这个使用条件目前没有直接确认记录。"
+    assert "no resolved identity or selected same-SKU evidence" in captured["system"]
+    assert "Do not add an adjacent procedure" in captured["system"]
 
 
 def test_unbound_environmental_gas_stove_safety_is_not_downgraded_to_gap():
@@ -1039,8 +1313,17 @@ def test_care_knowledge_can_use_sku_scoped_product_qa_without_product_candidates
         ]
 
     async def fake_chat(_db, messages, **kwargs):
-        calls.append(kwargs.get("purpose"))
+        purpose = kwargs.get("purpose")
+        calls.append(purpose)
         payload = json.loads(messages[-1]["content"])
+        if purpose == "semantic_knowledge_evidence_relevance_audit":
+            assert payload["excerpts"][0]["sku"] == "CW-C73"
+            return json.dumps({
+                "relevant_source_indexes": [0],
+                "scope": "common_category",
+                "reason": "The excerpt directly records the requested care operation.",
+            }, ensure_ascii=False)
+        assert purpose == "semantic_knowledge_base_answer"
         assert payload["excerpts"][0]["sku"] == "CW-C73"
         return json.dumps({
             "answer": "资料中记录使用温水和软刷清洗，洗后彻底擦干，并避免钢丝球刮擦。",
@@ -1062,7 +1345,123 @@ def test_care_knowledge_can_use_sku_scoped_product_qa_without_product_candidates
     assert result["answer_type"] == "knowledge_base_answer"
     assert result["result_skus"] == []
     assert result["evidence"][0]["sku"] == "CW-C73"
-    assert calls == ["semantic_knowledge_base_answer"]
+    assert calls == [
+        "semantic_knowledge_evidence_relevance_audit",
+        "semantic_knowledge_base_answer",
+    ]
+
+
+def test_product_qa_rag_drops_semantically_adjacent_evidence_before_writing(monkeypatch):
+    calls = []
+
+    async def fake_retrieve(_db, _query, **_kwargs):
+        return [{
+            "source_type": "product",
+            "sku": "CF-PG19",
+            "content": "Q: 瓦片烤盘有什么禁止操作？ A: 严禁骤冷骤热，严禁长时间浸泡水中。",
+            "metadata": {
+                "source_id": "product:CF-PG19:qa:care",
+                "section": "qa:care",
+                "title": "CF-PG19 QA 禁止操作",
+                "sku": "CF-PG19",
+            },
+            "score": 9.0,
+        }]
+
+    async def fake_chat(_db, messages, **kwargs):
+        purpose = kwargs.get("purpose")
+        calls.append(purpose)
+        assert purpose == "semantic_knowledge_evidence_relevance_audit"
+        payload = json.loads(messages[-1]["content"])
+        assert payload["question"] == "铝合金锅可以直接放在明火上烧吗？"
+        return json.dumps({
+            "relevant_source_indexes": [],
+            "scope": "none",
+            "reason": "The excerpt concerns cleaning care, not heat-source compatibility.",
+        }, ensure_ascii=False)
+
+    monkeypatch.setattr(customer_service_service.knowledge_service, "semantic_retrieve", fake_retrieve)
+    monkeypatch.setattr(customer_service_service.customer_llm_service, "chat_completion", fake_chat)
+
+    result = asyncio.run(
+        customer_service_service._semantic_knowledge_base_meta_result(
+            object(),
+            "铝合金锅可以直接放在明火上烧吗？",
+            {"qa_evidence_query": "明火兼容性", "route_family": "general_chat"},
+            allow_product_qa=True,
+        )
+    )
+
+    assert result is None
+    assert calls == ["semantic_knowledge_evidence_relevance_audit"]
+
+
+def test_semantic_coverage_preserves_typed_assignment_role_for_rag_reranking(monkeypatch):
+    captured = {}
+
+    async def fake_chat_completion(*_args, **kwargs):
+        captured["system"] = kwargs["messages"][0]["content"]
+        return json.dumps({
+            "decision_factors": [{
+                "factor": "gift suitability",
+                "customer_basis": "the item is requested as a gift",
+                "dimension": "",
+                "factor_type": "practical_fit",
+                "decision_kind": "subjective_outcome",
+                "importance": "preferred",
+                "supported_candidate_indexes": [0],
+                "bounded_candidate_indexes": [],
+                "partial_candidate_indexes": [],
+                "unverified_candidate_indexes": [],
+                "evidence_usage": [{
+                    "candidate_index": 0,
+                    "evidence": [{
+                        "field": "identity.product_form",
+                        "excerpt": "cookware_set",
+                    }],
+                }],
+            }],
+            "coverage": [],
+            "candidate_usability": [{"candidate_index": 0, "status": "usable"}],
+            "request_fit": [{"candidate_index": 0, "status": "supported"}],
+            "ranked_candidate_indexes": [0],
+        }, ensure_ascii=False)
+
+    monkeypatch.setattr(
+        customer_service_service.customer_llm_service,
+        "chat_completion",
+        fake_chat_completion,
+    )
+    coverage = asyncio.run(
+        customer_service_service._semantic_recommendation_requirement_coverage(
+            object(),
+            question="我想送朋友一件不容易选错的露营礼物",
+            candidates=[{
+                "candidate_index": 0,
+                "sku": "CW-C78",
+                "product_name": "享野套锅",
+                "product_form": "cookware_set",
+                "sealed_evidence": {
+                    "identity.product_name": "享野套锅",
+                    "identity.product_form": "cookware_set",
+                },
+            }],
+            semantic_requirements=[],
+            decision_factor_contract=[{
+                "factor": "gift suitability",
+                "customer_basis": "the item is requested as a gift",
+                "dimension": "",
+                "factor_type": "practical_fit",
+                "decision_kind": "subjective_outcome",
+                "importance": "preferred",
+                "requested_role_factor": True,
+            }],
+        )
+    )
+
+    assert coverage is not None
+    assert coverage["decision_factors"][0]["requested_role_factor"] is True
+    assert "requested_role_factor=true" in captured["system"]
 
 
 def test_answer_shaper_does_not_reapply_catalogue_cleanup(monkeypatch):
