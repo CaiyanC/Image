@@ -577,6 +577,12 @@ def _validated_recommendation_constraints(value: Any) -> dict[str, Any] | None:
             return None
         result["subject_kinds"] = subject_kinds
     people = value.get("people")
+    # Flash may serialize an explicitly typed single headcount as a scalar
+    # even though the public contract uses {min,max}.  Normalize that
+    # transport shape without reading customer wording or inventing a group:
+    # the model has already supplied the integer meaning.
+    if type(people) is int and 1 <= people <= 99:
+        people = {"min": people, "max": people}
     if people == {}:
         people = None
     if people is not None:
@@ -1514,6 +1520,31 @@ def _validate_semantic_preplan(
             "unrepresented_recommendation_requirements"
         )
         data["recommendation_constraints"] = raw_constraints
+    # ``storage_preference`` is a non-binding ranking hint.  If Flash emits
+    # that one optional enum in a natural semantic spelling, preserve the
+    # model-authored value as soft recommendation context instead of forcing
+    # a full route/schema reread.  This does not translate customer wording,
+    # create a hard predicate, or broaden retrieval; hard scope and typed
+    # eligibility fields remain strict below.
+    if route_family == "recommendation" and isinstance(raw_constraints, dict):
+        raw_storage_preference = raw_constraints.get("storage_preference")
+        if (
+            isinstance(raw_storage_preference, str)
+            and raw_storage_preference.strip()
+            and raw_storage_preference != "compact_storage"
+            and len(raw_storage_preference.strip()) <= 80
+        ):
+            raw_constraints = dict(raw_constraints)
+            raw_constraints.pop("storage_preference", None)
+            data = dict(data)
+            existing_soft = _validated_recommendation_soft_preferences(
+                data.get("recommendation_soft_preferences")
+            ) or []
+            data["recommendation_soft_preferences"] = list(dict.fromkeys([
+                *existing_soft,
+                raw_storage_preference.strip(),
+            ]))
+            data["recommendation_constraints"] = raw_constraints
     # ``recommendation_constraints`` belongs to the recommendation contract.
     # Flash may still echo that optional object while describing a comparison,
     # product-bound fact, or another route.  It is not part of those routes'
@@ -2335,7 +2366,7 @@ def _semantic_preplan_messages(
          "as a JSON object, never a list, with only subject_kind, people, heat_sources, scenarios, weight_preference, price_preference, storage_preference, or dishwasher_safe. subject_kind is only one of cookware,waterware,stove,coffee_gear,accessories; it is a broad scope, not a translated product title. Keep a category such as 烤盘 verbatim in subject_text. people is {min,max}; heat_sources uses card_stove,gas_stove,alcohol_stove,open_flame,induction, where card_stove means 卡式炉/卡式灶, gas_stove means 燃气炉/燃气灶/气炉, alcohol_stove means 酒精炉/酒精灶, open_flame means 明火, and induction means 电磁炉/电磁灶; scenarios uses camping,hiking,self_drive,seaside,soup. The typed transport values are exact enums: use only lightweight for weight_preference and compact_storage for storage_preference; never put a natural-language synonym or a product claim in those two fields. If a preference cannot be represented by the exact enum, leave that typed key out and preserve the customer meaning in recommendation_soft_preferences. Do not turn a preference into a hard condition just because it sounds useful. predicate_constraints use {field,operator,value,evidence_span,unit,importance}; values and "
          "The compound-scope instruction above is authoritative: subject_kinds is an additional allowed array in recommendation_constraints. Use it for every independently requested physical form in a conjunctive choice and never use a comma-joined entity_scope value. "
          "Preferred multi-value capabilities remain preferences unless the complete turn explicitly requires every option; do not make ‘both/all’ a hard conjunction by itself. "
-         "evidence_span come from the current turn, while later code checks product evidence. Supported operators are material/usage_scene=contains, surface_finish/color/dimensions=contains or =, heat_source=supports or not_supports, waterproof==, and capacity/weight/people use numeric comparison operators. recommendation_evidence_requirements and recommendation_soft_preferences are short strings, not nested objects. Numeric meaning, people, "
+         "evidence_span come from the current turn, while later code checks product evidence. Supported operators are material/usage_scene=contains, surface_finish/color/dimensions=contains or =, heat_source=supports or not_supports, waterproof==, and numeric fields require numeric values. recommendation_evidence_requirements and recommendation_soft_preferences are short strings, not nested objects. Numeric meaning, people, "
          "When selecting by a named method (for example, ‘哪些适合手冲’), keep method suitability as required product-fit evidence, not a preference; only treat it as background when the customer is not selecting by that capability. "
          "capacity, weight, dimensions, heating compatibility, material, and surface finish are separate concepts. Every recommendation requirement or preference must be semantically entailed by the current question or an explicit prior customer preference; never infer a plausible shopping criterion from the requested category or use. In particular, a request to choose a gift must preserve the gift use itself, but it does not imply appearance, packaging, prestige, or presentation quality. Add any such criterion only when the customer actually states it, and keep gift suitability separate from an independently stated appearance/packaging preference so evidence for one cannot establish the other. Semantically distinguish a ranking preference from a product-fit requirement: when the customer explicitly asks for an item to be truly/really suitable, dedicated, explicitly supported, or required for a named method, role, or use, preserve that named method/role/use as a required concrete fit in recommendation_evidence_requirements or unrepresented_recommendation_requirements. For example, asking for products truly suitable for pour-over coffee requires evidence that the same product has the requested pour-over form or capability; a related coffee workflow tool is not a substitute. A container, bag, or case that can hold a full set of tableware (or another named set) is also a required concrete capability for same-SKU RAG, not a soft storage preference. Other casual context remains soft. "
          "Confidence is low, medium, or high; reasoning_summary is a short audit note, not hidden reasoning. "

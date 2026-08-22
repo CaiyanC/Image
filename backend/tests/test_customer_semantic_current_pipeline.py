@@ -26,6 +26,79 @@ def test_prior_recommendation_scope_exposes_only_catalogue_context():
     assert "CW-C93" not in json.dumps(result, ensure_ascii=False)
 
 
+def test_semantic_preplan_normalizes_scalar_people_transport_shape():
+    provider_shape = {
+        "route_family": "recommendation",
+        "route_hint": "recommendation",
+        "question_type": "recommendation",
+        "entities": [],
+        "subject_text": "\u9505\u5177",
+        "entity_scope": "category_scope",
+        "canonical_fields": [],
+        "confidence": "high",
+        "ambiguity": False,
+        "evidence_required": True,
+        "evidence_kind": "structured_field",
+        "decision_requested": True,
+        "recommendation_constraints": {
+            "subject_kinds": ["cookware"],
+            "people": 3,
+            "scenarios": ["camping"],
+            "storage_preference": "compact_storage",
+        },
+        "predicate_constraints": [],
+        "recommendation_evidence_requirements": [],
+        "recommendation_soft_preferences": ["\u5bb9\u91cf\u5927\u4e00\u4e9b"],
+    }
+
+    result = customer_agent_planner_service._validate_semantic_preplan(
+        provider_shape,
+        raw_content=json.dumps(provider_shape, ensure_ascii=False),
+    )
+
+    assert result["fallback_reason"] == ""
+    assert result["recommendation_constraints"]["people"] == {
+        "min": 3,
+        "max": 3,
+    }
+
+
+def test_semantic_preplan_lifts_malformed_storage_enum_to_soft_context():
+    provider_shape = {
+        "route_family": "recommendation",
+        "route_hint": "recommendation",
+        "question_type": "recommendation",
+        "entities": [],
+        "subject_text": "\u9505\u5177",
+        "entity_scope": "category_scope",
+        "canonical_fields": [],
+        "confidence": "high",
+        "ambiguity": False,
+        "evidence_required": True,
+        "evidence_kind": "structured_field",
+        "decision_requested": True,
+        "recommendation_constraints": {
+            "subject_kind": "cookware",
+            "storage_preference": "easy_to_store",
+        },
+        "predicate_constraints": [],
+        "recommendation_evidence_requirements": [],
+        "recommendation_soft_preferences": ["\u5b9e\u7528"],
+    }
+
+    result = customer_agent_planner_service._validate_semantic_preplan(
+        provider_shape,
+        raw_content=json.dumps(provider_shape, ensure_ascii=False),
+    )
+
+    assert result["fallback_reason"] == ""
+    assert result["recommendation_constraints"] == {"subject_kind": "cookware"}
+    assert result["recommendation_soft_preferences"] == [
+        "\u5b9e\u7528",
+        "easy_to_store",
+    ]
+
+
 def test_category_subject_preserves_prior_recommendation_context(monkeypatch):
     monkeypatch.setattr(
         customer_service_service,

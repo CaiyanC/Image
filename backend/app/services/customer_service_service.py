@@ -13298,13 +13298,22 @@ async def _semantic_recommendation_narrative(
             if index < coverage_candidate_limit
         }
     if diagnostics is not None:
+        factor_status = (
+            "skipped"
+            if scope_only_continuation or not factor_contract_needed
+            else "evaluated" if decision_factor_contract is not None else "unavailable"
+        )
+        factor_reason = (
+            "scope_only_continuation"
+            if scope_only_continuation
+            else "not_needed"
+            if not factor_contract_needed
+            else ""
+        )
         diagnostics.append({
             "stage": "semantic_decision_factor_extraction",
-            "status": (
-                "skipped"
-                if scope_only_continuation
-                else "evaluated" if decision_factor_contract is not None else "unavailable"
-            ),
+            "status": factor_status,
+            "reason": factor_reason,
             "decision_factors": list(decision_factor_contract or []),
             "original_candidate_count": original_candidate_count,
             "coverage_candidate_count": len(candidates),
@@ -16456,6 +16465,7 @@ async def _semantic_comparison_narrative_recovery(
                         "If the customer asks for such a practical judgement and the packet does not state it directly, say that the record does not directly establish the judgement while still reporting the supported measurements. "
                         "Keep every fact attached to its own participant. Keep component labels and capacities separate; never calculate a product total or invent a headcount. "
                         "A promotional or subjective sentence in the packet is product-record wording, not neutral proof; prefer a neutral measurement or mechanism, or qualify it as a recorded description. "
+                        "If the customer only asks which recorded value is larger, smaller, lighter, or otherwise extreme, answer that direct comparison and do not call the participant more suitable for a current need unless the customer separately asks for suitability or a purchase choice. "
                         "If a selected participant index is supplied, keep that choice, name the participant, and state it as the assistant's bounded recommendation based on the direct differences actually reported—for example, '如果更看重较低重量和较小收纳尺寸，我会选B'. Do not present it as a catalogue-declared overall winner or turn the measurements into an unsupported carrying/storage outcome. "
                         "Do not use a table, evidence dump, source labels, internal terms, or a generic no-result reply. "
                         "used_evidence_fields must contain only exact keys from the sealed packet and only fields actually used in the answer."
@@ -16616,7 +16626,8 @@ async def _semantic_comparison_narrative(
                         "Preserve every supplied component label exactly: a frying pan must not become a kettle, a small pot must not become a kettle, and a kettle must not become a cup. Never introduce a headcount different from the customer's stated group. "
                         "If a requested non-column point is not established by the packet, say that briefly rather than substituting an unrelated field. "
                         "Supplemental comparison evidence may be prose from the same product's knowledge record. Use only the directly stated product trait or limitation in it; do not strengthen a tentative or descriptive sentence into a guarantee such as 显著减轻、几乎不增加负担、一定更易收纳, and do not repeat retrieval prose verbatim when a shorter natural comparison is possible. Treat each supplied product_qa value as a source fact to understand, not text to paste: write at most one concise sentence for each participant's supplemental dimension and omit source labels, marketing slogans, repeated titles, and unrelated fields. If a source itself contains a subjective or promotional assessment such as 无负担、轻松携带、理想之选, it is not a neutral fact; omit it when the comparison can be answered from direct fields, or write it only as an explicitly attributed record description. Do not infer causation across evidence fields: a material or handle description does not prove a lower weight or easier storage, and a weight value does not prove compactness or portability. The presence of a handle alone does not establish that packing is harder or less convenient; report the handle as a recorded fact unless the packet also states a storage consequence. For storage/packing, use only an explicitly supplied storage method, nesting/packing statement, or recorded dimension; a carrying-burden or lightweight statement alone is not storage evidence. If that evidence is absent, say the storage point is not directly established. Preserve the customer's group-fit judgement as conditional unless a same-SKU people-range or equivalent explicit support is supplied. "
-                         "When a same-SKU knowledge/listing sentence uses a broad descriptive claim that conflicts with a structured numeric or typed value in the packet, prefer the structured value in the comparison and do not repeat the conflicting adjective as if it were an independently verified fact. "
+                        "When a same-SKU knowledge/listing sentence uses a broad descriptive claim that conflicts with a structured numeric or typed value in the packet, prefer the structured value in the comparison and do not repeat the conflicting adjective as if it were an independently verified fact. "
+                        "If the customer only asks which recorded value is larger, smaller, lighter, or otherwise extreme, answer that direct comparison and do not call the participant more suitable for a current need unless the customer separately asks for suitability or a purchase choice. "
                         "Keep comparison dimensions independent: weight does not prove storage/packing burden, capacity does not prove a serving headcount or that a group will eat enough, and a cooking scene does not prove portability. Do not use a broad outcome sentence such as '都能满足基本做饭需求' unless the sealed evidence explicitly establishes that outcome. direct_group_fit_evidence_available is true only when every participant has explicit numeric group-size or people-range evidence in the people field; broad target-audience prose such as family or outdoor users is not enough. If it is false, do not write that either product is suitable for, enough for, or can satisfy the named number of people; present capacity only as a reference and keep actual portions/appetite conditional. When only one participant has group-fit evidence, qualify that participant alone and do not transfer it to the other participant. Never turn the customer's group size into a product fact. If the sealed evidence says a requested dimension is not explicitly described for a participant, do not make a positive or relative claim about that dimension from another field; state the gap and keep any supported fields separate. "
                         "Keep each product's facts attached to that same product. Do not invent products, SKUs, specifications, price, stock, or rankings. "
                          "When comparing recorded dimensions or weight, say the direct difference such as 数值更低、尺寸更小 or 重量更轻. Do not collapse that difference into unsupported outcome language such as 更易携带、可能更适合携带、收纳负担更小 or universally更适合. Even conditional wording such as 可能更适合携带 is still a portability judgement: a lower weight authorizes only the recorded weight difference unless the same-SKU evidence explicitly states portability or carrying ease. When selected_participant_index is supplied, give a bounded assistant choice that names the exact recorded dimensions driving it—for example, '如果更看重较低重量和较小收纳尺寸，我会选B'—without claiming the catalogue itself declares an overall winner. "
@@ -18682,10 +18693,12 @@ async def _phase1_compare_choice_result(db: Session, plan: dict) -> dict | None:
             selected_product = bundles[int(selected_index)][0]
             selected_name = str(selected_product.product_name_cn or selected_product.product_name_en or selected_sku).strip()
             if len(complete_fields) == len(requested_comparison_fields):
-                fallback_lines.append(f"根据以上商品资料，更适合当前需求的是{selected_name}（{selected_sku}）。")
+                fallback_lines.append(
+                    f"按已比较的字段，{selected_name}（{selected_sku}）更符合你提出的比较方向。"
+                )
             else:
                 fallback_lines.append(
-                    f"在这两款现有可核验资料范围内，相对更符合该需求的是"
+                    f"在这两款现有可核验资料范围内，按已比较的字段更符合你提出的方向的是"
                     f"{selected_name}（{selected_sku}）；未维护的字段仍按未知处理。"
                 )
         elif plan.get("must_make_choice"):
@@ -18860,7 +18873,9 @@ async def _phase1_compare_choice_result(db: Session, plan: dict) -> dict | None:
                             sources.append({"type": "product_field", "sku": sku, "field": field, "source": row["source"], "value": row["value"]})
                     if evidence_lines:
                         lines.append(f"选择依据（{field_label}）：" + " ".join(evidence_lines))
-                lines.append(f"根据以上商品资料，更适合当前需求的是{chosen_name}（{chosen_sku}）。")
+                lines.append(
+                    f"按已比较的{label}，{chosen_name}（{chosen_sku}）更符合你提出的比较方向。"
+                )
             else:
                 lines.append(f"当前同 SKU {label}证据不足或不可直接排序，不能据此指定其中一款更适合。")
         result_skus = [str(row.get("sku") or "").strip().upper() for row in rows if str(row.get("sku") or "").strip()]
