@@ -45,6 +45,64 @@ def test_semantic_preplan_prompt_receives_prior_scope_as_discourse_context():
     assert "heat source" in messages[0]["content"]
 
 
+def test_semantic_recommendation_route_survives_failed_constraint_schema_repair(monkeypatch):
+    initial_plan = {
+        "route_family": "recommendation",
+        "route_hint": "recommendation",
+        "question_type": "recommendation",
+        "subtype": "recommendation",
+        "entities": [],
+        "subject_text": "camping gear",
+        "entity_scope": "category",
+        "canonical_fields": [],
+        "confidence": "high",
+        "ambiguity": False,
+        "evidence_required": True,
+        "evidence_kind": "product_evidence",
+        "context_usage": "none",
+        "decision_requested": True,
+        "recommendation_constraints": {"subject_kinds": ["camping_gear"]},
+        "recommendation_evidence_requirements": ["beginner camping gift"],
+        "recommendation_soft_preferences": ["low choice risk"],
+        "unrepresented_recommendation_requirements": [],
+        "reasoning_summary": "The customer wants a beginner camping gift recommendation.",
+    }
+    partition_plan = {
+        "recommendation_constraints": {"subject_kinds": ["camping_gear"]},
+        "predicate_constraints": [],
+        "recommendation_evidence_requirements": ["beginner camping gift"],
+        "recommendation_soft_preferences": ["low choice risk"],
+        "unrepresented_recommendation_requirements": [],
+    }
+    responses = iter([
+        json.dumps(initial_plan),
+        json.dumps(initial_plan),
+        json.dumps(partition_plan),
+        json.dumps(partition_plan),
+    ])
+
+    async def fake_chat_completion(*_args, **_kwargs):
+        return next(responses)
+
+    monkeypatch.setattr(customer_agent_planner_service.customer_llm_service, "chat_completion", fake_chat_completion)
+    monkeypatch.setattr(customer_agent_planner_service, "_database_field_value_hints", lambda *_args: [])
+
+    result = asyncio.run(customer_agent_planner_service.plan_customer_question_semantic(
+        None,
+        "beginner camping gift",
+        {},
+        context={},
+    ))
+
+    assert result["fallback_reason"] == ""
+    assert result["route_family"] == "recommendation"
+    assert result["subject_text"] == "camping gear"
+    assert result["recommendation_constraints"] == {}
+    assert result["recommendation_evidence_requirements"] == ["beginner camping gift"]
+    assert result["recommendation_soft_preferences"] == ["low choice risk"]
+    assert result["semantic_schema_repair_salvaged"] is True
+
+
 def test_semantic_preplan_keeps_meaning_when_provider_uses_descriptive_transport_shapes():
     provider_shape = {
         "route_family": "recommendation",
@@ -454,9 +512,11 @@ def test_product_bound_ambiguity_with_formal_work_reaches_rag_executor():
 
 def test_comparison_adjudication_uses_one_semantic_decision_over_duplicate_review(monkeypatch):
     calls = []
+    captured = {}
 
     async def fake_chat_completion(_db, messages, **kwargs):
         assert messages
+        captured["system"] = messages[0]["content"]
         calls.append(kwargs.get("purpose"))
         return json.dumps({
             "selected_index": 0,
@@ -487,6 +547,9 @@ def test_comparison_adjudication_uses_one_semantic_decision_over_duplicate_revie
     assert decision["selected_index"] == 0
     assert decision["evidence_fields"] == ["weight"]
     assert calls == ["semantic_comparison_adjudication"]
+    assert "lower recorded weight is directly the lighter participant" in captured["system"]
+    assert "does not by itself prove carrying comfort" in captured["system"]
+    assert "selected_index is the same participant identified by reasoning_summary" in captured["system"]
 
 
 def test_comparison_decision_review_recovers_omitted_winner_request(monkeypatch):

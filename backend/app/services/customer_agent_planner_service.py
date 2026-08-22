@@ -4669,6 +4669,30 @@ async def plan_customer_question_semantic(
                         )
                         if not partition_result.get("fallback_reason"):
                             repaired_result = partition_result
+            # A schema repair can still return a structurally invalid
+            # recommendation partition after both the full and compact
+            # semantic rereads.  Preserve the original model-owned route and
+            # independently valid semantic arrays in that case so a malformed
+            # optional enum does not erase a usable recommendation before RAG
+            # gets a chance to verify same-SKU evidence.  The salvage helper
+            # only re-validates the provider packet; it does not infer a
+            # subject, constraint, candidate, product fact, or answer.
+            if (
+                repaired_result.get("fallback_reason")
+                and initial_failure_reason in {
+                    "invalid_recommendation_constraints",
+                    "missing_recommendation_semantic_context",
+                }
+            ):
+                preserved_result = _preserve_semantic_route_after_repair_failure(
+                    initial_semantic_data,
+                    raw_content=str(raw_content or ""),
+                    failure_reason=initial_failure_reason,
+                    error=ValueError("semantic_schema_repair_returned_invalid_output"),
+                )
+                if preserved_result is not None:
+                    repaired_result = preserved_result
+                    repaired_result["semantic_schema_repair_salvaged"] = True
             result = repaired_result
             result["semantic_repaired"] = True
             result["semantic_initial_failure_reason"] = initial_failure_reason

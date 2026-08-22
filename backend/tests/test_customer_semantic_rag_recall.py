@@ -576,6 +576,56 @@ def test_named_product_qa_with_ambiguity_still_enters_sealed_rag():
     assert service._semantic_product_qa_preempts_legacy_shortcuts(preplan)
 
 
+def test_medium_confidence_named_product_qa_still_enters_sealed_rag():
+    preplan = {
+        "called": True,
+        "route_family": "product_bound_qa",
+        "route_hint": "product_detail",
+        "confidence": 0.65,
+        "confidence_label": "medium",
+        "ambiguity": False,
+        "evidence_required": True,
+        "evidence_kind": "product_qa",
+        "canonical_fields": [],
+        "field_type": "",
+        "field_hint": None,
+        "entities": ["SKU-QUALITY-1"],
+        "subject_text": "SKU-QUALITY-1",
+        "qa_evidence_query": "产品品质评价",
+        "qa_evidence_queries": [],
+    }
+
+    assert service._semantic_prefers_sealed_product_qa({"semantic_preplan": preplan})
+    assert service._semantic_product_qa_preempts_legacy_shortcuts(preplan)
+
+
+def test_named_product_missing_recovery_does_not_enable_unbound_care_guidance(monkeypatch):
+    captured = {}
+
+    async def fake_chat_completion(*_args, **kwargs):
+        captured["system"] = kwargs["messages"][0]["content"]
+        return json.dumps({"answer": "当前同款资料未直接确认该项信息。"}, ensure_ascii=False)
+
+    monkeypatch.setattr(service.customer_llm_service, "chat_completion", fake_chat_completion)
+    result = asyncio.run(service._semantic_owned_missing_result_with_llm(
+        SimpleNamespace(),
+        "\u56f4\u96ea\u7089\u7684\u6750\u8d28\u5b89\u5168\u5417\uff1f\u9ad8\u6d77\u62d4\u4f7f\u7528\u4f1a\u4e0d\u4f1a\u6709\u95ee\u9898\uff1f",
+        {
+            "route_family": "product_bound_qa",
+            "subject_text": "\u56f4\u96ea\u7089",
+            "entities": ["\u56f4\u96ea\u7089"],
+            "question_type": "usage",
+            "evidence_kind": "product_qa",
+            "qa_evidence_query": "\u6750\u8d28\u5b89\u5168\u548c\u9ad8\u6d77\u62d4\u4f7f\u7528",
+        },
+        reason="product_qa_evidence_missing",
+    ))
+
+    assert result["answer"]
+    assert "This is an unbound cleaning/usage/safety question" not in captured["system"]
+    assert "温水和软布或海绵" not in captured["system"]
+
+
 def test_unsafe_missing_state_survives_natural_recovery_merge():
     result = {
         "intent": "product_detail",
@@ -668,6 +718,8 @@ def test_same_sku_rag_entailment_prompt_separates_measurement_from_subjective_we
     )
 
     assert "numeric weight plus a short-trip scene does not entail" in messages[0]["content"]
+    assert "personal carrying outcome" in messages[0]["content"]
+    assert "轻松放入背包" in messages[0]["content"]
 
 
 def test_same_sku_entailment_prompt_accepts_sealed_semantic_recommendation_framing():
@@ -1916,6 +1968,85 @@ def test_structured_field_conflict_is_carried_into_supplemental_rag_contract():
     assert "Highest-priority direct-field boundary" in strict_messages[0]["content"]
 
 
+def test_same_sku_selection_prompt_allows_explicit_qualitative_qa_answer():
+    messages = service._same_sku_knowledge_evidence_selection_messages(
+        "产品品质出众吗？",
+        "SKU-QUALITY-1",
+        [{
+            "index": 0,
+            "content": "Q: 适合当礼物送人吗？\nA: 包装精美、品质出众。",
+            "source_type": "product_qa",
+            "source_section": "qa",
+        }],
+        product_identity={"sku": "SKU-QUALITY-1", "canonical_name": "饭盒", "category": "餐具"},
+    )
+
+    assert "For a qualitative judgement" in messages[0]["content"]
+    assert "must attribute it as a product-QA or catalogue description" in messages[0]["content"]
+
+
+def test_selected_product_qa_writer_keeps_current_dimension_and_material_boundary(monkeypatch):
+    captured = {}
+
+    async def fake_chat_completion(*_args, **kwargs):
+        captured["messages"] = kwargs["messages"]
+        return json.dumps({
+            "answer": "产品问答中将它描述为品质出众。",
+            "evidence_quotes": [],
+        }, ensure_ascii=False)
+
+    async def always_grounded(*_args, **_kwargs):
+        return True
+
+    monkeypatch.setattr(service.customer_llm_service, "chat_completion", fake_chat_completion)
+    monkeypatch.setattr(service, "_same_sku_rag_answer_is_grounded_after_quote_validation", always_grounded)
+    monkeypatch.setattr(service, "_same_sku_rag_answer_covers_question", always_grounded)
+
+    rendered = asyncio.run(service._render_selected_product_qa_answer(
+        SimpleNamespace(),
+        question="产品品质出众吗？",
+        semantic_query="产品品质出众吗？",
+        selected_qa=SimpleNamespace(
+            id="qa-quality-1",
+            question="适合当礼物送人吗？",
+            answer="包装精美、品质出众，是送给户外露营爱好者的礼物。",
+        ),
+        result={"result_skus": ["SKU-QUALITY-1"], "answer_metadata": {}, "debug": {}},
+    ))
+
+    assert rendered["answer"] == "产品问答中将它描述为品质出众。"
+    prompt = captured["messages"][0]["content"]
+    assert "Answer only the operative dimension" in prompt
+    assert "omit those unrelated claims" in prompt
+    assert "does not by itself entail durability" in prompt
+
+
+def test_suitability_boundary_rewrite_does_not_list_unasked_qa_dimensions(monkeypatch):
+    captured = {}
+
+    async def fake_chat_completion(*_args, **kwargs):
+        captured["messages"] = kwargs["messages"]
+        return json.dumps({"answer": "产品问答中将它描述为品质出众。", "evidence_quotes": []}, ensure_ascii=False)
+
+    monkeypatch.setattr(service.customer_llm_service, "chat_completion", fake_chat_completion)
+
+    rewritten = asyncio.run(service._rewrite_suitability_boundary_from_same_sku_evidence(
+        SimpleNamespace(),
+        question="产品品质出众吗？",
+        semantic_focus="品质是否出众",
+        draft="产品问答中提到包装精美，适合作为礼物。",
+        evidence="Q: 适合当礼物送人吗？\nA: 包装精美、品质出众，是送给户外露营爱好者的礼物。",
+        recorded_qa_selected=True,
+    ))
+
+    assert rewritten[0] == "产品问答中将它描述为品质出众。"
+    prompt = captured["messages"][0]["content"]
+    assert "retain a trait only when it explains the requested dimension" in prompt
+    assert "omit other claims in the A even when they are exact" in prompt
+    payload = json.loads(captured["messages"][1]["content"])
+    assert payload["semantic_focus"] == "品质是否出众"
+
+
 def test_same_sku_rag_filters_secondary_capacity_rendering_before_answer_writer():
     current = {"capacity": "容量：锅：1400ML"}
 
@@ -3068,6 +3199,7 @@ def test_subjective_factor_entailment_downgrades_named_tasks_from_adjacent_facts
     system_instruction = captured["system"].lower()
     assert "named action, recipe, or concrete task" in system_instruction
     assert "capacity, people range, heat-source compatibility" in system_instruction
+    assert "specs.heat_source" in system_instruction
 
 
 def test_required_factual_rag_containment_downgrades_generic_storage(monkeypatch):
@@ -3623,6 +3755,10 @@ def test_focused_outcome_boundary_audit_rejects_softened_claim_after_gap(monkeyp
     assert "natural scene paraphrase" in captured["system"]
     assert "category or product-form identity match" in captured["system"]
     assert "target_audience label naming beginners" in captured["system"]
+    assert "Completeness boundary for a compound recommendation" in captured["system"]
+    assert "正好匹配你朋友刚开始露营的情况" in captured["system"]
+    assert "可作为朋友开始露营的基础选择" in captured["system"]
+    assert "绝佳礼物" in captured["system"]
     assert "符合你对好收纳的偏好/要求" in captured["system"]
     assert "可作为实用炊具的基础选择" in captured["system"]
     assert "与朋友刚开始露营的情况匹配" in captured["system"]
