@@ -2102,6 +2102,190 @@ def test_compact_recommendation_partition_repair_recovers_meaning_after_generic_
     assert result["unrepresented_recommendation_requirements"] == ["准备两个人煮面"]
 
 
+def test_compact_partition_repair_preserves_requirement_and_preference_context(monkeypatch):
+    responses = iter(
+        [
+            json.dumps({
+                "route_family": "recommendation",
+                "confidence": "high",
+                "evidence_required": True,
+                "decision_requested": True,
+                "subject_text": "coffee gear",
+                "recommendation_constraints": {
+                    "subject_kind": "coffee_gear",
+                    "scenarios": ["pour_over"],
+                },
+                "recommendation_evidence_requirements": ["truly suitable for pour-over"],
+                "recommendation_soft_preferences": ["portable"],
+            }),
+            json.dumps({
+                "route_family": "recommendation",
+                "confidence": "high",
+                "evidence_required": True,
+                "decision_requested": True,
+                "subject_text": "coffee gear",
+                "recommendation_constraints": {
+                    "subject_kind": "coffee_gear",
+                    "scenarios": ["pour_over"],
+                },
+            }),
+            json.dumps({
+                "recommendation_constraints": {"subject_kind": "coffee_gear"},
+                "predicate_constraints": [],
+                "recommendation_evidence_requirements": ["truly suitable for pour-over"],
+                "recommendation_soft_preferences": ["portable"],
+                "unrepresented_recommendation_requirements": [],
+            }),
+        ]
+    )
+
+    async def fake_chat_completion(_db, _messages, **_kwargs):
+        return next(responses)
+
+    monkeypatch.setattr(customer_agent_planner_service.customer_llm_service, "chat_completion", fake_chat_completion)
+    monkeypatch.setattr(customer_agent_planner_service, "_database_field_value_hints", lambda *_args: [])
+
+    result = asyncio.run(
+        customer_agent_planner_service.plan_customer_question_semantic(
+            None,
+            "I need coffee gear truly suitable for pour-over, preferably portable.",
+            {},
+            context={},
+        )
+    )
+
+    assert result["fallback_reason"] == ""
+    assert result["recommendation_constraints"] == {"subject_kind": "coffee_gear"}
+    assert result["recommendation_evidence_requirements"] == ["truly suitable for pour-over"]
+    assert result["recommendation_soft_preferences"] == ["portable"]
+
+
+def test_recommendation_semantic_arrays_reject_nested_provider_objects():
+    assert customer_agent_planner_service._validated_recommendation_soft_preferences(
+        [{"type": "practicality", "description": "practical"}]
+    ) is None
+
+
+def test_invalid_optional_recommendation_enum_does_not_erase_rag_scope(monkeypatch):
+    """An unknown model enum is discarded while the semantic recommendation survives."""
+    responses = iter(
+        [
+            json.dumps({
+                "route_family": "recommendation",
+                "route_hint": "recommendation",
+                "question_type": "recommendation",
+                "subtype": "product_selection",
+                "entities": [],
+                "subject_text": "camping gift",
+                "canonical_fields": [],
+                "confidence": "high",
+                "ambiguity": False,
+                "evidence_required": True,
+                "evidence_kind": "structured_field",
+                "context_usage": "none",
+                "decision_requested": True,
+                "recommendation_constraints": {
+                    "subject_kinds": ["camping_gear"],
+                    "scenarios": ["camping"],
+                    "storage_preference": "easy_to_store",
+                },
+                "predicate_constraints": [],
+                "recommendation_evidence_requirements": [],
+                "recommendation_soft_preferences": [
+                    "gift_suitable",
+                    "practical",
+                    "easy-to-store",
+                ],
+                "unrepresented_recommendation_requirements": [],
+                "reasoning_summary": "Choose a practical gift.",
+            }),
+            json.dumps({
+                "route_family": "recommendation",
+                "route_hint": "recommendation",
+                "question_type": "recommendation",
+                "subtype": "product_selection",
+                "entities": [],
+                "subject_text": "camping gift",
+                "canonical_fields": [],
+                "confidence": "high",
+                "ambiguity": False,
+                "evidence_required": True,
+                "evidence_kind": "structured_field",
+                "context_usage": "none",
+                "decision_requested": True,
+                "recommendation_constraints": {
+                    "subject_kinds": ["camping_gear"],
+                    "scenarios": ["camping"],
+                    "storage_preference": "compact_storage",
+                },
+                "predicate_constraints": [],
+                "recommendation_evidence_requirements": [],
+                "recommendation_soft_preferences": [
+                    "gift_suitable",
+                    "practical",
+                    "easy-to-store",
+                ],
+                "unrepresented_recommendation_requirements": [],
+                "reasoning_summary": "Choose a practical gift.",
+            }),
+            json.dumps({
+                "recommendation_constraints": {
+                    "subject_kinds": ["camping_gear"],
+                    "scenarios": ["camping"],
+                    "storage_preference": "compact_storage",
+                },
+                "predicate_constraints": [],
+                "recommendation_evidence_requirements": [],
+                "recommendation_soft_preferences": [],
+                "unrepresented_recommendation_requirements": [],
+            }),
+        ]
+    )
+    purposes = []
+
+    async def fake_chat_completion(_db, _messages, **kwargs):
+        purposes.append(kwargs.get("purpose"))
+        return next(responses)
+
+    monkeypatch.setattr(
+        customer_agent_planner_service.customer_llm_service,
+        "chat_completion",
+        fake_chat_completion,
+    )
+    monkeypatch.setattr(
+        customer_agent_planner_service,
+        "_database_field_value_hints",
+        lambda *_args: [],
+    )
+
+    result = asyncio.run(
+        customer_agent_planner_service.plan_customer_question_semantic(
+            None,
+            "I want a practical, easy-to-store gift for a friend who is new to camping.",
+            {},
+            context={},
+        )
+    )
+
+    assert purposes == [
+        "semantic_preplan",
+        "semantic_preplan_repair",
+        "semantic_recommendation_constraint_schema_repair",
+    ]
+    assert result["fallback_reason"] == ""
+    assert result["route_family"] == "recommendation"
+    assert result["subject_text"] == "camping gift"
+    assert result["recommendation_constraints"] == {
+        "scenarios": ["camping"],
+        "storage_preference": "compact_storage",
+    }
+    assert result["recommendation_soft_preferences"] == [
+        "gift_suitable",
+        "practical",
+        "easy-to-store",
+    ]
+
+
 def test_semantic_preplan_prompt_stays_within_live_provider_budget():
     """Route arbitration needs the contract, not a multi-thousand-token handbook."""
     messages = customer_agent_planner_service._semantic_preplan_messages(

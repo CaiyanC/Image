@@ -198,14 +198,24 @@ def keyword_retrieve(
         for section in (sections or [])
         if str(section or "").strip()
     ))
+    section_filters = []
+    for section in normalized_sections:
+        if section.casefold() == "qa":
+            # Product QA documents carry the row id after the section:
+            # ``product:<sku>:qa:<qa-id>``. The old suffix-only predicate
+            # matched only ``...:qa`` and silently excluded every synced QA
+            # chunk from section-scoped RAG retrieval.
+            section_filters.extend([
+                KnowledgeDocument.source_id.like("%:qa"),
+                KnowledgeDocument.source_id.like("%:qa:%"),
+            ])
+        else:
+            section_filters.append(KnowledgeDocument.source_id.like(f"%:{section}"))
     if normalized_sections:
         db_query = db_query.join(
             KnowledgeDocument,
             KnowledgeDocument.id == KnowledgeChunk.document_id,
-        ).filter(or_(*[
-            KnowledgeDocument.source_id.like(f"%:{section}")
-            for section in normalized_sections
-        ]))
+        ).filter(or_(*section_filters))
     if sku:
         db_query = db_query.filter(_chunk_matches_sku_sql(sku))
     elif skus:
@@ -398,9 +408,19 @@ async def semantic_retrieve(
         if normalized_sections:
             section_placeholders = []
             for index, section in enumerate(normalized_sections):
-                key = f"source_id_section_{index}"
-                section_placeholders.append(f"d.source_id LIKE :{key}")
-                params[key] = f"%:{section}"
+                if section.casefold() == "qa":
+                    exact_key = f"source_id_section_{index}_exact"
+                    nested_key = f"source_id_section_{index}_nested"
+                    section_placeholders.extend([
+                        f"d.source_id LIKE :{exact_key}",
+                        f"d.source_id LIKE :{nested_key}",
+                    ])
+                    params[exact_key] = "%:qa"
+                    params[nested_key] = "%:qa:%"
+                else:
+                    key = f"source_id_section_{index}"
+                    section_placeholders.append(f"d.source_id LIKE :{key}")
+                    params[key] = f"%:{section}"
             where += f" AND ({' OR '.join(section_placeholders)})"
         rows = db.execute(text(
             "SELECT c.source_type, c.sku, c.content, c.metadata_json, d.source_id AS document_source_id, "

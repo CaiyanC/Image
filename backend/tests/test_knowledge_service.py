@@ -254,6 +254,55 @@ class KnowledgeServiceTest(unittest.TestCase):
 
         self.assertEqual([row["sku"] for row in rows], ["CUP-1"])
 
+    def test_keyword_retrieve_matches_nested_product_qa_section_ids(self):
+        qa_document = KnowledgeDocument(
+            id="doc-qa-nested",
+            source_type="product",
+            source_id="product:CW-K31:qa:qa-2",
+            sku="CW-K31",
+            title="CW-K31 QA",
+            content="研磨粗细可调，适用于手冲和法压壶",
+        )
+        qa_negative_document = KnowledgeDocument(
+            id="doc-qa-negative",
+            source_type="product",
+            source_id="product:CW-K31:qa_negative",
+            sku="CW-K31",
+            title="CW-K31 negative",
+            content="negative feedback",
+        )
+        self.db.add_all([qa_document, qa_negative_document])
+        self.db.add_all([
+            KnowledgeChunk(
+                id="chunk-qa-nested",
+                document_id=qa_document.id,
+                sku="CW-K31",
+                source_type="product",
+                chunk_index=0,
+                content=qa_document.content,
+                embedding_status="pending",
+            ),
+            KnowledgeChunk(
+                id="chunk-qa-negative",
+                document_id=qa_negative_document.id,
+                sku="CW-K31",
+                source_type="product",
+                chunk_index=0,
+                content=qa_negative_document.content,
+                embedding_status="pending",
+            ),
+        ])
+        self.db.commit()
+
+        rows = knowledge_service.keyword_retrieve(
+            self.db,
+            "手冲 法压",
+            limit=5,
+            sections=["qa"],
+        )
+
+        self.assertEqual([row["metadata"]["source_id"] for row in rows], [qa_document.source_id])
+
     def test_keyword_retrieve_uses_generic_cjk_ngrams_for_natural_product_questions(self):
         documents = [
             KnowledgeDocument(

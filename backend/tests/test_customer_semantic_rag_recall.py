@@ -213,7 +213,7 @@ def test_semantic_catalogue_recall_returns_only_rag_hit_skus(monkeypatch):
     ]
 
     async def fake_retrieve(*_args, **kwargs):
-        assert kwargs["sections"] == ["recommendation", "content"]
+        assert kwargs["sections"] == ["recommendation", "content", "qa"]
         assert kwargs["prefer_product_sources"] is True
         assert kwargs.get("skus") is None
         return [
@@ -233,6 +233,128 @@ def test_semantic_catalogue_recall_returns_only_rag_hit_skus(monkeypatch):
 
     assert [row["sku"] for row in recalled] == ["CUP-1", "BAG-1"]
     assert recalled[1]["_semantic_rag_evidence"][0]["content"] == "bag context"
+
+
+def test_semantic_catalogue_recall_keeps_later_same_sku_qa_evidence(monkeypatch):
+    rows = [{"sku": "GRINDER-1", "product_name_cn": "Grinder"}]
+
+    async def fake_retrieve(*_args, **_kwargs):
+        return [
+            {
+                "sku": "GRINDER-1",
+                "content": f"context {index}",
+                "metadata": {
+                    "section": "qa",
+                    "source_id": f"product:GRINDER-1:qa:{index}",
+                },
+            }
+            for index in range(6)
+        ]
+
+    monkeypatch.setattr(service.knowledge_service, "semantic_retrieve", fake_retrieve)
+
+    recalled = asyncio.run(service._semantic_catalogue_recall_rows(
+        object(),
+        "natural customer request",
+        rows,
+    ))
+
+    assert [item["content"] for item in recalled[0]["_semantic_rag_evidence"]] == [
+        f"context {index}" for index in range(6)
+    ]
+
+
+def test_semantic_catalogue_recall_promotes_model_authored_focus_qa(monkeypatch):
+    rows = [
+        {"sku": "MOKA-1", "product_name_cn": "Moka"},
+        {"sku": "GRINDER-1", "product_name_cn": "Grinder"},
+    ]
+
+    async def fake_semantic_retrieve(*_args, **_kwargs):
+        if _kwargs.get("skus"):
+            return []
+        return [{
+            "sku": "MOKA-1",
+            "content": "nearby title mention",
+            "metadata": {"section": "content", "source_id": "product:MOKA-1:content"},
+        }]
+
+    def fake_keyword_retrieve(*_args, **kwargs):
+        assert kwargs["sections"] == ["recommendation", "content", "qa"]
+        return [{
+            "sku": "GRINDER-1",
+            "content": "Q: Which methods are supported? A: Suitable for pour-over.",
+            "metadata": {"section": "qa", "source_id": "product:GRINDER-1:qa:focus"},
+        }]
+
+    monkeypatch.setattr(service.knowledge_service, "semantic_retrieve", fake_semantic_retrieve)
+    monkeypatch.setattr(service.knowledge_service, "keyword_retrieve", fake_keyword_retrieve)
+
+    recalled = asyncio.run(service._semantic_catalogue_recall_rows(
+        object(),
+        "broad coffee equipment request",
+        rows,
+        semantic_focus_queries=["required pour-over capability"],
+    ))
+
+    assert [row["sku"] for row in recalled] == ["GRINDER-1", "MOKA-1"]
+    assert recalled[0]["_semantic_rag_evidence"][0]["section"] == "qa"
+
+
+def test_semantic_catalogue_recall_uses_scoped_vector_focus_for_same_sku_qa(monkeypatch):
+    rows = [
+        {"sku": "MOKA-1", "product_name_cn": "手冲摩卡壶"},
+        {"sku": "GRINDER-1", "product_name_cn": "转转磨豆器"},
+    ]
+    scoped_calls = []
+
+    async def fake_semantic_retrieve(*_args, **kwargs):
+        if kwargs.get("skus"):
+            scoped_calls.append(kwargs)
+            assert kwargs["sections"] == ["qa"]
+            assert set(kwargs["skus"]) == {"MOKA-1", "GRINDER-1"}
+            return [{
+                "sku": "GRINDER-1",
+                "content": "Q: 研磨粗细能调吗？ A: 适用于手冲、法压壶和意式咖啡机。",
+                "metadata": {
+                    "section": "qa",
+                    "source_id": "product:GRINDER-1:qa:method",
+                },
+            }]
+        return [{
+            "sku": "MOKA-1",
+            "content": "标题含有手冲字样，但没有具体冲煮方式 QA。",
+            "metadata": {
+                "section": "content",
+                "source_id": "product:MOKA-1:content:title",
+            },
+        }]
+
+    def fake_keyword_retrieve(*_args, **kwargs):
+        if kwargs["sections"] == ["qa"]:
+            return []
+        return [{
+            "sku": "MOKA-1",
+            "content": "标题含有手冲字样，但没有具体冲煮方式 QA。",
+            "metadata": {
+                "section": "content",
+                "source_id": "product:MOKA-1:content:title",
+            },
+        }]
+
+    monkeypatch.setattr(service.knowledge_service, "semantic_retrieve", fake_semantic_retrieve)
+    monkeypatch.setattr(service.knowledge_service, "keyword_retrieve", fake_keyword_retrieve)
+
+    recalled = asyncio.run(service._semantic_catalogue_recall_rows(
+        object(),
+        "咖啡器具宽泛请求",
+        rows,
+        semantic_focus_queries=["真正适合手冲的器具"],
+    ))
+
+    grinder = next(row for row in recalled if row["sku"] == "GRINDER-1")
+    assert grinder["_semantic_rag_evidence"][0]["section"] == "qa"
+    assert scoped_calls
 
 
 def test_semantic_catalogue_recall_adds_rag_only_live_catalogue_skus(monkeypatch):
@@ -1005,6 +1127,72 @@ def test_decision_factor_contract_keeps_semantic_gift_factors_without_verbatim_b
     ]
 
 
+def test_decision_factor_prompt_keeps_named_method_as_product_capability(monkeypatch):
+    captured = {}
+
+    async def fake_chat_completion(*_args, **kwargs):
+        captured["system"] = kwargs["messages"][0]["content"]
+        return json.dumps({
+            "requested_product_form_factor": None,
+            "requested_role_factor": None,
+            "decision_factors": [{
+                "factor": "suitable for pour-over",
+                "customer_basis": "the product should support pour-over",
+                "dimension": "",
+                "factor_type": "factual",
+                "decision_kind": "concrete_capability",
+                "importance": "required",
+            }],
+        })
+
+    monkeypatch.setattr(service.customer_llm_service, "chat_completion", fake_chat_completion)
+    factors = asyncio.run(service._semantic_recommendation_decision_factor_contract(
+        SimpleNamespace(),
+        question="I need coffee equipment truly suitable for pour-over.",
+        semantic_requirements=["suitable for pour-over"],
+        requested_catalogue_subject="coffee equipment",
+    ))
+
+    assert factors is not None
+    assert factors[0]["decision_kind"] == "concrete_capability"
+    assert "Final named-method self-check" in captured["system"]
+    assert "Do not label that selection criterion scenario_fit" in captured["system"]
+    assert "which products are suitable for or can support a named method" in captured["system"]
+
+
+def test_factor_contract_is_added_for_mixed_hard_and_preferred_semantic_requirements():
+    assert service._semantic_recommendation_factor_contract_needed(
+        ["adjustable grind size"],
+        ["pour-over and French press use"],
+        [],
+    ) is True
+    assert service._semantic_recommendation_factor_contract_needed(
+        [],
+        ["easy to clean"],
+        [],
+    ) is False
+    assert service._semantic_recommendation_factor_contract_needed(
+        ["cookware"],
+        [],
+        [],
+    ) is False
+
+
+def test_semantic_comparison_refs_prefer_sealed_skus_over_greedy_lexical_tail():
+    refs = service._semantic_comparison_product_refs(
+        {
+            "semantic_comparison_entity_contracts": [
+                {"status": "resolved", "resolved_sku": "CW-K31"},
+                {"status": "resolved", "resolved_sku": "KW-K31-黑"},
+            ],
+            "product_refs": [],
+        },
+        "CW-K31 和 KW-K31-黑都是咖啡器具吗？它们有什么区别？",
+    )
+
+    assert refs == ["CW-K31", "KW-K31-黑"]
+
+
 def test_semantic_coverage_prompt_maps_normalized_product_form_to_customer_language(monkeypatch):
     captured = {}
 
@@ -1069,6 +1257,10 @@ def test_semantic_coverage_prompt_maps_normalized_product_form_to_customer_langu
     assert "concrete containment request" in captured["system"]
     assert "multiple independent forms" in captured["system"]
     assert "single_cookware establishes only the pot" in captured["system"]
+    assert "approved same-SKU QA/content field" in captured["system"]
+    assert "explicit pour-over capability when the customer asks broadly" in captured["system"]
+    assert "title or identity field that merely contains the method word" in captured["system"]
+    assert "Final method-fit check" in captured["system"]
 
 
 def test_semantic_coverage_candidate_limit_bounds_factor_matrix():
@@ -2106,6 +2298,26 @@ def test_missing_recovery_neutralizes_conflicted_product_identity(monkeypatch):
     assert "keep the task unconfirmed" in captured["system"]
 
 
+def test_unbound_recommendation_missing_recovery_does_not_write_from_empty_rag(monkeypatch):
+    async def fail_if_called(*_args, **_kwargs):
+        raise AssertionError("an empty recommendation packet must not invoke a prose guesser")
+
+    monkeypatch.setattr(service.customer_llm_service, "chat_completion", fail_if_called)
+    result = asyncio.run(service._semantic_owned_missing_result_with_llm(
+        SimpleNamespace(),
+        "朋友刚开始露营，我想送一件不容易选错的实用礼物",
+        {"route_family": "recommendation", "subject_text": ""},
+        reason="semantic_executor_returned_no_result",
+        catalogue_context={},
+    ))
+
+    assert result["result_skus"] == []
+    assert "AC-Z14" not in result["answer"]
+    assert result["debug"]["recovery_writer"] == "semantic_grounded_missing_boundary"
+    assert result["debug"]["semantic_recovery_writer_skipped"] == "no_catalogue_explanation"
+    assert result["answer_metadata"]["semantic_recovery_grounding_boundary"] is True
+
+
 def test_product_field_followup_neutralizes_live_conflicted_identity(monkeypatch):
     class _Product:
         sku = "CW-C72"
@@ -2534,6 +2746,46 @@ def test_recovery_keeps_first_individually_covered_candidate_when_group_is_mixed
         coverage,
         [0, 1],
     ) == [0]
+
+
+def test_factor_audit_rejection_closes_required_candidate_for_recovery():
+    coverage = {
+        "ordinarily_usable_candidate_indexes": [0, 1],
+        "request_supported_candidate_indexes": [0, 1],
+        "request_partial_candidate_indexes": [],
+        "supported_candidate_indexes": [0, 1],
+        "partial_candidate_indexes": [],
+        "ranked_candidate_indexes": [0, 1],
+        "request_fit": [
+            {"candidate_index": 0, "status": "supported"},
+            {"candidate_index": 1, "status": "supported"},
+        ],
+        "decision_factors": [{
+            "factor": "named method capability",
+            "factor_type": "factual",
+            "decision_kind": "concrete_capability",
+            "importance": "required",
+            "supported_candidate_indexes": [0, 1],
+            "bounded_candidate_indexes": [],
+            "partial_candidate_indexes": [],
+            "unverified_candidate_indexes": [],
+        }],
+    }
+
+    rejected = service._semantic_recommendation_apply_factor_consistency_rejections(
+        coverage,
+        [{"factor_index": 0, "candidate_index": 0, "offending_excerpt": "title only"}],
+    )
+
+    assert rejected == {0}
+    assert coverage["decision_factors"][0]["supported_candidate_indexes"] == [1]
+    assert coverage["decision_factors"][0]["unverified_candidate_indexes"] == [0]
+    assert coverage["request_supported_candidate_indexes"] == [1]
+    assert coverage["request_fit"][0]["status"] == "unverified"
+    assert service._semantic_recommendation_recovery_candidate_indexes(
+        coverage,
+        [0, 1],
+    ) == [1]
 
 
 def test_catalogue_continuation_aligns_stale_subject_kind_with_live_category(monkeypatch):
