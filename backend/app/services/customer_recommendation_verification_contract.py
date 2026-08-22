@@ -12,6 +12,10 @@ _EMPTY_VALUES = {"", "/", "-", "--", "未知", "暂无", "无", "null", "none"}
 class RecommendationRequestContract:
     subject_category: str | None = None
     subject_kind: str | None = None
+    # Keep conjunctive product-form scope separate from the scalar catalogue
+    # kind so a request such as cookware plus waterware is not collapsed into
+    # the first form before same-SKU semantic coverage runs.
+    subject_kinds: list[str] = field(default_factory=list)
     subject_subtype: str | None = None
     # A semantic recommendation may carry a meaning-bearing subject_text
     # without Flash confidently assigning one of the closed catalogue kinds.
@@ -467,7 +471,7 @@ def _recommendation_contract_from_validated_semantic_constraints(
     """
     if not isinstance(constraints, dict):
         return None
-    allowed = {"subject_kind", "people", "heat_sources", "scenarios", "weight_preference", "price_preference", "storage_preference", "dishwasher_safe", "structure_preference"}
+    allowed = {"subject_kind", "subject_kinds", "people", "heat_sources", "scenarios", "weight_preference", "price_preference", "storage_preference", "dishwasher_safe", "structure_preference"}
     if not constraints or any(key not in allowed for key in constraints):
         return None
     contract = RecommendationRequestContract()
@@ -475,6 +479,32 @@ def _recommendation_contract_from_validated_semantic_constraints(
     subject_categories = {"cookware": "锅具", "waterware": "水具", "stove": "炉具", "coffee_gear": "咖啡器具", "accessories": "配件"}
     if subject_kind is not None and subject_kind not in subject_categories:
         return None
+    subject_kinds = constraints.get("subject_kinds")
+    if subject_kinds == []:
+        subject_kinds = None
+    if subject_kinds is not None:
+        if (
+            not isinstance(subject_kinds, list)
+            or not subject_kinds
+            or len(subject_kinds) > 5
+            or any(item not in subject_categories for item in subject_kinds)
+        ):
+            return None
+        subject_kinds = list(dict.fromkeys(subject_kinds))
+        if subject_kind is not None and subject_kind not in subject_kinds:
+            return None
+        contract.subject_kinds = subject_kinds
+        contract.field_provenance["subject_kinds"] = {
+            "source_turn": 1,
+            "provenance": "validated_semantic_constraints",
+        }
+        # Only a multi-form scope stays open. A one-item list remains
+        # compatible with the existing scalar structural verifier.
+        if len(subject_kinds) > 1:
+            contract.subject_scope_open = True
+            subject_kind = None
+        elif subject_kind is None:
+            subject_kind = subject_kinds[0]
     if subject_kind is not None:
         contract.subject_kind = subject_kind
         contract.subject_category = subject_categories[subject_kind]
@@ -561,7 +591,7 @@ def _recommendation_contract_from_validated_semantic_constraints(
         if present:
             contract.field_provenance[key] = {"source_turn": 1, "provenance": "validated_semantic_preplan"}
     signal_count = len(contract.hard_constraints) + len(contract.soft_preferences)
-    contract.confidence = "high" if contract.subject_category and signal_count >= 2 else "medium"
+    contract.confidence = "high" if (contract.subject_category or contract.subject_kinds) and signal_count >= 2 else "medium"
     return contract
 
 
@@ -600,7 +630,18 @@ _SEMANTIC_HEAT_SOURCE_LABELS = {
     # bind that enum to the customer's evidence and the same-SKU heat field;
     # they are not an intent or route detector.
     "card_stove": ("卡式炉", "卡式灶"),
-    "gas_stove": ("燃气炉", "燃气灶", "气炉", "气灶"),
+    "gas_stove": (
+        "燃气炉",
+        "燃气灶",
+        "气炉",
+        "气灶",
+        "高山气罐",
+        "高山罐",
+        "液化气罐",
+        "卡式气罐",
+        "气罐",
+        "气瓶",
+    ),
     "alcohol_stove": ("酒精炉", "酒精灶"),
     "open_flame": ("明火", "明火直烧"),
     "charcoal": ("炭火", "木炭", "竹炭"),
@@ -753,6 +794,10 @@ def build_semantic_recommendation_request_contract(
             # Contradictory semantic fields must fail closed rather than let a
             # broad model kind override the more specific subject identity.
             return None
+        if contract.subject_kinds and subject_kind not in contract.subject_kinds:
+            # A typed subject cannot silently override a multi-form semantic
+            # scope supplied by the preplan.
+            return None
         contract.subject_category = contract.subject_category or subject_category
         contract.subject_kind = contract.subject_kind or subject_kind
         if subject_subtype and not contract.subject_subtype:
@@ -761,7 +806,7 @@ def build_semantic_recommendation_request_contract(
             "source_turn": 1,
             "provenance": "validated_semantic_subject",
         }
-    if not contract.subject_category and not contract.subject_kind:
+    if not contract.subject_category and not contract.subject_kind and not contract.subject_kinds:
         # Keep an untyped semantic subject open for RAG recall and Flash's
         # same-SKU product-form adjudication. This is a contract state, not a
         # lexical fallback to a guessed product category.
@@ -852,6 +897,33 @@ def build_semantic_recommendation_request_contract(
             "provenance": "validated_semantic_predicate",
         }
     contract.predicate_constraints = normalized_predicates
+    heat_source_predicates = [
+        item
+        for item in normalized_predicates
+        if str(item.get("field") or "").strip() == "heat_source"
+    ]
+    if (
+        contract.heat_sources
+        and heat_source_predicates
+        and all(
+            str(item.get("importance") or "required").strip().lower()
+            == "preferred"
+            for item in heat_source_predicates
+        )
+    ):
+        # The abstract constraint object historically treated every
+        # ``heat_sources`` value as a hard filter.  Once Flash has reread the
+        # complete turn and marked the corresponding typed predicates as
+        # preferred, keep the preference on the typed predicates for ranking
+        # and evidence, but do not reject candidates that support another
+        # usable heat source.  This is semantic provenance preservation, not a
+        # customer-language keyword rule.
+        contract.heat_sources = []
+        contract.hard_constraints = [
+            item for item in contract.hard_constraints if item != "heat_source"
+        ]
+        contract.field_provenance.pop("heat_sources", None)
+        _append_unique(contract.soft_preferences, "heat_source")
     # The abstract constraint object and the typed predicates are two views of
     # the same Flash interpretation.  Do not let an unanchored heat-source
     # value in the abstract view become a hard catalogue filter when the typed
@@ -869,7 +941,7 @@ def build_semantic_recommendation_request_contract(
         ]
         contract.field_provenance.pop("heat_sources", None)
     signal_count = len(contract.hard_constraints) + len(contract.soft_preferences)
-    contract.confidence = "high" if (contract.subject_category or contract.subject_kind) and signal_count else "medium"
+    contract.confidence = "high" if (contract.subject_category or contract.subject_kind or contract.subject_kinds) and signal_count else "medium"
     return contract
 
 
@@ -1965,10 +2037,31 @@ def verify_recommendation_candidates(
             else:
                 from app.services import customer_agent_intent_service
 
+                gas_source_aliases = (
+                    "燃气炉",
+                    "燃气灶",
+                    "气炉",
+                    "气灶",
+                    "高山气罐",
+                    "高山罐",
+                    "液化气罐",
+                    "卡式气罐",
+                    "气罐",
+                    "气瓶",
+                )
                 matched = all(
                     customer_agent_intent_service._alcohol_stove_support_verdict(raw_heat) is True
                     if source == "酒精炉"
-                    else source in raw_heat or (source == "明火" and "明火" in raw_heat)
+                    else any(
+                        alias in raw_heat
+                        for alias in (
+                            gas_source_aliases
+                            if source == "燃气炉"
+                            else ("明火", "明火直烧")
+                            if source == "明火"
+                            else (source,)
+                        )
+                    )
                     for source in contract.heat_sources
                 )
                 evidence["heat_source"] = _condition("verified" if matched else "conflict", "heat_source", raw_heat)

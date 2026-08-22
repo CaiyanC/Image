@@ -168,6 +168,25 @@ def test_request_contract_uses_validated_semantic_constraints_without_reparsing_
     assert all(item["provenance"] == "validated_semantic_preplan" for item in contract.field_provenance.values())
 
 
+def test_semantic_contract_keeps_compound_product_forms_open_for_rag_coverage():
+    contract = build_semantic_recommendation_request_contract(
+        question="三个人露营，想要锅和水壶",
+        semantic_constraints={
+            "subject_kinds": ["cookware", "waterware"],
+            "people": {"min": 3, "max": 3},
+        },
+        predicate_constraints=[],
+        semantic_subject_text="锅和水壶",
+    )
+
+    assert contract is not None
+    assert contract.subject_kinds == ["cookware", "waterware"]
+    assert contract.subject_kind is None
+    assert contract.subject_category is None
+    assert contract.subject_scope_open is True
+    assert (contract.people_min, contract.people_max) == (3, 3)
+
+
 def test_explicit_accessory_subject_overrides_a_broad_semantic_cookware_scope():
     contract = build_recommendation_request_contract(
         "有没有户外餐具收纳包推荐下？",

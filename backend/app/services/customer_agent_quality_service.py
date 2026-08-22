@@ -21,7 +21,16 @@ CLARIFICATION_TERMS = ("请先", "需要明确", "告诉我", "SKU", "范围", "
 # Product variants may use a Chinese colour suffix (for example ``KW-K31-黑``).
 # Keep that suffix in the same SKU token so the quality gate does not also
 # report the valid base prefix as an unrelated product.
-SKU_RE = re.compile(r"\b[A-Z]{1,6}(?:-[A-Z0-9\u4e00-\u9fff]{1,8}){1,4}\b", flags=re.IGNORECASE)
+# Prefer the ASCII SKU shape when it is followed directly by Chinese grammar
+# (for example ``CW-S10-1的容量``).  The older single-shape expression could
+# not place a word boundary between the final digit and a Chinese character,
+# then backtracked to ``CW-S10`` and created a false quality warning.  The
+# second alternative keeps support for variants with Chinese suffixes.
+SKU_RE = re.compile(
+    r"\b(?:[A-Z]{1,6}(?:-[A-Z0-9]{1,8}){1,4})(?=$|[\s，。,；;：:）)\]】>\"'？?、.!\u4e00-\u9fff])"
+    r"|\b(?:[A-Z]{1,6}(?:-[A-Z0-9\u4e00-\u9fff]{1,8}){1,4})\b",
+    flags=re.IGNORECASE,
+)
 
 
 def evaluate_agent_response(

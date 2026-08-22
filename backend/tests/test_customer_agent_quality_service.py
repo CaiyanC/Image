@@ -94,6 +94,39 @@ class CustomerAgentQualityServiceTest(unittest.TestCase):
         }])
         self.assertNotIn("missing_sources", result["agent_quality"]["risks"])
 
+    def test_attached_quality_recomputes_against_final_variant_packet(self):
+        stale_sku_risk = "answer_mentions_unreturned_sku:CW-S10"
+        result = customer_service_service._attach_agent_quality({
+            "answer": "CW-S10-1\u7684\u5bb9\u91cf\u662f1400ML\u3002",
+            "intent": "product_detail",
+            "answer_type": "product_detail",
+            "confidence": "low",
+            "uncertainty": "insufficient_data",
+            "warnings": [stale_sku_risk],
+            "results": [{"sku": "CW-S10-1", "product_name_cn": "\u6fc0\u5ddd\u5355\u9505"}],
+            "result_skus": ["CW-S10-1"],
+            "evidence": [{
+                "sku": "CW-S10-1",
+                "field_label": "\u5bb9\u91cf",
+                "value": "1400ML",
+                "source_type": "product_db",
+                "source_label": "\u4ea7\u54c1\u57fa\u7840\u8d44\u6599",
+            }],
+            "agent_quality": {
+                "score": 0.2,
+                "level": "low",
+                "passed": False,
+                "risks": [stale_sku_risk],
+            },
+        }, "CW-S10-1\u7684\u5bb9\u91cf\u662f\u591a\u5c11\uff1f")
+
+        self.assertTrue(result["agent_quality"]["passed"])
+        self.assertNotIn(stale_sku_risk, result["agent_quality"]["risks"])
+        self.assertNotIn(stale_sku_risk, result["warnings"])
+        self.assertEqual(result["confidence"], "high")
+        self.assertEqual(result["uncertainty"], "resolved")
+        self.assertTrue(result["debug"]["agent_quality_recomputed_from_final_packet"])
+
     def test_product_fact_without_sources_is_not_high_quality(self):
         quality = customer_agent_quality_service.evaluate_agent_response(
             "CW-C83 的容量是多少？",

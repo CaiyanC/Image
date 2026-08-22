@@ -920,6 +920,110 @@ def test_semantic_preplan_prompt_keeps_unrepresented_capabilities_in_product_qa(
     assert "Preserve every independent customer requirement" in system
 
 
+def test_semantic_repair_prompt_keeps_typed_preferences_out_of_formal_fields(monkeypatch):
+    responses = iter(
+        [
+            json.dumps(
+                {
+                    "route_family": "product_bound_qa",
+                    "route_hint": "product_detail",
+                    "question_type": "field",
+                    "entities": ["SKU-1"],
+                    "subject_text": "SKU-1",
+                    "canonical_fields": ["selling_point", "storage_preference"],
+                    "field_type": "selling_point",
+                    "field_hint": "selling_point",
+                    "evidence_kind": "structured_field",
+                    "confidence": "high",
+                    "ambiguity": False,
+                    "evidence_required": True,
+                    "context_usage": "none",
+                    "reasoning_summary": "mixed product fact",
+                },
+                ensure_ascii=False,
+            ),
+            json.dumps(
+                {
+                    "route_family": "product_bound_qa",
+                    "route_hint": "product_detail",
+                    "question_type": "field",
+                    "entities": ["SKU-1"],
+                    "subject_text": "SKU-1",
+                    "canonical_fields": ["selling_point"],
+                    "field_type": "selling_point",
+                    "field_hint": "selling_point",
+                    "evidence_kind": "structured_field",
+                    "supplemental_qa_evidence_query": "storage convenience",
+                    "compound": True,
+                    "intent_coverage": "full",
+                    "confidence": "high",
+                    "ambiguity": False,
+                    "evidence_required": True,
+                    "context_usage": "none",
+                    "reasoning_summary": "formal field plus product QA",
+                },
+                ensure_ascii=False,
+            ),
+        ]
+    )
+    repair_messages = []
+
+    async def fake_chat_completion(_db, messages, **kwargs):
+        if kwargs.get("purpose") == "semantic_preplan_repair":
+            repair_messages.append(messages)
+        return next(responses)
+
+    monkeypatch.setattr(
+        customer_agent_planner_service.customer_llm_service,
+        "chat_completion",
+        fake_chat_completion,
+    )
+    monkeypatch.setattr(
+        customer_agent_planner_service,
+        "_database_field_value_hints",
+        lambda *_args: [],
+    )
+
+    result = asyncio.run(
+        customer_agent_planner_service.plan_customer_question_semantic(
+            None,
+            "SKU-1 selling points and storage convenience",
+            {},
+            context={},
+        )
+    )
+
+    assert result["fallback_reason"] == ""
+    assert result["canonical_fields"] == ["selling_point"]
+    assert result["supplemental_qa_evidence_query"] == "storage convenience"
+    assert repair_messages
+
+    direct_repair_messages = []
+
+    async def capture_direct_repair(_db, messages, **kwargs):
+        direct_repair_messages.append(messages)
+        return "{}"
+
+    monkeypatch.setattr(
+        customer_agent_planner_service.customer_llm_service,
+        "chat_completion",
+        capture_direct_repair,
+    )
+    asyncio.run(
+        customer_agent_planner_service._repair_semantic_preplan_output(
+            None,
+            question="named product selling points and storage convenience",
+            raw_content="{}",
+            failure_reason="unknown_canonical_field_in_multi_intent",
+            context={},
+        )
+    )
+    repair_system = direct_repair_messages[0][0]["content"]
+    assert "recommendation_constraints are not canonical_fields" in repair_system
+    assert "Never place storage_preference" in repair_system
+    assert "selling_point as the formal field" in repair_system
+
+
 def test_semantic_preplan_preserves_component_bound_product_qa_scope():
     """Component-to-value binding must stay in same-SKU RAG, not one scalar field."""
     preplan = customer_agent_planner_service._validate_semantic_preplan(

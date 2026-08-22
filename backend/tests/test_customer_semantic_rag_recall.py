@@ -6,6 +6,28 @@ from app.services import customer_agent_planner_service as planner
 from app.services import customer_service_service as service
 
 
+def test_same_sku_rag_prompts_keep_named_heat_source_compatibility_exact():
+    evidence = "适用热源：明火直烧、燃气炉、卡式炉、电磁炉"
+    answer = "明火直烧属于明火，所以支持酒精炉。"
+
+    grounding_system = service._same_sku_knowledge_grounding_messages(
+        "CW-C83 能不能用酒精炉？",
+        answer,
+        evidence,
+    )[0]["content"]
+    strict_system = service._same_sku_knowledge_strict_entailment_messages(
+        "CW-C83 能不能用酒精炉？",
+        answer,
+        evidence,
+    )[0]["content"]
+
+    for system in (grounding_system, strict_system):
+        assert "Heat-source and fuel compatibility are exact product facts" in system
+        assert "明火直烧" in system
+        assert "酒精炉" in system
+        assert "does not by itself entail" in system
+
+
 def test_strict_same_sku_verdict_retries_incomplete_json_with_same_evidence(monkeypatch):
     calls = []
     responses = iter([
@@ -62,6 +84,35 @@ def test_strict_same_sku_verdict_retries_incomplete_json_with_same_evidence(monk
     assert calls[0]["messages"][1]["content"] == calls[1]["messages"][1]["content"]
     assert json.loads(calls[1]["messages"][1]["content"])["evidence"] == sealed_evidence
     assert "previous verdict was truncated" in calls[1]["messages"][-1]["content"]
+
+
+def test_conflicted_field_delivery_requires_two_consistent_strict_verdicts(monkeypatch):
+    calls = 0
+
+    async def alternating_verifier(*_args, **_kwargs):
+        nonlocal calls
+        calls += 1
+        return calls == 1
+
+    monkeypatch.setattr(
+        service,
+        "_same_sku_evidence_answer_is_grounded",
+        alternating_verifier,
+    )
+
+    result = asyncio.run(
+        service._same_sku_rag_answer_is_grounded_after_quote_validation(
+            SimpleNamespace(),
+            "CW-S10-1\u652f\u6301\u5361\u5f0f\u7089\u5417\uff1f",
+            "\u8bb0\u5f55\u663e\u793a\u652f\u6301\u5361\u5f0f\u7089\u3002",
+            {},
+            "\u9002\u7528\u70ed\u6e90\uff1a\u5361\u5f0f\u7089\u3002",
+            conflicted_formal_fields=["heat_source"],
+        )
+    )
+
+    assert result is False
+    assert calls == 2
 
 
 def test_comparison_verdict_uses_focused_participant_bound_semantic_audit(monkeypatch):
@@ -131,6 +182,27 @@ def test_strict_entailment_prompt_keeps_task_use_below_categorical_success():
     system_instruction = messages[0]["content"]
     assert "可用于烧水/煮面" in system_instruction
     assert "没问题/完全可以/满足烧水煮面需求/满足两人使用/够两人煮面" in system_instruction
+
+    assert "Named-operation override" in system_instruction
+    assert "符合记录" in system_instruction
+
+
+def test_compound_form_boundary_allows_explicit_same_sku_named_component():
+    boundary = service._SEMANTIC_COMPOUND_PRODUCT_FORM_BOUNDARY
+
+    assert "canonical same-SKU product name, title, description, or RAG excerpt" in boundary
+    assert "烧水壶/水壶" in boundary
+    assert "generic set label" in boundary
+
+
+def test_recommendation_group_task_boundary_does_not_upgrade_broad_cooking():
+    boundary = service._SEMANTIC_RECOMMENDATION_GROUP_TASK_BOUNDARY
+
+    assert "broad cooking evidence" in boundary
+    assert "keep the customer's named task unconfirmed" in boundary
+    assert "only when the same-SKU packet explicitly states" in boundary
+    assert "specific recipe, dish, or operation" in boundary
+    assert "general supported/bounded ordinary-use allowance" in boundary
 
 
 def test_semantic_catalogue_recall_returns_only_rag_hit_skus(monkeypatch):
@@ -359,6 +431,29 @@ def test_unsafe_product_qa_wrapper_ambiguity_still_enters_sealed_rag():
     assert service._semantic_product_qa_preempts_legacy_shortcuts(preplan)
 
 
+def test_named_product_qa_with_ambiguity_still_enters_sealed_rag():
+    preplan = {
+        "called": True,
+        "route_family": "product_bound_qa",
+        "route_hint": "product_detail",
+        "confidence": 0.9,
+        "confidence_label": "high",
+        "ambiguity": True,
+        "evidence_required": True,
+        "evidence_kind": "product_qa",
+        "canonical_fields": [],
+        "field_type": "",
+        "field_hint": None,
+        "entities": ["CF-PG19"],
+        "subject_text": "CF-PG19",
+        "qa_evidence_query": "CF-PG19 保修政策",
+        "unsafe_or_fabricated_answer_requested": False,
+    }
+
+    assert service._semantic_prefers_sealed_product_qa({"semantic_preplan": preplan})
+    assert service._semantic_product_qa_preempts_legacy_shortcuts(preplan)
+
+
 def test_unsafe_missing_state_survives_natural_recovery_merge():
     result = {
         "intent": "product_detail",
@@ -423,6 +518,24 @@ def test_recommendation_rag_keeps_meaningful_content_but_drops_conflicting_measu
 
     assert any("effortless clean up" in value for value in evidence.values())
     assert all("2.2 lbs" not in value for value in evidence.values())
+
+
+def test_heat_source_conflict_keeps_unrelated_same_sku_rag_content_available():
+    """A heat-source conflict is semantic provenance, not a sentence-wide filter."""
+    value = "组件：锅、碗、勺、铲等10件配件；资料还提到可配合酒精炉使用。"
+
+    assert not service._recommendation_content_conflicts_with_structured_specs(
+        value,
+        capacity="7L锅，4L浅锅",
+        gross_weight_g=0,
+        conflicted_formal_fields=["heat_source"],
+    )
+    assert service._recommendation_content_conflicts_with_structured_specs(
+        "组件：锅、碗、勺、铲等10件配件；旧记录容量1.7L。",
+        capacity="7L锅，4L浅锅",
+        gross_weight_g=0,
+        conflicted_formal_fields=["capacity"],
+    )
 
 
 def test_same_sku_rag_entailment_prompt_separates_measurement_from_subjective_weight():
@@ -954,6 +1067,8 @@ def test_semantic_coverage_prompt_maps_normalized_product_form_to_customer_langu
     assert "identity.product_form" in captured["system"]
     assert "do not require" in captured["system"]
     assert "concrete containment request" in captured["system"]
+    assert "multiple independent forms" in captured["system"]
+    assert "single_cookware establishes only the pot" in captured["system"]
 
 
 def test_semantic_coverage_candidate_limit_bounds_factor_matrix():
@@ -1045,6 +1160,38 @@ def test_semantic_subfield_adapter_respects_flash_no_independent_fact_review():
         assert service._semantic_subfield_to_product_qa_preplan(plan) is None
         assert plan["canonical_fields"] == [field]
         assert plan["evidence_kind"] == "structured_field"
+
+
+def test_semantic_subfield_adapter_does_not_consume_formal_field_operator_hint():
+    """A formal field plus ``supports`` is still a field plan, not a subfield."""
+    plan = {
+        "route_family": "product_bound_qa",
+        "subject_text": "CW-S10-1",
+        "canonical_fields": ["heat_source"],
+        "field_type": "heat_source",
+        "field_hint": "supports",
+        "evidence_kind": "structured_field",
+    }
+
+    assert service._semantic_subfield_to_product_qa_preplan(plan) is None
+
+    adapted = service._semantic_structured_fields_to_product_qa_preplan(
+        plan,
+        "CW-S10-1\u652f\u6301\u5361\u5f0f\u7089\u5417\uff1f",
+    )
+    assert adapted is not None
+    assert adapted["semantic_original_formal_fields"] == ["heat_source"]
+
+
+def test_semantic_conflict_relevance_uses_flash_formal_fields_only():
+    assert service._semantic_conflicted_formal_fields_relevant_to_plan(
+        {"semantic_original_formal_fields": ["capacity"]},
+        ["heat_source", "capacity"],
+    ) == ["capacity"]
+    assert service._semantic_conflicted_formal_fields_relevant_to_plan(
+        {"question_type": "usage", "evidence_kind": "product_qa"},
+        ["heat_source"],
+    ) == []
 
 
 def test_relative_weight_reference_uses_exact_sealed_sku_bundle(monkeypatch):
@@ -1426,6 +1573,33 @@ def test_semantic_formal_fact_enters_same_sku_rag_packet_without_structured_writ
     assert result["debug"]["knowledge_semantic_formal_evidence_added"][0]["field"] == "weight"
 
 
+def test_same_sku_coverage_audit_skips_only_typed_single_formal_field():
+    single_formal_field = {
+        "semantic_adapter_source": "semantic_structured_fields_to_same_sku_rag",
+        "semantic_original_formal_fields": ["capacity"],
+        "question_type": "field",
+        "evidence_kind": "product_qa",
+        "intent_coverage": "full",
+        "ambiguity": False,
+        "compound": False,
+        "qa_or_usage_care": False,
+        "supplemental_qa_evidence_query": "",
+        "qa_evidence_queries": [],
+        "unsafe_or_fabricated_answer_requested": False,
+    }
+
+    assert service._same_sku_rag_answer_coverage_required(single_formal_field) is False
+
+    for changed in (
+        {**single_formal_field, "compound": True},
+        {**single_formal_field, "supplemental_qa_evidence_query": "是否适合两个人使用"},
+        {**single_formal_field, "semantic_original_formal_fields": ["capacity", "weight"]},
+        {**single_formal_field, "semantic_adapter_source": "other_semantic_adapter"},
+        {**single_formal_field, "unsafe_or_fabricated_answer_requested": True},
+    ):
+        assert service._same_sku_rag_answer_coverage_required(changed) is True
+
+
 def test_sealed_qa_compatibility_fallback_does_not_fail_open_exact_qa(monkeypatch):
     product = SimpleNamespace(
         id="product-1",
@@ -1535,7 +1709,9 @@ def test_structured_field_conflict_is_carried_into_supplemental_rag_contract():
 
     assert payload["conflicted_formal_fields"] == ["capacity"]
     assert "unresolved conflicts" in messages[0]["content"]
-    assert "Do not select, quote, restate" in messages[0]["content"]
+    assert "not a ban on every same-SKU RAG statement" in messages[0]["content"]
+    assert "Highest-priority direct-field boundary" in messages[0]["content"]
+    assert "do not answer that field with a settled positive or negative conclusion" in messages[0]["content"]
 
     strict_messages = service._same_sku_knowledge_strict_entailment_messages(
         "两个人煮面是否够用",
@@ -1543,8 +1719,42 @@ def test_structured_field_conflict_is_carried_into_supplemental_rag_contract():
         "商品定位：1.7L容量满足2-3人基础烹饪需求",
         conflicted_formal_fields=["capacity"],
     )
-    assert "Do not select, quote, restate" in strict_messages[0]["content"]
+    assert "not a ban on every same-SKU RAG statement" in strict_messages[0]["content"]
     assert "do not directly establish a partial or unverified requested practical outcome" in strict_messages[0]["content"]
+    assert "Highest-priority direct-field boundary" in strict_messages[0]["content"]
+
+
+def test_same_sku_rag_filters_secondary_capacity_rendering_before_answer_writer():
+    current = {"capacity": "容量：锅：1400ML"}
+
+    assert service._same_sku_rag_has_secondary_capacity_rendering(
+        "- 技术优势: 1.4L大容量满足双人需求",
+        current,
+    ) is True
+    assert service._same_sku_rag_has_secondary_capacity_rendering(
+        "Q: 容量是多少？\nA: 锅：1400ML。",
+        current,
+    ) is False
+    assert service._same_sku_rag_has_secondary_capacity_rendering(
+        "Q: 技术优势是什么？\nA: 1.1.4L大容量满足双人需求。",
+        current,
+    ) is True
+
+
+def test_semantic_partial_same_sku_rag_answer_is_not_truncated_to_first_sentence():
+    answer = "容量记录为1400ML。热源记录存在冲突，暂时无法确认。"
+    shaped = service._shape_product_detail_output(
+        answer,
+        [],
+        answer_metadata={
+            "contract_field_type": "product_qa",
+            "evidence_source": "same_sku_knowledge",
+            "evidence_status": "partial",
+            "semantic_selected_evidence_available": True,
+        },
+    )
+
+    assert shaped == answer
 
 
 def test_conflict_receipt_survives_missing_supplemental_merge():
@@ -1812,6 +2022,7 @@ def test_open_product_qa_rag_reloads_live_conflict_provenance(monkeypatch):
         {"semantic_preplan": {
             "subject_text": "CW-C72",
             "evidence_kind": "product_qa",
+            "semantic_original_formal_fields": ["capacity"],
             "qa_evidence_query": "CW-C72 是否适合两个人露营煮面？",
         }},
     ))
@@ -1826,7 +2037,7 @@ def test_open_product_qa_rag_reloads_live_conflict_provenance(monkeypatch):
         for candidate in captured["selection_payload"]["candidates"]
     )
     assert captured["selection_payload"]["product_identity"]["canonical_name"] == "单锅（CW-C72）"
-    assert "Do not select, quote, restate" in captured["selection_system"]
+    assert "not a ban on every same-SKU RAG statement" in captured["selection_system"]
     assert captured["grounding_conflicts"] == ["capacity"]
 
 
@@ -1869,16 +2080,30 @@ def test_missing_recovery_neutralizes_conflicted_product_identity(monkeypatch):
     result = asyncio.run(service._semantic_owned_missing_result_with_llm(
         _Db(),
         "CW-C72 按现有资料适合两个人露营煮面吗？",
-        {"route_family": "product_bound_qa", "subject_text": "CW-C72"},
+        {
+            "route_family": "product_bound_qa",
+            "subject_text": "CW-C72",
+            "semantic_original_formal_fields": ["capacity"],
+        },
         reason="product_qa_evidence_missing",
         resolved_sku="CW-C72",
+        selected_same_sku_evidence=["适用人数：1-2 人"],
     ))
 
     assert result["results"][0]["product_name_cn"] == "单锅（CW-C72）"
     assert "1.7L" not in result["results"][0]["product_name_cn"]
     assert captured["payload"]["resolved_identity"]["product_name"] == "单锅（CW-C72）"
     assert captured["payload"]["resolved_identity"]["conflicted_formal_fields"] == ["capacity"]
+    assert captured["payload"]["formal_field_status"] == [{
+        "field": "capacity",
+        "status": "recorded_but_conflicted",
+        "customer_conclusion": "unconfirmed",
+    }]
     assert "unresolved formal-field conflict" in captured["system"]
+    assert "field is recorded but internally inconsistent" in captured["system"]
+    assert "Conflict status has priority" in captured["system"]
+    assert "Do not infer a named recipe, dish, or operation" in captured["system"]
+    assert "keep the task unconfirmed" in captured["system"]
 
 
 def test_product_field_followup_neutralizes_live_conflicted_identity(monkeypatch):
@@ -2235,6 +2460,8 @@ def test_factor_contract_separates_catalogue_portability_from_personal_burden(mo
     assert factors[1]["decision_kind"] == "scenario_fit"
     assert factors[2]["decision_kind"] == "subjective_outcome"
     assert "intrinsic catalogue attribute" in captured["extraction_system"]
+    assert "recipient's background" in captured["extraction_system"]
+    assert "several alternative capabilities" in captured["extraction_system"]
 
 
 def test_required_scenario_fit_does_not_reopen_unverified_rag_pool():
@@ -2279,6 +2506,148 @@ def test_required_scenario_bounded_evidence_cannot_reopen_rag_pool():
         coverage,
         question="咖啡器具里请推荐真正适合手冲的产品",
     ) == []
+
+
+def test_recovery_keeps_first_individually_covered_candidate_when_group_is_mixed():
+    coverage = {
+        "ordinarily_usable_candidate_indexes": [0, 1],
+        "request_supported_candidate_indexes": [0, 1],
+        "decision_factors": [{
+            "factor": "gift suitability",
+            "factor_type": "practical_fit",
+            "decision_kind": "subjective_outcome",
+            "importance": "required",
+            "supported_candidate_indexes": [0],
+            "bounded_candidate_indexes": [],
+            "partial_candidate_indexes": [],
+        }],
+    }
+
+    # Candidate 1 is in the same Flash-selected packet but lacks the optional
+    # gift relation. The failed group check must not discard candidate 0 or
+    # make recovery invent a new candidate.
+    assert service._semantic_recommendation_selection_has_coverage(
+        coverage,
+        [0, 1],
+    ) is False
+    assert service._semantic_recommendation_recovery_candidate_indexes(
+        coverage,
+        [0, 1],
+    ) == [0]
+
+
+def test_catalogue_continuation_aligns_stale_subject_kind_with_live_category(monkeypatch):
+    monkeypatch.setattr(
+        service,
+        "_phase1_catalog_rows",
+        lambda _db, _ref: [{"category": "锅具", "sku": "CW-TEST-1"}],
+    )
+    preplan = {
+        "route_family": "recommendation",
+        "subject_text": "锅具",
+        "entities": ["锅具"],
+        "canonical_fields": [],
+        "predicate_constraints": [],
+        "recommendation_constraints": {
+            "subject_kind": "accessories",
+            "people": {"min": 2, "max": 2},
+        },
+        "recommendation_evidence_requirements": [],
+        "recommendation_soft_preferences": [],
+        "decision_requested": False,
+    }
+
+    normalized = service._normalize_semantic_catalogue_continuation(
+        SimpleNamespace(),
+        preplan,
+        {"recommended_skus": ["AC-OLD-1"]},
+    )
+
+    assert normalized["recommendation_constraints"] == {
+        "subject_kind": "cookware",
+        "people": {"min": 2, "max": 2},
+    }
+    assert normalized["route_family"] == "recommendation"
+    assert normalized["context_usage"] == "recommendation_context"
+    assert normalized["catalogue_category_ref"] == "锅具"
+    assert normalized["semantic_adapter_source"] == "live_catalogue_category_subject_kind"
+
+
+def test_alternative_followup_preserves_live_current_category_subject():
+    preplan = {
+        "route_family": "recommendation",
+        "subject_text": "\u9505\u5177",
+        "catalogue_category_ref": "\u9505\u5177",
+        "recommendation_constraints": {"subject_kind": "cookware"},
+        "recommendation_soft_preferences": [],
+        "decision_requested": True,
+    }
+    normalized = service._apply_semantic_recommendation_followup_action(
+        preplan,
+        {"recommended_skus": ["WS-B20"], "product_scope": ""},
+        {"recommendation_followup_action": "alternative", "relative_fields": []},
+    )
+
+    assert normalized["subject_text"] == "\u9505\u5177"
+    assert normalized["entity_scope"] == "category_scope"
+    assert normalized["recommendation_constraints"]["subject_kind"] == "cookware"
+
+
+def test_closed_category_context_allows_same_semantic_executor_retry():
+    assert service._semantic_recommendation_executor_retry_allowed(
+        {
+            "route_family": "recommendation",
+            "context_usage": "recommendation_context",
+            "catalogue_category_ref": "\u9505\u5177",
+        },
+        {"recommended_skus": ["WS-B20"]},
+    ) is True
+    assert service._semantic_recommendation_executor_retry_allowed(
+        {
+            "route_family": "recommendation",
+            "context_usage": "recommendation_context",
+            "catalogue_category_ref": "\u9505\u5177",
+        },
+        {},
+    ) is False
+    assert service._semantic_recommendation_executor_retry_allowed(
+        {
+            "route_family": "recommendation",
+            "context_usage": "none",
+            "catalogue_category_ref": "\u9505\u5177",
+        },
+        {"recommended_skus": ["WS-B20"]},
+    ) is False
+
+
+def test_first_turn_empty_result_can_retry_only_with_verified_packet():
+    assert service._semantic_recommendation_result_supports_executor_retry(None) is True
+    assert service._semantic_recommendation_result_supports_executor_retry({
+        "result_skus": [],
+        "debug": {"verified_candidate_count": 4},
+    }) is True
+    assert service._semantic_recommendation_result_supports_executor_retry({
+        "result_skus": [],
+        "debug": {"verified_candidate_count": 0},
+    }) is False
+    assert service._semantic_recommendation_result_supports_executor_retry({
+        "result_skus": [],
+        "debug": {
+            "verified_candidate_count": 4,
+            "semantic_terminal_no_match": True,
+        },
+    }) is False
+    assert service._semantic_recommendation_result_supports_executor_retry({
+        "result_skus": [],
+        "debug": {
+            "verified_candidate_count": 4,
+            "semantic_presentation_exhausted": True,
+        },
+    }) is False
+    assert service._semantic_recommendation_result_supports_executor_retry({
+        "result_skus": ["AC-Z14"],
+        "debug": {"verified_candidate_count": 4},
+    }) is False
 
 
 def test_unverified_subjective_preference_can_keep_a_conditional_rag_pool():
@@ -2750,6 +3119,113 @@ def test_required_factual_rag_completion_can_recover_direct_evidence(monkeypatch
     assert coverage["request_supported_candidate_indexes"] == [0]
 
 
+def test_rag_evidence_completion_skips_positive_coverage_with_existing_same_sku_citation(monkeypatch):
+    async def fail_if_called(*_args, **_kwargs):
+        raise AssertionError("positive coverage already has the writer citation")
+
+    monkeypatch.setattr(service.customer_llm_service, "chat_completion", fail_if_called)
+    coverage = {
+        "ranked_candidate_indexes": [0],
+        "decision_factors": [{
+            "factor": "适合露营",
+            "factor_type": "practical_fit",
+            "decision_kind": "scenario_fit",
+            "importance": "preferred",
+            "supported_candidate_indexes": [0],
+            "bounded_candidate_indexes": [],
+            "partial_candidate_indexes": [],
+            "unverified_candidate_indexes": [],
+            "evidence_usage": [{
+                "candidate_index": 0,
+                "evidence": [{
+                    "field": "content.usage_scenarios",
+                    "excerpt": "户外露营",
+                }],
+            }],
+        }],
+    }
+
+    result = asyncio.run(service._semantic_recommendation_rag_evidence_completion(
+        SimpleNamespace(),
+        question="推荐适合露营的产品",
+        candidates=[{
+            "candidate_index": 0,
+            "product_name": "测试产品",
+            "sealed_evidence": {
+                "content.usage_scenarios": "户外露营",
+                "rag.content.0.1": "户外露营使用",
+            },
+        }],
+        coverage=coverage,
+    ))
+
+    assert result == {"called": False, "status": "not_needed", "completed": []}
+
+
+def test_rag_evidence_completion_keeps_valid_partial_selections(monkeypatch):
+    async def fake_chat_completion(*_args, **_kwargs):
+        # The omitted second pair is intentionally safe: Flash only needs to
+        # return citations it can prove, not a placeholder for every pair.
+        return json.dumps({
+            "selections": [{
+                "factor_index": 0,
+                "candidate_index": 0,
+                "decision": "supported",
+                "evidence_fields": ["rag.content.0.1"],
+            }],
+        }, ensure_ascii=False)
+
+    monkeypatch.setattr(service.customer_llm_service, "chat_completion", fake_chat_completion)
+    coverage = {
+        "ranked_candidate_indexes": [0],
+        "decision_factors": [
+            {
+                "factor": "资料明确支持收纳",
+                "dimension": "documented_evidence",
+                "factor_type": "factual",
+                "decision_kind": "concrete_capability",
+                "importance": "required",
+                "supported_candidate_indexes": [],
+                "bounded_candidate_indexes": [],
+                "partial_candidate_indexes": [],
+                "unverified_candidate_indexes": [0],
+                "evidence_usage": [],
+            },
+            {
+                "factor": "资料明确支持清洁",
+                "dimension": "documented_evidence",
+                "factor_type": "factual",
+                "decision_kind": "concrete_capability",
+                "importance": "required",
+                "supported_candidate_indexes": [],
+                "bounded_candidate_indexes": [],
+                "partial_candidate_indexes": [],
+                "unverified_candidate_indexes": [0],
+                "evidence_usage": [],
+            },
+        ],
+    }
+
+    completion = asyncio.run(service._semantic_recommendation_rag_evidence_completion(
+        SimpleNamespace(),
+        question="资料明确支持收纳和清洁的产品",
+        candidates=[{
+            "candidate_index": 0,
+            "product_name": "测试产品",
+            "sealed_evidence": {
+                "rag.content.0.1": "资料明确支持收纳",
+                "rag.content.0.2": "资料明确支持清洁",
+            },
+        }],
+        coverage=coverage,
+    ))
+
+    assert completion["status"] == "completed"
+    assert completion["promoted_candidate_indexes"] == [0]
+    assert coverage["decision_factors"][0]["supported_candidate_indexes"] == [0]
+    assert coverage["decision_factors"][1]["unverified_candidate_indexes"] == [0]
+
+
 def test_natural_recovery_uses_only_factor_cited_evidence(monkeypatch):
     captured = {}
 
@@ -2888,6 +3364,22 @@ def test_focused_outcome_boundary_audit_rejects_softened_claim_after_gap(monkeyp
     assert captured["purpose"] == "semantic_recommendation_outcome_boundary_audit"
     assert captured["payload"]["outcome_boundaries"][0]["status"] == "unverified"
     assert "只能确认其基本功能" in captured["system"]
+    assert "作为收纳用途比较实用" in captured["system"]
+    assert "role-framed practicality statement" in captured["system"]
+    assert "semantic-equivalence instruction" in captured["system"]
+    assert "pure evidence-gap sentence" in captured["system"]
+    assert "natural scene paraphrase" in captured["system"]
+    assert "category or product-form identity match" in captured["system"]
+    assert "target_audience label naming beginners" in captured["system"]
+    assert "符合你对好收纳的偏好/要求" in captured["system"]
+    assert "可作为实用炊具的基础选择" in captured["system"]
+    assert "与朋友刚开始露营的情况匹配" in captured["system"]
+    assert "全套收纳" in captured["system"]
+    assert "重量数值较低" in captured["system"]
+    assert "可作为轻量化的参考" in captured["system"]
+    assert "specific recipe, dish, or concrete task" in captured["system"]
+    assert "broad cooking/food-preparation evidence" in captured["system"]
+    assert "A conditional selection phrase" in captured["system"]
     assert "Return every material violation" in captured["system"]
 
 
@@ -3270,6 +3762,14 @@ def test_recommendation_final_audits_receive_writer_outcome_boundaries(monkeypat
     assert captured["comparison_context"]["reference_sku"] == "CW-C78"
     assert captured["comparison_context"]["reference_weight_g"] == 1320.0
     assert "No typed budget decision factor exists" in captured["writer_system"]
+    assert "a single pot, 320g" in captured["writer_system"]
+    assert "PERFECT GIFT" in captured["writer_system"]
+    assert "target audience, usage scene" in captured["writer_system"]
+    assert "Most importantly, when a gift" in captured["writer_system"]
+    assert "Do not compress several supported" in captured["writer_system"]
+    assert "single_cookware establishes only the pot" in captured["writer_system"]
+    assert "specific recipe, dish, or operation" in captured["writer_system"]
+    assert "general supported/bounded ordinary-use allowance" in captured["writer_system"]
     assert "目录价位定位为入门款" not in captured["writer_system"]
 
 

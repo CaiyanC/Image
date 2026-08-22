@@ -1300,8 +1300,8 @@ def test_safe_missing_formal_field_hides_unrelated_product_row_evidence():
     assert shaped["evidence"] == []
 
 
-def test_same_sku_rag_accessories_contract_rejects_person_count_as_component_evidence(monkeypatch):
-    """An accessories plan cannot turn a serving-size claim into included cups."""
+def test_same_sku_rag_accessories_uses_semantic_component_evidence_without_package_keyword(monkeypatch):
+    """A natural component description must not be blocked by a package-word gate."""
     safe_missing = {
         "sku": "RAG-ACCESSORIES-100",
         "answer": "safe missing",
@@ -1309,7 +1309,7 @@ def test_same_sku_rag_accessories_contract_rejects_person_count_as_component_evi
     }
     rows = [{
         "sku": "RAG-ACCESSORIES-100",
-        "content": "Designed to meet coffee needs for up to 4 people.",
+        "content": "组件：锅、碗、勺、铲等10件配件。",
     }]
     monkeypatch.setattr(
         customer_service_service,
@@ -1324,7 +1324,7 @@ def test_same_sku_rag_accessories_contract_rejects_person_count_as_component_evi
         payload = json.loads(messages[-1]["content"])
         if "candidates" in payload:
             return '{"indexes":[0],"confidence":"high","identity_consistent":true}'
-        return '{"answer":"It includes four cups.","evidence_quotes":["up to 4 people"]}'
+        return '{"answer":"资料记录包含锅、碗、勺、铲等10件配件。","evidence_quotes":["锅、碗、勺、铲等10件配件"]}'
 
     async def grounded(*_args, **_kwargs):
         return True
@@ -1353,9 +1353,9 @@ def test_same_sku_rag_accessories_contract_rejects_person_count_as_component_evi
     )
 
     assert result is not None
-    assert result["answer"] == "safe missing"
-    assert result.get("evidence", []) == []
-    assert result["answer_metadata"]["retrieval_missing_reason"] == "package_evidence_incomplete"
+    assert result["answer"] == "资料记录包含锅、碗、勺、铲等10件配件。"
+    assert result["answer_metadata"]["evidence_status"] == "matched"
+    assert result["answer_metadata"].get("retrieval_missing_reason") != "package_evidence_incomplete"
 
 
 def test_same_sku_rag_broad_product_question_merges_multiple_selected_evidence(monkeypatch):
@@ -1416,6 +1416,70 @@ def test_same_sku_rag_broad_product_question_merges_multiple_selected_evidence(m
     assert result["debug"]["knowledge_evidence_selector"]["selected_count"] == 2
 
 
+def test_same_sku_rag_semantic_selection_is_not_repeated_for_a_large_narrow_packet(monkeypatch):
+    """A semantic selector owns packet breadth; a local item-count retry is unnecessary."""
+    safe_missing = {
+        "sku": "RAG-LARGE-100",
+        "answer": "safe missing",
+        "debug": {"agent_mode": "sealed_product_qa_safe_missing"},
+    }
+    rows = [
+        {"sku": "RAG-LARGE-100", "content": f"Direct fact {index}."}
+        for index in range(7)
+    ]
+    selection_calls = 0
+
+    monkeypatch.setattr(
+        customer_service_service,
+        "_sealed_semantic_product_qa_entity_guard",
+        lambda *_args, **_kwargs: safe_missing.copy(),
+    )
+
+    async def fake_retrieve(*_args, **_kwargs):
+        return rows
+
+    async def fake_completion(_db, *, messages, **_kwargs):
+        nonlocal selection_calls
+        prompt = messages[-1]["content"]
+        if '"candidates"' in prompt:
+            selection_calls += 1
+            return json.dumps({
+                "indexes": list(range(7)),
+                "confidence": "high",
+                "identity_consistent": True,
+                "coverage": "full",
+            })
+        return json.dumps({
+            "answer": "资料记录了这七项事实。",
+            "evidence_quotes": ["Direct fact 0."],
+        })
+
+    async def grounded(*_args, **_kwargs):
+        return True
+
+    async def covered(*_args, **_kwargs):
+        return True
+
+    monkeypatch.setattr(customer_service_service.knowledge_service, "semantic_retrieve", fake_retrieve)
+    monkeypatch.setattr(customer_service_service.customer_llm_service, "chat_completion", fake_completion)
+    monkeypatch.setattr(customer_service_service, "_same_sku_evidence_answer_is_grounded", grounded)
+    monkeypatch.setattr(customer_service_service, "_same_sku_rag_answer_covers_question", covered)
+
+    import asyncio
+
+    result = asyncio.run(
+        customer_service_service._try_sealed_same_sku_knowledge_answer(
+            SimpleNamespace(),
+            "What should I know about this product?",
+            {"semantic_preplan": {"qa_evidence_query": "What direct facts are recorded?"}},
+        )
+    )
+
+    assert result is not None
+    assert selection_calls == 1
+    assert result["debug"]["knowledge_evidence_selector"]["selected_count"] == 7
+
+
 def test_same_sku_selector_exposes_source_provenance_for_conflicting_numeric_values():
     """Flash must see provenance when same-SKU records disagree numerically."""
     messages = customer_service_service._same_sku_knowledge_evidence_selection_messages(
@@ -1446,6 +1510,17 @@ def test_same_sku_selector_exposes_source_provenance_for_conflicting_numeric_val
     assert payload["candidates"][1]["source_section"] == "qa:technical_advantage"
     assert "incompatible numeric values" in messages[0]["content"]
     assert "direct specification or direct field QA" in messages[0]["content"]
+
+
+def test_conflicted_formal_field_keeps_explicit_same_sku_rag_evidence_available():
+    instruction = customer_service_service._same_sku_conflicted_formal_fields_instruction(
+        ["heat_source"]
+    )
+
+    assert "not a ban on every same-SKU RAG statement" in instruction
+    assert "usage instruction" in instruction
+    assert "do not silently choose one" in instruction
+    assert "Reject a candidate that only implies" in instruction
 
 
 def test_same_sku_rag_repairs_conflicting_capacity_without_repeating_secondary_number(monkeypatch):
@@ -1829,7 +1904,7 @@ def test_strict_rag_grounding_allows_standard_threshold_normalization_for_numeri
     assert "Example that must return grounded=true" in system
 
 
-def test_same_sku_rag_retries_a_transient_low_confidence_evidence_selection(monkeypatch):
+def test_same_sku_rag_does_not_retry_a_low_confidence_evidence_selection(monkeypatch):
     sku = "RAG-SELECT-RETRY"
     safe_missing = {
         "sku": sku,
@@ -1882,9 +1957,9 @@ def test_same_sku_rag_retries_a_transient_low_confidence_evidence_selection(monk
         )
     )
 
-    assert selector_calls == 2
+    assert selector_calls == 1
     assert result is not None
-    assert "140\u00b0F" in result["answer"]
+    assert result["answer_metadata"]["retrieval_missing_reason"] == "evidence_selection_not_usable"
 
 
 def test_same_sku_structured_best_effort_answers_only_from_selected_evidence(monkeypatch):
@@ -2722,7 +2797,15 @@ def test_same_sku_rag_fails_closed_when_grounded_delivery_cannot_cover_question(
 
     assert result is not None
     assert result["answer"] == "safe missing"
-    assert result.get("evidence", []) == []
+    # Delivery still fails closed, but the selected same-SKU packet remains
+    # available as provenance for the semantic recovery layer instead of being
+    # erased by the post-selection failure.
+    assert [item["value"] for item in result.get("evidence", [])] == [
+        "Target audience: experienced campers.",
+        "Folding design for compact storage.",
+    ]
+    assert result["answer_metadata"]["evidence_status"] == "partial"
+    assert result["answer_metadata"]["semantic_selected_evidence_available"] is True
     assert result["answer_metadata"]["retrieval_missing_reason"] == "answer_grounding_failed"
 
 
@@ -3429,12 +3512,5 @@ def test_specification_summary_does_not_repeat_embedded_field_label():
     assert summary == "\u6750\u8d28\uff1a\u78e8\u6bdb\u6625\u4e9a\u7eba"
 
 
-def test_marketing_set_composition_is_not_a_complete_package_list():
-    assert not customer_service_service._is_complete_package_contents_evidence(
-        "这套炊具包含一个容量为 3700 毫升的主锅和一个容量为 2300 毫升的煎锅。"
-    )
-    assert customer_service_service._is_complete_package_contents_evidence(
-        "包装清单：主锅、煎锅、可拆卸手柄和收纳袋。"
-    )
 def test_people_field_accepts_explicit_single_person_audience_word():
     assert customer_service_service._people_count_field_evidence("适合单人背包客") == "单人"

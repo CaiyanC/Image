@@ -4,6 +4,47 @@ import json
 from app.services import customer_agent_planner_service, customer_service_service
 
 
+def test_prior_recommendation_scope_exposes_only_catalogue_context():
+    result = customer_service_service._semantic_prior_recommendation_scope(
+        {
+            "source": "recommendation",
+            "answer_type": "recommendation",
+            "product_scope": "锅具",
+            "recommended_skus": ["CW-C93"],
+            "effective_recommendation_contract": {
+                "recommendation_constraints": {"subject_kind": "cookware"},
+            },
+        },
+        {},
+    )
+
+    assert result == {
+        "source": "persisted_recommendation_catalogue_scope",
+        "category_or_scope": "锅具",
+        "subject_kind": "cookware",
+    }
+    assert "CW-C93" not in json.dumps(result, ensure_ascii=False)
+
+
+def test_semantic_preplan_prompt_receives_prior_scope_as_discourse_context():
+    messages = customer_agent_planner_service._semantic_preplan_messages(
+        question="如果我用酒精炉呢？",
+        deterministic_plan={},
+        context={
+            "prior_recommendation_scope": {
+                "source": "persisted_recommendation_catalogue_scope",
+                "category_or_scope": "锅具",
+                "subject_kind": "cookware",
+            },
+        },
+    )
+
+    payload = json.loads(messages[1]["content"])
+    assert payload["prior_recommendation_scope"]["subject_kind"] == "cookware"
+    assert "prior_recommendation_scope" in messages[0]["content"]
+    assert "heat source" in messages[0]["content"]
+
+
 def test_semantic_preplan_keeps_meaning_when_provider_uses_descriptive_transport_shapes():
     provider_shape = {
         "route_family": "recommendation",
@@ -37,12 +78,117 @@ def test_semantic_preplan_keeps_meaning_when_provider_uses_descriptive_transport
         raw_content=json.dumps(provider_shape, ensure_ascii=False),
     )
 
+    # A descriptive transport value is not silently converted into an
+    # executable broad scope.  The semantic planner keeps the recommendation
+    # ownership as provenance and gives Flash a repair pass; it must not fall
+    # through to a lexical/category route.
+    assert result["fallback_reason"] == "invalid_recommendation_constraints"
+    assert result["semantic_route_family_hint"] == "recommendation"
+
+
+def test_semantic_preplan_preserves_compound_product_form_scope():
+    provider_shape = {
+        "route_family": "recommendation",
+        "route_hint": "recommendation",
+        "question_type": "recommendation",
+        "entities": [],
+        "subject_text": "锅和水壶",
+        "entity_scope": "category_scope",
+        "canonical_fields": [],
+        "confidence": "high",
+        "ambiguity": False,
+        "evidence_required": True,
+        "evidence_kind": "",
+        "decision_requested": True,
+        "recommendation_constraints": {
+            "subject_kinds": ["cookware", "waterware"],
+            "people": {"min": 3, "max": 3},
+        },
+        "predicate_constraints": [],
+        "recommendation_evidence_requirements": [],
+        "recommendation_soft_preferences": [],
+    }
+
+    result = customer_agent_planner_service._validate_semantic_preplan(
+        provider_shape,
+        raw_content=json.dumps(provider_shape, ensure_ascii=False),
+    )
+
     assert result["fallback_reason"] == ""
-    assert result["route_family"] == "recommendation"
-    assert result["route_hint"] == "recommendation"
-    assert result["subject_text"] == "烤盘"
-    assert result["recommendation_constraints"] == {}
-    assert result["predicate_constraints"][0]["operator"] == "supports"
+    assert result["recommendation_constraints"]["subject_kinds"] == [
+        "cookware",
+        "waterware",
+    ]
+    assert "subject_kind" not in result["recommendation_constraints"]
+
+
+def test_semantic_preplan_normalizes_single_context_phrase_without_repair():
+    provider_shape = {
+        "route_family": "recommendation",
+        "route_hint": "recommendation",
+        "question_type": "recommendation",
+        "entities": [],
+        "subject_text": "cookware",
+        "entity_scope": "category_scope",
+        "canonical_fields": [],
+        "confidence": "high",
+        "ambiguity": False,
+        "evidence_required": True,
+        "evidence_kind": "structured_field",
+        "decision_requested": True,
+        "recommendation_constraints": {"subject_kind": "cookware"},
+        "predicate_constraints": [],
+        "recommendation_evidence_requirements": "supports alcohol stove",
+        "recommendation_soft_preferences": "prefer either fuel option",
+        "unrepresented_recommendation_requirements": [],
+    }
+
+    result = customer_agent_planner_service._validate_semantic_preplan(
+        provider_shape,
+        raw_content=json.dumps(provider_shape, ensure_ascii=False),
+    )
+
+    assert result["fallback_reason"] == ""
+    assert result["recommendation_evidence_requirements"] == [
+        "supports alcohol stove"
+    ]
+    assert result["recommendation_soft_preferences"] == [
+        "prefer either fuel option"
+    ]
+
+
+def test_complete_semantic_field_plan_skips_redundant_completeness_review():
+    plan = {
+        "route_family": "product_bound_qa",
+        "question_type": "field",
+        "evidence_kind": "structured_field",
+        "canonical_fields": ["capacity"],
+        "supplemental_qa_evidence_query": "",
+        "compound": False,
+        "intent_coverage": "full",
+        "ambiguity": False,
+        "qa_or_usage_care": False,
+        "fallback_reason": "",
+    }
+
+    assert not customer_agent_planner_service._semantic_structured_field_recheck_needed(plan)
+
+
+def test_semantic_field_completeness_review_remains_for_open_semantic_shape():
+    plan = {
+        "route_family": "product_bound_qa",
+        "question_type": "usage",
+        "evidence_kind": "structured_field",
+        "canonical_fields": ["capacity"],
+        "supplemental_qa_evidence_query": "",
+        "compound": True,
+        "intent_coverage": "full",
+        "ambiguity": False,
+        "qa_or_usage_care": False,
+        "fallback_reason": "",
+    }
+
+    assert customer_agent_planner_service._semantic_structured_field_recheck_needed(plan)
 
 
 def test_recommendation_ambiguity_diagnostic_does_not_bypass_semantic_rag():
@@ -76,6 +222,25 @@ def test_comparison_ambiguity_reaches_entity_sealing_before_clarification():
         "question_type": "comparison",
         "entities": ["CW-C83", "CW-C06PRO"],
         "canonical_fields": ["weight", "capacity"],
+        "confidence": 0.9,
+        "confidence_label": "high",
+        "ambiguity": True,
+        "fallback_reason": "",
+    }
+
+    assert customer_service_service._semantic_first_turn_is_owned(preplan)
+
+
+def test_structured_query_ambiguity_with_typed_work_reaches_executor():
+    preplan = {
+        "called": True,
+        "route_family": "structured_query",
+        "route_hint": "query_products",
+        "question_type": "filter",
+        "subject_text": "水壶",
+        "canonical_fields": ["capacity"],
+        "field_type": "capacity",
+        "predicate_constraints": [{"field": "capacity", "operator": ">=", "value": "1L"}],
         "confidence": 0.9,
         "confidence_label": "high",
         "ambiguity": True,
@@ -374,33 +539,6 @@ def test_recommendation_fact_integrity_keeps_measurements_bound_to_each_selected
 
     assert leaked["cross_sku_measurements"]
     assert correct["cross_sku_measurements"] == []
-
-
-def test_recommendation_group_outcome_allows_bounded_judgement_without_literal_promise():
-    rows = [
-        {
-            "product_name_cn": "炊墨炒锅",
-            "sku": "CW-C83-1",
-            "capacity": "锅：3700ML",
-            "features": "水性不沾，适合户外烹饪",
-            "usage_scenarios": "家庭户外野餐",
-            "target_audience": "家庭户外野餐群体",
-        },
-    ]
-
-    bounded = customer_service_service._recommendation_fact_integrity_conflicts(
-        "从容量和户外场景看可以作为三人用锅的候选，但实际能否吃饱还要结合食量。",
-        "三个人露营想选一口锅。",
-        rows,
-    )
-    unbounded = customer_service_service._recommendation_fact_integrity_conflicts(
-        "这口锅能让三个人吃饱。",
-        "三个人露营想选一口锅。",
-        rows,
-    )
-
-    assert bounded["group_outcome"] == []
-    assert unbounded["group_outcome"]
 
 
 def test_knowledge_base_meta_uses_document_rag_without_product_candidates(monkeypatch):

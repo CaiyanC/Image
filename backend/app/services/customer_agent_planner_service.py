@@ -5,7 +5,7 @@ import json
 import re
 
 import httpx
-from typing import Any
+from typing import Any, Callable
 from ..core.config import settings
 from ..models.product import Product
 from . import (
@@ -546,7 +546,7 @@ def _validated_recommendation_constraints(value: Any) -> dict[str, Any] | None:
         return {}
     if not isinstance(value, dict):
         return None
-    allowed = {"subject_kind", "people", "heat_sources", "scenarios", "weight_preference", "price_preference", "storage_preference", "dishwasher_safe"}
+    allowed = {"subject_kind", "subject_kinds", "people", "heat_sources", "scenarios", "weight_preference", "price_preference", "storage_preference", "dishwasher_safe"}
     if any(key not in allowed for key in value):
         return None
     result: dict[str, Any] = {}
@@ -558,6 +558,24 @@ def _validated_recommendation_constraints(value: Any) -> dict[str, Any] | None:
         ):
             return None
         result["subject_kind"] = subject_kind
+    subject_kinds = value.get("subject_kinds")
+    if subject_kinds == []:
+        subject_kinds = None
+    if subject_kinds is not None:
+        allowed_subject_kinds = {
+            "cookware", "waterware", "stove", "coffee_gear", "accessories"
+        }
+        if (
+            not isinstance(subject_kinds, list)
+            or not subject_kinds
+            or len(subject_kinds) > 5
+            or any(item not in allowed_subject_kinds for item in subject_kinds)
+        ):
+            return None
+        subject_kinds = list(dict.fromkeys(subject_kinds))
+        if subject_kind is not None and subject_kind not in subject_kinds:
+            return None
+        result["subject_kinds"] = subject_kinds
     people = value.get("people")
     if people == {}:
         people = None
@@ -644,10 +662,15 @@ def _validated_unrepresented_recommendation_requirements(value: Any) -> list[str
     The Flash preplan owns the meaning of these strings.  They are passed to
     retrieval and answer writing as customer context; they are never product
     facts and never act as a literal answer gate.  Deterministic code only
-    protects the request size and JSON shape.
+    protects the request size and JSON shape.  A provider occasionally emits
+    one phrase as a scalar instead of a one-item array; normalizing that
+    transport shape preserves the same model-authored meaning without adding
+    a local phrase interpretation or forcing a second semantic read.
     """
     if value is None:
         return []
+    if isinstance(value, str):
+        value = [value]
     if not isinstance(value, list) or len(value) > 5:
         return None
     items = [str(item or "").strip() for item in value]
@@ -2087,6 +2110,8 @@ def _semantic_preplan_messages_legacy(
                 "Before returning a recommendation plan, inspect every explicit customer requirement. When one customer expression contains multiple independently allowed requirements, emit every matching allowed constraint rather than letting one suppress another. If a single requested product form explicitly combines multiple components (for example a pot, burner, and canister bundle), do not collapse that form to one broad subject_kind; preserve the exact combined phrase in unrepresented_recommendation_requirements when the ontology cannot represent the whole combination. If a must-have eligibility condition cannot be put in recommendation_constraints without inventing a meaning, it MUST appear verbatim in unrepresented_recommendation_requirements. Do not turn a non-binding preference into an eligibility gap merely because the ontology cannot encode it. "
                 "route_family enum: structured_query,recommendation,comparison,product_bound_qa,product_navigation,unresolved_product_like,negative_product_like,unknown_realtime,contents_accessories,generic_query,knowledge_base_meta,general_chat,clarification. Use general_chat for ordinary conversation that can be answered without claiming a catalogue product fact: greetings, capability questions, general outdoor preparation checklists, beginner education, category-level tradeoffs, or general safety guidance. For a category-level hazardous-operation question with no named catalogue product, use general_chat with subtype=safety_procedure, entities=[], canonical_fields=[], evidence_required=false. For general_chat set entities=[], canonical_fields=[], evidence_required=false, and do not request catalogue retrieval. Use recommendation when the customer asks the assistant to identify, choose, find, or recommend an actual catalogue item/product. This includes asking what single item to give as a gift or what would be practical for a beginner when no category is named: keep the product scope broad if necessary, set decision_requested=true, and preserve the recipient, use, storage, budget, or other priorities as semantic recommendation inputs. General_chat is only for guidance that does not ask the assistant to choose a concrete item; it must not name an unverified product category as a recommendation. Use comparison only for named catalogue products, never merely for generic product forms. A request for the complete range, types, or models inside one explicitly named catalogue category is structured_query over category, not generic_query and not recommendation. When the customer asks for a bounded number of relevant choices, asks you to select options, or asks who each choice suits, use recommendation even if the same turn also contains catalogue-discovery wording such as which products exist. A request to prepare for camping or choose equipment is recommendation only when it seeks actual products rather than general decision guidance. Use knowledge_base_meta only when the user asks about a knowledge-base document itself, its contents, rules, or principles rather than requesting a product fact. For a knowledge_base_meta procedure or rule question, qa_evidence_query may be a concise Chinese retrieval phrase that preserves the requested subject and operation (for example, cookware non-stick coating cleaning/maintenance); it is a search signal only, never an answer or fact. A named-product question about operating steps, safety rules, prohibited actions, cleaning, maintenance, or any other product field is product_bound_qa even if its answer may later use a manual or knowledge-base document as evidence. "
                 "entity_scope enum: generic_scope,category_scope,product_like,resolved_product,ambiguous_product,unresolved_product,negative_product,prior_results. Use prior_results when the current turn chooses, compares, or asks about products represented only by the supplied opaque prior-result positions; never put a SKU or product name there. "
+                "For a compound product-form request, use subject_kinds as an array of every independently requested semantic form (for example cookware and waterware), keep the complete phrase in subject_text, and do not collapse it to one subject_kind. subject_kinds is retrieval scope only and never proves that one SKU contains all forms; entity_scope remains one enum. "
+                "When several alternatives or capabilities are introduced as a preference (for example a customer would ideally like either or both fuel types), keep the preference preferred unless the complete turn explicitly makes every listed capability mandatory. Do not turn a preferred multi-value request into one hard conjunction merely because several values are present. "
                 "field_type enum: " + ",".join(sorted(SEMANTIC_PREPLAN_FIELD_TYPES)) + ". "
                 "evidence_kind is required for every product_bound_qa request. Use structured_field only when the customer directly asks for a recorded field value. Use product_qa when the customer asks a product-specific capability, judgement, procedure, or compatibility fact that is not identical to one structured field; then canonical_fields MUST be [] and no field_type/field_hint may be emitted. For product_qa, qa_evidence_query is required: return a concise semantic retrieval phrase for the customer's intent, with no product name, SKU, database value, or answer. Preserve the customer's concrete operative condition rather than replacing it with an abstract category: for a question about whether low heat can be adjusted for simmering, the retrieval phrase must retain the low-heat adjustment and simmering condition, not merely say slow-cooking performance. For example, describe gifting suitability, authenticity verification, flame adjustability, household compatibility, durability, or load-bearing as the requested capability. For every other evidence_kind set qa_evidence_query="". Durability is not lifecycle_status; whether a product is suitable as a present is not whether a purchase includes a promotional gift; authenticity verification is not certification; adjustability is not a numeric power rating; household compatibility is not a list of usage scenes; and load-bearing is not net weight, headcount, or volume. These are ontology boundaries, not product facts: keep them product_qa so only a later same-SKU QA evidence contract may answer. "
                 "The public evidence_kind values are only structured_field and product_qa. For knowledge_base_meta, keep the source scope in information_scope=knowledge_base_meta and use product_qa; never emit provider/source labels such as knowledge_base, knowledge, or knowledge_chunk as evidence_kind. "
@@ -2202,7 +2227,9 @@ def _legacy_semantic_preplan_messages(
          "canonical_fields is an ordered subset of: " + field_types + ". Use directly recorded fields only. evidence_kind=structured_field for those fields; use product_qa and a concise customer-language qa_evidence_query for a named-product capability, judgement, procedure, compatibility, safety, durability, suitability, policy, or broad evidence-supported overview. There is no durability canonical field. A broad overview should not infer one field. Only select selling_point for a direct highlights/reasons-to-choose request. Whether a setting or adjustment is available is product_qa unless the customer explicitly asks for operating steps. For a mixed turn, retain every requested formal field and put only the independent non-column meaning in supplemental_qa_evidence_query. This includes a recorded field followed by a practical sufficiency or suitability question: for example, a capacity question that also asks whether the product is enough for a stated group and cooking task keeps capacity in canonical_fields and uses supplemental_qa_evidence_query such as ‘是否适合两个人煮面’. Treat ‘够不够/是否够用/是否适合/能否满足’ as a judgement about the stated use when they appear in the question; do not dismiss the group or task as mere background in that case. A turn that only asks for the recorded value, with a use scene supplied merely as context, may remain field-only. Do not collapse the whole turn into field-only merely because one part is a recorded field, and do not put the product name, SKU, or a database fact in the supplemental query. Set compound=true when both parts are represented; intent_coverage is full only when all requested meaning is represented. "
         "For recommendation or structured_query, put every explicit formal eligibility condition in predicate_constraints as {field,operator,value,evidence_span,unit,importance}. Supported fields: material,surface_finish,capacity,weight,dimensions,people,color,heat_source,usage_scene,waterproof. Numeric operators: >=,>,<=,<,=,between; material/usage_scene: contains; surface_finish/color/dimensions: contains or =; heat_source: supports or not_supports; waterproof: =. material means the product body's material; surface_finish means a coating, non-stick treatment, or other outer-surface finish. Therefore 不粘涂层、涂层、不粘表面 and surface treatment must use surface_finish, never material. Normalize numeric values and units while copying evidence_span exactly from this turn. Distinguish a product's recorded people specification from the customer's practical group context: a statement that the customer is shopping for a group, or wants something comparatively suitable for that group, is practical-fit context. Preserve its headcount in recommendation evidence or ranking context, but do not emit a required people predicate unless the customer explicitly asks for a product's supported/serving headcount or makes that headcount a non-negotiable eligibility condition. Phrases describing an outcome such as 比较适合、够用、吃饱 or 一起露营 are not literal catalogue labels and should be answered conditionally from same-SKU capacity and relevant scene evidence. Do not discard an explicit current-turn fit detail merely because it is practical context rather than a formal database predicate: a stated group/headcount, capacity goal, cooking task, portability or storage need, budget direction, cleaning preference, or named heat source must remain represented in recommendation_evidence_requirements or recommendation_soft_preferences as appropriate. A practical group statement need not become a required people predicate, but it must remain available for same-SKU capacity and scenario reasoning. The current turn owns these requirements; prior recommendation result positions never replace them. importance is required only for an obligation or eligibility condition; use preferred for a ranking preference, and do not convert a preference into hard rejection merely because it is expressed as a product property. An affordability or budget preference without an exact price, an explicit price ceiling, or a named price-positioning requirement is a ranking preference only: put it in recommendation_soft_preferences, never in recommendation_evidence_requirements or predicate_constraints, and do not reject a candidate merely because the catalogue lacks a price. Keep the requested item kind in subject_text. recommendation_constraints may contain only a confident broad subject_kind (cookware,waterware,stove,coffee_gear,accessories); otherwise use {}. Put non-field must-haves in recommendation_evidence_requirements and ranking or explanation preferences in recommendation_soft_preferences. A request to identify products that meet a compatibility, use, or quality condition, or to put qualifying products first, is still product selection even when it asks which products; use recommendation and preserve the condition instead of returning an unconstrained category browse. Use structured_query only for genuine browsing, listing, or counting without a choice, prioritization, or product-fit condition. Decide from meaning, not a fixed phrase list. These values guide retrieval and never prove a product fact. For recommendation, decision_requested=true when the customer asks the assistant to make a concrete choice rather than merely browse; this includes an explicitly singular choice. Keep it false only when no choice is requested. "
         "Core field distinctions: category=product kind; series=named family or collection and must not replace category; sku=item/product code, model is distinct, barcode is EAN/UPC/GTIN. dimensions are measurements, capacity is volume, weight is mass. people is numeric group size; target_audience is a persona or group. heat_source is compatible heating/fuel type; power is rated output, not specification. A cooking action or dish such as 烧水、煮面、煮饭、烹饪 does not imply a heat_source; only an explicitly named stove, fuel, heating method, or compatibility request can establish that field. material is body material while surface_finish is coating/non-stick/surface treatment; do not collapse those fields. accessories are included parts; gift means a promotional free item only, while gifting suitability is product_qa. dishwasher is explicit dishwasher compatibility; cleaning and care remain separate. Current purchasability is unknown_realtime, never inferred from lifecycle_status. Related specifications never prove a different capability. "
-        "confidence is low,medium,or high. ambiguity is true only when material meanings conflict. reasoning_summary is one short audit sentence."
+         "confidence is low,medium,or high. ambiguity is true only when material meanings conflict. reasoning_summary is one short audit sentence."
+         "For a compound product-form request, use subject_kinds as an array of every independently requested semantic form (for example cookware and waterware), keep the complete phrase in subject_text, and do not collapse it to one subject_kind. subject_kinds is retrieval scope only and never proves that one SKU contains all forms; entity_scope remains one enum. "
+         "When several alternatives or capabilities are introduced as a preference, keep the preference preferred unless the complete turn explicitly makes every listed capability mandatory; do not turn a preferred multi-value request into one hard conjunction. "
     )
     user = {
         "question": question,
@@ -2242,6 +2269,12 @@ def _semantic_preplan_messages(
         "You are the semantic interpreter for a product assistant. Read the complete customer turn and its supplied "
         "conversation context. Return one JSON object. Do not answer the customer and do "
         "not output a product fact, SKU, price, stock, candidate, or database value. Do not route by isolated words. "
+        "The optional prior_recommendation_scope is server-provided discourse context only: it contains a prior catalogue "
+        "category/form but no product identity or fact. When the current turn is elliptical, preserve that prior product "
+        "form and interpret a newly stated heat source, fuel, scene, or other condition as a constraint on it. Do not let "
+        "the noun naming a heating method replace the requested cookware or vessel merely because it is more concrete. "
+        "Switch to another product form only when the complete current turn explicitly asks for that different catalogue item. "
+        "This is a whole-turn semantic decision; never implement it by matching an isolated customer word. "
         "Keys: route_family,route_hint,question_type,entities,subject_text,entity_scope,canonical_fields,"
         "field_type,field_hint,subtype,confidence,ambiguity,evidence_required,evidence_kind,qa_evidence_query,"
         "qa_evidence_queries,supplemental_qa_evidence_query,compound,intent_coverage,context_usage,context_result_indexes,"
@@ -2280,6 +2313,9 @@ def _semantic_preplan_messages(
          "a scene that is merely context (for example weekend camping or short-trip use) does not create a supplement. "
          "Make this distinction from the complete meaning of the turn, not isolated words. The supplemental query "
          "is a retrieval hint only: never copy a product name, SKU, entity, database value, or answer into it. "
+         "For a mixed product-bound turn, preserve every explicitly requested formal field even when another part is a practical suitability or task judgement. "
+         "In particular, a question that asks whether a named product supports a stove, fuel, heating method, or other compatibility value must keep heat_source in canonical_fields, while a separate question about whether the product is suitable for a group, dish, or operation belongs in supplemental_qa_evidence_query. "
+         "Do not collapse the whole turn into product_qa merely because the practical part is not itself a recorded field; the formal field remains the Flash-owned conflict boundary for same-SKU RAG. "
          "Whenever supplemental_qa_evidence_query is non-empty, set compound=true and intent_coverage=full; leave "
          "it empty when no independent second meaning is requested. "
         "canonical_fields describe product-level recorded fields. When the customer asks for values separately for named components or parts of a set/bundle, and the answer must map each value to its component, do not force the whole turn into one scalar field such as dimensions or capacity. Use product_bound_qa with evidence_kind=product_qa, keep canonical_fields=[], set field_type and field_hint to empty, and make qa_evidence_query preserve the complete component-level request. Set compound=true when the named components or independently requested facts must all be covered. qa_evidence_queries may contain two or three concise model-authored child retrieval scopes only when separate evidence is genuinely needed; they must preserve the complete meaning of each child, while qa_evidence_query remains the whole-turn retrieval scope. For example, a request asking for the size/capacity of a cooking pot, frying pan, and kettle in one product is a component-bound RAG question, not permission to answer the package's storage dimensions. When a natural phrase such as '多大' could refer to volume or physical measurements and no single recorded field clearly covers the whole request, preserve that ambiguity for product-QA retrieval instead of selecting a related field. "
@@ -2287,8 +2323,11 @@ def _semantic_preplan_messages(
         "independent customer requirement: formal eligibility conditions go in predicate_constraints, non-column "
         "must-haves go in recommendation_evidence_requirements or unrepresented_recommendation_requirements, and "
          "ranking or explanation preferences go in recommendation_soft_preferences. Keep recommendation_constraints "
-        "as a JSON object, never a list, with only subject_kind, people, heat_sources, scenarios, weight_preference, price_preference, storage_preference, or dishwasher_safe. subject_kind is only one of cookware,waterware,stove,coffee_gear,accessories; it is a broad scope, not a translated product title. Keep a category such as 烤盘 verbatim in subject_text. people is {min,max}; heat_sources uses card_stove,gas_stove,alcohol_stove,open_flame,induction, where card_stove means 卡式炉/卡式灶, gas_stove means 燃气炉/燃气灶/气炉, alcohol_stove means 酒精炉/酒精灶, open_flame means 明火, and induction means 电磁炉/电磁灶; scenarios uses camping,hiking,self_drive,seaside,soup. Do not turn a preference into a hard condition just because it sounds useful. predicate_constraints use {field,operator,value,evidence_span,unit,importance}; values and "
-        "evidence_span come from the current turn, while later code checks product evidence. Supported operators are material/usage_scene=contains, surface_finish/color/dimensions=contains or =, heat_source=supports or not_supports, waterproof==, and capacity/weight/people use numeric comparison operators. recommendation_evidence_requirements and recommendation_soft_preferences are short strings, not nested objects. Numeric meaning, people, "
+         "Compound product-form scope is the one exception to the scalar subject_kind shape: when the customer requests multiple independent physical forms in one choice (for example a pot and a water vessel), emit subject_kinds as an array of every semantic form, keep the complete request in subject_text, and do not collapse it to the first form. Allowed values are cookware,waterware,stove,coffee_gear,accessories. subject_kinds defines retrieval scope only; it does not prove that one SKU contains every form. entity_scope remains one enum and must never contain a comma-joined list. "
+         "as a JSON object, never a list, with only subject_kind, people, heat_sources, scenarios, weight_preference, price_preference, storage_preference, or dishwasher_safe. subject_kind is only one of cookware,waterware,stove,coffee_gear,accessories; it is a broad scope, not a translated product title. Keep a category such as 烤盘 verbatim in subject_text. people is {min,max}; heat_sources uses card_stove,gas_stove,alcohol_stove,open_flame,induction, where card_stove means 卡式炉/卡式灶, gas_stove means 燃气炉/燃气灶/气炉, alcohol_stove means 酒精炉/酒精灶, open_flame means 明火, and induction means 电磁炉/电磁灶; scenarios uses camping,hiking,self_drive,seaside,soup. The typed transport values are exact enums: use only lightweight for weight_preference and compact_storage for storage_preference; never put a natural-language synonym or a product claim in those two fields. If a preference cannot be represented by the exact enum, leave that typed key out and preserve the customer meaning in recommendation_soft_preferences. Do not turn a preference into a hard condition just because it sounds useful. predicate_constraints use {field,operator,value,evidence_span,unit,importance}; values and "
+         "The compound-scope instruction above is authoritative: subject_kinds is an additional allowed array in recommendation_constraints. Use it for every independently requested physical form in a conjunctive choice and never use a comma-joined entity_scope value. "
+         "For a preferred multi-value capability request, preserve the preference status even when the customer names several values; only an explicit mandatory obligation makes every value a required conjunction. For example, ‘燃料最好液体酒精或高山气罐都能覆盖’ means the customer prefers coverage of those alternatives, so put that meaning in recommendation_soft_preferences; do not put it in recommendation_evidence_requirements or unrepresented_recommendation_requirements unless the complete turn explicitly says必须/只能/要求同时支持. Do not merge that fuel preference into the required product-form factors when the customer separately asks for multiple forms. "
+         "evidence_span come from the current turn, while later code checks product evidence. Supported operators are material/usage_scene=contains, surface_finish/color/dimensions=contains or =, heat_source=supports or not_supports, waterproof==, and capacity/weight/people use numeric comparison operators. recommendation_evidence_requirements and recommendation_soft_preferences are short strings, not nested objects. Numeric meaning, people, "
          "capacity, weight, dimensions, heating compatibility, material, and surface finish are separate concepts. Every recommendation requirement or preference must be semantically entailed by the current question or an explicit prior customer preference; never infer a plausible shopping criterion from the requested category or use. In particular, a request to choose a gift must preserve the gift use itself, but it does not imply appearance, packaging, prestige, or presentation quality. Add any such criterion only when the customer actually states it, and keep gift suitability separate from an independently stated appearance/packaging preference so evidence for one cannot establish the other. Semantically distinguish a ranking preference from a product-fit requirement: when the customer explicitly asks for an item to be truly/really suitable, dedicated, explicitly supported, or required for a named method, role, or use, preserve that named method/role/use as a required concrete fit in recommendation_evidence_requirements or unrepresented_recommendation_requirements. For example, asking for products truly suitable for pour-over coffee requires evidence that the same product has the requested pour-over form or capability; a related coffee workflow tool is not a substitute. A container, bag, or case that can hold a full set of tableware (or another named set) is also a required concrete capability for same-SKU RAG, not a soft storage preference. Other casual context remains soft. "
          "Confidence is low, medium, or high; reasoning_summary is a short audit note, not hidden reasoning. "
          "Set unsafe_or_fabricated_answer_requested=true only when the customer asks the assistant to invent a product fact, "
@@ -2299,7 +2338,33 @@ def _semantic_preplan_messages(
          "RAG can retrieve the recorded permitted and prohibited actions. Never comply with or repeat the requested fabrication as an answer. "
          "Use false for ordinary uncertainty, missing data, or a normal safety question. "
          "Set decision_requested=true when the customer asks you to choose or prioritize one concrete catalogue item, including one gift or one item for a beginner. For a comparison, it is also true when the customer asks which participant is better, more suitable, more appropriate, or should be chosen, even when the same turn lists comparison dimensions; it is false only for a neutral differences/specification comparison with no requested verdict. Keep it false for an open-ended category list or general advice that does not ask for a concrete product choice. "
-         "For a mixed request, intent_coverage is full only when every independent part is represented."
+          "For a mixed request, intent_coverage is full only when every independent part is represented."
+     )
+    # Keep the live semantic contract concise.  The surrounding planner and
+    # the downstream RAG/coverage prompts already repeat the detailed field
+    # taxonomy; sending the same prose twice only increases provider latency.
+    # This is prompt compaction, not a phrase-to-route rule: the model still
+    # owns the complete-turn interpretation and emits the same typed contract.
+    system = re.sub(
+        r"canonical_fields describe product-level recorded fields\..*?Preserve every ",
+        "canonical_fields describe product-level recorded fields. For named components or parts of a set/bundle, do not force the whole turn into one scalar field: use product_qa and a component-bound RAG question, preserve the complete retrieval scope, and set compound when independently requested parts must all be covered. Preserve every ",
+        system,
+        count=1,
+        flags=re.DOTALL,
+    )
+    system = re.sub(
+        r"Keep recommendation_constraints .*?evidence_span come from the current turn, while later code checks product evidence\. ",
+        "Keep recommendation_constraints as an object with only subject_kind,subject_kinds,people,heat_sources,scenarios,weight_preference,price_preference,storage_preference,or dishwasher_safe. Use only allowed subject kinds and exact typed enums: people is {min,max} integer bounds; heat_sources are card_stove,gas_stove,alcohol_stove,open_flame,induction; scenarios are camping,hiking,self_drive,seaside,soup; weight_preference is only lightweight; storage_preference is only compact_storage; dishwasher_safe is true or omitted. subject_kinds lists independent forms for compound scope and never proves that one SKU contains all forms. Use predicate_constraints with {field,operator,value,evidence_span,unit,importance}; preserve preferred alternatives as soft preferences unless the complete turn makes them mandatory. ",
+        system,
+        count=1,
+        flags=re.DOTALL,
+    )
+    system = re.sub(
+        r"recommendation_evidence_requirements and recommendation_soft_preferences are short strings, not nested objects\. Numeric meaning, people, capacity, weight, dimensions, heating compatibility, material, and surface finish are separate concepts\. .*?Other casual context remains soft\. ",
+        "recommendation_evidence_requirements and recommendation_soft_preferences are short strings, not nested objects. Requirements and preferences must be entailed by the current question or an explicit prior preference. Gift use does not imply appearance, packaging, or prestige; gifting suitability stays separate. A container that can hold a full set of tableware is a required same-SKU capability when requested. Explicitly truly/dedicated/required named use is required evidence; casual context is soft. ",
+        system,
+        count=1,
+        flags=re.DOTALL,
     )
     user = {
         "question": question,
@@ -2310,6 +2375,7 @@ def _semantic_preplan_messages(
         "database_field_value_hints": context.get("database_field_value_hints") or [],
         "prior_result_context_indexes": context.get("prior_result_context_indexes") or [],
         "prior_result_context_semantics": context.get("prior_result_context_semantics") or {},
+        "prior_recommendation_scope": context.get("prior_recommendation_scope") or {},
         "explicit_prior_customer_preference_texts": (
             context.get("explicit_prior_customer_preference_texts")
             or context.get("prior_customer_preference_texts")
@@ -2605,6 +2671,19 @@ async def _repair_semantic_preplan_output(
         "ranking meaning; preserve unsupported meaning as a current-turn phrase "
         "in the appropriate semantic array."
     )
+    if failure_reason in {
+        "unknown_canonical_field_in_multi_intent",
+        "unknown_canonical_field_in_comparison",
+    }:
+        messages[0]["content"] += (
+            " Mixed-field ontology boundary: recommendation_constraints are not canonical_fields. Never place "
+            "storage_preference, weight_preference, people, heat_sources, scenarios, or dishwasher_safe in "
+            "canonical_fields for a named-product fact turn. If the customer asks for selling_point plus whether "
+            "the product is convenient to store, keep selling_point as the formal field and put the storage judgement "
+            "in supplemental_qa_evidence_query, with compound=true and intent_coverage=full. If no formal field "
+            "remains, use product_qa with canonical_fields=[] and a complete qa_evidence_query. Do not leave an "
+            "unknown canonical field or the multi-intent fallback state after this repair."
+        )
     if failure_reason == "invalid_recommendation_constraints":
         messages[0]["content"] += (
             " This repair was triggered by an invalid recommendation constraint. "
@@ -3740,6 +3819,9 @@ async def _semantic_recommendation_constraint_grounding(
     question: str,
     recommendation_constraints: dict[str, Any] | None,
     predicate_constraints: list[dict[str, Any]] | None,
+    recommendation_evidence_requirements: list[str] | None = None,
+    recommendation_soft_preferences: list[str] | None = None,
+    unrepresented_recommendation_requirements: list[str] | None = None,
 ) -> dict[str, Any] | None:
     """Re-read recommendation constraints against the complete customer turn.
 
@@ -3753,7 +3835,10 @@ async def _semantic_recommendation_constraint_grounding(
 
     The spans are provenance for the semantic request only.  They are never
     compared with product/RAG evidence and never become a customer-facing
-    answer gate.
+    answer gate.  The same reread also preserves the distinction between a
+    required condition and a preference.  That distinction must stay with
+    Flash because a natural expression such as “最好支持两种燃料” is not a
+    hard no-match condition.
     """
 
     original_constraints = (
@@ -3764,6 +3849,13 @@ async def _semantic_recommendation_constraint_grounding(
     original_predicates = [
         item for item in (predicate_constraints or []) if isinstance(item, dict)
     ]
+    original_evidence_requirements = list(
+        recommendation_evidence_requirements or []
+    )
+    original_soft_preferences = list(recommendation_soft_preferences or [])
+    original_unrepresented_requirements = list(
+        unrepresented_recommendation_requirements or []
+    )
     if not original_constraints and not original_predicates:
         return None
 
@@ -3792,7 +3884,25 @@ async def _semantic_recommendation_constraint_grounding(
                 "evidence_spans must contain one or more exact uninterrupted "
                 "customer substrings under the matching key. For every retained "
                 "predicate, its evidence_span must be an exact uninterrupted "
-                "customer substring. If a proposed item has no customer basis, "
+                "customer substring. Re-read importance from the complete "
+                "customer question: language expressing priority or preference "
+                "such as 优先、倾向、最好、尽量、可以的话 is preferred by default; "
+                "language expressing an obligation such as 必须、一定要、没有就不考虑、"
+                "不可缺少 or non-negotiable is required. Do not turn a preference "
+                "into a hard condition merely because its value is representable "
+                "in the schema. A typed predicate must carry importance=required "
+                "or importance=preferred. If an abstract constraint is only a "
+                "preference that lists several alternative capabilities—even when the sentence says ideally both or all—keep it preferred unless the complete customer turn explicitly requires every capability. For example, ‘燃料最好液体酒精或高山气罐都能覆盖’ is a soft preference for alternative fuel coverage, not a required conjunction; keep it in recommendation_soft_preferences and do not fuse it with required product-form factors. Do not turn a preferred multi-value request into a hard conjunction. "
+                "preference, remove it from recommendation_constraints and preserve "
+                "the customer meaning in recommendation_soft_preferences. Rebuild "
+                "the three semantic context arrays from the whole turn: put a "
+                "condition the chosen product is expected to satisfy in "
+                "recommendation_evidence_requirements, a ranking/explanation "
+                "preference in recommendation_soft_preferences, and a must-have "
+                "that cannot be represented safely in "
+                "unrepresented_recommendation_requirements. Keep these as short "
+                "customer-meaning phrases; do not output a product, SKU, database "
+                "value, route, or answer. If a proposed item has no customer basis, "
                 "omit it. Do not output a product name, SKU, candidate, database "
                 "value, route, or answer. The heat-source enum has this ontology: "
                 "card_stove means 卡式炉/卡式灶, gas_stove means 燃气炉/燃气灶/气炉, "
@@ -3810,6 +3920,9 @@ async def _semantic_recommendation_constraint_grounding(
                     "question": str(question or ""),
                     "proposed_recommendation_constraints": original_constraints,
                     "proposed_predicate_constraints": original_predicates,
+                    "proposed_recommendation_evidence_requirements": original_evidence_requirements,
+                    "proposed_recommendation_soft_preferences": original_soft_preferences,
+                    "proposed_unrepresented_recommendation_requirements": original_unrepresented_requirements,
                 },
                 ensure_ascii=False,
             ),
@@ -3846,7 +3959,38 @@ async def _semantic_recommendation_constraint_grounding(
     if (
         grounded_constraints is None
         or grounded_predicates is None
-        or not isinstance(evidence_spans, dict)
+    ):
+        return None
+    if not isinstance(evidence_spans, dict):
+        evidence_spans = {}
+
+    def _grounded_context(
+        key: str,
+        original: list[str],
+        validator: Callable[[Any], list[str] | None],
+    ) -> list[str] | None:
+        raw_value = payload[key] if key in payload else original
+        return validator(raw_value)
+
+    grounded_evidence_requirements = _grounded_context(
+        "recommendation_evidence_requirements",
+        original_evidence_requirements,
+        _validated_recommendation_evidence_requirements,
+    )
+    grounded_soft_preferences = _grounded_context(
+        "recommendation_soft_preferences",
+        original_soft_preferences,
+        _validated_recommendation_soft_preferences,
+    )
+    grounded_unrepresented_requirements = _grounded_context(
+        "unrepresented_recommendation_requirements",
+        original_unrepresented_requirements,
+        _validated_unrepresented_recommendation_requirements,
+    )
+    if (
+        grounded_evidence_requirements is None
+        or grounded_soft_preferences is None
+        or grounded_unrepresented_requirements is None
     ):
         return None
 
@@ -3873,25 +4017,34 @@ async def _semantic_recommendation_constraint_grounding(
         if _valid_spans(key):
             grounded_constraint_values[key] = value
 
-    # A complete grounding response may intentionally remove an unsupported
-    # optional constraint.  If it removes the whole original packet, however,
-    # treat the pass as unavailable rather than silently losing the customer's
-    # subject or hard fit information.
-    if original_constraints and not grounded_constraint_values:
-        return None
-
     grounded_predicate_values: list[dict[str, Any]] = []
     for item in grounded_predicates:
         evidence_span = str(item.get("evidence_span") or "").strip()
         if evidence_span and _occurs_in_question(evidence_span):
             grounded_predicate_values.append(item)
-    if original_predicates and not grounded_predicate_values:
+
+    # A complete grounding response may intentionally remove an unsupported
+    # optional constraint.  If it removes the whole original packet, however,
+    # treat the pass as unavailable rather than silently losing the customer's
+    # subject or hard fit information.
+    retained_context = bool(
+        grounded_predicate_values
+        or grounded_evidence_requirements
+        or grounded_soft_preferences
+        or grounded_unrepresented_requirements
+    )
+    if original_constraints and not grounded_constraint_values and not retained_context:
+        return None
+    if original_predicates and not grounded_predicate_values and not retained_context:
         return None
 
     return {
         "recommendation_constraints": grounded_constraint_values,
         "predicate_constraints": grounded_predicate_values,
         "structured_query_constraints": grounded_predicate_values,
+        "recommendation_evidence_requirements": grounded_evidence_requirements,
+        "recommendation_soft_preferences": grounded_soft_preferences,
+        "unrepresented_recommendation_requirements": grounded_unrepresented_requirements,
         "recommendation_constraint_grounding": "validated_semantic_grounding",
     }
 
@@ -4272,6 +4425,35 @@ async def _legacy_plan_customer_question_semantic(
     # shape.  This is only a structural trigger for a second semantic reading:
     '''
 
+def _semantic_structured_field_recheck_needed(plan: dict[str, Any] | None) -> bool:
+    """Whether a typed field plan still needs a semantic completeness reread.
+
+    A complete, unambiguous field-only plan is already the planner's semantic
+    decision.  The supplemental reviewer is reserved for an explicitly open
+    shape so ordinary field questions do not pay for a second interpretation.
+    """
+    value = plan if isinstance(plan, dict) else {}
+    question_type = str(value.get("question_type") or "").strip().lower()
+    intent_coverage = str(value.get("intent_coverage") or "").strip().lower()
+    fields = value.get("canonical_fields") if isinstance(value.get("canonical_fields"), list) else []
+    return bool(
+        value.get("ambiguity") is True
+        or value.get("compound") is True
+        or intent_coverage != "full"
+        or question_type not in {"", "field"}
+        or value.get("qa_or_usage_care") is True
+        # A multi-field plan is more likely to have compressed a separate
+        # product meaning into the field list. Keep the completeness reread
+        # for that shape even when an older/provider response omitted the
+        # explicit compound signal.
+        or len(fields) > 1
+        or any(
+            not customer_field_contract.is_supported_detail_field(field)
+            for field in fields
+        )
+    )
+
+
 async def plan_customer_question_semantic(
     db,
     question: str,
@@ -4333,6 +4515,31 @@ async def plan_customer_question_semantic(
     )
     if result.get("fallback_reason"):
         initial_failure_reason = str(result.get("fallback_reason") or "")
+        initial_constraint_keys: list[str] = []
+        initial_invalid_constraint_fields: list[str] = []
+        initial_constraint_cross_field_invalid = False
+        initial_semantic_data = _extract_json_object(str(raw_content or ""))
+        initial_constraints = (
+            initial_semantic_data.get("recommendation_constraints")
+            if isinstance(initial_semantic_data, dict)
+            else None
+        )
+        if isinstance(initial_constraints, dict):
+            initial_constraint_keys = sorted(
+                str(key or "").strip()
+                for key in initial_constraints
+                if str(key or "").strip()
+            )
+            initial_invalid_constraint_fields = sorted(
+                str(key or "").strip()
+                for key, value in initial_constraints.items()
+                if str(key or "").strip()
+                and _validated_recommendation_constraints({key: value}) is None
+            )
+            initial_constraint_cross_field_invalid = (
+                not initial_invalid_constraint_fields
+                and _validated_recommendation_constraints(initial_constraints) is None
+            )
         try:
             repaired_content = await _repair_semantic_preplan_output(
                 db,
@@ -4396,10 +4603,18 @@ async def plan_customer_question_semantic(
                             repaired_result = partition_result
             result = repaired_result
             result["semantic_repaired"] = True
+            result["semantic_initial_failure_reason"] = initial_failure_reason
+            result["semantic_initial_constraint_keys"] = initial_constraint_keys
+            result["semantic_initial_invalid_constraint_fields"] = initial_invalid_constraint_fields
+            result["semantic_initial_constraint_cross_field_invalid"] = initial_constraint_cross_field_invalid
         except Exception as exc:
             call_count += 1
             result["semantic_repair_unavailable"] = True
             result["semantic_repair_error"] = type(exc).__name__
+            result["semantic_initial_failure_reason"] = initial_failure_reason
+            result["semantic_initial_constraint_keys"] = initial_constraint_keys
+            result["semantic_initial_invalid_constraint_fields"] = initial_invalid_constraint_fields
+            result["semantic_initial_constraint_cross_field_invalid"] = initial_constraint_cross_field_invalid
 
     # A schema-valid recommendation can still carry a semantically misplaced
     # enum from the model's repair pass. Re-read the complete turn with a
@@ -4407,33 +4622,69 @@ async def plan_customer_question_semantic(
     # This keeps meaning with the semantic model while preventing an optional
     # boolean or canonical heat-source label from becoming a hidden hard
     # requirement merely because it appeared in the output schema.
+    proposed_constraints = result.get("recommendation_constraints")
+    proposed_constraint_keys = (
+        set(proposed_constraints)
+        if isinstance(proposed_constraints, dict)
+        else set()
+    )
+    # The preplan already owns the semantic catalogue scope and people
+    # context. Re-reading a packet containing only those two scope fields
+    # repeats the same interpretation without checking a typed field. Keep the
+    # grounding pass for predicates and any additional constraint (heat source,
+    # material, compatibility, etc.) where a second semantic reading can
+    # prevent a malformed enum from becoming a hard requirement.
+    constraint_grounding_needed = bool(result.get("predicate_constraints")) or bool(
+        proposed_constraint_keys
+        - {
+            "subject_kind",
+            "subject_kinds",
+            "people",
+            "scenarios",
+            "weight_preference",
+            "price_preference",
+            "storage_preference",
+            "dishwasher_safe",
+        }
+    )
     if (
         not result.get("fallback_reason")
         and str(result.get("route_family") or "").strip() == "recommendation"
-        and (
-            isinstance(result.get("recommendation_constraints"), dict)
-            and result.get("recommendation_constraints")
-            or bool(result.get("predicate_constraints"))
-        )
+        and constraint_grounding_needed
     ):
         grounded_constraints = await _semantic_recommendation_constraint_grounding(
             db,
             question=text,
             recommendation_constraints=result.get("recommendation_constraints"),
             predicate_constraints=result.get("predicate_constraints"),
+            recommendation_evidence_requirements=result.get(
+                "recommendation_evidence_requirements"
+            ),
+            recommendation_soft_preferences=result.get(
+                "recommendation_soft_preferences"
+            ),
+            unrepresented_recommendation_requirements=result.get(
+                "unrepresented_recommendation_requirements"
+            ),
         )
         call_count += 1
         if isinstance(grounded_constraints, dict):
             result.update(grounded_constraints)
         else:
             result["recommendation_constraint_grounding"] = "unavailable"
+    elif (
+        not result.get("fallback_reason")
+        and str(result.get("route_family") or "").strip() == "recommendation"
+        and proposed_constraint_keys
+    ):
+        result["recommendation_constraint_grounding"] = "preplan_scope_preserved"
 
     # The first semantic read can compress a formal field plus a practical
     # judgement into a field-only shape. It can also emit a product-QA route
-    # whose reasoning names formal fields while serializing neither those
-    # fields nor a retrieval query. Ask one typed completeness reviewer for
-    # both cases. This is semantic arbitration, not a word matcher or a
-    # product-specific evidence gate.
+    # whose retrieval query contains several meanings while serializing no
+    # formal field. Ask one typed completeness reviewer for both cases so a
+    # mixed turn does not lose a formal conflict boundary. This is semantic
+    # arbitration, not a word matcher or a product-specific evidence gate.
     review_route = str(result.get("route_family") or "").strip()
     review_evidence_kind = str(result.get("evidence_kind") or "").strip()
     review_fields = list(result.get("canonical_fields") or [])
@@ -4490,6 +4741,15 @@ async def plan_customer_question_semantic(
             review_fields = list(result.get("canonical_fields") or [])
             review_qa_query = str(result.get("qa_evidence_query") or "").strip()
             review_qa_queries = list(result.get("qa_evidence_queries") or [])
+    # The primary Flash plan already owns completeness for a normal formal
+    # field question.  Re-reading every such plan here added one LLM call to
+    # ordinary requests even when Flash had explicitly returned a complete,
+    # unambiguous field-only intent.  Keep the semantic completeness review
+    # for plans that actually advertise an open shape (compound meaning,
+    # partial coverage, ambiguity, a usage/care meaning, or an unsupported
+    # formal field).  This remains model-state driven; it does not inspect the
+    # customer's wording or create a lexical route.
+    review_structured_field_recheck = _semantic_structured_field_recheck_needed(result)
     review_needed = (
         not result.get("fallback_reason")
         and review_route in {"product_bound_qa", "comparison"}
@@ -4498,12 +4758,11 @@ async def plan_customer_question_semantic(
                 review_evidence_kind == "structured_field"
                 and review_fields
                 and not str(result.get("supplemental_qa_evidence_query") or "").strip()
+                and review_structured_field_recheck
             )
             or (
                 review_evidence_kind == "product_qa"
                 and not review_fields
-                and not review_qa_query
-                and not review_qa_queries
             )
         )
     )
