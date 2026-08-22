@@ -28,6 +28,17 @@ def test_same_sku_rag_prompts_keep_named_heat_source_compatibility_exact():
         assert "does not by itself entail" in system
 
 
+def test_same_sku_strict_audit_separates_gift_scene_from_recipient_fit():
+    system = service._same_sku_knowledge_strict_entailment_messages(
+        "CW-C83适合作为送给露营爱好者的礼物吗？",
+        "作为露营爱好者的礼物在场景上是匹配的，但礼物条件未确认。",
+        "使用场景：家庭精致露营、房车自驾旅行",
+    )[0]["content"]
+
+    assert "作为露营爱好者的礼物在场景上是匹配的" in system
+    assert "requested gift/recipient relation" in system
+
+
 def test_strict_same_sku_verdict_retries_incomplete_json_with_same_evidence(monkeypatch):
     calls = []
     responses = iter([
@@ -3683,6 +3694,8 @@ def test_natural_recovery_uses_only_factor_cited_evidence(monkeypatch):
     ))
 
     assert result is not None
+    assert result["_factor_consistency_audited"] is True
+    assert result["_factor_consistency_status"] == "approved"
     assert captured["same_sku_evidence"] == {
         "specs.capacity": "1.4L",
         "specs.gross_weight_g": "300g",

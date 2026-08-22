@@ -332,6 +332,66 @@ def merge_retrieval_rows(
                 item[1],
             )
         )
+    else:
+        # Generic knowledge retrieval still needs both semantic and lexical
+        # signals.  Keeping the complete vector page ahead of lexical rows
+        # lets an unrelated file paragraph hide an exact QA/document match
+        # before the semantic adjudicator sees it.  Fuse ranks rather than
+        # comparing cosine and lexical scores directly; the latter are on
+        # different scales.  The small lexical preference reflects that a
+        # bounded term match is a useful second signal for natural-language
+        # procedures, while the vector signal remains in the same pool.
+        rank_score_by_identity: dict[tuple[str, str, str, str], float] = {}
+        for origin, rows in enumerate((primary_rows or [], supplemental_rows or [])):
+            signal_weight = 1.0 if origin == 0 else 1.25
+            for index, raw_row in enumerate(rows):
+                if not isinstance(raw_row, dict):
+                    continue
+                metadata = raw_row.get("metadata") if isinstance(raw_row.get("metadata"), dict) else {}
+                source_id = str(
+                    metadata.get("source_id")
+                    or metadata.get("source_id_hash")
+                    or raw_row.get("source_id")
+                    or ""
+                ).strip()
+                identity = (
+                    str(raw_row.get("source_type") or "").strip(),
+                    str(raw_row.get("sku") or "").strip().upper(),
+                    source_id,
+                    str(raw_row.get("content") or "").strip(),
+                )
+                rank_score_by_identity[identity] = (
+                    rank_score_by_identity.get(identity, 0.0)
+                    + signal_weight / (20.0 + index)
+                )
+        combined.sort(
+            key=lambda item: (
+                -rank_score_by_identity.get(
+                    (
+                        str(item[2].get("source_type") or "").strip(),
+                        str(item[2].get("sku") or "").strip().upper(),
+                        str(
+                            (
+                                item[2].get("metadata")
+                                if isinstance(item[2].get("metadata"), dict)
+                                else {}
+                            ).get("source_id")
+                            or (
+                                item[2].get("metadata")
+                                if isinstance(item[2].get("metadata"), dict)
+                                else {}
+                            ).get("source_id_hash")
+                            or item[2].get("source_id")
+                            or ""
+                        ).strip(),
+                        str(item[2].get("content") or "").strip(),
+                    ),
+                    0.0,
+                ),
+                item[0],
+                item[1],
+            )
+        )
     return [row for _origin, _index, row in combined[:limit]]
 
 

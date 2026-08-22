@@ -10192,7 +10192,29 @@ def _semantic_coverage_candidate_projection(
     for candidate in candidates:
         if not isinstance(candidate, dict):
             continue
-        item = dict(candidate)
+        # The adjudicator only needs the candidate identity, product-form
+        # ontology, catalogue-availability context, predicate view, and the
+        # sealed same-SKU evidence.  Passing the full executor candidate
+        # (aliases, verification bookkeeping, duplicate identity fields, and
+        # recovery-only state) makes the coverage prompt much larger without
+        # adding a semantic signal.  Keep this as a typed packet projection,
+        # not a question/category-specific field filter.
+        item = {
+            key: candidate.get(key)
+            for key in (
+                "candidate_index",
+                "product_name",
+                "sku",
+                "product_form",
+                "selection_context",
+                "evidence_boundaries",
+                "formal_predicate_evidence",
+                "verified_constraints",
+                "uncertainties",
+                "sealed_evidence",
+            )
+            if key in candidate
+        }
         evidence = candidate.get("sealed_evidence")
         if isinstance(evidence, dict):
             compact_evidence: dict[str, str] = {}
@@ -13050,6 +13072,7 @@ async def _semantic_recommendation_narrative(
     requested_catalogue_subject: str | None = None,
     recommendation_context_text: str | None = None,
     comparison_context: dict[str, Any] | None = None,
+    scope_only_continuation: bool = False,
     diagnostics: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any] | None:
     runtime = customer_agent_planner_service._semantic_preplan_runtime_settings()
@@ -13235,10 +13258,14 @@ async def _semantic_recommendation_narrative(
     # repeats the same interpretation for a simple typed scope plus one soft
     # preference.  Keep the semantic model in the coverage call for that
     # narrow case instead of adding a serial provider round trip.
-    factor_contract_needed = _semantic_recommendation_factor_contract_needed(
-        semantic_requirements,
-        soft_preferences,
-        predicate_constraints,
+    factor_contract_needed = (
+        False
+        if scope_only_continuation
+        else _semantic_recommendation_factor_contract_needed(
+            semantic_requirements,
+            soft_preferences,
+            predicate_constraints,
+        )
     )
     decision_factor_contract = (
         await _semantic_recommendation_decision_factor_contract(
@@ -13273,25 +13300,59 @@ async def _semantic_recommendation_narrative(
     if diagnostics is not None:
         diagnostics.append({
             "stage": "semantic_decision_factor_extraction",
-            "status": "evaluated" if decision_factor_contract is not None else "unavailable",
+            "status": (
+                "skipped"
+                if scope_only_continuation
+                else "evaluated" if decision_factor_contract is not None else "unavailable"
+            ),
             "decision_factors": list(decision_factor_contract or []),
             "original_candidate_count": original_candidate_count,
             "coverage_candidate_count": len(candidates),
         })
     coverage_validation_diagnostic: dict[str, Any] = {}
     coverage_candidates = _semantic_coverage_candidate_projection(candidates)
-    coverage = await _semantic_recommendation_requirement_coverage(
-        db,
-        question=question,
-        candidates=coverage_candidates,
-        semantic_requirements=semantic_requirements,
-        soft_preferences=soft_preferences,
-        predicate_constraints=predicate_constraints,
-        requested_catalogue_subject=requested_catalogue_subject,
-        recommendation_context_text=recommendation_context_text,
-        decision_factor_contract=decision_factor_contract,
-        validation_diagnostic=coverage_validation_diagnostic,
-    )
+    if scope_only_continuation:
+        # The live category and same-SKU verifier establish the only current
+        # turn condition. RAG has already ordered these sealed candidates;
+        # do not ask Flash to reinterpret the prior turn's preferences again.
+        # The final writer still receives the prior context and sealed RAG
+        # evidence, so this remains a semantic RAG continuation rather than a
+        # deterministic answer or a keyword route.
+        scope_indexes = list(range(len(candidates)))
+        coverage = {
+            "decision_factors": [],
+            "requirements": [],
+            "coverage": [],
+            "candidate_usability": [
+                {"candidate_index": index, "status": "usable"}
+                for index in scope_indexes
+            ],
+            "request_fit": [
+                {"candidate_index": index, "status": "supported"}
+                for index in scope_indexes
+            ],
+            "request_supported_candidate_indexes": scope_indexes,
+            "request_partial_candidate_indexes": [],
+            "supported_candidate_indexes": scope_indexes,
+            "partial_candidate_indexes": [],
+            "usable_candidate_indexes": scope_indexes,
+            "ordinarily_usable_candidate_indexes": scope_indexes,
+            "ranked_candidate_indexes": scope_indexes,
+            "semantic_scope_only_continuation": True,
+        }
+    else:
+        coverage = await _semantic_recommendation_requirement_coverage(
+            db,
+            question=question,
+            candidates=coverage_candidates,
+            semantic_requirements=semantic_requirements,
+            soft_preferences=soft_preferences,
+            predicate_constraints=predicate_constraints,
+            requested_catalogue_subject=requested_catalogue_subject,
+            recommendation_context_text=recommendation_context_text,
+            decision_factor_contract=decision_factor_contract,
+            validation_diagnostic=coverage_validation_diagnostic,
+        )
     if coverage is None:
         if diagnostics is not None:
             diagnostics.append({
@@ -14891,7 +14952,8 @@ async def _semantic_naturalize_recommendation_fallback(
          + "For a gift question, do not combine a target audience, usage scene, or multi-use feature into a gift or practicality conclusion: 露营玩家/入门级用户, 适合露营, and 可用于盛饭、盛汤、洗菜/多用途 remain recorded audience, scene, or capability facts and do not by themselves authorize 适合作为露营场景的礼物, 适合新手, or 比较实用. Prefer the attributed catalogue wording and keep the recipient's personal suitability conditional unless the same-SKU evidence directly states that role relation. "
          + _SEMANTIC_MEASUREMENT_SUBJECTIVITY_BOUNDARY
            + "Final recovery priority: mention every supplied selected product once, but use only one or two facts that answer the customer's priorities for each product. For every bounded, partial, or unverified factor, state the recorded same-SKU fact and the evidence gap only; never rephrase it as personal suitability, comparative lightness, carrying ease, storage ease, or support for a named task. If a named task is not directly recorded, state that gap without saying adjacent capacity or scene evidence supports it or merely serves as a reference for that task. When an important requested operation, compatibility, quantity, or qualitative property remains unverified, disclose that limitation once in the answer instead of omitting the customer's central question; use the directly relevant recorded measurement or neighboring fact as context, not as a substitute. Do not spend the answer on target-audience lists, usage-scenario lists, or unrelated selling points while leaving that requested point unanswered. "
-          + "Previous semantic audit feedback is supplied separately as repair context. Treat it as model-generated evidence-boundary feedback: remove every rejected meaning, keep the same selected SKU, and do not turn the feedback into a new route, filter, or customer-facing explanation. When the feedback says a numeric measurement does not entail a qualitative or personal outcome, write only the measurement. Never mention internal routing, retrieval, evidence, validation, candidate indexes, or this recovery."
+          + "Previous semantic audit feedback is supplied separately as repair context. Treat it as model-generated evidence-boundary feedback: remove every rejected meaning, keep the same selected SKU, and do not turn the feedback into a new route, filter, or customer-facing explanation. When the feedback says a numeric measurement does not entail a qualitative or personal outcome, write only the measurement. Never mention internal routing, retrieval, evidence, validation, candidate indexes, or this recovery. "
+          + "Highest-priority boundary for this presentation: when a decision_factor_status is not supported, do not affirm that customer outcome in the first draft. Use the safe shape ‘可以先看/推荐’ plus one or two attributed same-SKU facts, followed by a concise statement that the unresolved gift, recipient, beginner-fit, practicality, storage, or choice-risk outcome is not directly confirmed. A matching audience label or scene must stay an attributed record and must not name the recipient as the product's beneficiary."
     )
     payload = {
         "question": str(question or "").strip(),
@@ -14943,6 +15005,14 @@ async def _semantic_naturalize_recommendation_fallback(
                 "For a bounded weight preference, report the numeric weight only or use a transparent choice based on that measurement; do not say the item is suitable for the customer's hiking scene, lighter, low burden, or that the number is relatively low. "
                 "If the rejected meaning is recipient matching, gift suitability, or role fit, remove the entire recipient relationship rather than replacing it with a softer synonym such as ‘可作为朋友开始露营的基础选择’; do not put the named recipient in the beneficiary or recommendation role at all. Keep only an attributed audience/scene fact and the explicit recipient-fit gap. Omit storage or other selling points unless they directly answer the customer's question."
             )
+            system += (
+                " Boundary-repair output contract for this attempt: write one natural recommendation action based on the sealed selection, "
+                "then one or two directly recorded same-SKU facts with clear attribution, then one concise sentence leaving every "
+                "partial, bounded, or unverified customer outcome unconfirmed. A candidate's target audience, usage scene, product form, "
+                "measurement, or nearby feature may be reported as a record, but none of them may become the customer's gift suitability, "
+                "beginner fit, practicality, storage ease, or low-choice-risk conclusion unless that exact semantic relation is supported. "
+                "Do not try to satisfy an unresolved priority by paraphrasing it more softly; preserve the gap and keep the answer conversational."
+            )
             missing_products = payload.get("missing_selected_products") or []
             if missing_products:
                 system += (
@@ -14959,7 +15029,12 @@ async def _semantic_naturalize_recommendation_fallback(
                     {"role": "system", "content": system},
                     {"role": "user", "content": json.dumps(payload, ensure_ascii=False)},
                 ],
-                temperature=0.15,
+                # Boundary recovery is a constrained semantic rewrite over a
+                # sealed packet. Deterministic sampling keeps the same
+                # evidence boundary from oscillating between a safe natural
+                # answer and a rejected overclaim on otherwise identical
+                # requests; it does not select products or bypass the audit.
+                temperature=0.0,
                 max_tokens=min(int(runtime["max_tokens"]), 480),
                 purpose="semantic_recommendation_natural_recovery",
                 api_model_override=runtime["model"],
@@ -15158,6 +15233,13 @@ async def _semantic_naturalize_recommendation_fallback(
             "answer": answer,
             "_strict_entailment_audited": True,
             "_strict_entailment_candidates": audit_candidates,
+            # The factor-consistency audit is the same sealed-packet audit
+            # that the publication boundary used to run again. Carry its
+            # approval with the internal narrative so the caller can reuse
+            # the result instead of spending another serial Flash round on
+            # an unchanged answer and unchanged coverage packet.
+            "_factor_consistency_audited": True,
+            "_factor_consistency_status": "approved",
         }
     return None
 
@@ -20208,23 +20290,31 @@ async def _semantic_recommendation_contract_result(
         or preplan.get("structured_query_constraints")
         or []
     )
-    current_turn_contract_fields = {
-        str(item.get("field") or "").strip()
-        for item in predicate_constraints
-        if isinstance(item, dict) and str(item.get("field") or "").strip()
-    }
-    current_turn_contract_fields.update(
-        key
-        for key, value in constraints.items()
-        if key != "subject_kind" and value not in (None, "", [], {})
+    semantic_scope_only_marker = bool(
+        preplan.get("semantic_catalogue_scope_only_continuation")
     )
+    current_turn_contract_fields = set()
+    if not semantic_scope_only_marker:
+        current_turn_contract_fields.update(
+            str(item.get("field") or "").strip()
+            for item in predicate_constraints
+            if isinstance(item, dict) and str(item.get("field") or "").strip()
+        )
+        current_turn_contract_fields.update(
+            key
+            for key, value in constraints.items()
+            if key != "subject_kind" and value not in (None, "", [], {})
+        )
     scope_only_continuation = bool(
-        isinstance(recommendation_context, dict)
-        and recommendation_context.get("recommended_skus")
-        and str(preplan.get("context_usage") or "").strip() == "recommendation_context"
-        and bool(str(preplan.get("subject_text") or "").strip() or constraints.get("subject_kind"))
-        and not current_turn_contract_fields
-        and not planner_requested_alternative
+        semantic_scope_only_marker
+        or (
+            not planner_requested_alternative
+            and isinstance(recommendation_context, dict)
+            and recommendation_context.get("recommended_skus")
+            and str(preplan.get("context_usage") or "").strip() == "recommendation_context"
+            and bool(str(preplan.get("subject_text") or "").strip() or constraints.get("subject_kind"))
+            and not current_turn_contract_fields
+        )
     )
     if scope_only_continuation:
         # The current turn only narrows the product kind (for example, “锅具”).
@@ -21094,6 +21184,7 @@ async def _semantic_recommendation_contract_result(
             requested_catalogue_subject=str(preplan.get("subject_text") or "").strip(),
             recommendation_context_text=recommendation_context_text,
             comparison_context=comparison_context,
+            scope_only_continuation=scope_only_continuation,
             diagnostics=narrative_diagnostics,
         )
     if not narrative:
@@ -21129,6 +21220,7 @@ async def _semantic_recommendation_contract_result(
     fallback_diagnostic_statuses = {
         ("semantic_decision_factor_extraction", "evaluated"),
         ("semantic_decision_factor_extraction", "unavailable"),
+        ("semantic_decision_factor_extraction", "skipped"),
         ("semantic_candidate_ranking", "approved"),
         ("semantic_candidate_ranking", "unavailable"),
         # RAG citation completion is optional evidence projection over the
@@ -21531,19 +21623,36 @@ async def _semantic_recommendation_contract_result(
     # reopening retrieval or adding a local wording rule.
     force_final_rejection = False
     if narrative_source == "semantic_natural_recovery":
-        recovery_audit_candidates = _recommendation_audit_candidates_from_rows(
-            returned_rows,
-            narrative,
-        )
-        recovery_factor_consistency = await _semantic_recommendation_answer_factor_consistency_audit(
-            db,
-            question=question,
-            answer=str(narrative.get("answer") or ""),
-            candidates=recovery_audit_candidates,
-            coverage=evaluated_coverage,
-            selected_candidate_indexes=list(narrative.get("ranked_candidate_indexes") or []),
-            allow_legacy_fallback=False,
-        )
+        # Natural recovery has already performed this exact consolidated
+        # factor/same-SKU audit against the final answer. Reuse the sealed
+        # verdict carried by the narrative; the selected indexes, evidence,
+        # and answer have not changed since that audit. Running it again here
+        # added a serial Flash call and could make an approved answer fail
+        # only because a second stochastic judge phrased the same boundary
+        # differently.
+        if narrative.get("_factor_consistency_audited") is True:
+            recovery_factor_consistency = {
+                "called": True,
+                "status": str(
+                    narrative.get("_factor_consistency_status") or "approved"
+                ).strip() or "approved",
+                "violations": [],
+                "reused": True,
+            }
+        else:
+            recovery_audit_candidates = _recommendation_audit_candidates_from_rows(
+                returned_rows,
+                narrative,
+            )
+            recovery_factor_consistency = await _semantic_recommendation_answer_factor_consistency_audit(
+                db,
+                question=question,
+                answer=str(narrative.get("answer") or ""),
+                candidates=recovery_audit_candidates,
+                coverage=evaluated_coverage,
+                selected_candidate_indexes=list(narrative.get("ranked_candidate_indexes") or []),
+                allow_legacy_fallback=False,
+            )
         if narrative_diagnostics is not None:
             narrative_diagnostics.append({
                 "stage": "semantic_recovery_factor_consistency_final",
@@ -22510,12 +22619,12 @@ def _normalize_customer_answer_text(value: Any) -> str:
 def _heat_source_field_evidence(value: Any) -> str:
     """Normalize a structured heat-source cell into one readable list."""
     display = _compound_display_value(value)
-    if not display:
+    if display.strip() in {"", "/", "[]", "暂无", "未标注"}:
         return ""
     items = [
         item.strip()
         for item in re.split(r"[、,，;；\r\n]+", display)
-        if item.strip()
+        if item.strip() and item.strip() not in {"/", "[]", "暂无", "未标注"}
     ]
     return "、".join(dict.fromkeys(items))
 
@@ -25515,13 +25624,19 @@ def _clear_unrelated_catalogue_cards(question: str, agent_result: dict) -> dict:
 _KNOWLEDGE_META_PRODUCT_SOURCES = {"product", "product_qa", "sku_manual"}
 
 
-def _knowledge_meta_rows(rows: list[dict[str, Any]] | None) -> list[dict[str, Any]]:
+def _knowledge_meta_rows(
+    rows: list[dict[str, Any]] | None,
+    *,
+    allow_product_qa: bool = False,
+) -> list[dict[str, Any]]:
     """Keep document evidence for an explicit knowledge-base turn.
 
-    Retrieval is deliberately source-agnostic.  This small projection only
-    removes product-index chunks, which belong to the SKU-bound executors and
-    must not silently become a general knowledge answer.  It does not inspect
-    the customer's wording or classify a product category.
+    Retrieval is deliberately source-agnostic.  Product-index chunks remain
+    excluded for ordinary knowledge-base meta questions.  A semantic
+    category-level care turn may explicitly opt in to product QA excerpts;
+    those excerpts stay SKU-scoped and are adjudicated by Flash before they
+    can contribute to a general answer.  This does not inspect customer words
+    or classify a product category in Python.
     """
     selected: list[dict[str, Any]] = []
     seen: set[tuple[str, str, str]] = set()
@@ -25533,7 +25648,11 @@ def _knowledge_meta_rows(rows: list[dict[str, Any]] | None) -> list[dict[str, An
             continue
         source_type = str(raw.get("source_type") or "").strip().lower()
         if source_type in _KNOWLEDGE_META_PRODUCT_SOURCES:
-            continue
+            metadata = raw.get("metadata") if isinstance(raw.get("metadata"), dict) else {}
+            section = str(metadata.get("section") or "").strip().lower()
+            is_product_qa = source_type == "product" and section.startswith("qa:")
+            if not (allow_product_qa and is_product_qa):
+                continue
         metadata = raw.get("metadata") if isinstance(raw.get("metadata"), dict) else {}
         source_id = str(
             metadata.get("source_id")
@@ -25550,6 +25669,7 @@ def _knowledge_meta_rows(rows: list[dict[str, Any]] | None) -> list[dict[str, An
             "source_id": source_id,
             "title": str(metadata.get("title") or raw.get("title") or "").strip(),
             "content": content,
+            "sku": str(raw.get("sku") or metadata.get("sku") or "").strip().upper(),
             "score": raw.get("score"),
             "metadata": metadata,
         })
@@ -25560,6 +25680,8 @@ async def _semantic_knowledge_base_meta_result(
     db: Session,
     question: str,
     semantic_preplan: dict[str, Any] | None,
+    *,
+    allow_product_qa: bool = False,
 ) -> dict | None:
     """Answer an explicit knowledge-base question from retrieved documents.
 
@@ -25570,7 +25692,18 @@ async def _semantic_knowledge_base_meta_result(
     if db is None:
         return None
     plan = semantic_preplan if isinstance(semantic_preplan, dict) else {}
-    query = str(plan.get("qa_evidence_query") or question or "").strip()
+    # Keep the customer's original wording in the RAG query alongside the
+    # Flash-authored retrieval hint.  The hint is useful semantic expansion,
+    # but it can accidentally compress away a decisive operation such as
+    # “清洁/清洗”; using it alone lets a semantically related safety or first-
+    # use QA outrank the actual care procedure.  This is still one semantic
+    # retrieval request and does not introduce a keyword route or a local
+    # answer rule.
+    query_parts = [
+        str(question or "").strip(),
+        str(plan.get("qa_evidence_query") or "").strip(),
+    ]
+    query = " ".join(dict.fromkeys(item for item in query_parts if item))
     if not query:
         return None
     try:
@@ -25588,7 +25721,10 @@ async def _semantic_knowledge_base_meta_result(
             retrieved = []
     except Exception:
         retrieved = []
-    evidence_rows = _knowledge_meta_rows(retrieved)
+    evidence_rows = _knowledge_meta_rows(
+        retrieved,
+        allow_product_qa=allow_product_qa,
+    )
     if not evidence_rows:
         return None
 
@@ -25598,6 +25734,7 @@ async def _semantic_knowledge_base_meta_result(
             "source_type": row["source_type"],
             "source_id": row["source_id"],
             "title": row["title"],
+            "sku": row.get("sku") or "",
             "content": row["content"][:1800],
         }
         for index, row in enumerate(evidence_rows[:8])
@@ -25613,6 +25750,7 @@ async def _semantic_knowledge_base_meta_result(
                         "Return only JSON: {answer:string,used_sources:[integer]}. "
                         "Answer the customer's original question in natural, concise Chinese using only the supplied knowledge-base excerpts. "
                         "The excerpts are the source of truth: do not add general knowledge, product facts, prices, stock, or guarantees. "
+                        "Some excerpts may be product QA with an explicit SKU. Treat those excerpts as scoped to that SKU. For a category-level question with no named SKU, synthesize a common procedure when multiple relevant excerpts independently record the same concrete instruction; that repeated common step is direct category-level evidence even if each QA question names a specific model. Do not require the literal category wording to appear in every QA question. Otherwise state that the product-specific scope is not established. Never present a single SKU's unique instruction as a universal rule. "
                         "Explain the relevant rule or procedure directly, combine related excerpts when useful, and say plainly which point the documents do not establish if the question goes beyond them. "
                         "Do not turn the reply into a retrieval report, a source dump, a fixed no-match sentence, or a follow-up question when the excerpts already answer it. "
                         "Do not mention models, prompts, routing, chunks, indexes, validation, or internal fields. "
@@ -25659,6 +25797,8 @@ async def _semantic_knowledge_base_meta_result(
             "source": row["source_type"],
             "content": row["content"],
         }
+        if row.get("sku"):
+            item["sku"] = row["sku"]
         if row["source_id"]:
             item["source_id"] = row["source_id"]
         if row["title"]:
@@ -26054,6 +26194,7 @@ async def _semantic_owned_missing_result_with_llm(
         "If the customer named a specific task and the selected same-SKU evidence does not explicitly record that task or a genuinely equivalent operation, "
         "keep the task unconfirmed: report the broader facts separately and do not say the product is suitable, works, or is enough for that task, even conditionally "
         "or with a later caveat. "
+        "For a gift, recipient, or role-fit question, treat that relation as its own semantic condition. A product usage scene, target audience, portability descriptor, or marketing phrase may be reported as a separate attributed product fact, but it cannot be combined with the gift or recipient relation as ‘作为该人的礼物在场景上匹配’、‘送给该人合适’ or any equivalent positive fit conclusion when the same-SKU evidence does not directly record that relation. In that case state the recorded scene/audience separately and say the gift or recipient fit is not directly confirmed. "
         "The authoritative_current_fields object contains the current maintained value for a field. If a selected QA or marketing sentence contains a different "
         "numeric rendering of that field, keep only its separately useful nonnumeric statement and omit the conflicting numeric token. "
         if selected_evidence
@@ -26508,6 +26649,8 @@ def _normalize_semantic_catalogue_continuation(
     db: Session,
     semantic_preplan: dict | None,
     recommendation_context: dict | None,
+    *,
+    question: str | None = None,
 ) -> dict | None:
     """Keep a category continuation in the catalogue executor.
 
@@ -26554,6 +26697,13 @@ def _normalize_semantic_catalogue_continuation(
     raw_constraints = semantic_preplan.get("recommendation_constraints")
     constraints = dict(raw_constraints) if isinstance(raw_constraints, dict) else {}
     current_kind = str(constraints.get("subject_kind") or "").strip()
+    has_prior_recommendation = bool(
+        isinstance(recommendation_context, dict)
+        and (
+            recommendation_context.get("recommended_skus")
+            or recommendation_context.get("previous_result_skus")
+        )
+    )
     if category_ref:
         normalized = dict(semantic_preplan)
         # Preserve the live catalogue scope even when the current turn also
@@ -26574,6 +26724,26 @@ def _normalize_semantic_catalogue_continuation(
             )
             normalized["semantic_adapter_source"] = "live_catalogue_category_subject_kind"
         semantic_preplan = normalized
+
+    # The model's accepted subject and the live category together provide a
+    # generic discourse boundary for a one-token category continuation.  This
+    # deliberately compares semantic-plan output with the current turn; it
+    # does not recognize a Chinese phrase or maintain a route keyword list.
+    # It is needed because Flash can otherwise copy the prior turn's free-form
+    # requirements into a plan for a question that contains only the category.
+    def _compact_turn_text(value: Any) -> str:
+        normalized_value = customer_agent_service.normalize_search_text(value)
+        return re.sub(r"[\W_]+", "", normalized_value, flags=re.UNICODE).casefold()
+
+    compact_question = _compact_turn_text(question)
+    compact_subjects = {
+        _compact_turn_text(value)
+        for value in (subject, category_ref)
+        if _compact_turn_text(value)
+    }
+    current_turn_is_category_only = bool(
+        compact_question and compact_question in compact_subjects
+    )
 
     predicate_constraints = [
         item
@@ -26599,47 +26769,68 @@ def _normalize_semantic_catalogue_continuation(
         and customer_agent_service.normalize_search_text(str(entity or "")).strip()
         != normalized_subject
     ]
+    has_current_turn_selection_detail = (
+        False
+        if current_turn_is_category_only
+        else bool(
+            predicate_constraints
+            or canonical_fields
+            or semantic_preplan.get("recommendation_evidence_requirements")
+            or semantic_preplan.get("unrepresented_recommendation_requirements")
+            or non_subject_entities
+            or any(
+                key not in {"subject_kind", "subject_kinds", "scenarios"}
+                and value not in (None, "", [], {})
+                for key, value in constraints.items()
+            )
+        )
+    )
     has_selection_detail = bool(
-        predicate_constraints
-        or canonical_fields
+        has_current_turn_selection_detail
         # ``decision_requested`` is itself a semantic selection contract.
         # A recommendation can have no formal predicate when Flash preserves
         # the scenario in its typed semantic context; the live category-scope
         # adapter must not downgrade that explicit choice request to a browse.
         or semantic_preplan.get("decision_requested") is True
-        or semantic_preplan.get("recommendation_evidence_requirements")
-        or semantic_preplan.get("recommendation_soft_preferences")
-        or semantic_preplan.get("unrepresented_recommendation_requirements")
-        or non_subject_entities
     )
-    if has_selection_detail:
+    if has_selection_detail and not has_prior_recommendation:
         return semantic_preplan
 
     normalized = dict(semantic_preplan)
-    has_prior_recommendation = bool(
-        isinstance(recommendation_context, dict)
-        and (
-            recommendation_context.get("recommended_skus")
-            or recommendation_context.get("previous_result_skus")
-        )
-    )
     if has_prior_recommendation:
-        # This is a category narrowing inside the existing recommendation
-        # conversation.  Preserve the prior purpose as context, but do not
-        # bind the new turn to opaque result positions or an alternative
-        # action that the customer did not ask for.
+        # This is a live category subject inside an existing recommendation
+        # conversation. Preserve every current-turn semantic constraint, but
+        # make the discourse context explicit even when Flash also copied a
+        # prior choice/preference into the plan. A later Flash follow-up
+        # classifier still owns whether the turn is an alternative search;
+        # this adapter only prevents the category from falling out of the
+        # prior recommendation context.
         normalized["route_family"] = "recommendation"
         normalized["route_hint"] = "recommendation"
         normalized["question_type"] = "recommendation"
+        normalized["entity_scope"] = "category_scope"
         normalized["context_usage"] = "recommendation_context"
         normalized["context_result_indexes"] = []
-        normalized["decision_requested"] = False
-        normalized["recommendation_followup_action"] = ""
         normalized["fallback_reason"] = ""
         normalized["ambiguity"] = False
-        normalized["accepted_or_overridden"] = "catalogue_category_continuation"
-        normalized["override_reason"] = "live_category_scope_overrode_opaque_result_choice"
+        normalized["accepted_or_overridden"] = "catalogue_category_context_continuation"
+        normalized["override_reason"] = "live_category_scope_preserved_recommendation_context"
         normalized["catalogue_category_ref"] = category_ref
+        # A bare live category is the only new semantic condition. Any
+        # scenario/preferences copied from the prior recommendation remain
+        # discourse context, not new requirements for this turn.
+        normalized["semantic_catalogue_scope_only_continuation"] = (
+            current_turn_is_category_only or not has_current_turn_selection_detail
+        )
+        if current_turn_is_category_only:
+            # Keep the prior goals in the sealed conversation context where
+            # the writer may explain continuity, but do not let copied fields
+            # become current-turn predicates or retrieval requirements.
+            normalized["predicate_constraints"] = []
+            normalized["structured_query_constraints"] = []
+            normalized["recommendation_evidence_requirements"] = []
+            normalized["recommendation_soft_preferences"] = []
+            normalized["unrepresented_recommendation_requirements"] = []
     else:
         # Without a recommendation context, a bare category is a catalogue
         # browse.  Let the structured catalogue executor display its actual
@@ -26947,6 +27138,7 @@ async def _semantic_first_turn_result(
             db,
             semantic_preplan,
             recommendation_context,
+            question=question,
         )
         or semantic_preplan
     )
@@ -27048,10 +27240,18 @@ async def _semantic_first_turn_result(
         phase1_plan["semantic_preplan"] = semantic_preplan
 
     if route == "knowledge_base_meta":
+        # Flash may keep a care/safety turn in the knowledge-base route while
+        # also marking qa_or_usage_care.  In that semantic state, product QA
+        # excerpts are valid RAG evidence for a category-level procedure, but
+        # they must remain SKU-scoped in the answer packet and can never
+        # become product candidates.  The previous call used the ordinary
+        # document-only policy here, so the later general-chat care branch
+        # never ran and relevant product QA was discarded before generation.
         result = await _semantic_knowledge_base_meta_result(
             db,
             question,
             semantic_preplan,
+            allow_product_qa=bool(semantic_preplan.get("qa_or_usage_care")),
         )
         return (
             result
@@ -27303,6 +27503,7 @@ async def _semantic_first_turn_result(
                 db,
                 question,
                 knowledge_plan,
+                allow_product_qa=True,
             )
             if knowledge_result:
                 # A general-care document may establish only a boundary and
@@ -27325,7 +27526,7 @@ async def _semantic_first_turn_result(
                                 "role": "system",
                                 "content": (
                                     "Return only JSON: {answer:string}. Answer this category-level cleaning or safety question in natural, concise Chinese. "
-                                    "Use the retrieved context only where it directly bears on the customer's question; retrieved titles, sales guidance, unrelated scenarios, and wording-policy notes are not cleaning procedures. Do not pretend the excerpts contain a product-specific instruction when they do not. "
+                                    "Use the retrieved context only where it directly bears on the customer's question; retrieved titles, sales guidance, unrelated scenarios, and wording-policy notes are not cleaning procedures. Product QA excerpts are scoped to their recorded SKU; for this category-level question, use a procedure as a common care instruction only when the relevant excerpts agree, and do not present one SKU's unique instruction as universal. Do not pretend the excerpts contain a product-specific instruction when they do not. "
                                     "For combustion or fire safety, especially a stove in a tent, room, vehicle, or other enclosed space, state the prohibition clearly: do not use it there because ventilation does not remove the fire and carbon-monoxide risk. Never offer 'if you must use it indoors, ventilate and supervise' as an acceptable workaround; tell the customer to stop, extinguish if safe, leave for fresh air, and use an open safe environment instead. "
                                     "For vehicle transport or storage of a pressurized fuel canister, never call an ordinary trunk a well-ventilated safe space and never recommend leaving the canister in a parked vehicle, direct sun, heat, or overnight. If short transport is necessary, avoid a safety guarantee and direct the customer to the canister instructions and local transport rules; keep the canister detached, valve/cap protected, upright and secured, minimize vehicle time, and remove it promptly. Do not transport a damaged, overheated, expired, or leaking canister. "
                                     "If the coating or material is unknown, give a conservative and executable first step: stop heating and let the cookware cool, avoid metal tools, hard scraping, abrasive pads, strong chemicals, or another high-heat attempt until the material is identified. For this burnt-pot question, answer in only two or three sentences and keep the procedure to cooling, warm-water softening, and a soft cloth or sponge; do not add a soak duration, detergent type, baking soda, boiling, cold-water thermal-shock claim, or other detailed procedure unless that exact procedure is directly stated in the retrieved context. "
@@ -31610,6 +31811,7 @@ def _same_sku_knowledge_strict_entailment_messages(
                 "The supplied product_name and SKU are identity labels. Repeating the exact product_name to identify the selected item is allowed, but a number or physical descriptor embedded in that name is not independent specification evidence; judge any separate numeric or physical claim only from that candidate's sealed_evidence. "
                  "If a draft says that the records do not directly establish a partial or unverified requested practical outcome, it must not affirm that same outcome elsewhere in the answer; a caveat does not cancel an unsupported affirmative. A bounded conditional recommendation is not such an affirmation when it keeps the outcome explicitly conditional and attributes the basis to the cited traits. "
                  "A pure evidence-gap sentence such as ‘是否适合作为礼物、是否容易选错，还需结合朋友的实际喜好判断’ explicitly leaves the outcome unconfirmed and is grounded; do not reject it as a positive suitability claim unless another clause affirms or implies that outcome. "
+                 "A scene or audience fact must remain separate from a gift or recipient relation: wording such as ‘作为露营爱好者的礼物在场景上是匹配的’ or ‘作为某人的礼物与场景匹配’ still positively implies gifting or recipient fit, even when it adds ‘在场景上’ and later says the gift condition is unconfirmed. Reject that combined implication unless the same-SKU evidence directly records the requested gift/recipient relation. "
                  "A category or product-form identity match is narrower than a global customer-fit statement: if the turn asks for 锅具, ‘这是一款锅具’ is grounded, but ‘符合你送锅具的要求’ or ‘符合你的需求’ incorrectly upgrades the category match into gift/request suitability. A target_audience label naming beginners or a user group may be reported as an attributed record, such as ‘资料标注目标用户为入门级露营者’; do not convert it into ‘适用于入门级露营’ or ‘适合新手’ unless the same-SKU evidence directly establishes that personal relation. "
                  "When no same-SKU lightness descriptor or explicit comparison baseline exists, a numeric weight may be reported only as the measurement. Expressions such as ‘重量数值较低’、‘可作为轻量化的参考’、‘偏轻’ or ‘相对轻’ are still qualitative lightness/comparison claims and must be rejected without that evidence. "
                  "When storage, practicality, or user-fit is partial or unverified, semantic equivalents such as ‘符合你对好收纳的偏好/要求’, ‘收纳方面很合适’, ‘适合作为收纳装备’, or ‘可作为实用炊具的基础选择’ are positive customer-outcome or role-fit claims, not neutral descriptions. Reject them unless the same-SKU evidence directly establishes that narrow relation; keep the recorded storage, usage, or audience fact and the explicit gap. "

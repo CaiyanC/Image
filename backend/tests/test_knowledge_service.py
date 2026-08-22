@@ -50,6 +50,31 @@ class KnowledgeServiceTest(unittest.TestCase):
 
         self.assertEqual([row["sku"] for row in rows], ["CW-C83", None])
 
+    def test_merge_retrieval_rows_fuses_generic_vector_and_lexical_signals(self):
+        vector_rows = [{
+            "source_type": "file",
+            "sku": None,
+            "content": "unrelated stove sales paragraph",
+            "metadata": {"source_id": "file:stove"},
+            "score": 0.99,
+        }]
+        keyword_rows = [{
+            "source_type": "product",
+            "sku": "CW-C73",
+            "content": "Q: 如何清洗保养？ A: 使用温水和软刷清洗，擦干后存放。",
+            "metadata": {"source_id": "product:CW-C73:qa:1", "section": "qa:1"},
+            "score": 9.0,
+        }]
+
+        rows = knowledge_service.merge_retrieval_rows(
+            vector_rows,
+            keyword_rows,
+            limit=2,
+            prefer_product_sources=False,
+        )
+
+        self.assertEqual([row["sku"] for row in rows], ["CW-C73", None])
+
     def test_health_report_surfaces_enterprise_readiness(self):
         self.db.add(Product(
             id="product-1",

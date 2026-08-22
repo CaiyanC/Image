@@ -893,6 +893,11 @@ def test_heat_source_evidence_normalizes_multiline_and_duplicate_separators():
     assert result == "明火直烧、燃气炉、卡式炉"
 
 
+def test_heat_source_evidence_discards_catalogue_placeholders():
+    assert customer_service_service._heat_source_field_evidence("/") == ""
+    assert customer_service_service._heat_source_field_evidence("暂无") == ""
+
+
 def test_heat_source_answer_consumes_the_normalized_structured_value():
     metadata = {}
     answer, status = customer_service_service._phase1_heat_source_capability_answer(
