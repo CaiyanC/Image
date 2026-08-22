@@ -10564,6 +10564,7 @@ async def _semantic_recommendation_requirement_coverage_once(
                  "such as 可以考虑用于 or 适合收纳 silently reintroduce the named task/contents. "
                 "Do not upgrade entry-level audience, portability, appearance, non-stick finish, durability, or another adjacent trait into "
                 "simple operation, beginner friendliness, low choice risk, gift suitability, practicality, easy storage, or easy cleaning. "
+                "A storage mechanism such as 全套收纳, 配有收纳袋, or 可叠放 describes how or where the product is stored; it does not by itself entail the customer's ease outcome 好收纳、收纳方便、方便整理, or 收纳省心. Unless the same-SKU evidence explicitly states that ease outcome or a genuine semantic equivalent, mark the outcome unverified and do not combine the mechanism with a capacity, scene, or audience field to manufacture it. "
                 "Keep measured factors field-specific: for a factual weight/lightness factor, specs.gross_weight_g directly supports the recorded weight, and a RAG excerpt supports the qualitative factor only when it explicitly describes the product as lightweight/light or gives a direct same-SKU weight comparison. If the customer factor itself is qualitative, such as 重量轻、不太重 or 轻便, a numeric value alone is only a narrower measurement/ranking basis and must be partial or unverified, never supported; the writer must not state the qualitative factor positively. Portability, easy storage, audience, usage scene, capacity, material, or a general marketing phrase in the same RAG excerpt is not weight evidence and must not be cited for the weight factor. Likewise, a numeric weight or portability phrase cannot be reused as evidence for storage ease or personal carrying comfort. Do not let one multi-attribute RAG sentence authorize several unrelated factor meanings. "
                 "A requested role such as gift remains separate from its reasons. Natural multilingual paraphrases are valid; literal word "
                 "matching is not required. When a same-SKU maintained feature directly states the requested qualitative property or a "
@@ -11485,7 +11486,7 @@ async def _semantic_recommendation_subjective_factor_entailment_audit(
                         "Allow natural paraphrases and multilingual equivalence; never require a literal substring. A nearby trait "
                         "such as small, light, portable, broad-audience, entry-level, attractive, durable, non-stick, a material, or "
                         "a capacity does not by itself entail simple operation, low choice risk, gift suitability, easy storage, easy "
-                        "cleaning, practicality, or another distinct outcome. A same-SKU phrase such as ‘effortless clean up’, ‘easy cleaning’, or ‘easy to clean’ directly addresses cleanability and is a valid semantic equivalent of 好清洁; do not reduce that phrase to a non-stick/material-only claim. "
+                        "cleaning, practicality, or another distinct outcome. A storage mechanism such as 全套收纳, 配有收纳袋, or 可叠放 is evidence about the storage method only; it is not evidence that storage feels easy, convenient, or省心. Unless the same-SKU field explicitly states 易收纳、收纳方便、方便整理 or a genuine equivalent, return entailed=false for a factor such as 好收纳, 收纳省心, or 收纳起来方便, even when capacity, scene, or audience evidence is also present. A same-SKU phrase such as ‘effortless clean up’, ‘easy cleaning’, or ‘easy to clean’ directly addresses cleanability and is a valid semantic equivalent of 好清洁; do not reduce that phrase to a non-stick/material-only claim. "
                          "For a factor that asks whether the product can perform a named action, recipe, or concrete task, entailed=true "
                          "requires same-SKU evidence that directly states that action/function or a genuinely equivalent operation. "
                          "Capacity, people range, heat-source compatibility, product form, or a broad cooking/usage scene alone is adjacent "
@@ -12197,7 +12198,7 @@ async def _semantic_recommendation_outcome_boundary_audit(
                         "content": (
                             "Return only JSON: {consistent:boolean,violations:[{factor_index:integer,candidate_index:integer,offending_excerpt:string,reason:string}],grounded:boolean,offending_claim:string,grounding_reason:string}. Keep each violation reason under 120 characters and grounding_reason under 180 characters; do not add keys, markdown, or explanatory text outside this object. "
                             "Perform one complete semantic audit of final_answer against all_factor_checks, while applying the strictest treatment to outcome_boundaries. You cannot route, retrieve, rank, replace a product, or add evidence. Judge natural meaning and implications, never literal word overlap. "
-                            "For status=supported, affirmative wording is allowed only for the same narrow meaning entailed by that candidate's factor_evidence or same_sku_evidence. A measurement, audience, scene, price tier, or nearby small/light/portable/attractive trait does not prove a different personal result such as lower burden, easy storage, simple operation, gift suitability, affordability, or low choice risk. Keep carrying, storage, simplicity, quantity sufficiency, and other outcomes semantically separate. "
+                            "For status=supported, affirmative wording is allowed only for the same narrow meaning entailed by that candidate's factor_evidence or same_sku_evidence. A measurement, audience, scene, price tier, or nearby small/light/portable/attractive trait does not prove a different personal result such as lower burden, easy storage, simple operation, gift suitability, affordability, or low choice risk. Keep carrying, storage, simplicity, quantity sufficiency, and other outcomes semantically separate. A storage mechanism such as 全套收纳, 配有收纳袋, or 可叠放 is not the same meaning as 好收纳、收纳方便、方便整理, or 收纳省心; reject that upgrade unless the same-SKU evidence directly states the ease outcome or a genuine semantic equivalent, even when the answer also reports capacity, scene, or audience. "
                              + budget_outcome_boundary_instruction
                              + _SEMANTIC_MEASUREMENT_SUBJECTIVITY_BOUNDARY
                              + _SEMANTIC_RECOMMENDATION_FINAL_PRIORITY
@@ -12938,6 +12939,95 @@ def _semantic_recommendation_apply_factor_consistency_rejections(
             if index not in candidate_indexes
         ]
     return rejected_candidates
+
+
+def _semantic_recommendation_unresolved_factor_evidence_fields(
+    narrative: dict[str, Any] | None,
+    *,
+    candidates: list[dict[str, Any]] | None,
+    coverage: dict[str, Any] | None,
+) -> list[dict[str, Any]]:
+    """Keep unresolved semantic factors from borrowing adjacent writer fields.
+
+    Coverage owns the meaning of each factor and its same-SKU evidence keys.
+    The writer may still report a narrower field for a partial/bounded factor,
+    but a field used only by an unverified factor must not be presented as if
+    it proved that factor.  This is a typed semantic-packet consistency check;
+    it does not inspect customer wording or compare literal phrases.
+    """
+    if not isinstance(narrative, dict) or not isinstance(coverage, dict):
+        return []
+    candidate_by_index = {
+        candidate.get("candidate_index"): candidate
+        for candidate in (candidates or [])
+        if isinstance(candidate, dict) and type(candidate.get("candidate_index")) is int
+    }
+    if not candidate_by_index:
+        return []
+    unresolved_by_candidate: dict[int, list[str]] = {}
+    unresolved_evidence_fields_by_candidate: dict[int, set[str]] = {}
+    for factor in coverage.get("decision_factors") or []:
+        if not isinstance(factor, dict):
+            continue
+        factor_name = str(factor.get("factor") or "").strip()
+        usage_by_index = {
+            usage.get("candidate_index"): usage.get("evidence") or []
+            for usage in (factor.get("evidence_usage") or [])
+            if isinstance(usage, dict) and type(usage.get("candidate_index")) is int
+        }
+        for candidate_index in candidate_by_index:
+            status = next(
+                (
+                    label
+                    for label, field in (
+                        ("supported", "supported_candidate_indexes"),
+                        ("bounded", "bounded_candidate_indexes"),
+                        ("partial", "partial_candidate_indexes"),
+                        ("unverified", "unverified_candidate_indexes"),
+                    )
+                    if candidate_index in set(factor.get(field) or [])
+                ),
+                "unverified",
+            )
+            if status == "unverified":
+                if factor_name:
+                    unresolved_by_candidate.setdefault(candidate_index, []).append(factor_name)
+                for evidence_item in usage_by_index.get(candidate_index, []):
+                    if not isinstance(evidence_item, dict):
+                        continue
+                    field = str(evidence_item.get("field") or "").strip()
+                    if field and not field.startswith("identity."):
+                        unresolved_evidence_fields_by_candidate.setdefault(
+                            candidate_index,
+                            set(),
+                        ).add(field)
+                continue
+    violations: list[dict[str, Any]] = []
+    for usage in narrative.get("evidence_usage") or []:
+        if not isinstance(usage, dict) or type(usage.get("candidate_index")) is not int:
+            continue
+        candidate_index = usage["candidate_index"]
+        unresolved = unresolved_by_candidate.get(candidate_index) or []
+        if not unresolved:
+            continue
+        unresolved_evidence_fields = (
+            unresolved_evidence_fields_by_candidate.get(candidate_index) or set()
+        )
+        for field in usage.get("fields") or []:
+            field_name = str(field or "").strip()
+            if (
+                not field_name
+                or field_name.startswith("identity.")
+                or field_name not in unresolved_evidence_fields
+            ):
+                continue
+            violations.append({
+                "candidate_index": candidate_index,
+                "field": field_name,
+                "unresolved_factors": list(dict.fromkeys(unresolved)),
+                "reason": "writer field is also attached to an unverified factor for this candidate",
+            })
+    return violations
 
 
 def _semantic_recommendation_recovery_candidate_indexes(
@@ -21637,6 +21727,61 @@ async def _semantic_recommendation_contract_result(
     # audit; the final check reuses the same coverage and sealed rows without
     # reopening retrieval or adding a local wording rule.
     force_final_rejection = False
+    publication_semantic_field_conflicts = _semantic_recommendation_unresolved_factor_evidence_fields(
+        narrative,
+        candidates=_recommendation_audit_candidates_from_rows(
+            returned_rows,
+            narrative,
+        ),
+        coverage=evaluated_coverage,
+    )
+    if publication_semantic_field_conflicts:
+        # A writer may borrow a same-SKU field that coverage attached to an
+        # unverified factor, even when another factor legitimately uses that
+        # field. Do not ask another model to paraphrase the same leakage:
+        # project the already selected packet through the sealed fact writer.
+        # This is a typed coverage/evidence boundary; it neither reads the
+        # customer's wording nor reopens retrieval or candidate selection.
+        if narrative_diagnostics is not None:
+            narrative_diagnostics.append({
+                "stage": "semantic_publication_field_boundary",
+                "status": "rejected",
+                "violations": publication_semantic_field_conflicts,
+            })
+        bounded_publication_fallback = _sealed_recommendation_fact_fallback(
+            question=question,
+            fallback={
+                "ranked_candidate_indexes": list(
+                    narrative.get("ranked_candidate_indexes") or []
+                ),
+            },
+            rows=returned_rows,
+            soft_preferences=semantic_soft_preferences,
+            coverage=evaluated_coverage,
+            comparison_context=comparison_context,
+        )
+        if bounded_publication_fallback:
+            bounded_publication_conflicts = _semantic_recommendation_unresolved_factor_evidence_fields(
+                bounded_publication_fallback,
+                candidates=_recommendation_audit_candidates_from_rows(
+                    returned_rows,
+                    bounded_publication_fallback,
+                ),
+                coverage=evaluated_coverage,
+            )
+            if not bounded_publication_conflicts:
+                narrative = bounded_publication_fallback
+                narrative_source = "sealed_same_sku_fact_fallback"
+                publication_semantic_field_conflicts = []
+                if narrative_diagnostics is not None:
+                    narrative_diagnostics.append({
+                        "stage": "semantic_publication_field_boundary",
+                        "status": "sealed_fact_fallback_approved",
+                    })
+            else:
+                publication_semantic_field_conflicts = bounded_publication_conflicts
+        if publication_semantic_field_conflicts:
+            force_final_rejection = True
     if narrative_source == "semantic_natural_recovery":
         # Natural recovery has already performed this exact consolidated
         # factor/same-SKU audit against the final answer. Reuse the sealed
@@ -21827,6 +21972,20 @@ async def _semantic_recommendation_contract_result(
                 final_answer_conflicts["strict_same_sku_entailment"] = [
                     "fallback answer was not semantically entailed by the selected same-SKU evidence"
                 ]
+    publication_semantic_field_conflicts = _semantic_recommendation_unresolved_factor_evidence_fields(
+        narrative,
+        candidates=_recommendation_audit_candidates_from_rows(
+            returned_rows,
+            narrative,
+        ),
+        coverage=evaluated_coverage,
+    )
+    if publication_semantic_field_conflicts:
+        final_answer_conflicts["semantic_publication_field_boundary"] = [
+            item.get("reason") or "writer field is attached to an unverified factor"
+            for item in publication_semantic_field_conflicts
+            if isinstance(item, dict)
+        ] or ["writer field is attached to an unverified factor"]
     if any(final_answer_conflicts.values()):
         # The selected same-SKU packet itself could not produce a safe
         # customer-facing sentence. Keep the semantic no-result response for

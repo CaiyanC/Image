@@ -99,6 +99,65 @@ def test_semantic_preplan_lifts_malformed_storage_enum_to_soft_context():
     ]
 
 
+def test_unresolved_factor_cannot_authorize_an_adjacent_writer_field():
+    violations = customer_service_service._semantic_recommendation_unresolved_factor_evidence_fields(
+        {
+            "ranked_candidate_indexes": [0],
+            "evidence_usage": [{
+                "candidate_index": 0,
+                "fields": [
+                    "identity.product_form",
+                    "specs.capacity",
+                    "content.features",
+                ],
+            }],
+        },
+        candidates=[{
+            "candidate_index": 0,
+            "sealed_evidence": {
+                "identity.product_form": "cookware_set",
+                "specs.capacity": "3L",
+                "content.features": "全套收纳",
+            },
+        }],
+        coverage={
+            "decision_factors": [
+                {
+                    "factor": "cookware set",
+                    "supported_candidate_indexes": [0],
+                    "evidence_usage": [{
+                        "candidate_index": 0,
+                        "evidence": [{"field": "identity.product_form"}],
+                    }],
+                },
+                {
+                    "factor": "large capacity",
+                    "supported_candidate_indexes": [0],
+                    "evidence_usage": [{
+                        "candidate_index": 0,
+                        "evidence": [{"field": "specs.capacity"}],
+                    }],
+                },
+                {
+                    "factor": "easy to store",
+                    "unverified_candidate_indexes": [0],
+                    "evidence_usage": [{
+                        "candidate_index": 0,
+                        "evidence": [{"field": "content.features"}],
+                    }],
+                },
+            ],
+        },
+    )
+
+    assert violations == [{
+        "candidate_index": 0,
+        "field": "content.features",
+        "unresolved_factors": ["easy to store"],
+        "reason": "writer field is also attached to an unverified factor for this candidate",
+    }]
+
+
 def test_category_subject_preserves_prior_recommendation_context(monkeypatch):
     monkeypatch.setattr(
         customer_service_service,
