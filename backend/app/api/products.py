@@ -1,5 +1,6 @@
 ﻿import uuid
 import os
+from io import BytesIO
 from typing import List
 
 from fastapi import APIRouter, Depends, Query, Request, UploadFile, File, HTTPException
@@ -796,19 +797,25 @@ def upload_product_images(
         content = _read_limited_upload(file, MAX_PRODUCT_IMAGE_BYTES, "图片不能超过 10MB")
         _validate_media_content(content, ext, "image")
         file.file.seek(0)
-    for file in files:
-        ext = _validate_media_upload(
-            file,
-            allowed_suffixes=ALLOWED_PRODUCT_IMAGE_SUFFIXES,
-            allowed_mime_types=ALLOWED_PRODUCT_IMAGE_MIME_TYPES,
-        )
-        content = _read_limited_upload(file, MAX_PRODUCT_IMAGE_BYTES, "鍥剧墖涓嶈兘瓒呰繃 10MB")
-        _validate_media_content(content, ext, "image")
-        name = f"{uuid.uuid4().hex}{ext}"
-        path = os.path.join(settings.IMAGE_UPLOAD_DIR, name)
-        with open(path, "wb") as f:
-            f.write(content)
-        urls.append(f"/uploads/images/{name}")
+    saved_paths: list[str] = []
+    try:
+        for file in files:
+            ext = _validate_media_upload(
+                file,
+                allowed_suffixes=ALLOWED_PRODUCT_IMAGE_SUFFIXES,
+                allowed_mime_types=ALLOWED_PRODUCT_IMAGE_MIME_TYPES,
+            )
+            content = _read_limited_upload(file, MAX_PRODUCT_IMAGE_BYTES, "图片不能超过 10MB")
+            _validate_media_content(content, ext, "image")
+            name = f"{uuid.uuid4().hex}{ext}"
+            path = os.path.join(settings.IMAGE_UPLOAD_DIR, name)
+            content = _sanitize_product_image(content, ext)
+            _atomic_store_product_upload(path, content)
+            saved_paths.append(path)
+            urls.append(f"/uploads/images/{name}")
+    except Exception:
+        _cleanup_product_upload_paths(saved_paths)
+        raise
     operation_log_service.log_operation(
         db,
         operator_id=current_user.id,
@@ -843,19 +850,24 @@ def upload_product_videos(
         content = _read_limited_upload(file, MAX_PRODUCT_VIDEO_BYTES, "视频不能超过 100MB")
         _validate_media_content(content, ext, "video")
         file.file.seek(0)
-    for file in files:
-        ext = _validate_media_upload(
-            file,
-            allowed_suffixes=ALLOWED_PRODUCT_VIDEO_SUFFIXES,
-            allowed_mime_types=ALLOWED_PRODUCT_VIDEO_MIME_TYPES,
-        )
-        content = _read_limited_upload(file, MAX_PRODUCT_VIDEO_BYTES, "瑙嗛涓嶈兘瓒呰繃 100MB")
-        _validate_media_content(content, ext, "video")
-        name = f"{uuid.uuid4().hex}{ext}"
-        path = os.path.join(settings.VIDEO_UPLOAD_DIR, name)
-        with open(path, "wb") as f:
-            f.write(content)
-        urls.append(f"/uploads/videos/{name}")
+    saved_paths: list[str] = []
+    try:
+        for file in files:
+            ext = _validate_media_upload(
+                file,
+                allowed_suffixes=ALLOWED_PRODUCT_VIDEO_SUFFIXES,
+                allowed_mime_types=ALLOWED_PRODUCT_VIDEO_MIME_TYPES,
+            )
+            content = _read_limited_upload(file, MAX_PRODUCT_VIDEO_BYTES, "视频不能超过 100MB")
+            _validate_media_content(content, ext, "video")
+            name = f"{uuid.uuid4().hex}{ext}"
+            path = os.path.join(settings.VIDEO_UPLOAD_DIR, name)
+            _atomic_store_product_upload(path, content)
+            saved_paths.append(path)
+            urls.append(f"/uploads/videos/{name}")
+    except Exception:
+        _cleanup_product_upload_paths(saved_paths)
+        raise
     operation_log_service.log_operation(
         db,
         operator_id=current_user.id,
@@ -914,4 +926,51 @@ def _validate_media_content(content: bytes, ext: str, media_type: str) -> None:
             validate_video_content(content, ext)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+def _atomic_store_product_upload(path: str, content: bytes) -> None:
+    temporary = f"{path}.{uuid.uuid4().hex}.part"
+    try:
+        with open(temporary, "wb") as handle:
+            handle.write(content)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary, path)
+    finally:
+        try:
+            os.remove(temporary)
+        except FileNotFoundError:
+            pass
+
+
+def _cleanup_product_upload_paths(paths: list[str]) -> None:
+    upload_root = os.path.abspath(settings.UPLOAD_DIR)
+    for path in reversed(paths):
+        target = os.path.abspath(path)
+        try:
+            if os.path.commonpath([target, upload_root]) == upload_root:
+                os.remove(target)
+        except FileNotFoundError:
+            pass
+
+
+def _sanitize_product_image(content: bytes, ext: str) -> bytes:
+    from PIL import Image, ImageOps
+
+    with Image.open(BytesIO(content)) as source:
+        if ext == ".gif" and bool(getattr(source, "is_animated", False)):
+            return content
+        image = ImageOps.exif_transpose(source)
+        output = BytesIO()
+        if ext in {".jpg", ".jpeg"}:
+            if image.mode not in ("RGB", "L"):
+                image = image.convert("RGB")
+            image.save(output, "JPEG", quality=95, optimize=True)
+        elif ext == ".png":
+            image.save(output, "PNG", optimize=True)
+        elif ext == ".webp":
+            image.save(output, "WEBP", quality=95, method=4)
+        else:
+            image.save(output, source.format or "PNG")
+        return output.getvalue()
 

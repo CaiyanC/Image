@@ -1,9 +1,13 @@
 import base64
 import binascii
+import os
+import time
+from io import BytesIO
 
 from fastapi import APIRouter, Depends, UploadFile, File, Form, HTTPException
 from sqlalchemy.orm import Session
 from typing import List, Optional
+from ..core.config import settings
 from ..core.database import get_db
 from ..core.rate_limit import enforce_rate_limit
 from ..core.security import require_permission
@@ -30,6 +34,7 @@ ALLOWED_REFERENCE_IMAGE_SUFFIXES = {".jpg", ".jpeg", ".png", ".webp"}
 MIME_TO_EXTENSION = {"image/jpeg": "jpg", "image/png": "png", "image/webp": "webp"}
 AI_GENERATION_LIMIT_PER_MINUTE = 15
 FILE_UPLOAD_LIMIT_PER_MINUTE = 45
+REFERENCE_UPLOAD_TTL_SECONDS = 24 * 60 * 60
 
 
 def _resolve_generation_model_or_legacy(db: Session, user: User, model_id: str, capability: str):
@@ -179,11 +184,27 @@ async def upload_reference_image(
     current_user: User = Depends(require_permission("ai.generate")),
 ):
     _enforce_file_upload_limit(current_user, "generation.upload")
-    from ..utils.file_storage import save_upload
-    await _read_reference_upload(file)
-    await file.seek(0)
-    path = await save_upload(file, "images")
+    from ..utils.file_storage import save_bytes
+    content = await _read_reference_upload(file)
+    owner_subdir = f"reference-images/{current_user.id}"
+    _cleanup_expired_reference_uploads(owner_subdir)
+    path = await save_bytes(content, owner_subdir, _file_suffix(file.filename))
     return {"url": path, "filename": file.filename}
+
+
+def _cleanup_expired_reference_uploads(owner_subdir: str) -> None:
+    root = os.path.abspath(settings.UPLOAD_DIR)
+    target_dir = os.path.abspath(os.path.join(root, owner_subdir))
+    if os.path.commonpath([target_dir, root]) != root or not os.path.isdir(target_dir):
+        return
+    cutoff = time.time() - REFERENCE_UPLOAD_TTL_SECONDS
+    for name in os.listdir(target_dir):
+        path = os.path.join(target_dir, name)
+        try:
+            if os.path.isfile(path) and os.path.getmtime(path) < cutoff:
+                os.remove(path)
+        except OSError:
+            continue
 
 
 def _enforce_ai_generation_limit(current_user: User) -> None:
@@ -209,8 +230,9 @@ async def _read_reference_upload(file: UploadFile) -> bytes:
     content = await file.read(MAX_REFERENCE_IMAGE_BYTES + 1)
     if len(content) > MAX_REFERENCE_IMAGE_BYTES:
         raise HTTPException(status_code=413, detail="参考图不能超过 10MB")
-    _validate_reference_image_content(content, _file_suffix(file.filename))
-    return content
+    suffix = _file_suffix(file.filename)
+    _validate_reference_image_content(content, suffix)
+    return _sanitize_reference_image_content(content, suffix)
 
 
 def _decode_reference_payload(img: ImagePayload) -> tuple[bytes, str]:
@@ -225,7 +247,7 @@ def _decode_reference_payload(img: ImagePayload) -> tuple[bytes, str]:
         raise HTTPException(status_code=413, detail="参考图不能超过 10MB")
     extension = MIME_TO_EXTENSION[content_type]
     _validate_reference_image_content(content, f".{extension}")
-    return content, extension
+    return _sanitize_reference_image_content(content, f".{extension}"), extension
 
 
 def _validate_reference_image_metadata(filename: str | None, content_type: str | None) -> None:
@@ -252,3 +274,22 @@ def _validate_reference_image_content(content: bytes, suffix: str) -> None:
         validate_image_content(content, suffix)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail="参考图内容无效或与文件类型不匹配") from exc
+
+
+def _sanitize_reference_image_content(content: bytes, suffix: str) -> bytes:
+    from PIL import Image, ImageOps
+
+    with Image.open(BytesIO(content)) as source:
+        image = ImageOps.exif_transpose(source)
+        output = BytesIO()
+        if suffix in {".jpg", ".jpeg"}:
+            if image.mode not in ("RGB", "L"):
+                image = image.convert("RGB")
+            image.save(output, "JPEG", quality=95, optimize=True)
+        elif suffix == ".png":
+            image.save(output, "PNG", optimize=True)
+        elif suffix == ".webp":
+            image.save(output, "WEBP", quality=95, method=4)
+        else:
+            image.save(output, source.format or "PNG")
+        return output.getvalue()

@@ -1,5 +1,5 @@
 from datetime import datetime, timezone
-from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, String, Text, Index
+from sqlalchemy import BigInteger, Boolean, DateTime, ForeignKey, Integer, String, Text, Index
 from sqlalchemy.orm import Mapped, mapped_column
 
 from ..core.database import Base
@@ -43,7 +43,13 @@ class ProductAsset(Base):
     date_tag: Mapped[str | None] = mapped_column(String(16), nullable=True)
     status_tag: Mapped[str | None] = mapped_column(String(32), nullable=True)
     file_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    original_file_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
     file_format: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    mime_type: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    file_size_bytes: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    checksum_sha256: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    width: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    height: Mapped[int | None] = mapped_column(Integer, nullable=True)
     resolution: Mapped[str | None] = mapped_column(String(32), nullable=True)
     aspect_ratio: Mapped[str | None] = mapped_column(String(16), nullable=True)
     asset_level: Mapped[str] = mapped_column(String(10), nullable=False, default="C")

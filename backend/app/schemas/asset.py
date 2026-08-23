@@ -23,7 +23,13 @@ class ProductAssetBase(BaseModel):
     date_tag: Optional[str] = None
     status_tag: Optional[str] = None
     file_name: Optional[str] = None
+    original_file_name: Optional[str] = None
     file_format: Optional[str] = None
+    mime_type: Optional[str] = None
+    file_size_bytes: Optional[int] = None
+    checksum_sha256: Optional[str] = None
+    width: Optional[int] = None
+    height: Optional[int] = None
     resolution: Optional[str] = None
     aspect_ratio: Optional[str] = None
     asset_level: str = "C"
@@ -69,7 +75,13 @@ class ProductAssetUpdate(BaseModel):
     date_tag: Optional[str] = None
     status_tag: Optional[str] = None
     file_name: Optional[str] = None
+    original_file_name: Optional[str] = None
     file_format: Optional[str] = None
+    mime_type: Optional[str] = None
+    file_size_bytes: Optional[int] = None
+    checksum_sha256: Optional[str] = None
+    width: Optional[int] = None
+    height: Optional[int] = None
     resolution: Optional[str] = None
     aspect_ratio: Optional[str] = None
     asset_level: Optional[str] = None

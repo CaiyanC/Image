@@ -1,4 +1,5 @@
 import json
+import logging
 import os
 import uuid
 from datetime import datetime
@@ -8,7 +9,7 @@ from fastapi import HTTPException
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
-from ..core.config import resolve_project_path, settings
+from ..core.config import settings
 from ..models.product import Product
 from ..models.product_asset import ProductAsset
 
@@ -18,6 +19,7 @@ DEFAULT_CHANNEL = "General"
 DEFAULT_LANGUAGE = "CN"
 DEFAULT_VERSION = "V1"
 DEFAULT_STATUS = "待审核"
+AI_GENERATED_CATEGORY_CODE = "07"
 ARCHIVE_CATEGORY_CODE = "08"
 ARCHIVE_CATEGORY_NAME = "参考归档禁用图"
 
@@ -26,6 +28,8 @@ EXPRESSION_REQUIREMENTS = {
     "场景图": "scene_tags",
     "氛围图": "mood_tags",
 }
+
+logger = logging.getLogger(__name__)
 
 
 def today_tag() -> str:
@@ -105,7 +109,13 @@ def model_to_dict(asset: ProductAsset) -> dict[str, Any]:
         "date_tag": asset.date_tag,
         "status_tag": asset.status_tag,
         "file_name": asset.file_name,
+        "original_file_name": asset.original_file_name,
         "file_format": asset.file_format,
+        "mime_type": asset.mime_type,
+        "file_size_bytes": asset.file_size_bytes,
+        "checksum_sha256": asset.checksum_sha256,
+        "width": asset.width,
+        "height": asset.height,
         "resolution": asset.resolution,
         "aspect_ratio": asset.aspect_ratio,
         "asset_level": asset.asset_level,
@@ -266,9 +276,28 @@ def apply_status_movement(data: dict[str, Any]) -> dict[str, Any]:
     return data
 
 
-def create_asset(db: Session, sku: str, data: dict[str, Any]) -> ProductAsset:
+def apply_category_invariants(
+    data: dict[str, Any],
+    *,
+    current_category_code: str | None = None,
+) -> dict[str, Any]:
+    """Keep ontology-backed asset flags consistent with their category."""
+    effective_code = str(data.get("category_code") or current_category_code or "").strip()
+    if effective_code == AI_GENERATED_CATEGORY_CODE:
+        data["is_ai_generated"] = True
+        data["is_real_product"] = False
+    return data
+
+
+def create_asset(
+    db: Session,
+    sku: str,
+    data: dict[str, Any],
+    *,
+    commit: bool = True,
+) -> ProductAsset:
     ensure_product_exists(db, sku)
-    payload = apply_status_movement(dict(data))
+    payload = apply_category_invariants(apply_status_movement(dict(data)))
     category_code = str(payload.get("category_code") or "").strip()
     category_name = str(payload.get("category_name") or "").strip()
     url = str(payload.get("url") or "").strip()
@@ -306,7 +335,13 @@ def create_asset(db: Session, sku: str, data: dict[str, Any]) -> ProductAsset:
         date_tag=payload.get("date_tag") or today_tag(),
         status_tag=payload.get("status_tag") or DEFAULT_STATUS,
         file_name=payload.get("file_name") or os.path.basename(url),
+        original_file_name=payload.get("original_file_name"),
         file_format=payload.get("file_format") or os.path.splitext(url.split("?", 1)[0])[1].lstrip(".").lower() or None,
+        mime_type=payload.get("mime_type"),
+        file_size_bytes=payload.get("file_size_bytes"),
+        checksum_sha256=payload.get("checksum_sha256"),
+        width=payload.get("width"),
+        height=payload.get("height"),
         resolution=payload.get("resolution"),
         aspect_ratio=payload.get("aspect_ratio"),
         asset_level=payload.get("asset_level") or "C",
@@ -329,22 +364,33 @@ def create_asset(db: Session, sku: str, data: dict[str, Any]) -> ProductAsset:
         notes=payload.get("notes"),
     )
     db.add(asset)
-    db.commit()
-    db.refresh(asset)
+    db.flush()
+    if commit:
+        db.commit()
+        db.refresh(asset)
     return asset
 
 
 def create_assets_batch(db: Session, sku: str, items: list[dict[str, Any]]) -> list[ProductAsset]:
-    created = []
-    for item in items:
-        created.append(create_asset(db, sku, item))
-    return created
+    ensure_product_exists(db, sku)
+    try:
+        created = [create_asset(db, sku, item, commit=False) for item in items]
+        db.commit()
+        for item in created:
+            db.refresh(item)
+        return created
+    except Exception:
+        db.rollback()
+        raise
 
 
 def update_asset(db: Session, sku: str, asset_id: str, data: dict[str, Any]) -> ProductAsset:
     ensure_product_exists(db, sku)
     asset = get_asset(db, sku, asset_id)
-    payload = apply_status_movement(dict(data))
+    payload = apply_category_invariants(
+        apply_status_movement(dict(data)),
+        current_category_code=asset.category_code,
+    )
     allowed = {
         "category_code",
         "category_name",
@@ -364,7 +410,13 @@ def update_asset(db: Session, sku: str, asset_id: str, data: dict[str, Any]) -> 
         "date_tag",
         "status_tag",
         "file_name",
+        "original_file_name",
         "file_format",
+        "mime_type",
+        "file_size_bytes",
+        "checksum_sha256",
+        "width",
+        "height",
         "resolution",
         "aspect_ratio",
         "asset_level",
@@ -414,7 +466,10 @@ def delete_asset(db: Session, sku: str, asset_id: str) -> None:
     db.delete(asset)
     db.commit()
     for path in paths:
-        _delete_local_asset_file(path)
+        try:
+            _delete_local_asset_file(path)
+        except OSError as exc:
+            logger.warning("failed to remove deleted asset file %s: %s", path, exc)
 
 
 def _delete_local_asset_file(url: str | None) -> None:
@@ -422,8 +477,8 @@ def _delete_local_asset_file(url: str | None) -> None:
     if not normalized.startswith("/uploads/assets/"):
         return
     relative = normalized.removeprefix("/uploads/").lstrip("/")
-    target = os.path.abspath(resolve_project_path(os.path.join(settings.UPLOAD_DIR, relative)))
-    upload_root = os.path.abspath(resolve_project_path(settings.UPLOAD_DIR))
+    upload_root = os.path.abspath(settings.UPLOAD_DIR)
+    target = os.path.abspath(os.path.join(upload_root, relative))
     if os.path.commonpath([target, upload_root]) != upload_root:
         return
     try:

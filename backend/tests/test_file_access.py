@@ -131,6 +131,41 @@ class FileAccessTest(unittest.TestCase):
             self.asset_dir / "asset_sample.png",
         )
 
+    def test_batch_sign_deduplicates_paths_and_preserves_authorization(self):
+        response = files_api.sign_files_batch(
+            files_api.FileSignBatchRequest(paths=[
+                "/uploads/images/sample.png",
+                "/uploads/assets/ASSET-1/asset_sample.png",
+                "/uploads/images/sample.png",
+            ]),
+            current_user=self.user,
+            db=self.db,
+        )
+        self.assertEqual([item.path for item in response.items], [
+            "/uploads/images/sample.png",
+            "/uploads/assets/ASSET-1/asset_sample.png",
+        ])
+        self.assertTrue(all(item.url.startswith("/api/files/signed/") for item in response.items))
+
+        with self.assertRaises(HTTPException) as ctx:
+            files_api.sign_files_batch(
+                files_api.FileSignBatchRequest(paths=["/uploads/images/sample.png"]),
+                current_user=self.no_permission_user,
+                db=self.db,
+            )
+        self.assertEqual(ctx.exception.status_code, 403)
+
+    def test_reference_image_sign_is_owner_scoped(self):
+        owner_dir = self.upload_dir / "reference-images" / self.user.id
+        owner_dir.mkdir(parents=True)
+        (owner_dir / "ref.png").write_bytes(b"ref")
+        path = f"/uploads/reference-images/{self.user.id}/ref.png"
+        response = files_api.sign_file(files_api.FileSignRequest(path=path), current_user=self.user, db=self.db)
+        self.assertTrue(response.url.startswith("/api/files/signed/"))
+        with self.assertRaises(HTTPException) as ctx:
+            files_api.sign_file(files_api.FileSignRequest(path=path), current_user=self.no_permission_user, db=self.db)
+        self.assertEqual(ctx.exception.status_code, 403)
+
     def test_knowledge_files_cannot_use_signed_public_path(self):
         with self.assertRaises(HTTPException) as ctx:
             files_api.sign_file(

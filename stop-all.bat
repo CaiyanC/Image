@@ -6,20 +6,11 @@ cd /d "%~dp0"
 call :load_env_prod
 set "LOG_DIR_WIN=%LOG_DIR:/=\%"
 
-echo Stopping production Celery worker by pidfile/name/queue...
-if exist "%LOG_DIR_WIN%\celery.pid" (
-    for /f "usebackq tokens=*" %%p in ("%LOG_DIR_WIN%\celery.pid") do (
-        taskkill /F /T /PID %%p >nul 2>nul
-    )
-    del "%LOG_DIR_WIN%\celery.pid" >nul 2>nul
-)
-powershell -NoProfile -ExecutionPolicy Bypass -Command ^
-  "$self = $PID;" ^
-  "Get-CimInstance Win32_Process | Where-Object { $cmd = $_.CommandLine; $_.ProcessId -ne $self -and $cmd -and (($cmd -like '*uvicorn app.main:app*--port 8000*') -or ($cmd -like '*%CELERY_WORKER_NAME%@*') -or ($cmd -like '*-Q %CELERY_QUEUE%*')) } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }"
-
-echo Stopping fallback listeners on ports 8000 and 5275...
-for /f "tokens=5" %%p in ('netstat -ano ^| findstr /R /C:":8000 .*LISTENING" /C:":5275 .*LISTENING"') do (
-    taskkill /F /T /PID %%p >nul 2>nul
+echo Stopping validated production backend, frontend, and worker processes...
+powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0deploy\scripts\service_control_windows.ps1" -Action StopAll -RepoRoot "%~dp0" -LogPath "%~dp0logs\watchdog.log"
+if errorlevel 1 (
+    echo Failed to stop one or more production services. Check logs\watchdog.log.
+    exit /b 1
 )
 
 echo.

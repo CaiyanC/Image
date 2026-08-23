@@ -1,12 +1,16 @@
+import hashlib
 import json
+import mimetypes
 import os
 import uuid
 from collections import defaultdict
 from datetime import datetime
 from typing import Any
+from pathlib import Path
 
 from sqlalchemy.orm import Session
 
+from ..core.config import settings
 from ..models.product import Product
 from ..models.product_asset import ProductAsset
 
@@ -195,6 +199,7 @@ def _add_asset(
     file_name = os.path.basename(url.split("?", 1)[0]) or f"{source_key}-{index}"
     extension = os.path.splitext(file_name)[1].lstrip(".").lower() or None
     asset_type = "video" if category_code == "06" else "image"
+    file_metadata = _local_file_metadata(url, asset_type)
     status_tag = "禁用" if is_banned else "归档历史版本" if is_archived else "待审核"
     review_status = "disabled" if is_banned else "archived" if is_archived else "pending"
     db.add(ProductAsset(
@@ -216,6 +221,13 @@ def _add_asset(
         status_tag=status_tag,
         file_name=file_name,
         file_format=extension,
+        mime_type=file_metadata.get("mime_type"),
+        file_size_bytes=file_metadata.get("file_size_bytes"),
+        checksum_sha256=file_metadata.get("checksum_sha256"),
+        width=file_metadata.get("width"),
+        height=file_metadata.get("height"),
+        resolution=file_metadata.get("resolution"),
+        aspect_ratio=file_metadata.get("aspect_ratio"),
         asset_level="C",
         is_real_product=not (is_ai or is_competitor),
         is_ai_generated=is_ai,
@@ -233,3 +245,42 @@ def _add_asset(
         tags=json.dumps({"source_keys": [source_key]}, ensure_ascii=False),
         notes=notes,
     ))
+
+
+def _local_file_metadata(url: str, asset_type: str) -> dict[str, Any]:
+    normalized = str(url or "").split("?", 1)[0].replace("\\", "/")
+    if not normalized.startswith("/uploads/"):
+        return {}
+    root = Path(settings.UPLOAD_DIR).resolve()
+    path = (root / normalized.removeprefix("/uploads/").lstrip("/")).resolve()
+    if path != root and root not in path.parents:
+        return {}
+    if not path.is_file():
+        return {}
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    metadata: dict[str, Any] = {
+        "mime_type": mimetypes.guess_type(path.name)[0],
+        "file_size_bytes": path.stat().st_size,
+        "checksum_sha256": digest.hexdigest(),
+    }
+    if asset_type != "image":
+        return metadata
+    try:
+        from math import gcd
+        from PIL import Image
+
+        with Image.open(path) as image:
+            width, height = image.size
+        divisor = gcd(width, height)
+        metadata.update({
+            "width": width,
+            "height": height,
+            "resolution": f"{width}x{height}",
+            "aspect_ratio": f"{width // divisor}:{height // divisor}" if divisor else None,
+        })
+    except Exception:
+        pass
+    return metadata

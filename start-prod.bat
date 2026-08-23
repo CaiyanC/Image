@@ -14,5 +14,5 @@ echo - Worker: worker_prod
 echo - Logs: logs\prod
 echo.
 
-call "%~dp0start-all.bat"
+powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0deploy\scripts\service_control_windows.ps1" -Action All -RepoRoot "%~dp0" -LogPath "%~dp0logs\watchdog.log"
 exit /b %errorlevel%

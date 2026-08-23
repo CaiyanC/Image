@@ -209,8 +209,10 @@ class ApiInputSafetyTest(unittest.TestCase):
         content, ext = generation_api._decode_reference_payload(
             ImagePayload(data=base64.b64encode(image).decode("ascii"), mimeType="image/png")
         )
-        self.assertEqual(content, image)
         self.assertEqual(ext, "png")
+        with Image.open(io.BytesIO(content)) as decoded:
+            self.assertEqual(decoded.size, (2, 2))
+            self.assertEqual(len(decoded.getexif()), 0)
 
         with self.assertRaises(HTTPException):
             generation_api._decode_reference_payload(ImagePayload(data="not-base64", mimeType="image/png"))
@@ -244,6 +246,19 @@ class ApiInputSafetyTest(unittest.TestCase):
         with self.assertRaises(HTTPException) as ctx:
             products_api._read_limited_upload(oversized, products_api.MAX_PRODUCT_IMAGE_BYTES, "图片不能超过 10MB")
         self.assertEqual(ctx.exception.status_code, 413)
+
+    def test_uploaded_product_and_reference_images_strip_exif_metadata(self):
+        source = io.BytesIO()
+        exif = Image.Exif()
+        exif[271] = "Fake camera"
+        Image.new("RGB", (8, 4), color="blue").save(source, format="JPEG", exif=exif)
+
+        product_image = products_api._sanitize_product_image(source.getvalue(), ".jpg")
+        reference_image = generation_api._sanitize_reference_image_content(source.getvalue(), ".jpg")
+        for content in (product_image, reference_image):
+            with Image.open(io.BytesIO(content)) as decoded:
+                self.assertEqual(decoded.size, (8, 4))
+                self.assertEqual(len(decoded.getexif()), 0)
 
 
 if __name__ == "__main__":

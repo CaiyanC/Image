@@ -1,13 +1,17 @@
 import io
 import tempfile
 import unittest
+from pathlib import Path
+from unittest.mock import patch
 
 from fastapi.testclient import TestClient
+from PIL import Image
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
 from app.core.database import Base, get_db
+from app.core.config import settings
 from app.core.permission_constants import MANAGEMENT_GROUP_NAME
 from app.core.security import get_current_user
 from app.main import app
@@ -21,6 +25,8 @@ from app.models.user_group import UserGroup
 class AssetApiTest(unittest.TestCase):
     def setUp(self):
         self.tmpdir = tempfile.TemporaryDirectory()
+        self.previous_upload_dir = settings.UPLOAD_DIR
+        settings.UPLOAD_DIR = self.tmpdir.name
         engine = create_engine(
             "sqlite:///:memory:",
             connect_args={"check_same_thread": False},
@@ -87,6 +93,7 @@ class AssetApiTest(unittest.TestCase):
 
     def tearDown(self):
         app.dependency_overrides.clear()
+        settings.UPLOAD_DIR = self.previous_upload_dir
         self.tmpdir.cleanup()
 
     def test_create_list_update_and_patch_tags(self):
@@ -156,6 +163,55 @@ class AssetApiTest(unittest.TestCase):
         self.assertEqual(payload["items"][0]["asset_type"], "video")
         self.assertEqual(payload["items"][0]["sub_category"], "视频")
         self.assertEqual(payload["items"][0]["material_type"], "video")
+
+    def test_ai_image_upload_sign_read_and_delete_is_a_closed_lifecycle(self):
+        image_data = io.BytesIO()
+        Image.new("RGB", (64, 32), color=(20, 80, 140)).save(image_data, format="PNG")
+        response = self.client.post(
+            "/api/products/API-ASSET-1/assets/upload",
+            data={"category_code": "07", "category_name": "AI 生成图"},
+            files={"files": ("customer-original.png", image_data.getvalue(), "image/png")},
+        )
+        self.assertEqual(response.status_code, 200, response.text)
+        asset = response.json()["items"][0]
+        self.assertTrue(asset["is_ai_generated"])
+        self.assertFalse(asset["is_real_product"])
+        self.assertEqual(asset["original_file_name"], "customer-original.png")
+        self.assertEqual(asset["mime_type"], "image/png")
+        self.assertEqual(asset["width"], 64)
+        self.assertEqual(asset["height"], 32)
+        self.assertEqual(asset["resolution"], "64x32")
+        self.assertEqual(asset["aspect_ratio"], "2:1")
+        self.assertEqual(len(asset["checksum_sha256"]), 64)
+
+        original = Path(settings.UPLOAD_DIR) / asset["url"].removeprefix("/uploads/")
+        thumbnail = Path(settings.UPLOAD_DIR) / asset["thumbnail_url"].removeprefix("/uploads/")
+        self.assertTrue(original.is_file())
+        self.assertTrue(thumbnail.is_file())
+
+        signed = self.client.post("/api/files/sign", json={"path": asset["url"]})
+        self.assertEqual(signed.status_code, 200, signed.text)
+        downloaded = self.client.get(signed.json()["url"])
+        self.assertEqual(downloaded.status_code, 200)
+        self.assertGreater(len(downloaded.content), 0)
+
+        deleted = self.client.delete(f"/api/products/API-ASSET-1/assets/{asset['id']}")
+        self.assertEqual(deleted.status_code, 200, deleted.text)
+        self.assertFalse(original.exists())
+        self.assertFalse(thumbnail.exists())
+
+    def test_upload_removes_saved_files_when_database_batch_fails(self):
+        image_data = io.BytesIO()
+        Image.new("RGB", (8, 8), color=(1, 2, 3)).save(image_data, format="PNG")
+        with patch("app.api.assets.asset_service.create_assets_batch", side_effect=RuntimeError("db failed")):
+            with self.assertRaises(RuntimeError):
+                self.client.post(
+                    "/api/products/API-ASSET-1/assets/upload",
+                    data={"category_code": "01", "category_name": "产品标准图"},
+                    files={"files": ("rollback.png", image_data.getvalue(), "image/png")},
+                )
+        asset_dir = Path(settings.UPLOAD_DIR) / "assets" / "API-ASSET-1"
+        self.assertEqual(list(asset_dir.glob("*")), [])
 
 
     def test_global_search_matches_tag_values_within_dimension(self):

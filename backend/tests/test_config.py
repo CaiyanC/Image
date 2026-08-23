@@ -1,17 +1,37 @@
-import importlib
+import json
 import os
 import subprocess
 import sys
 import unittest
 from pathlib import Path
-from unittest.mock import patch
 
 from app.core import config
 
 
 class SettingsConfigTest(unittest.TestCase):
-    def tearDown(self):
-        importlib.reload(config)
+    def _settings_from_clean_process(self, env_updates: dict[str, str]) -> dict:
+        env = os.environ.copy()
+        env.update(env_updates)
+        code = (
+            "import json;"
+            "from app.core.config import settings;"
+            "print(json.dumps({"
+            "'APP_ENV': settings.APP_ENV, 'BACKEND_PORT': settings.BACKEND_PORT,"
+            "'CELERY_QUEUE': settings.CELERY_QUEUE, 'CELERY_WORKER_NAME': settings.CELERY_WORKER_NAME,"
+            "'LOG_DIR': settings.LOG_DIR, 'UPLOAD_DIR': settings.UPLOAD_DIR,"
+            "'IMAGE_UPLOAD_DIR': settings.IMAGE_UPLOAD_DIR, 'VIDEO_UPLOAD_DIR': settings.VIDEO_UPLOAD_DIR,"
+            "'GENERATED_DIR': settings.GENERATED_DIR, 'BACKEND_ROOT': __import__('app.core.config', fromlist=['BACKEND_ROOT']).BACKEND_ROOT"
+            "}))"
+        )
+        result = subprocess.run(
+            [sys.executable, "-c", code],
+            cwd=Path(__file__).resolve().parents[1],
+            env=env,
+            text=True,
+            capture_output=True,
+            check=True,
+        )
+        return json.loads(result.stdout.strip().splitlines()[-1])
 
     def _runtime_settings(self, app_env: str):
         settings = config.Settings()
@@ -30,21 +50,21 @@ class SettingsConfigTest(unittest.TestCase):
 
     def test_upload_dir_can_be_configured_from_env(self):
         custom_upload_dir = os.path.normpath("backend/uploads_dev")
-        with patch.dict(os.environ, {"UPLOAD_DIR": custom_upload_dir}):
-            reloaded = importlib.reload(config)
+        loaded = self._settings_from_clean_process({"UPLOAD_DIR": custom_upload_dir})
 
-        self.assertEqual(os.path.normpath(reloaded.settings.UPLOAD_DIR), custom_upload_dir)
+        resolved_upload_dir = os.path.join(config.PROJECT_ROOT, custom_upload_dir)
+        self.assertEqual(os.path.normpath(loaded["UPLOAD_DIR"]), os.path.normpath(resolved_upload_dir))
         self.assertEqual(
-            os.path.normpath(reloaded.settings.IMAGE_UPLOAD_DIR),
-            os.path.join(custom_upload_dir, "images"),
+            os.path.normpath(loaded["IMAGE_UPLOAD_DIR"]),
+            os.path.join(resolved_upload_dir, "images"),
         )
         self.assertEqual(
-            os.path.normpath(reloaded.settings.VIDEO_UPLOAD_DIR),
-            os.path.join(custom_upload_dir, "videos"),
+            os.path.normpath(loaded["VIDEO_UPLOAD_DIR"]),
+            os.path.join(resolved_upload_dir, "videos"),
         )
         self.assertEqual(
-            os.path.normpath(reloaded.settings.GENERATED_DIR),
-            os.path.join(custom_upload_dir, "generated"),
+            os.path.normpath(loaded["GENERATED_DIR"]),
+            os.path.join(resolved_upload_dir, "generated"),
         )
 
     def test_runtime_isolation_settings_are_loaded_from_env(self):
@@ -56,16 +76,17 @@ class SettingsConfigTest(unittest.TestCase):
             "LOG_DIR": "logs/dev",
             "UPLOAD_DIR": "uploads_dev",
         }
-        with patch.dict(os.environ, env):
-            reloaded = importlib.reload(config)
-            settings = reloaded.Settings()
+        loaded = self._settings_from_clean_process(env)
 
-        self.assertEqual(settings.APP_ENV, "dev")
-        self.assertEqual(settings.BACKEND_PORT, 8001)
-        self.assertEqual(settings.CELERY_QUEUE, "celery_dev")
-        self.assertEqual(settings.CELERY_WORKER_NAME, "worker_dev")
-        self.assertEqual(os.path.normpath(settings.LOG_DIR), os.path.normpath("logs/dev"))
-        self.assertEqual(os.path.normpath(settings.UPLOAD_DIR), os.path.normpath("uploads_dev"))
+        self.assertEqual(loaded["APP_ENV"], "dev")
+        self.assertEqual(loaded["BACKEND_PORT"], 8001)
+        self.assertEqual(loaded["CELERY_QUEUE"], "celery_dev")
+        self.assertEqual(loaded["CELERY_WORKER_NAME"], "worker_dev")
+        self.assertEqual(os.path.normpath(loaded["LOG_DIR"]), os.path.normpath("logs/dev"))
+        self.assertEqual(
+            os.path.normpath(loaded["UPLOAD_DIR"]),
+            os.path.normpath(os.path.join(loaded["BACKEND_ROOT"], "uploads_dev")),
+        )
 
     def test_environment_validation_rejects_dev_database_in_prod(self):
         settings = config.Settings()

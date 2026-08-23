@@ -166,8 +166,8 @@ class AssetServiceTest(unittest.TestCase):
                 "sub_category": "AI 生成图",
                 "material_type": "aiGenerated",
                 "url": "/uploads/assets/ASSET-1/ai.png",
-                "is_real_product": False,
-                "is_ai_generated": True,
+                "is_real_product": True,
+                "is_ai_generated": False,
             },
         )
         self.assertFalse(asset.is_real_product)

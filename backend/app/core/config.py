@@ -7,6 +7,21 @@ PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..
 BACKEND_ROOT = os.path.join(PROJECT_ROOT, "backend")
 
 
+def resolve_backend_path(path: str) -> str:
+    """Resolve runtime data paths independently from the process cwd.
+
+    Backend env files intentionally use short values such as ``uploads_dev``.
+    Those values must always mean ``backend/uploads_dev`` whether Uvicorn was
+    launched from the project root, the backend directory, or a test runner.
+    """
+    if os.path.isabs(path):
+        return os.path.abspath(path)
+    normalized = os.path.normpath(path)
+    if normalized.split(os.sep, 1)[0].lower() == "backend":
+        return os.path.abspath(os.path.join(PROJECT_ROOT, normalized))
+    return os.path.abspath(os.path.join(BACKEND_ROOT, normalized))
+
+
 def _resolve_env_path(path: str) -> str:
     if os.path.isabs(path):
         return path
@@ -102,10 +117,7 @@ class Settings:
     )
     REDIS_URL: str = os.getenv("REDIS_URL", "redis://localhost:6379/0")
 
-    UPLOAD_DIR: str = os.getenv(
-        "UPLOAD_DIR",
-        os.path.join(os.path.dirname(os.path.dirname(__file__)), "..", "uploads"),
-    )
+    UPLOAD_DIR: str = resolve_backend_path(os.getenv("UPLOAD_DIR", "uploads"))
     IMAGE_UPLOAD_DIR: str = os.path.join(UPLOAD_DIR, "images")
     VIDEO_UPLOAD_DIR: str = os.path.join(UPLOAD_DIR, "videos")
     GENERATED_DIR: str = os.path.join(UPLOAD_DIR, "generated")

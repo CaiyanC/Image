@@ -2,12 +2,15 @@ import httpx
 import asyncio
 import base64
 import binascii
+import logging
+import os
 from io import BytesIO
 from datetime import datetime, date
 from urllib.parse import urljoin
 from sqlalchemy import func, Date
 from sqlalchemy.orm import Session
 from fastapi import HTTPException, status
+from ..core.config import settings
 from ..models.generation import Generation
 from ..models.user import User
 from ..schemas.generation import Txt2ImgRequest, Img2ImgRequest, Txt2VidRequest, GenerationStats
@@ -24,6 +27,7 @@ IMG2IMG_MAX_RETRIES = 2
 TXT2IMG_MAX_RETRIES = 2
 MAX_GENERATED_IMAGE_BYTES = 50 * 1024 * 1024
 MAX_GENERATED_IMAGE_REDIRECTS = 3
+logger = logging.getLogger(__name__)
 
 
 def _compress_image(img_bytes: bytes, filename: str) -> tuple[bytes, str, str]:
@@ -382,5 +386,36 @@ def get_generation_by_id(db: Session, generation_id: str, user_id: str = None):
 
 def delete_generation(db: Session, generation_id: str, user_id: str):
     gen = get_generation_by_id(db, generation_id, user_id)
+    paths = _generation_result_paths(gen)
     db.delete(gen)
     db.commit()
+    for path in paths:
+        try:
+            _delete_generated_file(path)
+        except OSError as exc:
+            logger.warning("failed to delete generated result %s: %s", path, exc)
+
+
+def _generation_result_paths(generation: Generation) -> set[str]:
+    paths = {generation.result_image_path, generation.result_video_path}
+    result_images = generation.result_images
+    if isinstance(result_images, list):
+        paths.update(item for item in result_images if isinstance(item, str))
+    elif isinstance(result_images, dict):
+        paths.update(item for item in result_images.values() if isinstance(item, str))
+    return {str(path) for path in paths if path}
+
+
+def _delete_generated_file(url: str) -> None:
+    normalized = url.split("?", 1)[0].replace("\\", "/")
+    if not normalized.startswith("/uploads/generated/"):
+        return
+    root = os.path.abspath(settings.GENERATED_DIR)
+    relative = normalized.removeprefix("/uploads/generated/").lstrip("/")
+    target = os.path.abspath(os.path.join(root, relative))
+    if os.path.commonpath([target, root]) != root:
+        return
+    try:
+        os.remove(target)
+    except FileNotFoundError:
+        pass

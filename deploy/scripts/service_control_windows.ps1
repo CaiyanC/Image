@@ -1,5 +1,5 @@
 param(
-    [ValidateSet("Redis", "Backend", "RestartBackend", "DeployBackend", "Frontend", "Worker", "All", "Watchdog")]
+    [ValidateSet("Redis", "Backend", "RestartBackend", "DeployBackend", "Frontend", "Worker", "All", "StopAll", "Watchdog")]
     [string]$Action = "All",
     [string]$RepoRoot = "",
     [string]$LogPath = "",
@@ -213,8 +213,21 @@ function Stop-BackendListeners {
         foreach ($pidValue in @($listeners | ForEach-Object { [int]$_.OwningProcess } | Select-Object -Unique)) {
             $proc = Get-ProcessById -ProcessId $pidValue
             if (-not $proc) {
-                Write-WatchdogLog "ERROR" "backend listener pid=$pidValue cannot be resolved after stop attempt"
-                return $false
+                $orphans = @(Get-CimInstance Win32_Process -ErrorAction SilentlyContinue | Where-Object {
+                    $cmd = [string]$_.CommandLine
+                    $_.ParentProcessId -eq $pidValue -and
+                    $cmd -like "*$ExpectedBackendRoot*venv*python*" -and
+                    $cmd -like "*multiprocessing.spawn*"
+                })
+                if (-not $orphans) {
+                    Write-WatchdogLog "ERROR" "backend listener pid=$pidValue cannot be resolved and no validated worker children were found"
+                    return $false
+                }
+                foreach ($orphan in $orphans) {
+                    Write-WatchdogLog "WARN" "stopping orphaned production backend worker pid=$($orphan.ProcessId) phantom_parent=$pidValue"
+                    Stop-ProcessTreeBestEffort -ProcessId ([int]$orphan.ProcessId) | Out-Null
+                }
+                continue
             }
             if (-not (Test-ProductionBackendProcess -Process $proc)) {
                 Write-WatchdogLog "ERROR" "listener pid=$pidValue is not a production backend after stop attempt: $($proc.CommandLine)"
@@ -241,6 +254,56 @@ function Stop-Backend {
         return $true
     }
     return Stop-BackendListeners
+}
+
+function Stop-Frontend {
+    $listeners = @(Get-NetTCPConnection -LocalPort $ProdFrontendPort -State Listen -ErrorAction SilentlyContinue)
+    foreach ($listener in $listeners) {
+        $pidValue = [int]$listener.OwningProcess
+        $proc = Get-ProcessById -ProcessId $pidValue
+        if ($proc) {
+            $cmd = [string]$proc.CommandLine
+            if ($cmd -notlike "*$ProdFrontendPort*" -and $cmd -notlike "*$ProdFrontendDir*") {
+                Write-WatchdogLog "ERROR" "frontend listener pid=$pidValue has unexpected command line: $cmd"
+                return $false
+            }
+            Stop-ProcessTreeBestEffort -ProcessId $pidValue | Out-Null
+        }
+    }
+
+    $self = $PID
+    $wrappers = @(Get-CimInstance Win32_Process -ErrorAction SilentlyContinue | Where-Object {
+        $cmd = [string]$_.CommandLine
+        $_.ProcessId -ne $self -and
+        $_.Name -match '^(powershell|pwsh|cmd|npm)(\.exe|\.cmd)?$' -and
+        $cmd -like "*$RepoRoot*" -and
+        ($cmd -like "*serve:prod*" -or $cmd -like "*start-all.bat*frontend*")
+    })
+    foreach ($wrapper in $wrappers) {
+        Write-WatchdogLog "WARN" "stopping stale production frontend wrapper pid=$($wrapper.ProcessId)"
+        Stop-ProcessTreeBestEffort -ProcessId ([int]$wrapper.ProcessId) | Out-Null
+    }
+    return Wait-PortReleased -Port $ProdFrontendPort -TimeoutSeconds 20
+}
+
+function Stop-Worker {
+    $workers = @(Get-CimInstance Win32_Process -ErrorAction SilentlyContinue | Where-Object {
+        $cmd = [string]$_.CommandLine
+        $cmd -and ($cmd -like "*$ProdWorkerName@*" -or $cmd -like "*-Q $ProdQueue*")
+    })
+    foreach ($worker in $workers) {
+        Write-WatchdogLog "WARN" "stopping production worker pid=$($worker.ProcessId)"
+        Stop-ProcessTreeBestEffort -ProcessId ([int]$worker.ProcessId) | Out-Null
+    }
+    Remove-Item -LiteralPath $ProdWorkerPidFile -Force -ErrorAction SilentlyContinue
+    return -not (Test-ProdWorker)
+}
+
+function Stop-All {
+    $backendOk = Stop-Backend
+    $frontendOk = Stop-Frontend
+    $workerOk = Stop-Worker
+    return $backendOk -and $frontendOk -and $workerOk
 }
 
 function Ensure-Docker {
@@ -458,6 +521,7 @@ $ok = switch ($Action) {
     "Frontend" { Start-Frontend }
     "Worker" { Start-Worker }
     "All" { Ensure-All }
+    "StopAll" { Stop-All }
     "Watchdog" { Ensure-All }
 }
 

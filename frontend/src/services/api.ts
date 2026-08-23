@@ -1255,6 +1255,15 @@ export const api = {
       )
       return { ...response, url: toBackendUrl(response.url) }
     },
+    signBatch: async (paths: string[]) => {
+      const response = await request<{
+        items: Array<{ path: string; url: string; expires_in: number }>
+      }>('/files/sign-batch', {
+        method: 'POST',
+        body: JSON.stringify({ paths }),
+      })
+      return response.items.map((item) => ({ ...item, url: toBackendUrl(item.url) }))
+    },
     knowledgeDownloadUrl: (documentId: string) => toBackendUrl(`/api/knowledge-base/files/${documentId}/download`),
   },
 
