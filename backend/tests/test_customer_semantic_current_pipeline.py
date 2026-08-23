@@ -595,6 +595,48 @@ def test_semantic_recommendation_route_survives_failed_constraint_schema_repair(
     assert result["semantic_schema_repair_salvaged"] is True
 
 
+def test_semantic_repair_salvages_ambiguous_recommendation_scope_without_inventing_kind():
+    initial_plan = {
+        "route_family": "recommendation",
+        "route_hint": "recommendation",
+        "question_type": "recommendation",
+        "subtype": "recommendation",
+        "entities": [],
+        "subject_text": "露营用品",
+        "entity_scope": "category",
+        "canonical_fields": [],
+        "confidence": "high",
+        "ambiguity": True,
+        "evidence_required": True,
+        "evidence_kind": "structured_field",
+        "context_usage": "none",
+        "decision_requested": True,
+        "recommendation_constraints": {
+            "subject_kinds": ["camping_gear"],
+            "scenarios": ["camping"],
+        },
+        "recommendation_evidence_requirements": ["适合露营新手"],
+        "recommendation_soft_preferences": ["实用"],
+        "unrepresented_recommendation_requirements": ["不容易选错"],
+        "reasoning_summary": "The customer wants a camping gift recommendation.",
+    }
+
+    preserved = customer_agent_planner_service._preserve_semantic_route_after_repair_failure(
+        initial_plan,
+        raw_content=json.dumps(initial_plan, ensure_ascii=False),
+        failure_reason="invalid_recommendation_constraints",
+        error=ValueError("schema repair returned an invalid optional scope"),
+    )
+
+    assert preserved is not None
+    assert preserved["route_family"] == "recommendation"
+    assert preserved["subject_text"] == "露营用品"
+    assert preserved["recommendation_constraints"] == {"scenarios": ["camping"]}
+    assert preserved["recommendation_evidence_requirements"] == ["适合露营新手"]
+    assert preserved["recommendation_soft_preferences"] == ["实用"]
+    assert preserved["unrepresented_recommendation_requirements"] == ["不容易选错"]
+
+
 def test_semantic_preplan_keeps_meaning_when_provider_uses_descriptive_transport_shapes():
     provider_shape = {
         "route_family": "recommendation",

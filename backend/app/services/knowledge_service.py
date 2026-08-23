@@ -332,6 +332,27 @@ def merge_retrieval_rows(
                 item[1],
             )
         )
+        # Product retrieval feeds a later SKU-level candidate verifier. Keep
+        # the strongest row for each SKU visible before spending the result
+        # budget on additional chunks from an already represented SKU. The
+        # previous row-level truncation could let one product's profile/QA
+        # rows fill the page and hide another product whose strongest lexical
+        # or vector row was only slightly lower. This is a generic retrieval
+        # diversity safeguard; it does not inspect the question, category, or
+        # any product phrase, and it leaves the later semantic adjudication in
+        # charge of relevance and factual authorization.
+        diverse_rows: list[tuple[int, int, dict]] = []
+        overflow_rows: list[tuple[int, int, dict]] = []
+        represented_skus: set[str] = set()
+        for item in combined:
+            sku = str(item[2].get("sku") or "").strip().upper()
+            if sku and sku in represented_skus:
+                overflow_rows.append(item)
+                continue
+            if sku:
+                represented_skus.add(sku)
+            diverse_rows.append(item)
+        combined = [*diverse_rows, *overflow_rows]
     else:
         # Generic knowledge retrieval still needs both semantic and lexical
         # signals.  Keeping the complete vector page ahead of lexical rows

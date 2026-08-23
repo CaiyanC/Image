@@ -50,6 +50,34 @@ class KnowledgeServiceTest(unittest.TestCase):
 
         self.assertEqual([row["sku"] for row in rows], ["CW-C83", None])
 
+    def test_merge_product_retrieval_surfaces_distinct_skus_before_duplicate_chunks(self):
+        vector_rows = [
+            {
+                "source_type": "product",
+                "sku": "SKU-A",
+                "content": f"SKU-A chunk {index}",
+                "metadata": {"source_id": f"product:SKU-A:{index}"},
+                "score": 0.9 - index / 100,
+            }
+            for index in range(4)
+        ]
+        keyword_rows = [{
+            "source_type": "product",
+            "sku": "SKU-B",
+            "content": "SKU-B exact lexical evidence",
+            "metadata": {"source_id": "product:SKU-B:content"},
+            "score": 4.0,
+        }]
+
+        rows = knowledge_service.merge_retrieval_rows(
+            vector_rows,
+            keyword_rows,
+            limit=3,
+            prefer_product_sources=True,
+        )
+
+        self.assertEqual([row["sku"] for row in rows[:2]], ["SKU-A", "SKU-B"])
+
     def test_merge_retrieval_rows_fuses_generic_vector_and_lexical_signals(self):
         vector_rows = [{
             "source_type": "file",

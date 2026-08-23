@@ -2207,7 +2207,21 @@ def _preserve_semantic_route_after_repair_failure(
     if route_family not in SEMANTIC_PREPLAN_ROUTE_FAMILIES - {""}:
         return None
     confidence, _ = _semantic_confidence_parts(initial_data.get("confidence"))
-    if confidence < 0.65 or bool(initial_data.get("ambiguity")):
+    if confidence < 0.65:
+        return None
+    # A recommendation can remain executable when Flash marks the wording
+    # ambiguous, provided the same response still carries a concrete product
+    # scope/decision and semantic recommendation context.  The ambiguity flag
+    # is a wording diagnostic here, not an instruction to erase a complete
+    # recommendation after a later schema repair failed.  Keep the stricter
+    # fail-closed behavior for every other route, and do not manufacture a
+    # scope: ``_recommendation_semantic_context_present`` only accepts fields
+    # already supplied by Flash.
+    if bool(initial_data.get("ambiguity")) and not (
+        route_family == "recommendation"
+        and bool(initial_data.get("decision_requested"))
+        and _recommendation_semantic_context_present(initial_data)
+    ):
         return None
     if any(key in initial_data for key in SEMANTIC_PREPLAN_FORBIDDEN_KEYS):
         return None
@@ -4127,7 +4141,11 @@ async def _semantic_recommendation_constraint_grounding(
     original_unrepresented_requirements = list(
         unrepresented_recommendation_requirements or []
     )
-    if not original_constraints and not original_predicates:
+    if not original_constraints and not original_predicates and not (
+        original_evidence_requirements
+        or original_soft_preferences
+        or original_unrepresented_requirements
+    ):
         return None
 
     runtime_settings = _semantic_preplan_runtime_settings()
@@ -4136,7 +4154,7 @@ async def _semantic_recommendation_constraint_grounding(
             "role": "system",
             "content": (
                 "Return only JSON with exactly these keys: "
-                "recommendation_constraints, predicate_constraints, evidence_spans. "
+                "recommendation_constraints, predicate_constraints, evidence_spans, context_partition. "
                 "Re-read the complete customer question and treat the proposed "
                 "constraints as hypotheses, not facts. Keep only constraints that "
                 "the customer actually expressed, and correct a canonical enum "
@@ -4186,7 +4204,23 @@ async def _semantic_recommendation_constraint_grounding(
                 "induction means 电磁炉/电磁灶. When a heat_sources constraint is "
                 "retained, also preserve a matching predicate_constraints item "
                 "with field=heat_source, operator=supports, the same enum value, "
-                "and the exact named heat-source phrase as evidence_span."
+                "and the exact named heat-source phrase as evidence_span. "
+                "context_partition is the semantic review of the three proposed "
+                "recommendation context arrays. It must be an object with exactly "
+                "three arrays named evidence, soft, and unrepresented. Each item is "
+                "{source:string,index:integer}, where source is one of "
+                "recommendation_evidence_requirements, recommendation_soft_preferences, "
+                "or unrepresented_recommendation_requirements and index refers to "
+                "that source array in the input. Use it to keep, reclassify, or omit "
+                "the proposed semantic item; never create a new phrase or translate "
+                "one into a stronger product attribute. Review every item against the "
+                "complete customer meaning. A recipient's background, audience, or "
+                "personal situation is context for ranking unless the customer clearly "
+                "requires the product-recipient relation; do not turn it into a product "
+                "suitability requirement. Do not derive a physical attribute or another "
+                "new preference from a different storage, convenience, or practical "
+                "outcome. If an item is not semantically supported by the question, "
+                "leave it out of all three arrays."
             ),
         },
         {
@@ -4248,6 +4282,58 @@ async def _semantic_recommendation_constraint_grounding(
     if not isinstance(evidence_spans, dict):
         evidence_spans = {}
 
+    # Context arrays are semantic planner metadata, not lexical evidence
+    # spans. Let Flash decide whether each already-proposed item is retained,
+    # reclassified, or discarded. The server only validates the typed source
+    # and index envelope, then reuses the original item; it never compares a
+    # phrase with the customer question or invents a replacement phrase.
+    original_context = {
+        "recommendation_evidence_requirements": original_evidence_requirements,
+        "recommendation_soft_preferences": original_soft_preferences,
+        "unrepresented_recommendation_requirements": original_unrepresented_requirements,
+    }
+    context_partition = payload.get("context_partition")
+    partitioned_context: dict[str, list[str]] | None = None
+    if isinstance(context_partition, dict):
+        destination_map = {
+            "evidence": "recommendation_evidence_requirements",
+            "soft": "recommendation_soft_preferences",
+            "unrepresented": "unrepresented_recommendation_requirements",
+        }
+        allowed_sources = set(original_context)
+        seen_sources: set[tuple[str, int]] = set()
+        partition_valid = True
+        partitioned_context = {
+            "recommendation_evidence_requirements": [],
+            "recommendation_soft_preferences": [],
+            "unrepresented_recommendation_requirements": [],
+        }
+        for destination, target_key in destination_map.items():
+            entries = context_partition.get(destination)
+            if not isinstance(entries, list):
+                partition_valid = False
+                break
+            for entry in entries:
+                if not isinstance(entry, dict):
+                    partition_valid = False
+                    break
+                source = str(entry.get("source") or "").strip()
+                index = entry.get("index")
+                if (
+                    source not in allowed_sources
+                    or type(index) is not int
+                    or not 0 <= index < len(original_context[source])
+                    or (source, index) in seen_sources
+                ):
+                    partition_valid = False
+                    break
+                seen_sources.add((source, index))
+                partitioned_context[target_key].append(original_context[source][index])
+            if not partition_valid:
+                break
+        if not partition_valid:
+            partitioned_context = None
+
     def _grounded_context(
         key: str,
         original: list[str],
@@ -4256,21 +4342,36 @@ async def _semantic_recommendation_constraint_grounding(
         raw_value = payload[key] if key in payload else original
         return validator(raw_value)
 
-    grounded_evidence_requirements = _grounded_context(
-        "recommendation_evidence_requirements",
-        original_evidence_requirements,
-        _validated_recommendation_evidence_requirements,
-    )
-    grounded_soft_preferences = _grounded_context(
-        "recommendation_soft_preferences",
-        original_soft_preferences,
-        _validated_recommendation_soft_preferences,
-    )
-    grounded_unrepresented_requirements = _grounded_context(
-        "unrepresented_recommendation_requirements",
-        original_unrepresented_requirements,
-        _validated_unrepresented_recommendation_requirements,
-    )
+    if partitioned_context is not None:
+        grounded_evidence_requirements = partitioned_context[
+            "recommendation_evidence_requirements"
+        ]
+        grounded_soft_preferences = partitioned_context[
+            "recommendation_soft_preferences"
+        ]
+        grounded_unrepresented_requirements = partitioned_context[
+            "unrepresented_recommendation_requirements"
+        ]
+    else:
+        # Accept the pre-partition response shape during the provider-output
+        # migration. The new prompt normally supplies context_partition; if a
+        # provider omits it, preserve the prior model-owned arrays rather than
+        # applying a local phrase filter or silently dropping a real condition.
+        grounded_evidence_requirements = _grounded_context(
+            "recommendation_evidence_requirements",
+            original_evidence_requirements,
+            _validated_recommendation_evidence_requirements,
+        )
+        grounded_soft_preferences = _grounded_context(
+            "recommendation_soft_preferences",
+            original_soft_preferences,
+            _validated_recommendation_soft_preferences,
+        )
+        grounded_unrepresented_requirements = _grounded_context(
+            "unrepresented_recommendation_requirements",
+            original_unrepresented_requirements,
+            _validated_unrepresented_recommendation_requirements,
+        )
     if (
         grounded_evidence_requirements is None
         or grounded_soft_preferences is None
@@ -4330,6 +4431,11 @@ async def _semantic_recommendation_constraint_grounding(
         "recommendation_soft_preferences": grounded_soft_preferences,
         "unrepresented_recommendation_requirements": grounded_unrepresented_requirements,
         "recommendation_constraint_grounding": "validated_semantic_grounding",
+        **(
+            {"recommendation_context_partition": "validated_semantic_partition"}
+            if partitioned_context is not None
+            else {}
+        ),
     }
 
 
@@ -4999,6 +5105,10 @@ async def plan_customer_question_semantic(
     # complete turn before RAG consumes them.
     constraint_grounding_needed = bool(result.get("predicate_constraints")) or bool(
         proposed_constraint_keys - {"subject_kind", "subject_kinds"}
+    ) or bool(
+        result.get("recommendation_evidence_requirements")
+        or result.get("recommendation_soft_preferences")
+        or result.get("unrepresented_recommendation_requirements")
     )
     if (
         not result.get("fallback_reason")
