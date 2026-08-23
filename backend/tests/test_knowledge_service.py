@@ -1,6 +1,7 @@
 import asyncio
 import json
 import unittest
+from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
@@ -24,6 +25,109 @@ class KnowledgeServiceTest(unittest.TestCase):
 
     def tearDown(self):
         self.db.close()
+
+    def test_keyword_idf_gives_rare_retrieval_signal_more_weight(self):
+        tokens = ["common", "specific operation"]
+        contents = [
+            "common specific operation",
+            "common catalogue text",
+            "common catalogue summary",
+        ]
+
+        weights = knowledge_service._keyword_token_weights(tokens, contents)
+
+        self.assertGreater(weights["specific operation"], weights["common"])
+        self.assertGreater(
+            knowledge_service._keyword_score(
+                "query",
+                tokens,
+                contents[0],
+                token_weights=weights,
+            ),
+            knowledge_service._keyword_score(
+                "query",
+                tokens,
+                contents[1],
+                token_weights=weights,
+            ),
+        )
+
+    def test_cjk_ngram_budget_represents_later_semantic_run(self):
+        tokens = knowledge_service._query_tokens(
+            "顾客明确要求锅具套装 锅具套装 "
+            "顾客要求锅具套装具备煮面能力且必须有产品资料依据 煮面能力"
+        )
+
+        self.assertIn("锅具套装", tokens)
+        self.assertIn("煮面", tokens)
+
+    def test_cjk_ngram_budget_represents_end_of_long_natural_clause(self):
+        tokens = knowledge_service._query_tokens(
+            "两个人周末露营想煮面，推荐一套有明确资料支持的锅具。 "
+            "锅具 产品需有明确资料支持，如规格、材质、适用场景等"
+        )
+
+        self.assertIn("两个人", tokens)
+        self.assertIn("煮面", tokens)
+        self.assertLessEqual(len(tokens), 32)
+
+    def test_keyword_retrieve_merges_token_group_pages_before_idf_ranking(self):
+        now = datetime.now(timezone.utc)
+        documents = []
+        chunks = []
+        for index in range(50):
+            document = KnowledgeDocument(
+                id=f"doc-generic-{index}",
+                source_type="product",
+                source_id=f"product:GEN-{index}:content",
+                sku=f"GEN-{index}",
+                title=f"generic {index}",
+                content="genericone catalogue text",
+            )
+            documents.append(document)
+            chunks.append(KnowledgeChunk(
+                id=f"chunk-generic-{index}",
+                document_id=document.id,
+                sku=document.sku,
+                source_type="product",
+                chunk_index=0,
+                content=document.content,
+                embedding_status="pending",
+                updated_at=now + timedelta(seconds=index),
+            ))
+        direct_document = KnowledgeDocument(
+            id="doc-direct-capability",
+            source_type="product",
+            source_id="product:DIRECT-1:content",
+            sku="DIRECT-1",
+            title="direct capability",
+            content="directcapability is explicitly documented",
+        )
+        documents.append(direct_document)
+        chunks.append(KnowledgeChunk(
+            id="chunk-direct-capability",
+            document_id=direct_document.id,
+            sku="DIRECT-1",
+            source_type="product",
+            chunk_index=0,
+            content=direct_document.content,
+            embedding_status="pending",
+            updated_at=now - timedelta(days=365),
+        ))
+        self.db.add_all(documents)
+        self.db.add_all(chunks)
+        self.db.commit()
+
+        rows = knowledge_service.keyword_retrieve(
+            self.db,
+            (
+                "genericone generic2 generic3 generic4 generic5 "
+                "generic6 generic7 generic8 directcapability"
+            ),
+            limit=5,
+        )
+
+        self.assertEqual(rows[0]["sku"], "DIRECT-1")
 
     def test_merge_retrieval_rows_keeps_product_keyword_evidence_when_vectors_exist(self):
         vector_rows = [{

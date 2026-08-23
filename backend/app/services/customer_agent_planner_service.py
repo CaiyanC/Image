@@ -1522,6 +1522,10 @@ def _validate_semantic_preplan(
     if (
         route_family == "comparison"
         and len(entities) + len(context_result_indexes) < 2
+        # A prior-results comparison deliberately carries no current-turn
+        # product identity. Keep that provider-owned discourse meaning so the
+        # service can bind opaque, server-owned result positions afterwards.
+        and entity_scope != "prior_results"
         and not forbidden
     ):
         result = _empty_semantic_preplan(called=True, fallback_reason="invalid_comparison_participants")
@@ -2297,7 +2301,7 @@ def _semantic_preplan_messages_legacy(
                 "Return only JSON, no markdown. You are a pre-route arbiter only; do not answer and do not judge product facts. "
                 "Required keys: route_family, subtype, entities, subject_text, canonical_fields, confidence, ambiguity, evidence_required, evidence_kind, qa_evidence_query, context_usage, context_result_indexes, decision_requested, information_scope, reasoning_summary. "
                 "When the customer explicitly asks for accessories, add subject_kind=accessories; accessories are a distinct catalogue scope from cookware, waterware, stove, and coffee gear. "
-                "For route_family=recommendation, use a small reusable set of formal scope/predicate keys. Preserve every other independently stated condition as an exact customer-language phrase in recommendation_evidence_requirements when the selected product is expected to satisfy it, or in recommendation_soft_preferences when it only helps rank or explain the choice. Decide that partition from the complete request and conversational meaning, not from a fixed phrase list. Subjective experience or outcome preferences such as wanting something simple, practical, easy to store, easy to choose, or beginner-friendly are soft preferences unless the customer explicitly makes them non-negotiable or names a concrete capability, product form, or constraint; do not turn an unrecorded quality adjective into a hard no-match condition. A concrete use goal such as boiling water or cooking noodles may remain a recommendation evidence requirement, but lack of a literal catalogue label for simplicity or convenience must be disclosed in prose rather than vetoing otherwise relevant same-SKU candidates. These phrases are retrieval and writing inputs only; they never prove a product fact. Never include product names, SKUs, candidates, database values, reasons about a particular product, or an answer in recommendation_constraints. "
+                "For route_family=recommendation, use a small reusable set of formal scope/predicate keys. Preserve every other independently stated condition as an exact customer-language phrase in recommendation_evidence_requirements when the selected product is expected to satisfy it, or in recommendation_soft_preferences when it only helps rank or explain the choice. Decide that partition from the complete request and conversational meaning, not from a fixed phrase list. A criterion the customer explicitly waives, de-prioritizes, or says need not influence the choice is neither a product requirement nor a soft preference; omit it from all constraint/preference arrays unless the same turn separately states a positive bound that products must satisfy. Such a waiver controls ranking only by removing that priority and must never become a product evidence gap. Subjective experience or outcome preferences such as wanting something simple, practical, easy to store, easy to choose, or beginner-friendly are soft preferences unless the customer explicitly makes them non-negotiable or names a concrete capability, product form, or constraint; do not turn an unrecorded quality adjective into a hard no-match condition. A concrete use goal such as boiling water or cooking noodles may remain a recommendation evidence requirement, but lack of a literal catalogue label for simplicity or convenience must be disclosed in prose rather than vetoing otherwise relevant same-SKU candidates. These phrases are retrieval and writing inputs only; they never prove a product fact. Never include product names, SKUs, candidates, database values, reasons about a particular product, or an answer in recommendation_constraints. "
                 "For route_family=recommendation or structured_query with explicit formal conditions, add predicate_constraints: an array of 1-8 objects {field,operator,value,evidence_span,unit,importance}. field must be one of material,surface_finish,capacity,weight,dimensions,people,color,heat_source,usage_scene,waterproof. operator must be: material/usage_scene contains; surface_finish/color/dimensions contains or =; heat_source supports or not_supports; numeric fields >=,>,<=,<,=,between; waterproof =. Set importance=required for a condition that must be met and importance=preferred for a condition used to rank otherwise usable products. evidence_span must be an exact customer phrase in this turn, and each textual value must be a verbatim substring of that evidence_span. For structured_query, each predicate field must also be in canonical_fields and mirror the array in structured_query_constraints during migration. A generic catalogue kind is subject scope in subject_text, not a predicate. Never include a product name, SKU, candidate, database value, answer, or inferred condition. "
                 "For a catalogue count or an unconstrained list whose only scope is a generic product kind (for example, how many stoves are recorded), use route_family=structured_query, route_hint=query_products, subject_text for that kind, canonical_fields=[category], and structured_query_constraints=[]; category describes the database membership scope here and MUST NOT appear as a predicate object. For a catalogue list constrained only by a stored collection, brand, or product-level value, likewise use structured_query with canonical_fields containing exactly series, brand, or product_level, preserve the customer-provided value in subject_text, and return structured_query_constraints=[]: the executor validates that value against the database column rather than treating it as an inferred predicate. "
                 "subject_text is the database-retrieval scope, not a loose head noun: retain the most specific customer-stated product kind and its meaning-bearing modifier. Do not reduce a storage box, folding box, coffee grinder, tea set, or other compound product kind to a generic single noun when the modifier changes the catalogue scope. When the customer combines an explicitly named but unverified product with a generic catalogue request, preserve the named subject as an entity candidate and mark ambiguity or unresolved scope rather than silently discarding it and listing the generic category. "
@@ -2940,6 +2944,27 @@ async def _repair_semantic_preplan_output(
             "unrepresented_recommendation_requirements as arrays of strings; do not "
             "replace a non-column condition with an empty placeholder."
         )
+    if failure_reason == "invalid_comparison_participants":
+        prior_result_handles = [
+            item
+            for item in (
+                context.get("prior_result_context_indexes") or []
+                if isinstance(context, dict)
+                else []
+            )
+            if type(item) is int and item > 0
+        ]
+        if prior_result_handles:
+            messages[0]["content"] += (
+                " The execution context contains opaque prior_result_context_indexes. Re-read the complete current turn "
+                "and its prior-result discourse semantics before treating the comparison as participant-less. If the "
+                "customer is comparing products previously shown, preserve route_family=comparison, set "
+                "entity_scope=prior_results and context_usage=result_context, and return the relevant supplied opaque "
+                "positions in context_result_indexes in comparison order. Keep current-turn literal product mentions "
+                "only in entities. Preserve every requested canonical field and decision_requested. The opaque positions "
+                "carry no identity or facts: never invent or copy a SKU, product name, value, or answer. Use the ordinary "
+                "missing-participant repair only when the complete turn is genuinely unrelated to the prior result set."
+            )
     messages[1]["content"] = json.dumps(
         {
             "question": question,
@@ -4197,7 +4222,7 @@ async def _semantic_recommendation_constraint_grounding(
                 "unrepresented_recommendation_requirements. Keep these as short "
                 "customer-meaning phrases; do not output a product, SKU, database "
                 "value, route, or answer. If a proposed item has no customer basis, "
-                "omit it. Do not output a product name, SKU, candidate, database "
+                "omit it. If the customer explicitly waived or de-prioritized a criterion, omit that criterion from all three arrays unless a separate positive bound remains; a waived priority is not evidence the product must supply and must not become a missing-fact caveat. Do not output a product name, SKU, candidate, database "
                 "value, route, or answer. The heat-source enum has this ontology: "
                 "card_stove means 卡式炉/卡式灶, gas_stove means 燃气炉/燃气灶/气炉, "
                 "alcohol_stove means 酒精炉/酒精灶, open_flame means 明火, and "

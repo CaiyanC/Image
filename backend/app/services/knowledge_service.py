@@ -1,4 +1,5 @@
 import json
+import math
 import re
 from typing import Any
 
@@ -228,20 +229,69 @@ def keyword_retrieve(
             return []
         db_query = db_query.filter(KnowledgeChunk.sku.in_(normalized_skus))
     if tokens:
-        # Natural Chinese questions are tokenless from SQL's point of view. The
-        # tokenizer below emits bounded character n-grams, so keep a wider
-        # lexical window than the old eight-token slice; otherwise the first
-        # few generic fragments can hide the product term that appears later
-        # in the question. This is still only a lexical recall signal: the
-        # semantic layer and same-SKU binding remain the answer authority.
-        conditions = [KnowledgeChunk.content.ilike(f"%{token}%") for token in tokens[:32]]
-        db_query = db_query.filter(or_(*conditions))
+        # Fetch bounded lexical pages per token group before the in-memory IDF
+        # rerank. A single OR page ordered by update time lets many recent
+        # chunks matching one generic early token evict an older chunk that
+        # matches a rarer later capability token. Grouped pages preserve the
+        # whole model/customer query vocabulary without assigning meaning or
+        # priority to any token. The final score below still owns the order.
+        if sku:
+            # A single sealed SKU has only its own small document set; one
+            # query is sufficient and avoids multiplying the per-SKU QA
+            # completion calls used by catalogue recall.
+            conditions = [
+                KnowledgeChunk.content.ilike(f"%{token}%")
+                for token in tokens[:32]
+            ]
+            chunks = (
+                db_query
+                .filter(or_(*conditions))
+                .order_by(KnowledgeChunk.updated_at.desc())
+                .limit(max(limit * 8, limit))
+                .all()
+            )
+        else:
+            chunks_by_id: dict[str, KnowledgeChunk] = {}
+            per_group_limit = max(limit * 4, 40)
+            for offset in range(0, len(tokens[:32]), 8):
+                token_group = tokens[offset:offset + 8]
+                conditions = [
+                    KnowledgeChunk.content.ilike(f"%{token}%")
+                    for token in token_group
+                ]
+                grouped_chunks = (
+                    db_query
+                    .filter(or_(*conditions))
+                    .order_by(KnowledgeChunk.updated_at.desc())
+                    .limit(per_group_limit)
+                    .all()
+                )
+                for item in grouped_chunks:
+                    chunks_by_id[str(item.id)] = item
+            chunks = list(chunks_by_id.values())
     else:
-        db_query = db_query.filter(KnowledgeChunk.content.ilike(f"%{query_text}%"))
-    chunks = db_query.order_by(KnowledgeChunk.updated_at.desc()).limit(max(limit * 8, limit)).all()
+        chunks = (
+            db_query
+            .filter(KnowledgeChunk.content.ilike(f"%{query_text}%"))
+            .order_by(KnowledgeChunk.updated_at.desc())
+            .limit(max(limit * 8, limit))
+            .all()
+        )
+    token_weights = _keyword_token_weights(
+        tokens,
+        [item.content or "" for item in chunks],
+    )
     ranked = sorted(
         chunks,
-        key=lambda item: (_keyword_score(query_text, tokens, item.content), item.updated_at),
+        key=lambda item: (
+            _keyword_score(
+                query_text,
+                tokens,
+                item.content,
+                token_weights=token_weights,
+            ),
+            item.updated_at,
+        ),
         reverse=True,
     )[:limit]
     document_source_ids = {
@@ -262,7 +312,12 @@ def keyword_retrieve(
                 item.metadata_json,
                 document_source_ids.get(str(item.document_id)),
             ),
-            "score": _keyword_score(query_text, tokens, item.content),
+            "score": _keyword_score(
+                query_text,
+                tokens,
+                item.content,
+                token_weights=token_weights,
+            ),
         }
         for item in ranked
     ]
@@ -651,6 +706,41 @@ def _chunk_matches_sku_sql(sku: str):
     )
 
 
+def _balanced_ngram_indexes(count: int) -> list[int]:
+    """Visit a character run from its boundaries toward its interior.
+
+    Chinese natural-language clauses can be longer than the bounded SQL token
+    budget.  Visiting only left-to-right makes the beginning of the first
+    clause consume that budget and silently drops a meaning-bearing phrase at
+    the end.  Repeatedly bisecting the widest uncovered interval gives the
+    prefix, suffix, and interior comparable recall opportunity without
+    assigning meaning to any word.
+    """
+    if count <= 0:
+        return []
+    if count == 1:
+        return [0]
+    order = [0, count - 1]
+    selected = {0, count - 1}
+    while len(order) < count:
+        boundaries = sorted(selected)
+        widest = max(
+            (
+                (right - left, -left, left, right)
+                for left, right in zip(boundaries, boundaries[1:])
+                if right - left > 1
+            ),
+            default=None,
+        )
+        if widest is None:
+            break
+        left, right = widest[2], widest[3]
+        midpoint = (left + right) // 2
+        selected.add(midpoint)
+        order.append(midpoint)
+    return order
+
+
 def _query_tokens(query: str) -> list[str]:
     raw = [item.strip() for item in re.split(r"[\s,，。！？?、/；;：:（）()]+", query) if item.strip()]
     tokens = []
@@ -687,10 +777,36 @@ def _query_tokens(query: str) -> list[str]:
     # not create artificial tokens. Three-character grams carry most meaning;
     # two-character grams cover compact catalogue terms such as 水杯/收纳.
     han_runs = re.findall(r"[\u3400-\u4dbf\u4e00-\u9fff]+", query)
-    for size in (3, 2):
-        for run in han_runs:
-            for index in range(0, max(len(run) - size + 1, 0)):
-                add_token(run[index:index + size])
+    ngrams_by_size_and_run = {
+        size: [
+            [
+                run[index:index + size]
+                for index in _balanced_ngram_indexes(
+                    max(len(run) - size + 1, 0)
+                )
+            ]
+            for run in han_runs
+        ]
+        for size in (3, 2)
+    }
+    # Round-robin across both n-gram sizes and every separated Han run. Each
+    # run's grams are already ordered prefix/suffix/interior, so neither an
+    # early run nor the beginning of one long run can consume the bounded token
+    # window before a later product form or capability phrase contributes a
+    # lexical signal.
+    max_gram_count = max(
+        (
+            len(grams)
+            for groups in ngrams_by_size_and_run.values()
+            for grams in groups
+        ),
+        default=0,
+    )
+    for index in range(max_gram_count):
+        for size in (3, 2):
+            for grams in ngrams_by_size_and_run[size]:
+                if index < len(grams):
+                    add_token(grams[index])
 
     # Bound SQL predicate growth while retaining all short terms and a useful
     # spread of n-grams from natural questions. This is language-agnostic
@@ -698,7 +814,43 @@ def _query_tokens(query: str) -> list[str]:
     return tokens[:32]
 
 
-def _keyword_score(query: str, tokens: list[str], content: str) -> float:
+def _keyword_token_weights(
+    tokens: list[str],
+    contents: list[str],
+) -> dict[str, float]:
+    """Return bounded IDF weights for one lexical RAG result page.
+
+    Character n-grams make natural Chinese retrieval recall-friendly, but a
+    raw hit count gives a ubiquitous category/scene fragment the same value as
+    a rarer operation or capability fragment. Page-local inverse document
+    frequency restores that standard information-retrieval distinction
+    without maintaining a vocabulary or interpreting any customer/product
+    meaning. The additive 1.0 preserves the existing score contribution for
+    common tokens while rarer tokens gain bounded discriminating weight.
+    """
+    normalized_contents = [str(content or "") for content in contents]
+    document_count = len(normalized_contents)
+    if not tokens or document_count <= 0:
+        return {}
+    return {
+        token: 1.0 + math.log(
+            (document_count + 1.0)
+            / (
+                1.0
+                + sum(1 for content in normalized_contents if token in content)
+            )
+        )
+        for token in tokens
+    }
+
+
+def _keyword_score(
+    query: str,
+    tokens: list[str],
+    content: str,
+    *,
+    token_weights: dict[str, float] | None = None,
+) -> float:
     text = content or ""
     if not text:
         return 0
@@ -707,7 +859,9 @@ def _keyword_score(query: str, tokens: list[str], content: str) -> float:
         score += 10
     for token in tokens:
         if token in text:
-            score += min(len(token), 6)
+            score += min(len(token), 6) * float(
+                (token_weights or {}).get(token, 1.0)
+            )
     return score
 
 

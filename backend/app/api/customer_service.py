@@ -45,7 +45,7 @@ _PARITY_CANONICAL_FIELDS = (
 # A parity snapshot is a public-response cache, not durable conversation
 # state.  Bump this when the answer contract changes so a worker reload cannot
 # serve a response shaped by an older semantic-recovery implementation.
-_PARITY_RESULT_SNAPSHOT_SCHEMA_VERSION = "20260817-semantic-rag-scoped-parity-v48"
+_PARITY_RESULT_SNAPSHOT_SCHEMA_VERSION = "20260823-semantic-rag-conditional-comparison-v49"
 
 
 def _parity_isolation_enabled(request: Request) -> bool:

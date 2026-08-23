@@ -205,6 +205,154 @@ def test_capacity_name_and_structured_value_conflict_fails_closed():
     ) is None
 
 
+def test_product_row_keeps_uncorroborated_marketing_capacity_conflict_closed():
+    product = SimpleNamespace(
+        sku="FIELD-CAPACITY-1",
+        barcode="",
+        product_name_cn="示例水壶",
+        product_name_en="Example Kettle",
+        brand="",
+        series="",
+        category="水具",
+        sub_category="水壶",
+        product_level="",
+        launch_date=None,
+        lifecycle_status="active",
+    )
+    specs = SimpleNamespace(
+        capacity="水壶：800ml",
+        technical_advantages="",
+        heat_source="",
+        size_info="",
+        power="",
+        body_material="",
+        surface_finish="",
+        color="",
+        usage_instruction="",
+        gross_weight_g=183,
+    )
+    stale_content = SimpleNamespace(long_description_cn="旧版文案写成 1.4L 双人容量")
+
+    row = customer_service_service._product_row_from_model(
+        product,
+        specs,
+        None,
+        stale_content,
+    )
+
+    assert row["capacity"] == ""
+    assert row["capacity_evidence_conflict"] is True
+    assert "capacity" in row["conflicted_formal_fields"]
+
+
+def test_product_row_closes_capacity_conflict_against_same_sku_size_info():
+    product = SimpleNamespace(
+        sku="FIELD-CAPACITY-SIZE-1",
+        barcode="",
+        product_name_cn="示例套锅",
+        product_name_en="Example Cookware Set",
+        brand="",
+        series="",
+        category="锅具",
+        sub_category="套锅",
+        product_level="",
+        launch_date=None,
+        lifecycle_status="active",
+    )
+    specs = SimpleNamespace(
+        capacity=[
+            {"label": "", "value": "7L锅", "unit": ""},
+            {"label": "", "value": "4L浅锅", "unit": ""},
+        ],
+        size_info=[
+            {"label": "展开尺寸", "value": "1.7L锅 17*17*7.5", "unit": "cm"},
+            {"label": "", "value": "1.4L浅锅 16*16*7.5", "unit": "cm"},
+        ],
+        technical_advantages="户外锅具套装",
+        heat_source="",
+        power="",
+        body_material="",
+        surface_finish="",
+        color="",
+        usage_instruction="",
+        gross_weight_g=1030,
+    )
+
+    row = customer_service_service._product_row_from_model(
+        product,
+        specs,
+        None,
+        None,
+    )
+
+    assert row["capacity"] == ""
+    assert row["capacity_evidence_conflict"] is True
+    assert "capacity" in row["conflicted_formal_fields"]
+
+
+def test_approved_direct_capacity_qa_can_corroborate_complete_structured_value():
+    approved = [SimpleNamespace(
+        question="示例水壶的容量多大？",
+        answer="水壶：800ml。",
+        tags=None,
+    )]
+    stale_or_unrelated = [
+        SimpleNamespace(
+            question="示例水壶有什么核心卖点？",
+            answer="1.4L 双人容量。",
+            tags=None,
+        ),
+        SimpleNamespace(
+            question="示例水壶的容量多大？",
+            answer="1.4L。",
+            tags=None,
+        ),
+    ]
+
+    assert customer_service_service._approved_capacity_qa_corroborates_structured_value(
+        approved,
+        "水壶：800ml",
+    ) is True
+    assert customer_service_service._approved_capacity_qa_corroborates_structured_value(
+        stale_or_unrelated,
+        "水壶：800ml",
+    ) is False
+
+
+def test_product_row_still_fails_closed_on_capacity_in_canonical_identity():
+    product = SimpleNamespace(
+        sku="FIELD-CAPACITY-2",
+        barcode="",
+        product_name_cn="1.4L 示例水壶",
+        product_name_en="",
+        brand="",
+        series="",
+        category="水具",
+        sub_category="水壶",
+        product_level="",
+        launch_date=None,
+        lifecycle_status="active",
+    )
+    specs = SimpleNamespace(
+        capacity="水壶：800ml",
+        technical_advantages="",
+        heat_source="",
+        size_info="",
+        power="",
+        body_material="",
+        surface_finish="",
+        color="",
+        usage_instruction="",
+        gross_weight_g=183,
+    )
+
+    row = customer_service_service._product_row_from_model(product, specs, None, None)
+
+    assert row["capacity"] == ""
+    assert row["capacity_evidence_conflict"] is True
+    assert "capacity" in row["conflicted_formal_fields"]
+
+
 def test_explicit_name_color_and_structured_color_conflict_fails_closed():
     assert customer_service_service._color_evidence_conflict(
         "示例水壶(电光绿)",
@@ -1106,6 +1254,22 @@ def test_same_sku_knowledge_evidence_units_keep_independent_listing_paragraphs_s
         "- 中文 Listing: 这套炊具采用硬质阳极氧化铝合金。",
         "这套全面的炊具包含一个容量为 3700 毫升的主锅和一个容量为 2300 毫升的煎锅。",
         "请在锅具仍有余温时用温水清洗。",
+    ]
+
+
+def test_same_sku_knowledge_evidence_units_atomize_english_listing_sentences():
+    content = (
+        "The kettle passed a food-contact standard. "
+        "Hard anodized aluminum resists corrosion. "
+        "The upgraded lid stays in place while pouring hot water."
+    )
+
+    units = customer_service_service._same_sku_knowledge_evidence_units(content)
+
+    assert units == [
+        "The kettle passed a food-contact standard.",
+        "Hard anodized aluminum resists corrosion.",
+        "The upgraded lid stays in place while pouring hot water.",
     ]
 
 

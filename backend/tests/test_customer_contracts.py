@@ -802,6 +802,62 @@ def test_semantic_comparison_preplan_rejects_missing_participants():
     assert preplan["fallback_reason"] == "invalid_comparison_participants"
 
 
+def test_semantic_comparison_preplan_preserves_prior_result_scope_for_server_binding():
+    preplan = customer_agent_planner_service._validate_semantic_preplan(
+        {
+            "route_family": "comparison",
+            "entities": [],
+            "entity_scope": "prior_results",
+            "canonical_fields": ["capacity"],
+            "confidence": "high",
+            "ambiguity": False,
+            "evidence_required": True,
+            "context_usage": "result_context",
+            "context_result_indexes": [],
+            "decision_requested": True,
+            "reasoning_summary": "Compare the products in the prior result set.",
+        }
+    )
+
+    assert preplan["fallback_reason"] == ""
+    assert preplan["route_family"] == "comparison"
+    assert preplan["entity_scope"] == "prior_results"
+
+
+def test_invalid_comparison_repair_uses_opaque_prior_result_handles(monkeypatch):
+    captured = {}
+
+    async def fake_chat_completion(_db, messages, **_kwargs):
+        captured["messages"] = messages
+        return "{}"
+
+    monkeypatch.setattr(
+        customer_agent_planner_service.customer_llm_service,
+        "chat_completion",
+        fake_chat_completion,
+    )
+
+    asyncio.run(customer_agent_planner_service._repair_semantic_preplan_output(
+        None,
+        question="和前面那一款比，哪个锅的容量更大？",
+        raw_content=json.dumps({
+            "route_family": "comparison",
+            "entities": [],
+            "canonical_fields": ["capacity"],
+        }, ensure_ascii=False),
+        failure_reason="invalid_comparison_participants",
+        context={
+            "prior_result_context_indexes": [1, 2],
+            "prior_result_context_semantics": {"prior_answer_kind": "recommendation"},
+        },
+    ))
+
+    system = captured["messages"][0]["content"]
+    assert "entity_scope=prior_results" in system
+    assert "context_usage=result_context" in system
+    assert "opaque positions" in system
+
+
 @pytest.mark.skip(reason="Retired provider-specific comparison subtype gate; the semantic contract no longer requires that label.")
 def test_semantic_comparison_preplan_rejects_unknown_subtype_for_semantic_repair():
     """A provider-specific comparison label cannot silently bypass the overview contract."""
@@ -1650,6 +1706,7 @@ def test_semantic_comparison_adjudication_accepts_only_a_sealed_participant_inde
 
     assert decision == {
         "selected_index": 1,
+        "conditional_choice_index": None,
         "evidence_fields": ["usage_scene", "selling_point"],
         "reasoning_summary": "The sealed evidence for participant 2 better matches the stated scenario.",
     }
@@ -1678,6 +1735,7 @@ def test_semantic_comparison_adjudication_accepts_a_safe_no_choice_without_evide
         allowed_evidence_fields={"usage_scene"},
     ) == {
         "selected_index": None,
+        "conditional_choice_index": None,
         "evidence_fields": [],
         "reasoning_summary": "The sealed evidence does not support preferring either participant.",
     }

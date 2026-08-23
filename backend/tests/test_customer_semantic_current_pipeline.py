@@ -998,7 +998,7 @@ def test_product_qa_prior_scope_uses_recorded_comparison_choice():
     assert "SKU-B" not in json.dumps(normalized, ensure_ascii=False)
 
 
-def test_unresolved_generic_product_safety_uses_general_guidance_shape(monkeypatch):
+def test_unresolved_generic_product_safety_uses_knowledge_rag_shape(monkeypatch):
     monkeypatch.setattr(
         customer_service_service,
         "_explicit_product_from_question",
@@ -1027,10 +1027,44 @@ def test_unresolved_generic_product_safety_uses_general_guidance_shape(monkeypat
         },
     )
 
-    assert normalized["route_family"] == "general_chat"
+    assert normalized["route_family"] == "knowledge_base_meta"
     assert normalized["entities"] == []
-    assert normalized["evidence_required"] is False
+    assert normalized["evidence_required"] is True
+    assert normalized["information_scope"] == "knowledge_base_meta"
+    assert normalized["semantic_adapter_source"] == (
+        "semantic_unanchored_product_qa_to_knowledge_base_rag"
+    )
     assert normalized["semantic_original_product_qa_scope"]["question_type"] == "usage"
+
+
+def test_unanchored_product_qa_with_independent_semantic_query_uses_knowledge_rag():
+    normalized = customer_service_service._normalize_unanchored_product_qa_to_general_chat(
+        None,
+        "\u4e0d\u7c98\u9505\u6d82\u5c42\u80fd\u7528\u94a2\u4e1d\u7403\u6e05\u6d17\u5417\uff1f",
+        {
+            "called": True,
+            "route_family": "product_bound_qa",
+            "route_hint": "usage_care",
+            "question_type": "usage",
+            "subject_text": "\u4e0d\u7c98\u9505",
+            "qa_or_usage_care": True,
+            "evidence_required": True,
+            "evidence_kind": "structured_field",
+            "semantic_product_field_supplemental_review": {
+                "independent": True,
+                "supplemental_query": "\u4e0d\u7c98\u6d82\u5c42\u662f\u5426\u80fd\u7528\u94a2\u4e1d\u7403\u6e05\u6d17",
+            },
+        },
+    )
+
+    assert normalized["route_family"] == "knowledge_base_meta"
+    assert normalized["evidence_kind"] == "product_qa"
+    assert normalized["qa_evidence_query"] == (
+        "\u4e0d\u7c98\u6d82\u5c42\u662f\u5426\u80fd\u7528\u94a2\u4e1d\u7403\u6e05\u6d17"
+    )
+    assert normalized["semantic_adapter_source"] == (
+        "semantic_unanchored_product_qa_to_knowledge_base_rag"
+    )
 
 
 def test_product_bound_missing_recovery_does_not_authorize_adjacent_care_procedure(monkeypatch):
@@ -1189,7 +1223,287 @@ def test_comparison_adjudication_uses_one_semantic_decision_over_duplicate_revie
     assert calls == ["semantic_comparison_adjudication"]
     assert "lower recorded weight is directly the lighter participant" in captured["system"]
     assert "does not by itself prove carrying comfort" in captured["system"]
-    assert "selected_index is the same participant identified by reasoning_summary" in captured["system"]
+    assert "selected_participant or conditional_choice_participant is the same participant identified by reasoning_summary" in captured["system"]
+    assert "must never be summed or described as a total capacity" in captured["system"]
+    assert "cannot justify selecting the other participant or reverse a measured relation" in captured["system"]
+
+
+def test_comparison_choice_packet_excludes_supplemental_rag_prose():
+    packet = customer_service_service._semantic_comparison_choice_evidence_packet(
+        {
+            "capacity": [
+                {"participant_index": 0, "value": "1.7L"},
+                {"participant_index": 1, "value": "3.0L"},
+            ],
+            "comparison_qa": [
+                {"participant_index": 0, "value": "方形设计增加烹饪空间"},
+                {"participant_index": 1, "value": "适合背包旅行"},
+            ],
+        }
+    )
+
+    assert list(packet) == ["capacity"]
+    assert packet["capacity"][1]["value"] == "3.0L"
+
+
+def test_comparison_choice_packet_can_follow_semantic_field_contract():
+    packet = customer_service_service._semantic_comparison_choice_evidence_packet(
+        {
+            "capacity": [{"participant_index": 0, "value": "1.7L"}],
+            "target_audience": [{"participant_index": 0, "value": "1-2人"}],
+        },
+        preferred_fields={"capacity"},
+    )
+
+    assert list(packet) == ["capacity"]
+
+
+def test_comparison_adjudication_maps_semantic_participant_labels():
+    decision = customer_service_service._validate_semantic_comparison_adjudication(
+        {
+            "selected_participant": None,
+            "conditional_choice_participant": "B",
+            "evidence_fields": ["capacity"],
+            "reasoning_summary": "B has the larger recorded capacity",
+        },
+        participant_count=2,
+        allowed_evidence_fields={"capacity"},
+    )
+
+    assert decision["selected_index"] is None
+    assert decision["conditional_choice_index"] == 1
+
+
+def test_comparison_adjudication_accepts_conditional_choice_without_group_fit(monkeypatch):
+    async def fake_chat_completion(_db, messages, **kwargs):
+        assert messages
+        return json.dumps({
+            "selected_index": None,
+            "conditional_choice_index": 1,
+            "evidence_fields": ["capacity"],
+            "reasoning_summary": "participant 1 has the directly larger recorded pot capacity",
+        })
+
+    monkeypatch.setattr(
+        customer_service_service.customer_llm_service,
+        "chat_completion",
+        fake_chat_completion,
+    )
+
+    decision = asyncio.run(
+        customer_service_service._semantic_comparison_adjudication(
+            None,
+            question="哪款更适合两个人露营？",
+            evidence_packet={
+                "capacity": [
+                    {"participant_index": 0, "value": "1.7L"},
+                    {"participant_index": 1, "value": "3.0L"},
+                ],
+            },
+            participant_count=2,
+        )
+    )
+
+    assert decision["selected_index"] is None
+    assert decision["conditional_choice_index"] == 1
+    assert decision["evidence_fields"] == ["capacity"]
+
+
+def test_comparison_adjudication_receives_sealed_product_forms_for_component_semantics(monkeypatch):
+    captured = {}
+
+    async def fake_chat_completion(_db, messages, **_kwargs):
+        captured["system"] = messages[0]["content"]
+        captured["payload"] = json.loads(messages[1]["content"])
+        return json.dumps({
+            "selected_participant": "B",
+            "conditional_choice_participant": None,
+            "evidence_fields": ["capacity"],
+            "reasoning_summary": "B's single pot is 3L, larger than A's labelled 1.7L pot.",
+        })
+
+    monkeypatch.setattr(
+        customer_service_service.customer_llm_service,
+        "chat_completion",
+        fake_chat_completion,
+    )
+
+    decision = asyncio.run(customer_service_service._semantic_comparison_adjudication(
+        None,
+        question="Which pot has the larger capacity?",
+        evidence_packet={
+            "capacity": [
+                {"participant_index": 0, "value": "kettle 1.0L, large pot 1.7L"},
+                {"participant_index": 1, "value": "3L"},
+            ],
+        },
+        participant_count=2,
+        choice_requested=True,
+        participant_forms=["cookware_set", "single_cookware"],
+    ))
+
+    assert decision["selected_index"] == 1
+    assert captured["payload"]["participant_forms"] == {
+        "A": "cookware_set",
+        "B": "single_cookware",
+    }
+    assert "sealed catalogue identity context" in captured["system"]
+    assert "must never be summed" in captured["system"]
+
+
+def test_comparison_adjudication_retries_empty_choice_on_same_packet(monkeypatch):
+    calls = []
+    responses = iter([
+        json.dumps({
+            "selected_index": None,
+            "conditional_choice_index": None,
+            "evidence_fields": ["capacity"],
+            "reasoning_summary": "the group-fit outcome is not directly recorded",
+        }),
+        json.dumps({
+            "selected_index": None,
+            "conditional_choice_index": 1,
+            "evidence_fields": ["capacity"],
+            "reasoning_summary": "participant 1 has the directly larger recorded capacity",
+        }),
+    ])
+
+    async def fake_chat_completion(*_args, **kwargs):
+        calls.append(kwargs["purpose"])
+        return next(responses)
+
+    monkeypatch.setattr(
+        customer_service_service.customer_llm_service,
+        "chat_completion",
+        fake_chat_completion,
+    )
+
+    decision = asyncio.run(
+        customer_service_service._semantic_comparison_adjudication(
+            None,
+            question="哪款更适合两个人露营？",
+            evidence_packet={
+                "capacity": [
+                    {"participant_index": 0, "value": "1.7L"},
+                    {"participant_index": 1, "value": "3.0L"},
+                ],
+            },
+            participant_count=2,
+            choice_requested=True,
+        )
+    )
+
+    assert decision["conditional_choice_index"] == 1
+    assert calls == [
+        "semantic_comparison_adjudication",
+        "semantic_comparison_adjudication_retry",
+    ]
+
+
+def test_comparison_adjudication_keeps_noncolumn_choice_conditional(monkeypatch):
+    calls = []
+    responses = iter([
+        json.dumps({
+            "selected_index": 0,
+            "conditional_choice_index": None,
+            "evidence_fields": ["capacity"],
+            "reasoning_summary": "participant 0 appears more suitable from the mixed packet",
+        }),
+        json.dumps({
+            "selected_index": None,
+            "conditional_choice_index": 1,
+            "evidence_fields": ["capacity"],
+            "reasoning_summary": "participant 1 has the directly larger recorded capacity",
+        }),
+    ])
+
+    async def fake_chat_completion(*_args, **kwargs):
+        calls.append(kwargs["purpose"])
+        return next(responses)
+
+    monkeypatch.setattr(
+        customer_service_service.customer_llm_service,
+        "chat_completion",
+        fake_chat_completion,
+    )
+
+    decision = asyncio.run(
+        customer_service_service._semantic_comparison_adjudication(
+            None,
+            question="哪款更适合两个人露营？",
+            evidence_packet={
+                "capacity": [
+                    {"participant_index": 0, "value": "1.7L"},
+                    {"participant_index": 1, "value": "3.0L"},
+                ],
+                "comparison_qa": [
+                    {"participant_index": 0, "value": "方形设计"},
+                    {"participant_index": 1, "value": "适合背包旅行"},
+                ],
+            },
+            participant_count=2,
+            choice_requested=True,
+            allow_unconditional_choice=False,
+        )
+    )
+
+    assert decision["selected_index"] is None
+    assert decision["conditional_choice_index"] == 1
+    assert calls == [
+        "semantic_comparison_adjudication",
+        "semantic_comparison_adjudication_retry",
+    ]
+
+
+def test_comparison_adjudication_rechecks_conditional_index_identity(monkeypatch):
+    calls = []
+    responses = iter([
+        json.dumps({
+            "selected_index": None,
+            "conditional_choice_index": 0,
+            "evidence_fields": ["capacity"],
+            "reasoning_summary": "participant 1 has the larger recorded capacity",
+        }),
+        json.dumps({
+            "selected_index": None,
+            "conditional_choice_index": 1,
+            "evidence_fields": ["capacity"],
+            "reasoning_summary": "participant 1 has the larger recorded capacity",
+        }),
+    ])
+
+    async def fake_chat_completion(*_args, **kwargs):
+        calls.append(kwargs["purpose"])
+        return next(responses)
+
+    monkeypatch.setattr(
+        customer_service_service.customer_llm_service,
+        "chat_completion",
+        fake_chat_completion,
+    )
+
+    decision = asyncio.run(
+        customer_service_service._semantic_comparison_adjudication(
+            None,
+            question="哪款更适合两个人露营？",
+            evidence_packet={
+                "capacity": [
+                    {"participant_index": 0, "value": "1.7L"},
+                    {"participant_index": 1, "value": "3.0L"},
+                ],
+            },
+            participant_count=2,
+            choice_requested=True,
+            allow_unconditional_choice=False,
+        )
+    )
+
+    assert decision["selected_index"] is None
+    assert decision["conditional_choice_index"] == 1
+    assert calls == [
+        "semantic_comparison_adjudication",
+        "semantic_comparison_adjudication_retry",
+    ]
 
 
 def test_comparison_decision_review_recovers_omitted_winner_request(monkeypatch):
@@ -1330,8 +1644,10 @@ def test_knowledge_meta_retrieval_keeps_original_question_with_flash_hint(monkey
 
 def test_care_knowledge_can_use_sku_scoped_product_qa_without_product_candidates(monkeypatch):
     calls = []
+    retrieval_kwargs = []
 
     async def fake_retrieve(_db, _query, **_kwargs):
+        retrieval_kwargs.append(dict(_kwargs))
         return [
             {
                 "source_type": "product",
@@ -1387,10 +1703,27 @@ def test_care_knowledge_can_use_sku_scoped_product_qa_without_product_candidates
     assert result["answer_type"] == "knowledge_base_answer"
     assert result["result_skus"] == []
     assert result["evidence"][0]["sku"] == "CW-C73"
+    assert retrieval_kwargs[0]["sections"] == ["qa"]
     assert calls == [
         "semantic_knowledge_evidence_relevance_audit",
         "semantic_knowledge_base_answer",
     ]
+
+
+def test_knowledge_rag_missing_closes_without_generic_care_writer():
+    result = customer_service_service._semantic_knowledge_base_meta_missing_result(
+        "不粘锅涂层能用钢丝球清洗吗？",
+        {
+            "route_family": "knowledge_base_meta",
+            "information_scope": "knowledge_base_meta",
+        },
+        reason="knowledge_base_meta_executor_no_result",
+    )
+
+    assert result["answer"] == "当前知识库没有直接匹配的资料，暂时无法确认这个问题；请以该产品说明书或官方指引为准。"
+    assert result["answer_metadata"]["source"] == "semantic_knowledge_base_rag_missing"
+    assert result["answer_metadata"]["llm_allowed"] is False
+    assert result["debug"]["agent_mode"] == "semantic_knowledge_base_rag_missing"
 
 
 def test_product_qa_rag_drops_semantically_adjacent_evidence_before_writing(monkeypatch):
