@@ -100,7 +100,7 @@ async def add_security_headers(request: Request, call_next):
         )
         if settings.AUTH_COOKIE_SECURE:
             response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
-    if request.url.path.startswith(("/api/auth", "/api/admin")) or request.url.path == "/api/health/version":
+    if request.url.path.startswith(("/api/auth", "/api/admin", "/api/model-governance/my-credentials")) or request.url.path == "/api/health/version":
         response.headers["Cache-Control"] = "no-store"
     return response
 

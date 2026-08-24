@@ -27,6 +27,8 @@ from ..schemas.model_governance import (
     ModelCreateRequest,
     ModelResponse,
     ModelUpdateRequest,
+    PersonalCredentialResponse,
+    PersonalCredentialUpdateRequest,
     SelectableModelResponse,
     UsageLogListResponse,
 )
@@ -146,6 +148,70 @@ def selectable_models(
         SelectableModelResponse(id=model.id, name=model.display_name, capability=model.capability)
         for model in model_governance_service.list_selectable_models(db, current_user, feature_key, capability)
     ]
+
+
+@router.get(
+    "/api/model-governance/my-credentials",
+    response_model=list[PersonalCredentialResponse],
+)
+def list_my_credentials(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Show only the signed-in user's personal credential status."""
+    return model_governance_service.list_personal_credential_options(db, current_user)
+
+
+@router.put(
+    "/api/model-governance/my-credentials/{provider_name}",
+    response_model=PersonalCredentialResponse,
+)
+def update_my_credential(
+    provider_name: str,
+    payload: PersonalCredentialUpdateRequest,
+    request: Request,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Let a user set their own key without accepting scope or endpoint input."""
+    try:
+        credential = model_governance_service.upsert_personal_credential(
+            db,
+            current_user,
+            provider_name,
+            **payload.model_dump(exclude_unset=True),
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    option = next(
+        (
+            item for item in model_governance_service.list_personal_credential_options(db, current_user)
+            if item["provider_name"] == credential.provider_name
+        ),
+        None,
+    )
+    if option is None:
+        raise HTTPException(status_code=404, detail="Provider is no longer available")
+
+    response = PersonalCredentialResponse.model_validate(option)
+    audit_data = {
+        "provider_name": credential.provider_name,
+        **payload.model_dump(exclude_unset=True),
+    }
+    _write_audit(
+        db,
+        current_user,
+        request,
+        action_type="update",
+        action_name="Update personal AI provider credential",
+        target_type="ai_provider_credential",
+        target_id=credential.id,
+        target_name=credential.provider_name,
+        request_data=audit_data,
+        response_data=response.model_dump(),
+    )
+    return response
 
 
 @admin_router.get("/credentials", response_model=list[CredentialResponse])

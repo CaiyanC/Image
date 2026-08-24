@@ -1,5 +1,6 @@
 import base64
 import hashlib
+import uuid
 from dataclasses import dataclass
 from typing import Literal
 
@@ -199,16 +200,35 @@ def create_credential(
     return credential
 
 
+def _access_subject_id(value: object) -> str:
+    """Normalize UUID-backed user/group IDs for varchar governance columns."""
+    return str(value)
+
+
+def _uuid_identifier(value: object) -> object:
+    """Bind route IDs correctly when the legacy users/groups tables use UUID."""
+    if isinstance(value, uuid.UUID):
+        return value
+    try:
+        return uuid.UUID(str(value))
+    except (AttributeError, TypeError, ValueError):
+        return str(value)
+
+
 def _user_group_ids(db: Session, user: User) -> list[str]:
-    return list(db.scalars(select(UserGroup.group_id).where(UserGroup.user_id == user.id)))
+    return [
+        _access_subject_id(group_id)
+        for group_id in db.scalars(select(UserGroup.group_id).where(UserGroup.user_id == user.id))
+    ]
 
 
 def _is_allowed(db: Session, user: User, feature_key: str, model_id: str) -> bool:
+    user_subject_id = _access_subject_id(user.id)
     user_effects = list(db.scalars(select(AIModelAccessRule.effect).where(
         AIModelAccessRule.feature_key == feature_key,
         AIModelAccessRule.model_id == model_id,
         AIModelAccessRule.subject_type == "user",
-        AIModelAccessRule.subject_id == user.id,
+        AIModelAccessRule.subject_id == user_subject_id,
     )))
     if "deny" in user_effects:
         return False
@@ -239,11 +259,12 @@ def _is_allowed(db: Session, user: User, feature_key: str, model_id: str) -> boo
 def _credential_candidates(db: Session, user: User, provider_name: str) -> list[AIProviderCredential]:
     """Return credentials by scope precedence; group ties use ascending group ID."""
     group_ids = _user_group_ids(db, user)
+    user_id = _access_subject_id(user.id)
     credentials = list(db.scalars(select(AIProviderCredential).where(
         AIProviderCredential.provider_name == provider_name,
         AIProviderCredential.is_enabled.is_(True),
     )))
-    personal = [item for item in credentials if item.scope_type == "user" and item.scope_id == user.id]
+    personal = [item for item in credentials if item.scope_type == "user" and item.scope_id == user_id]
     group = sorted(
         (item for item in credentials if item.scope_type == "group" and item.scope_id in group_ids),
         key=lambda item: item.scope_id or "",
@@ -329,24 +350,26 @@ def _allowed_permission_source(
     group_ids: list[str],
     user_id: str | None = None,
 ) -> str | None:
-    if user_id is not None:
+    normalized_group_ids = [_access_subject_id(group_id) for group_id in group_ids]
+    normalized_user_id = _access_subject_id(user_id) if user_id is not None else None
+    if normalized_user_id is not None:
         user_effects = list(db.scalars(select(AIModelAccessRule.effect).where(
             AIModelAccessRule.feature_key == feature_key,
             AIModelAccessRule.model_id == model_id,
             AIModelAccessRule.subject_type == "user",
-            AIModelAccessRule.subject_id == user_id,
+            AIModelAccessRule.subject_id == normalized_user_id,
         )))
         if "deny" in user_effects:
             return None
         if "allow" in user_effects:
             return "user_allow"
 
-    if group_ids:
+    if normalized_group_ids:
         group_effects = list(db.scalars(select(AIModelAccessRule.effect).where(
             AIModelAccessRule.feature_key == feature_key,
             AIModelAccessRule.model_id == model_id,
             AIModelAccessRule.subject_type == "group",
-            AIModelAccessRule.subject_id.in_(group_ids),
+            AIModelAccessRule.subject_id.in_(normalized_group_ids),
         )))
         if "deny" in group_effects:
             return None
@@ -366,12 +389,13 @@ def _allowed_permission_source(
 def _credential_status_for_group(
     db: Session, group_id: str, provider_name: str,
 ) -> tuple[bool, str | None]:
+    normalized_group_id = _access_subject_id(group_id)
     credentials = list(db.scalars(select(AIProviderCredential).where(
         AIProviderCredential.provider_name == provider_name,
         AIProviderCredential.is_enabled.is_(True),
     )))
     candidates = [
-        *[item for item in credentials if item.scope_type == "group" and item.scope_id == group_id],
+        *[item for item in credentials if item.scope_type == "group" and item.scope_id == normalized_group_id],
         *[item for item in credentials if item.scope_type == "company"],
     ]
     for credential in candidates:
@@ -392,6 +416,167 @@ def _credential_status_for_user(
     return True, resolved[0].scope_type
 
 
+def _provider_endpoint(db: Session, provider_name: str) -> str | None:
+    """Return an administrator-provisioned endpoint for a provider.
+
+    Personal users are deliberately not allowed to submit or change a base URL.
+    The governance schema predates a separate provider table, so the endpoint
+    is sourced from an existing credential row.  The endpoint is configuration,
+    not a secret; the key itself is never read into this public response.
+    Prefer shared scopes, then use a deterministic credential row as a
+    compatibility path for deployments that currently have only an admin's
+    personal provider row.
+    """
+    credentials = list(db.scalars(select(AIProviderCredential).where(
+        AIProviderCredential.provider_name == provider_name,
+    )))
+    scope_order = {"company": 0, "group": 1, "user": 2}
+    credentials.sort(key=lambda item: (
+        scope_order.get(item.scope_type, 99),
+        item.scope_id or "",
+        item.id,
+    ))
+    return next((item.api_base_url for item in credentials if item.api_base_url), None)
+
+
+def list_personal_credential_options(db: Session, user: User) -> list[dict]:
+    """List safe provider choices for the signed-in user.
+
+    The catalog comes from enabled governed models.  A user's own existing
+    credential is included as well so it can be replaced or disabled after an
+    administrator retires a model.  No other user's credential metadata or
+    secret is returned.
+    """
+    model_rows = list(db.execute(select(AIModel, AIFeatureModel.feature_key).join(
+        AIFeatureModel, AIFeatureModel.model_id == AIModel.id,
+    ).where(
+        AIFeatureModel.is_enabled.is_(True),
+        AIModel.is_enabled.is_(True),
+    ).order_by(AIModel.provider_name, AIFeatureModel.sort_order, AIModel.display_name, AIModel.id)))
+
+    models_by_provider: dict[str, list[AIModel]] = {}
+    seen_model_ids: set[str] = set()
+    for model, feature_key in model_rows:
+        if not _is_allowed(db, user, feature_key, model.id):
+            continue
+        if model.id in seen_model_ids:
+            continue
+        seen_model_ids.add(model.id)
+        models_by_provider.setdefault(model.provider_name, []).append(model)
+
+    user_id = _access_subject_id(user.id)
+    personal_credentials = list(db.scalars(select(AIProviderCredential).where(
+        AIProviderCredential.scope_type == "user",
+        AIProviderCredential.scope_id == user_id,
+    )))
+    personal_by_provider = {item.provider_name: item for item in personal_credentials}
+    provider_names = set(models_by_provider) | set(personal_by_provider)
+
+    options: list[dict] = []
+    for provider_name in sorted(provider_names):
+        credential = personal_by_provider.get(provider_name)
+        configured = False
+        key_masked = "****"
+        if credential is not None:
+            try:
+                # A decrypt check prevents a stale key_hint from being shown
+                # as usable after encryption-key rotation or data corruption.
+                decrypt_credential(credential)
+                configured = True
+                key_masked = f"****{credential.key_hint}" if len(credential.key_hint) == 4 else "****"
+            except ValueError:
+                configured = False
+
+        resolved = _resolve_credential(db, user, provider_name)
+        options.append({
+            "provider_name": provider_name,
+            "api_base_url": credential.api_base_url if credential is not None else _provider_endpoint(db, provider_name),
+            "personal_credential_id": credential.id if credential is not None else None,
+            "api_key_masked": key_masked,
+            "is_configured": configured,
+            "is_enabled": bool(credential.is_enabled) if credential is not None else False,
+            "effective_credential_scope_type": resolved[0].scope_type if resolved is not None else None,
+            "has_personal_credential": credential is not None,
+            "can_configure": bool(models_by_provider.get(provider_name)) and bool(
+                credential is not None and credential.api_base_url
+                or credential is None and _provider_endpoint(db, provider_name)
+            ),
+            "models": [
+                {
+                    "model_id": model.id,
+                    "display_name": model.display_name,
+                    "capability": model.capability,
+                }
+                for model in models_by_provider.get(provider_name, [])
+            ],
+        })
+    return options
+
+
+def upsert_personal_credential(
+    db: Session,
+    user: User,
+    provider_name: str,
+    *,
+    api_key: str | None = None,
+    is_enabled: bool | None = None,
+) -> AIProviderCredential:
+    """Create or update only the current user's credential for a provider.
+
+    The provider endpoint is copied from administrator-provisioned governance
+    data.  There is intentionally no user-controlled scope, scope id, or base
+    URL in this function's contract.
+    """
+    normalized_provider = provider_name.strip()
+    if not normalized_provider:
+        raise ValueError("Provider name must not be empty")
+
+    user_id = _access_subject_id(user.id)
+    credential = db.scalar(select(AIProviderCredential).where(
+        AIProviderCredential.provider_name == normalized_provider,
+        AIProviderCredential.scope_type == "user",
+        AIProviderCredential.scope_id == user_id,
+    ))
+
+    normalized_key = api_key.strip() if api_key is not None else None
+    if api_key is not None and not normalized_key:
+        raise ValueError("API credential must not be empty")
+
+    if credential is None:
+        if normalized_key is None:
+            raise ValueError("A new personal credential requires an API key")
+        option = next(
+            (item for item in list_personal_credential_options(db, user)
+             if item["provider_name"] == normalized_provider),
+            None,
+        )
+        if option is None or not option["can_configure"] or not option["api_base_url"]:
+            raise ValueError("This provider is not configured for personal credentials")
+        credential = create_credential(
+            db,
+            provider_name=normalized_provider,
+            api_base_url=option["api_base_url"],
+            api_key=normalized_key,
+            scope_type="user",
+            scope_id=user_id,
+            is_enabled=True if is_enabled is None else is_enabled,
+        )
+        return credential
+
+    if normalized_key is not None:
+        credential.api_key_ciphertext = encrypt_credential(normalized_key)
+        credential.key_hint = normalized_key[-4:]
+    if is_enabled is not None:
+        if is_enabled and normalized_key is None:
+            try:
+                decrypt_credential(credential)
+            except ValueError as exc:
+                raise ValueError("Enter a new API key before enabling this credential") from exc
+        credential.is_enabled = is_enabled
+    db.flush()
+    return credential
+
+
 def _enabled_feature_models(db: Session, feature_key: str) -> list[tuple[AIFeatureModel, AIModel]]:
     return list(db.execute(select(AIFeatureModel, AIModel).join(
         AIModel, AIFeatureModel.model_id == AIModel.id,
@@ -409,10 +594,11 @@ def _validate_subject_and_model_ids(
     candidates: list[tuple[AIFeatureModel, AIModel]],
     model_ids: set[str],
 ) -> None:
+    database_subject_id = _uuid_identifier(subject_id)
     if subject_type == "group":
-        subject_exists = db.get(Group, subject_id) is not None
+        subject_exists = db.get(Group, database_subject_id) is not None
     elif subject_type == "user":
-        subject_exists = db.get(User, subject_id) is not None
+        subject_exists = db.get(User, database_subject_id) is not None
     else:
         raise HTTPException(status_code=422, detail="Subject type must be group or user")
     if not subject_exists:
@@ -439,7 +625,12 @@ def _baseline_model_ids(
             if feature_model.is_default
         }
 
-    group_ids = list(db.scalars(select(UserGroup.group_id).where(UserGroup.user_id == subject_id)))
+    group_ids = [
+        _access_subject_id(group_id)
+        for group_id in db.scalars(
+            select(UserGroup.group_id).where(UserGroup.user_id == _uuid_identifier(subject_id))
+        )
+    ]
     return {
         model.id for _feature_model, model in candidates
         if _allowed_permission_source(
@@ -463,7 +654,7 @@ def _upsert_rule(
         feature_key=feature_key,
         model_id=model_id,
         subject_type=subject_type,
-        subject_id=subject_id,
+        subject_id=_access_subject_id(subject_id),
         effect=effect,
     )
     db.add(rule)
@@ -476,6 +667,7 @@ def _subject_feature_rules(
     subject_id: str,
     feature_key: str,
 ) -> list[AIModelAccessRule]:
+    subject_id = _access_subject_id(subject_id)
     return list(db.scalars(select(AIModelAccessRule).where(
         AIModelAccessRule.feature_key == feature_key,
         AIModelAccessRule.subject_type == subject_type,
@@ -491,6 +683,7 @@ def replace_subject_feature_models(
     feature_key: str,
     model_ids: set[str],
 ) -> list[AIModelAccessRule]:
+    subject_id = _access_subject_id(subject_id)
     candidates = _enabled_feature_models(db, feature_key)
     _validate_subject_and_model_ids(db, subject_type, subject_id, candidates, model_ids)
     baseline_ids = _baseline_model_ids(db, subject_type, subject_id, feature_key, candidates)
@@ -573,6 +766,7 @@ def _overview_feature_catalog(db: Session) -> list[AuthorizationOverviewFeatureC
 
 
 def _has_personal_override(db: Session, user_id: str) -> bool:
+    user_id = _access_subject_id(user_id)
     return bool(db.scalar(select(AIModelAccessRule.id).where(
         AIModelAccessRule.subject_type == "user",
         AIModelAccessRule.subject_id == user_id,
@@ -591,15 +785,15 @@ def _overview_group(
     ).order_by(User.username, User.id)))
     feature_keys = [feature.feature_key for feature in feature_catalog]
     return AuthorizationOverviewGroup(
-        subject_id=group.id,
+        subject_id=_access_subject_id(group.id),
         subject_name=group.group_name,
         features=_overview_features_for_subject(
-            db, feature_keys=feature_keys, group_ids=[group.id],
+            db, feature_keys=feature_keys, group_ids=[_access_subject_id(group.id)],
         ),
         members=[
             AuthorizationOverviewRow(
                 subject_type="user",
-                subject_id=user.id,
+                subject_id=_access_subject_id(user.id),
                 subject_name=user.display_name or user.username,
                 has_personal_override=_has_personal_override(db, user.id),
                 features=_overview_features_for_subject(
