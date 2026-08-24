@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from pydantic import BaseModel, Field, computed_field
+from pydantic import BaseModel, ConfigDict, Field, computed_field
 
 
 class CredentialResponse(BaseModel):
@@ -37,6 +37,36 @@ class CredentialUpdateRequest(BaseModel):
     api_key: str | None = Field(default=None, min_length=1)
     scope_type: str | None = Field(default=None, pattern="^(company|group|user)$")
     scope_id: str | None = Field(default=None, max_length=36)
+    is_enabled: bool | None = None
+
+
+class PersonalCredentialModelResponse(BaseModel):
+    model_id: str
+    display_name: str
+    capability: str
+
+
+class PersonalCredentialResponse(BaseModel):
+    """Public, non-secret view of a user's provider credential."""
+
+    provider_name: str
+    api_base_url: str | None
+    personal_credential_id: str | None
+    api_key_masked: str
+    is_configured: bool
+    is_enabled: bool
+    effective_credential_scope_type: str | None
+    has_personal_credential: bool
+    can_configure: bool
+    models: list[PersonalCredentialModelResponse]
+
+
+class PersonalCredentialUpdateRequest(BaseModel):
+    """Only the owner may submit a key; endpoint and scope are server-owned."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    api_key: str | None = Field(default=None, min_length=1)
     is_enabled: bool | None = None
 
 

@@ -144,6 +144,25 @@ export interface CredentialSummary {
   updated_at: string
 }
 
+export interface PersonalCredentialModel {
+  model_id: string
+  display_name: string
+  capability: string
+}
+
+export interface PersonalCredentialSummary {
+  provider_name: string
+  api_base_url: string | null
+  personal_credential_id: string | null
+  api_key_masked: string
+  is_configured: boolean
+  is_enabled: boolean
+  effective_credential_scope_type: 'company' | 'group' | 'user' | null
+  has_personal_credential: boolean
+  can_configure: boolean
+  models: PersonalCredentialModel[]
+}
+
 export interface ManagedModel {
   id: string
   display_name: string
@@ -903,6 +922,12 @@ export const api = {
         { method: 'PUT', body: JSON.stringify({ model_ids: modelIds }) },
       ),
     credentials: () => request<CredentialSummary[]>('/admin/model-governance/credentials'),
+    myCredentials: () => request<PersonalCredentialSummary[]>('/model-governance/my-credentials'),
+    updateMyCredential: (providerName: string, data: { api_key?: string; is_enabled?: boolean }) =>
+      request<PersonalCredentialSummary>(
+        `/model-governance/my-credentials/${encodeURIComponent(providerName)}`,
+        { method: 'PUT', body: JSON.stringify(data) },
+      ),
     createCredential: (data: {
       provider_name: string; api_base_url: string; api_key: string; scope_type: 'company' | 'group' | 'user'; scope_id?: string | null; is_enabled: boolean
     }) => request<CredentialSummary>('/admin/model-governance/credentials', { method: 'POST', body: JSON.stringify(data) }),

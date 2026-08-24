@@ -518,6 +518,131 @@ def test_model_governance_admin_endpoint_rejects_non_admin(api_client, api_db):
     assert response.status_code == 403
 
 
+def test_regular_user_can_view_provider_catalog_without_other_users_credentials(api_client, api_db, encryption_key):
+    user = User(id="self-service-user", username="self-service-user", password_hash="hash")
+    other = User(id="other-self-service-user", username="other-self-service-user", password_hash="hash")
+    model = AIModel(
+        id="self-service-image", display_name="Self Service Image", provider_name="provider-self",
+        capability="image", request_model_name="self-service-image-v1",
+    )
+    api_db.add_all([user, other, model, AIFeatureModel(
+        feature_key="generation.image", model_id=model.id, is_default=True,
+    )])
+    create_credential(api_db, "provider-self", "https://provider.example", "other-secret", "user", other.id)
+    api_db.commit()
+    app.dependency_overrides[get_current_user] = lambda: user
+
+    response = api_client.get("/api/model-governance/my-credentials")
+
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body[0]["provider_name"] == "provider-self"
+    assert body[0]["models"] == [{
+        "model_id": "self-service-image",
+        "display_name": "Self Service Image",
+        "capability": "image",
+    }]
+    assert body[0]["has_personal_credential"] is False
+    assert body[0]["api_key_masked"] == "****"
+    assert body[0]["personal_credential_id"] is None
+    assert "other-secret" not in response.text
+    assert "other-self-service-user" not in response.text
+
+
+def test_regular_user_can_create_replace_and_disable_only_their_personal_key(api_client, api_db, encryption_key):
+    user = User(id="personal-key-owner", username="personal-key-owner", password_hash="hash")
+    model = AIModel(
+        id="personal-key-image", display_name="Personal Key Image", provider_name="provider-personal",
+        capability="image", request_model_name="personal-key-image-v1",
+    )
+    api_db.add_all([user, model, AIFeatureModel(
+        feature_key="generation.image", model_id=model.id, is_default=True,
+    )])
+    create_credential(api_db, "provider-personal", "https://provider.example", "company-secret", "company")
+    api_db.commit()
+    app.dependency_overrides[get_current_user] = lambda: user
+
+    created = api_client.put(
+        "/api/model-governance/my-credentials/provider-personal",
+        json={"api_key": "personal-secret"},
+    )
+
+    assert created.status_code == 200, created.text
+    assert "personal-secret" not in created.text
+    assert created.json()["api_key_masked"] == "****cret"
+    assert created.json()["has_personal_credential"] is True
+    personal = api_db.query(AIProviderCredential).filter(
+        AIProviderCredential.provider_name == "provider-personal",
+        AIProviderCredential.scope_type == "user",
+        AIProviderCredential.scope_id == user.id,
+    ).one()
+    assert model_governance_service.decrypt_credential(personal) == "personal-secret"
+    assert personal.api_base_url == "https://provider.example"
+
+    replaced = api_client.put(
+        "/api/model-governance/my-credentials/provider-personal",
+        json={"api_key": "replacement-secret", "is_enabled": True},
+    )
+    assert replaced.status_code == 200, replaced.text
+    assert replaced.json()["api_key_masked"] == "****cret"
+    assert model_governance_service.decrypt_credential(personal) == "replacement-secret"
+
+    disabled = api_client.put(
+        "/api/model-governance/my-credentials/provider-personal",
+        json={"is_enabled": False},
+    )
+    assert disabled.status_code == 200, disabled.text
+    assert disabled.json()["is_enabled"] is False
+    assert disabled.json()["effective_credential_scope_type"] == "company"
+
+
+def test_personal_credential_rejects_scope_and_endpoint_overrides_without_persisting_key(api_client, api_db, encryption_key):
+    user = User(id="personal-boundary-user", username="personal-boundary-user", password_hash="hash")
+    model = AIModel(
+        id="personal-boundary-image", display_name="Personal Boundary Image", provider_name="provider-boundary",
+        capability="image", request_model_name="personal-boundary-image-v1",
+    )
+    api_db.add_all([user, model, AIFeatureModel(
+        feature_key="generation.image", model_id=model.id, is_default=True,
+    )])
+    create_credential(api_db, "provider-boundary", "https://provider.example", "company-secret", "company")
+    api_db.commit()
+    app.dependency_overrides[get_current_user] = lambda: user
+    sentinel = "must-not-be-stored"
+
+    response = api_client.put(
+        "/api/model-governance/my-credentials/provider-boundary",
+        json={
+            "api_key": sentinel,
+            "scope_type": "company",
+            "scope_id": "someone-else",
+            "api_base_url": "http://169.254.169.254/",
+        },
+    )
+
+    assert response.status_code == 422, response.text
+    assert sentinel not in response.text
+    assert api_db.query(AIProviderCredential).filter(
+        AIProviderCredential.scope_type == "user",
+        AIProviderCredential.scope_id == user.id,
+    ).count() == 0
+
+
+def test_personal_credential_cannot_be_created_for_unprovisioned_provider(api_client, api_db, encryption_key):
+    user = User(id="unprovisioned-provider-user", username="unprovisioned-provider-user", password_hash="hash")
+    api_db.add(user)
+    api_db.commit()
+    app.dependency_overrides[get_current_user] = lambda: user
+
+    response = api_client.put(
+        "/api/model-governance/my-credentials/not-in-catalog",
+        json={"api_key": "not-in-catalog-secret"},
+    )
+
+    assert response.status_code == 422, response.text
+    assert "not-in-catalog-secret" not in response.text
+
+
 def test_authorization_overview_returns_effective_group_and_personal_permissions(api_client, api_db, encryption_key):
     """Catches an overview that returns raw rules instead of resolved permissions."""
     admin = User(id="overview-admin", username="overview-admin", password_hash="hash")
