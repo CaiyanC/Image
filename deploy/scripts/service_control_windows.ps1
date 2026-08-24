@@ -47,7 +47,10 @@ $ProdFrontendErrLog = Join-Path $ProdLogDir "frontend.err.log"
 $ExpectedBackendRoot = [System.IO.Path]::GetFullPath((Join-Path $RepoRoot "backend"))
 $ProdPython = [System.IO.Path]::GetFullPath((Join-Path $DependencyRoot "backend\runtime\prod-venv\Scripts\python.exe"))
 $LegacyPython = [System.IO.Path]::GetFullPath((Join-Path $RuntimeRoot "backend\venv\Scripts\python.exe"))
-$ProdServeCommand = [System.IO.Path]::GetFullPath((Join-Path $DependencyRoot "frontend\node_modules\.bin\serve.cmd"))
+$ProdServeCommand = [System.IO.Path]::GetFullPath((Join-Path $ProdFrontendDir "node_modules\.bin\serve.cmd"))
+if (-not (Test-Path $ProdServeCommand)) {
+    $ProdServeCommand = [System.IO.Path]::GetFullPath((Join-Path $DependencyRoot "frontend\node_modules\.bin\serve.cmd"))
+}
 $ProdUploadDir = [System.IO.Path]::GetFullPath((Join-Path $RuntimeRoot "backend\uploads"))
 
 $env:CAIYAN_ENV_FILE = $EnvFile

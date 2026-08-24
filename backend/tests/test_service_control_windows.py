@@ -49,6 +49,8 @@ def test_worker_and_frontend_use_release_code_with_persistent_runtime_paths():
     assert '$cmd -like "*$ExpectedBackendRoot*"' in script
     assert '$executable -eq $ProdPython' in script
     assert '$ProdFrontendDir = Join-Path $RepoRoot "frontend"' in script
+    assert 'Join-Path $ProdFrontendDir "node_modules\\.bin\\serve.cmd"' in script
+    assert 'Join-Path $DependencyRoot "frontend\\node_modules\\.bin\\serve.cmd"' in script
     assert '$ProdServeCommand' in script
     assert '@("-s", "dist", "-l", "$ProdFrontendPort", "-c", "serve.json")' in script
     assert "5276" not in script

@@ -50,7 +50,8 @@ if (Test-Path $releaseRoot) {
 }
 
 $npm = Get-Command "npm.cmd" -ErrorAction Stop
-Push-Location (Join-Path $SourceRepo "frontend")
+$releaseFrontend = Join-Path $releaseRoot "frontend"
+Push-Location $releaseFrontend
 try {
     & $npm.Source ci
     if ($LASTEXITCODE -ne 0) { throw "npm ci failed" }
@@ -60,9 +61,9 @@ try {
     Pop-Location
 }
 
-$releaseDist = Join-Path $releaseRoot "frontend\dist"
-New-Item -ItemType Directory -Force -Path $releaseDist | Out-Null
-Copy-Item -Path (Join-Path $SourceRepo "frontend\dist\*") -Destination $releaseDist -Recurse -Force
+if (-not (Test-Path (Join-Path $releaseFrontend "dist\index.html"))) {
+    throw "Frontend build output is missing from the immutable release: $releaseFrontend"
+}
 
 $prodVenv = Join-Path $SourceRepo "backend\runtime\prod-venv"
 $prodPython = Join-Path $prodVenv "Scripts\python.exe"
