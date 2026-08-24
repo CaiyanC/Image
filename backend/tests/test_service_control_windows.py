@@ -24,6 +24,7 @@ def test_backend_stop_is_identity_checked_and_has_explicit_legacy_transition():
     assert "$executable -eq $ProdPython" in script
     assert "$executable -eq $LegacyPython" in script
     assert "multiprocessing.spawn" in script
+    assert "$parentCmd -like \"*$ProdPython*\"" in script
 
 
 def test_all_action_enforces_release_identity_health_and_commit_gates():
