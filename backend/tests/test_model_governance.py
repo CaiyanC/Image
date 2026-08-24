@@ -1,4 +1,5 @@
 from datetime import datetime, timezone
+import uuid
 
 import asyncio
 
@@ -71,6 +72,14 @@ def test_credential_response_does_not_expose_short_key_hint():
     response = CredentialResponse.model_validate({"key_hint": "abc"})
 
     assert response.api_key_masked == "****"
+
+
+def test_governance_normalizes_uuid_subject_values_at_db_boundaries():
+    identifier = uuid.uuid4()
+
+    assert model_governance_service._access_subject_id(identifier) == str(identifier)
+    assert model_governance_service._uuid_identifier(str(identifier)) == identifier
+    assert model_governance_service._uuid_identifier("legacy-subject") == "legacy-subject"
 
 
 def test_customer_chat_uses_existing_system_model_when_governance_is_unconfigured(db, monkeypatch):
