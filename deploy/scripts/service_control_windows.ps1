@@ -125,31 +125,26 @@ function Test-ProductionBackendProcess {
     }
     $cmd = [string]$Process.CommandLine
     $executable = Get-NormalizedProcessPath -Process $Process
-    if (-not $executable) {
+    $hasUvicornCommand = $cmd -like "*uvicorn app.main:app*"
+    $hasBackendPort = $cmd -like "*--port $ProdBackendPort*"
+    if (-not $executable -or -not $hasUvicornCommand -or -not $hasBackendPort) {
         return $false
     }
     $releaseProcess = (
-        $cmd -like "*uvicorn app.main:app*" -and
-        $cmd -like "*--port $ProdBackendPort*" -and
         $cmd -like "*$ExpectedBackendRoot*" -and
-        $executable -eq $ProdPython
+        ($executable -eq $ProdPython -or $cmd -like "*$ProdPython*")
     )
     $legacyProcess = (
         $AllowLegacySharedProcess -and
-        $cmd -like "*uvicorn app.main:app*" -and
-        $cmd -like "*--port $ProdBackendPort*" -and
-        $executable -eq $LegacyPython
+        ($executable -eq $LegacyPython -or $cmd -like "*$LegacyPython*")
     )
     if ($releaseProcess -or $legacyProcess) {
         return $true
     }
 
-    # Uvicorn worker children can own the listening socket on Windows while their
-    # command line only contains multiprocessing.spawn. Validate those children
-    # through both their dedicated interpreter and their uvicorn parent.
-    if ($cmd -notlike "*multiprocessing.spawn*") {
-        return $false
-    }
+    # Windows Uvicorn multiprocessing.spawn children can own the listening socket
+    # while their command line shows ``-m uvicorn`` and the base interpreter.
+    # Validate those children through the release launcher's parent command.
     $parent = Get-ProcessById -ProcessId ([int]$Process.ParentProcessId)
     if (-not $parent) {
         return $false
@@ -157,18 +152,16 @@ function Test-ProductionBackendProcess {
     $parentCmd = [string]$parent.CommandLine
     $parentExecutable = Get-NormalizedProcessPath -Process $parent
     $releaseChild = (
-        $executable -eq $ProdPython -and
-        $parentExecutable -eq $ProdPython -and
         $parentCmd -like "*uvicorn app.main:app*" -and
         $parentCmd -like "*--port $ProdBackendPort*" -and
-        $parentCmd -like "*$ExpectedBackendRoot*"
+        $parentCmd -like "*$ExpectedBackendRoot*" -and
+        ($parentExecutable -eq $ProdPython -or $parentCmd -like "*$ProdPython*")
     )
     $legacyChild = (
         $AllowLegacySharedProcess -and
-        $executable -eq $LegacyPython -and
-        $parentExecutable -eq $LegacyPython -and
         $parentCmd -like "*uvicorn app.main:app*" -and
-        $parentCmd -like "*--port $ProdBackendPort*"
+        $parentCmd -like "*--port $ProdBackendPort*" -and
+        ($parentExecutable -eq $LegacyPython -or $parentCmd -like "*$LegacyPython*")
     )
     return $releaseChild -or $legacyChild
 }
