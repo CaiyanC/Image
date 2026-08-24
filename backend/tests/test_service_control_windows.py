@@ -51,8 +51,10 @@ def test_worker_and_frontend_use_release_code_with_persistent_runtime_paths():
     assert '$ProdFrontendDir = Join-Path $RepoRoot "frontend"' in script
     assert 'Join-Path $ProdFrontendDir "node_modules\\.bin\\serve.cmd"' in script
     assert 'Join-Path $DependencyRoot "frontend\\node_modules\\.bin\\serve.cmd"' in script
+    assert '$ProdServeConfig = [System.IO.Path]::GetFullPath((Join-Path $ProdFrontendDir "serve.json"))' in script
+    assert '"-c", $ProdServeConfig' in script
     assert '$ProdServeCommand' in script
-    assert '@("-s", "dist", "-l", "$ProdFrontendPort", "-c", "serve.json")' in script
+    assert 'ArgumentList @("-s", "dist", "-l", "$ProdFrontendPort", "-c", $ProdServeConfig)' in script
     assert "5276" not in script
     assert "8001" not in script
 
@@ -78,6 +80,7 @@ def test_start_and_stop_resolve_the_immutable_release_pointer():
     assert '-ExpectedCommit "%RELEASE_COMMIT%"' in start_script
     assert "-AllowLegacySharedProcess" in start_script
     assert "production-release.json" in stop_script
+    assert "usebackq delims=" in stop_script
     assert '-RepoRoot "%ACTIVE_RELEASE_ROOT%"' in stop_script
     assert '-ExpectedCommit "%ACTIVE_RELEASE_COMMIT%"' in stop_script
 

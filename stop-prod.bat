@@ -18,7 +18,8 @@ echo.
 set "ACTIVE_RELEASE_ROOT=%RUNTIME_ROOT%"
 set "ACTIVE_RELEASE_COMMIT="
 if exist "%RUNTIME_ROOT%\backend\runtime\production-release.json" (
-    for /f "tokens=1,* delims==" %%a in ('powershell -NoProfile -Command "$p = Get-Content -Raw -LiteralPath ''%RUNTIME_ROOT%\backend\runtime\production-release.json'' | ConvertFrom-Json; Write-Output (''ACTIVE_RELEASE_ROOT='' + $p.release_root); Write-Output (''ACTIVE_RELEASE_COMMIT='' + $p.commit)"') do set "%%a=%%b"
+    for /f "usebackq delims=" %%a in (`powershell -NoProfile -Command "(ConvertFrom-Json (Get-Content -Raw -LiteralPath '%RUNTIME_ROOT%\backend\runtime\production-release.json')).release_root"`) do set "ACTIVE_RELEASE_ROOT=%%a"
+    for /f "usebackq delims=" %%a in (`powershell -NoProfile -Command "(ConvertFrom-Json (Get-Content -Raw -LiteralPath '%RUNTIME_ROOT%\backend\runtime\production-release.json')).commit"`) do set "ACTIVE_RELEASE_COMMIT=%%a"
 )
 if not exist "%ACTIVE_RELEASE_ROOT%\deploy\scripts\service_control_windows.ps1" (
     echo Active production release is invalid: %ACTIVE_RELEASE_ROOT%

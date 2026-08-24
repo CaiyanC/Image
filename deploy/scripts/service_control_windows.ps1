@@ -51,6 +51,7 @@ $ProdServeCommand = [System.IO.Path]::GetFullPath((Join-Path $ProdFrontendDir "n
 if (-not (Test-Path $ProdServeCommand)) {
     $ProdServeCommand = [System.IO.Path]::GetFullPath((Join-Path $DependencyRoot "frontend\node_modules\.bin\serve.cmd"))
 }
+$ProdServeConfig = [System.IO.Path]::GetFullPath((Join-Path $ProdFrontendDir "serve.json"))
 $ProdUploadDir = [System.IO.Path]::GetFullPath((Join-Path $RuntimeRoot "backend\uploads"))
 
 $env:CAIYAN_ENV_FILE = $EnvFile
@@ -526,9 +527,13 @@ function Start-Frontend {
         Write-WatchdogLog "ERROR" "production serve command is missing: $ProdServeCommand"
         return $false
     }
+    if (-not (Test-Path $ProdServeConfig)) {
+        Write-WatchdogLog "ERROR" "production serve config is missing: $ProdServeConfig"
+        return $false
+    }
     New-Item -ItemType Directory -Force -Path $ProdLogDir | Out-Null
     Write-WatchdogLog "WARN" "starting production frontend from $ProdFrontendDir on port $ProdFrontendPort"
-    $frontendProcess = Start-Process -FilePath $ProdServeCommand -ArgumentList @("-s", "dist", "-l", "$ProdFrontendPort", "-c", "serve.json") `
+    $frontendProcess = Start-Process -FilePath $ProdServeCommand -ArgumentList @("-s", "dist", "-l", "$ProdFrontendPort", "-c", $ProdServeConfig) `
         -WorkingDirectory $ProdFrontendDir -WindowStyle Hidden -PassThru `
         -RedirectStandardOutput $ProdFrontendOutLog -RedirectStandardError $ProdFrontendErrLog
     Write-WatchdogLog "INFO" "production frontend launcher pid=$($frontendProcess.Id) stdout=$ProdFrontendOutLog stderr=$ProdFrontendErrLog"
