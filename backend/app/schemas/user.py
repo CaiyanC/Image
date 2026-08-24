@@ -74,6 +74,11 @@ class LoginRequest(BaseModel):
 
 
 class Token(BaseModel):
+    access_token: Optional[str] = None
+    token_type: str = "cookie"
+    user: UserResponse
+
+
+class BearerToken(BaseModel):
     access_token: str
     token_type: str = "bearer"
-    user: UserResponse

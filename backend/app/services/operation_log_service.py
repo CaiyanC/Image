@@ -4,7 +4,7 @@ from datetime import datetime, time
 from typing import Any
 
 from fastapi import Request
-from sqlalchemy import String, cast, or_
+from sqlalchemy import String, cast, inspect, or_
 from sqlalchemy.orm import Session
 
 from ..models.operation_logs import OperationLog
@@ -69,8 +69,24 @@ def log_operation(
     error_message: str | None = None,
     request: Request | None = None,
 ) -> OperationLog:
+    operator_name = str(operator_id)
+    # Some bounded service transactions (and a number of lightweight tools)
+    # intentionally mount only the audit-domain tables.  Snapshotting the
+    # username must not make those otherwise valid transactions depend on the
+    # full identity schema.  Production has the users table, where the human
+    # readable name is retained before a later account deletion.
+    # Inspect through the session's current connection.  Opening an Engine-level
+    # inspector can borrow and roll back the same underlying SQLite connection
+    # used by an in-flight transaction (notably with StaticPool), deleting work
+    # that was flushed immediately before the audit entry.
+    if inspect(db.connection()).has_table(User.__tablename__):
+        operator_name = (
+            db.query(User.username).filter(User.id == str(operator_id)).scalar()
+            or operator_name
+        )
     log = OperationLog(
         operator_id=str(operator_id),
+        operator_name_snapshot=operator_name,
         operator_type="human",
         action_type=action_type,
         action_name=action_name,
@@ -131,6 +147,7 @@ def list_operation_logs(
             OperationLog.target_name.ilike(like),
             OperationLog.target_id.ilike(like),
             OperationLog.target_type.ilike(like),
+            OperationLog.operator_name_snapshot.ilike(like),
             User.username.ilike(like),
             User.display_name.ilike(like),
         ))
@@ -156,7 +173,7 @@ def _serialize_operation_log(
     return {
         "id": log.id,
         "operator_id": log.operator_id,
-        "operator_name": user.username if user else "-",
+        "operator_name": user.username if user else (log.operator_name_snapshot or "已删除用户"),
         "operator_display_name": user.display_name if user else None,
         "action_type": log.action_type,
         "action_name": log.action_name,

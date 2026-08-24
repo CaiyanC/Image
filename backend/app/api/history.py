@@ -14,7 +14,7 @@ router = APIRouter(prefix="/api/history", tags=["history"])
 
 def _is_management(user: User, db: Session) -> bool:
     for g in get_user_groups(db, user.id):
-        if g["group_name"] in FULL_ACCESS_GROUP_NAMES:
+        if g["group_name"] in FULL_ACCESS_GROUP_NAMES and g["group_role"] == "admin":
             return True
     return False
 

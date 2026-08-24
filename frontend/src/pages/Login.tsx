@@ -19,7 +19,7 @@ export default function Login() {
 
     try {
       const data = await api.auth.login(username, password)
-      setAuth(data.access_token, data.user)
+      setAuth(data.user)
       const permissions = data.user.permissions || []
       if (permissions.includes('ai.generate')) {
         navigate('/')

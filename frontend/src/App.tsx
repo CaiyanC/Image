@@ -1,4 +1,4 @@
-import { Suspense, lazy } from 'react'
+import { Suspense, lazy, useEffect } from 'react'
 import { Routes, Route, Navigate } from 'react-router-dom'
 import { useAuthStore } from './store/authStore'
 import Layout from './components/layout/Layout'
@@ -28,14 +28,14 @@ const AdminDepartmentWorkbench = lazy(() => import('./pages/AdminDepartmentWorkb
 const AdminModelGovernance = lazy(() => import('./pages/AdminModelGovernance'))
 
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
-  const { token } = useAuthStore()
-  if (!token) return <Navigate to="/login" replace />
+  const { authenticated } = useAuthStore()
+  if (!authenticated) return <Navigate to="/login" replace />
   return <>{children}</>
 }
 
 function SuperAdminRoute({ children }: { children: React.ReactNode }) {
-  const { token, isManagement } = useAuthStore()
-  if (!token) return <Navigate to="/login" replace />
+  const { authenticated, isManagement } = useAuthStore()
+  if (!authenticated) return <Navigate to="/login" replace />
   if (!isManagement) return <Navigate to="/no-access" replace />
   return <>{children}</>
 }
@@ -58,13 +58,21 @@ function PermissionRoute({
   fallback?: string
   children: React.ReactNode
 }) {
-  const { token, isManagement, user } = useAuthStore()
-  if (!token) return <Navigate to="/login" replace />
+  const { authenticated, isManagement, user } = useAuthStore()
+  if (!authenticated) return <Navigate to="/login" replace />
   if (!hasPermission(user, isManagement, permissionKey)) return <Navigate to={fallback} replace />
   return <>{children}</>
 }
 
 export default function App() {
+  const { bootstrap, initialized } = useAuthStore()
+
+  useEffect(() => {
+    void bootstrap()
+  }, [bootstrap])
+
+  if (!initialized) return <RouteFallback />
+
   return (
     <>
       <PermissionToast />

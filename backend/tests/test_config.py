@@ -198,6 +198,69 @@ class SettingsConfigTest(unittest.TestCase):
         self.assertEqual(summary["database"], "product_knowledge")
         self.assertNotIn("secret", str(summary))
 
+    def test_security_validation_rejects_weak_secret_and_long_lived_tokens(self):
+        settings = self._runtime_settings("dev")
+        settings.SECRET_KEY = "short"
+        with self.assertRaisesRegex(RuntimeError, "SECRET_KEY"):
+            config.validate_security_settings(settings)
+
+        settings.SECRET_KEY = "x" * 48
+        settings.ACCESS_TOKEN_EXPIRE_MINUTES = 1440
+        with self.assertRaisesRegex(RuntimeError, "ACCESS_TOKEN_EXPIRE_MINUTES"):
+            config.validate_security_settings(settings)
+
+    def test_production_security_requires_dedicated_model_key_and_no_bootstrap_password(self):
+        settings = self._runtime_settings("prod")
+        settings.SECRET_KEY = "x" * 48
+        settings.ACCESS_TOKEN_EXPIRE_MINUTES = 60
+        settings.AUTH_TOKEN_ISSUER = "caiyan-auth-prod"
+        settings.AUTH_TOKEN_AUDIENCE = "caiyan-api-prod"
+        settings.AUTH_COOKIE_NAME = "caiyan_session_prod"
+        settings.AUTH_COOKIE_SAMESITE = "lax"
+        settings.AUTH_COOKIE_SECURE = True
+        settings.ALLOW_INSECURE_LOCAL_PROD = False
+        settings.ALLOW_ADMIN_BOOTSTRAP = False
+        settings.MODEL_CREDENTIAL_ENCRYPTION_KEY = ""
+        settings.CORS_ORIGINS_EXPLICIT = True
+        settings.DEFAULT_ADMIN_PASSWORD = ""
+
+        with self.assertRaisesRegex(RuntimeError, "MODEL_CREDENTIAL_ENCRYPTION_KEY"):
+            config.validate_security_settings(settings)
+
+        settings.MODEL_CREDENTIAL_ENCRYPTION_KEY = "configured"
+        settings.DEFAULT_ADMIN_PASSWORD = "still-present"
+        with self.assertRaisesRegex(RuntimeError, "DEFAULT_ADMIN_PASSWORD"):
+            config.validate_security_settings(settings)
+
+        settings.DEFAULT_ADMIN_PASSWORD = ""
+        config.validate_security_settings(settings)
+
+    def test_production_security_requires_explicit_cors_and_secure_cookie_opt_out(self):
+        settings = self._runtime_settings("prod")
+        settings.SECRET_KEY = "x" * 48
+        settings.ACCESS_TOKEN_EXPIRE_MINUTES = 60
+        settings.AUTH_TOKEN_ISSUER = "caiyan-auth-prod"
+        settings.AUTH_TOKEN_AUDIENCE = "caiyan-api-prod"
+        settings.AUTH_COOKIE_NAME = "caiyan_session_prod"
+        settings.AUTH_COOKIE_SAMESITE = "lax"
+        settings.MODEL_CREDENTIAL_ENCRYPTION_KEY = "configured"
+        settings.DEFAULT_ADMIN_PASSWORD = ""
+        settings.ALLOW_ADMIN_BOOTSTRAP = False
+        settings.AUTH_COOKIE_SECURE = True
+        settings.ALLOW_INSECURE_LOCAL_PROD = False
+        settings.CORS_ORIGINS_EXPLICIT = False
+
+        with self.assertRaisesRegex(RuntimeError, "CORS_ORIGINS"):
+            config.validate_security_settings(settings)
+
+        settings.CORS_ORIGINS_EXPLICIT = True
+        settings.AUTH_COOKIE_SECURE = False
+        with self.assertRaisesRegex(RuntimeError, "Secure"):
+            config.validate_security_settings(settings)
+
+        settings.ALLOW_INSECURE_LOCAL_PROD = True
+        config.validate_security_settings(settings)
+
     def test_project_root_script_import_loads_dev_env_instead_of_sqlite_default(self):
         repo_root = Path(__file__).resolve().parents[2]
         env = os.environ.copy()

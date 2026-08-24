@@ -63,7 +63,7 @@ class Txt2VidRequest(BaseModel):
 
 class GenerationResponse(BaseModel):
     id: UuidStr
-    user_id: UuidStr
+    user_id: Optional[UuidStr] = None
     type: str
     prompt: str
     negative_prompt: Optional[str] = None

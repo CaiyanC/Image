@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from sqlalchemy.orm import Session
 from ..core.database import get_db
 from ..core.config import settings
@@ -12,6 +12,7 @@ from ..schemas.user import (
     UserProfileUpdate,
     UserResponse,
     Token,
+    BearerToken,
     LoginRequest,
     UserGroupInfo,
 )
@@ -36,12 +37,7 @@ def register(user_data: UserCreate, request: Request = None, db: Session = Depen
     return user_service.create_user(db, user_data)
 
 
-@router.post("/login")
-def login(
-    req: LoginRequest,
-    request: Request = None,
-    db: Session = Depends(get_db),
-):
+def _authenticate(req: LoginRequest, request: Request, db: Session) -> User:
     enforce_rate_limit(
         user_id=f"{get_request_identifier(request)}:{req.username.strip().lower()}",
         scope="auth.login",
@@ -59,18 +55,64 @@ def login(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="账号已被禁用，请联系管理员",
         )
+    return user
 
-    access_token = create_access_token(data={"sub": str(user.id)})
 
+def _user_response(db: Session, user: User) -> UserResponse:
     groups = get_user_groups(db, user.id)
     user_response = UserResponse.model_validate(user)
-    user_response.groups = [UserGroupInfo(**g) for g in groups]
+    user_response.groups = [UserGroupInfo(**group) for group in groups]
     user_response.permissions = get_user_permissions(db, user.id)
+    return user_response
 
-    return Token(
-        access_token=access_token,
-        user=user_response,
+
+def _issue_access_token(user: User) -> str:
+    return create_access_token(data={"sub": str(user.id), "ver": user.auth_version})
+
+
+@router.post("/login", response_model=Token)
+def login(
+    req: LoginRequest,
+    response: Response,
+    request: Request,
+    db: Session = Depends(get_db),
+):
+    user = _authenticate(req, request, db)
+    access_token = _issue_access_token(user)
+    response.set_cookie(
+        key=settings.AUTH_COOKIE_NAME,
+        value=access_token,
+        max_age=settings.ACCESS_TOKEN_EXPIRE_MINUTES * 60,
+        httponly=True,
+        secure=settings.AUTH_COOKIE_SECURE,
+        samesite=settings.AUTH_COOKIE_SAMESITE,
+        path="/api",
     )
+    return Token(user=_user_response(db, user))
+
+
+@router.post("/token", response_model=BearerToken)
+def create_bearer_token(
+    req: LoginRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+):
+    """Issue a bearer token for trusted scripts and non-browser API clients."""
+    user = _authenticate(req, request, db)
+    return BearerToken(access_token=_issue_access_token(user))
+
+
+@router.post("/logout", status_code=status.HTTP_204_NO_CONTENT)
+def logout(response: Response):
+    response.delete_cookie(
+        key=settings.AUTH_COOKIE_NAME,
+        path="/api",
+        secure=settings.AUTH_COOKIE_SECURE,
+        httponly=True,
+        samesite=settings.AUTH_COOKIE_SAMESITE,
+    )
+    response.status_code = status.HTTP_204_NO_CONTENT
+    return response
 
 
 @router.get("/me", response_model=UserResponse)

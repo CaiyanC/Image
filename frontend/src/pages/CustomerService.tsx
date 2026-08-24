@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { AgentAction, AgentStep, ApiRequestError, ProductSearchResult, api } from '../services/api'
 import { useAuthStore } from '../store/authStore'
@@ -110,13 +110,6 @@ export default function CustomerService() {
   }, [conversationStates])
 
   useEffect(() => {
-    loadSideData()
-    return () => {
-      Object.values(conversationStatesRef.current).forEach((state) => state.abortController?.abort())
-    }
-  }, [])
-
-  useEffect(() => {
     skipNextDraftPersistRef.current = true
     draftHydratedRef.current = false
     const draft = loadCustomerServiceDraft(draftCacheKey)
@@ -129,7 +122,7 @@ export default function CustomerService() {
     setActiveConversationKey(draftKey)
     setConversationStates(states)
     draftHydratedRef.current = true
-  }, [draftCacheKey])
+  }, [draftCacheKey, initialConversationKey])
 
   useEffect(() => {
     if (!draftHydratedRef.current) return
@@ -208,7 +201,7 @@ export default function CustomerService() {
     updateConversationState(activeConversationKey, updater)
   }
 
-  async function loadConversationList() {
+  const loadConversationList = useCallback(async () => {
     const requestVersion = ++conversationListRequestRef.current
     try {
       const conversationResult = await api.customerService.conversations()
@@ -237,9 +230,9 @@ export default function CustomerService() {
     } catch {
       // Conversation history must not block the chat surface.
     }
-  }
+  }, [draftCacheKey])
 
-  async function loadSideData() {
+  const loadSideData = useCallback(async () => {
     // History is an independently useful, lightweight request.  Do not wait
     // for knowledge/review panels before showing it, otherwise old records
     // appear as a surprising late batch after the user sends a new message.
@@ -254,7 +247,14 @@ export default function CustomerService() {
     } catch {
       // Side data should not block the chat surface.
     }
-  }
+  }, [loadConversationList])
+
+  useEffect(() => {
+    void loadSideData()
+    return () => {
+      Object.values(conversationStatesRef.current).forEach((state) => state.abortController?.abort())
+    }
+  }, [loadSideData])
 
   async function ask() {
     const requestKey = activeConversationKey

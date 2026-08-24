@@ -4,7 +4,12 @@ from ..models.group import Group
 from ..models.user_group import UserGroup
 from ..models.user import User
 from ..models.permissions import GroupPermission, Permission
-from ..core.permission_constants import DEPARTMENT_ORDER, FULL_ACCESS_GROUP_NAMES, PRESET_GROUP_NAMES
+from ..core.permission_constants import (
+    DEPARTMENT_ORDER,
+    FULL_ACCESS_GROUP_NAMES,
+    PRESET_GROUP_NAMES,
+    SYSTEM_ADMIN_PERMISSION,
+)
 
 
 def _group_to_dict(group: Group) -> dict:
@@ -24,12 +29,13 @@ def _validate_role(group_role: str):
 
 
 def _active_management_count(db: Session) -> int:
-    return db.query(User).join(UserGroup, UserGroup.user_id == User.id).join(
+    return db.query(User.id).join(UserGroup, UserGroup.user_id == User.id).join(
         Group, UserGroup.group_id == Group.id
     ).filter(
         User.is_active == True,  # noqa: E712
         Group.group_name.in_(FULL_ACCESS_GROUP_NAMES),
-    ).count()
+        UserGroup.group_role == "admin",
+    ).distinct().count()
 
 
 def get_group_by_id(db: Session, group_id: str):
@@ -88,9 +94,12 @@ def update_group_permissions(db: Session, group_id: str, permission_keys: list[s
     group = get_group_by_id(db, group_id)
     if not group:
         raise HTTPException(status_code=404, detail="Group not found")
+    if SYSTEM_ADMIN_PERMISSION in permission_keys:
+        raise HTTPException(
+            status_code=400,
+            detail="System administration is granted only by an admin role in 总经办 or IT部",
+        )
 
-    if group.group_name in FULL_ACCESS_GROUP_NAMES:
-        permission_keys = [key for (key,) in db.query(Permission.permission_key).all()]
     unique_keys = sorted(set(permission_keys))
     permissions = db.query(Permission).filter(Permission.permission_key.in_(unique_keys)).all() if unique_keys else []
     found_keys = {permission.permission_key for permission in permissions}
@@ -101,6 +110,9 @@ def update_group_permissions(db: Session, group_id: str, permission_keys: list[s
     db.query(GroupPermission).filter(GroupPermission.group_id == group_id).delete()
     for permission in permissions:
         db.add(GroupPermission(group_id=group_id, permission_id=permission.id))
+    db.query(User).filter(
+        User.id.in_(db.query(UserGroup.user_id).filter(UserGroup.group_id == group_id))
+    ).update({User.auth_version: User.auth_version + 1}, synchronize_session=False)
     db.commit()
     return get_group_permissions(db, group_id)
 
@@ -120,6 +132,8 @@ def update_group(db: Session, group_id: str, name: str = None, description: str 
     if not group:
         raise HTTPException(status_code=404, detail="Group not found")
     if name:
+        if group.group_name in PRESET_GROUP_NAMES and name != group.group_name:
+            raise HTTPException(status_code=400, detail="Preset groups cannot be renamed")
         existing = db.query(Group).filter(Group.group_name == name, Group.id != group_id).first()
         if existing:
             raise HTTPException(status_code=400, detail="Group name already exists")
@@ -156,13 +170,23 @@ def add_user_to_group(db: Session, group_id: str, user_id: str, group_role: str 
         UserGroup.user_id == user_id, UserGroup.group_id == group_id
     ).first()
     if existing:
+        if (
+            group.group_name in FULL_ACCESS_GROUP_NAMES
+            and existing.group_role == "admin"
+            and group_role != "admin"
+            and user.is_active
+            and _active_management_count(db) <= 1
+        ):
+            raise HTTPException(status_code=400, detail="Cannot demote the last active management user")
         existing.group_role = group_role
+        user.auth_version = int(user.auth_version or 0) + 1
         db.commit()
         db.refresh(existing)
         return existing
 
     ug = UserGroup(user_id=user_id, group_id=group_id, group_role=group_role)
     db.add(ug)
+    user.auth_version = int(user.auth_version or 0) + 1
     db.commit()
     db.refresh(ug)
     return ug
@@ -174,7 +198,7 @@ def remove_user_from_group(db: Session, group_id: str, user_id: str):
     ).first()
     if not ug:
         raise HTTPException(status_code=404, detail="User not in group")
-    if ug.group and ug.group.group_name in FULL_ACCESS_GROUP_NAMES:
+    if ug.group and ug.group.group_name in FULL_ACCESS_GROUP_NAMES and ug.group_role == "admin":
         user = db.query(User).filter(User.id == user_id).first()
         if user and user.is_active and _active_management_count(db) <= 1:
             raise HTTPException(
@@ -182,6 +206,9 @@ def remove_user_from_group(db: Session, group_id: str, user_id: str):
                 detail="Cannot remove the last active management user",
             )
     db.delete(ug)
+    user = db.query(User).filter(User.id == user_id).first()
+    if user:
+        user.auth_version = int(user.auth_version or 0) + 1
     db.commit()
     return {"detail": "User removed from group"}
 
@@ -193,7 +220,19 @@ def update_user_group_role(db: Session, group_id: str, user_id: str, group_role:
     ).first()
     if not ug:
         raise HTTPException(status_code=404, detail="User not in group")
+    if (
+        ug.group
+        and ug.group.group_name in FULL_ACCESS_GROUP_NAMES
+        and ug.group_role == "admin"
+        and group_role != "admin"
+    ):
+        user = db.query(User).filter(User.id == user_id).first()
+        if user and user.is_active and _active_management_count(db) <= 1:
+            raise HTTPException(status_code=400, detail="Cannot demote the last active management user")
     ug.group_role = group_role
+    user = db.query(User).filter(User.id == user_id).first()
+    if user:
+        user.auth_version = int(user.auth_version or 0) + 1
     db.commit()
     db.refresh(ug)
     return ug

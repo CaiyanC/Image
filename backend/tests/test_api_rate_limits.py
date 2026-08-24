@@ -2,7 +2,7 @@ import unittest
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
-from fastapi import HTTPException
+from fastapi import HTTPException, Response
 
 from app.api import auth as auth_api
 from app.api import generation as generation_api
@@ -27,11 +27,17 @@ class ApiRateLimitTest(unittest.IsolatedAsyncioTestCase):
         with patch.object(auth_api.user_service, "get_user_by_username", return_value=None):
             for _ in range(8):
                 with self.assertRaises(HTTPException) as ctx:
-                    auth_api.login(LoginRequest(username="Alice", password="bad"), request=self.request, db=object())
+                    auth_api.login(
+                        LoginRequest(username="Alice", password="bad"),
+                        response=Response(), request=self.request, db=object(),
+                    )
                 self.assertEqual(ctx.exception.status_code, 401)
 
             with self.assertRaises(HTTPException) as ctx:
-                auth_api.login(LoginRequest(username="Alice", password="bad"), request=self.request, db=object())
+                auth_api.login(
+                    LoginRequest(username="Alice", password="bad"),
+                    response=Response(), request=self.request, db=object(),
+                )
 
         self.assertEqual(ctx.exception.status_code, 429)
         self.assertEqual(ctx.exception.detail, "请求过于频繁，请稍后再试")

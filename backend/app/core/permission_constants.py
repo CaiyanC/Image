@@ -16,6 +16,7 @@ IT_GROUP_NAME = "IT部"
 
 TOOL_MANAGE_PERMISSION = "tool.manage"
 ECOMMERCE_DATA_FILL_PERMISSION = "finance.ecommerce_data_fill"
+SYSTEM_ADMIN_PERMISSION = "system.admin"
 
 # Compatibility aliases used by authorization code and older tests.
 MANAGEMENT_GROUP_NAME = EXECUTIVE_OFFICE_GROUP_NAME
@@ -83,6 +84,7 @@ PERMISSION_DEFS = [
     ("export.approved", "导出审批", "button"),
     (TOOL_MANAGE_PERMISSION, "管理内部工具", "page"),
     (ECOMMERCE_DATA_FILL_PERMISSION, "电商数据自动填表", "page"),
+    (SYSTEM_ADMIN_PERMISSION, "系统管理", "page"),
 ]
 
 ROUTE_DEFS = [
@@ -92,7 +94,11 @@ ROUTE_DEFS = [
     ("/profile", "个人资料", "page"),
     ("/products", "产品管理", "page"),
     ("/assets", "视觉素材库", "page"),
+    ("/assets/search", "素材搜索", "page"),
+    ("/knowledge-base", "产品知识库", "page"),
+    ("/file-knowledge", "文件知识库", "page"),
     ("/products/create", "新增产品", "page"),
+    ("/products/create/:draftId", "编辑产品草稿", "page"),
     ("/products/edit/:sku", "编辑产品", "page"),
     ("/products/drafts", "草稿箱", "page"),
     ("/admin/users", "用户管理", "page"),
@@ -102,6 +108,8 @@ ROUTE_DEFS = [
     ("/tools", "工具中心", "page"),
     ("/tools/ecommerce-data-fill", "电商数据自动填表", "page"),
     ("/admin/tools", "工具管理", "page"),
+    ("/admin/department-workbench", "部门工作台", "page"),
+    ("/admin/model-governance", "模型治理", "page"),
 ]
 
 COMMON_PERMISSION_KEYS = ["history.view", "profile.view"]
@@ -117,7 +125,7 @@ _VISUAL_KEYS = [
 ]
 
 GROUP_PERMISSION_KEYS = {
-    EXECUTIVE_OFFICE_GROUP_NAME: [key for key, _, _ in PERMISSION_DEFS],
+    EXECUTIVE_OFFICE_GROUP_NAME: [key for key, _, _ in PERMISSION_DEFS if key != SYSTEM_ADMIN_PERMISSION],
     HR_ADMIN_GROUP_NAME: list(_OFFICE_KEYS),
     FINANCE_GROUP_NAME: list(_OFFICE_KEYS),
     PRODUCT_DEPARTMENT_GROUP_NAME: [
@@ -143,7 +151,7 @@ GROUP_PERMISSION_KEYS = {
     ],
     FINANCIAL_SERVICES_GROUP_NAME: list(_OFFICE_KEYS),
     VISUAL_TWO_GROUP_NAME: list(_VISUAL_KEYS),
-    IT_GROUP_NAME: [key for key, _, _ in PERMISSION_DEFS],
+    IT_GROUP_NAME: [key for key, _, _ in PERMISSION_DEFS if key != SYSTEM_ADMIN_PERMISSION],
 }
 
 for _group_name in (EXECUTIVE_OFFICE_GROUP_NAME, IT_GROUP_NAME):
@@ -158,12 +166,23 @@ PERMISSION_ROUTE_MAP = {
     "ai.generate": ["/"],
     "ai.customer_service": ["/customer-service"],
     "history.view": ["/history"],
-    "profile.view": ["/profile"],
-    "product.read": ["/products", "/assets", "/products/drafts"],
-    "product.create": ["/products/create"],
+    "profile.view": ["/profile", "/tools"],
+    "product.read": ["/products", "/assets", "/assets/search", "/products/drafts"],
+    "product.create": ["/products/create", "/products/create/:draftId"],
     "product.edit": ["/products/create", "/products/edit/:sku", "/products/drafts"],
     "product.delete": ["/products"],
     ECOMMERCE_DATA_FILL_PERMISSION: ["/tools/ecommerce-data-fill"],
+    SYSTEM_ADMIN_PERMISSION: [
+        "/knowledge-base",
+        "/file-knowledge",
+        "/admin/users",
+        "/admin/groups",
+        "/admin/settings",
+        "/admin/logs",
+        "/admin/tools",
+        "/admin/department-workbench",
+        "/admin/model-governance",
+    ],
 }
 
 DEFAULT_TOOL_DEFS = [

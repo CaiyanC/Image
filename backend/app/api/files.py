@@ -31,7 +31,7 @@ FILE_SIGN_LIMIT_PER_MINUTE = 45
 FILE_SIGN_BATCH_LIMIT_PER_MINUTE = 30
 MAX_FILE_SIGN_BATCH_SIZE = 100
 _SIGNED_FILE_ALGORITHM = settings.ALGORITHM
-_SIGNED_FILE_AUDIENCE = "file-access"
+_SIGNED_FILE_AUDIENCE = f"file-access:{settings.APP_ENV}"
 logger = logging.getLogger(__name__)
 
 
@@ -188,6 +188,7 @@ def _is_in_management_group(db: Session, user_id: str) -> bool:
         db.query(UserGroup)
         .join(Group, UserGroup.group_id == Group.id)
         .filter(UserGroup.user_id == user_id, Group.group_name.in_(FULL_ACCESS_GROUP_NAMES))
+        .filter(UserGroup.group_role == "admin")
         .first()
         is not None
     )

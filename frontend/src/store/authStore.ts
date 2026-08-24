@@ -1,57 +1,61 @@
 import { create } from 'zustand'
+import { api } from '../services/api'
 import type { User } from '../types'
 
 function isManagement(user: User | null): boolean {
   if (!user || !user.groups) return false
-  return user.groups.some((g) => g.group_name === '总经办' || g.group_name === 'IT部')
-}
-
-function readStoredAuth(): Pick<AuthState, 'token' | 'user' | 'isManagement'> {
-  if (typeof window === 'undefined') {
-    return { token: null, user: null, isManagement: false }
-  }
-  const token = localStorage.getItem('token')
-  const userStr = localStorage.getItem('user')
-  if (!token || !userStr) {
-    return { token: null, user: null, isManagement: false }
-  }
-  try {
-    const user = JSON.parse(userStr) as User
-    return { token, user, isManagement: isManagement(user) }
-  } catch {
-    localStorage.removeItem('token')
-    localStorage.removeItem('user')
-    return { token: null, user: null, isManagement: false }
-  }
+  return user.groups.some(
+    (group) =>
+      (group.group_name === '总经办' || group.group_name === 'IT部') &&
+      group.group_role === 'admin',
+  )
 }
 
 interface AuthState {
-  token: string | null
   user: User | null
+  authenticated: boolean
+  initialized: boolean
   isManagement: boolean
-  setAuth: (token: string, user: User) => void
+  setAuth: (user: User) => void
   updateUser: (user: User) => void
-  logout: () => void
-  loadFromStorage: () => void
+  logout: () => Promise<void>
+  bootstrap: () => Promise<void>
 }
 
-export const useAuthStore = create<AuthState>((set) => ({
-  ...readStoredAuth(),
-  setAuth: (token, user) => {
-    localStorage.setItem('token', token)
-    localStorage.setItem('user', JSON.stringify(user))
-    set({ token, user, isManagement: isManagement(user) })
+let bootstrapPromise: Promise<void> | null = null
+
+export const useAuthStore = create<AuthState>((set, get) => ({
+  user: null,
+  authenticated: false,
+  initialized: false,
+  isManagement: false,
+  setAuth: (user) => {
+    set({ user, authenticated: true, initialized: true, isManagement: isManagement(user) })
   },
   updateUser: (user) => {
-    localStorage.setItem('user', JSON.stringify(user))
-    set({ user, isManagement: isManagement(user) })
+    set({ user, authenticated: true, isManagement: isManagement(user) })
   },
-  logout: () => {
-    localStorage.removeItem('token')
-    localStorage.removeItem('user')
-    set({ token: null, user: null, isManagement: false })
+  logout: async () => {
+    try {
+      await api.auth.logout()
+    } finally {
+      set({ user: null, authenticated: false, initialized: true, isManagement: false })
+    }
   },
-  loadFromStorage: () => {
-    set(readStoredAuth())
+  bootstrap: async () => {
+    if (get().initialized) return
+    if (!bootstrapPromise) {
+      bootstrapPromise = api.auth.me()
+        .then((user) => {
+          set({ user, authenticated: true, initialized: true, isManagement: isManagement(user) })
+        })
+        .catch(() => {
+          set({ user: null, authenticated: false, initialized: true, isManagement: false })
+        })
+        .finally(() => {
+          bootstrapPromise = null
+        })
+    }
+    await bootstrapPromise
   },
 }))

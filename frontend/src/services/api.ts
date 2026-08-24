@@ -2,7 +2,7 @@ const API_BASE_ENV = import.meta.env.VITE_API_BASE_URL || '/api'
 const BASE_URL = resolveApiBaseUrl(API_BASE_ENV)
 const TRACE_CUSTOMER_AGENT = import.meta.env.VITE_TRACE_CUSTOMER_AGENT === 'true'
 
-import type { AssetGrouped, AssetTags, AssetUploadResponse, Product, ProductAsset, ProductListResponse, ProductDraft } from '../types'
+import type { AssetGrouped, AssetTags, AssetUploadResponse, AuthResponse, Product, ProductAsset, ProductListResponse, ProductDraft, User } from '../types'
 import { NO_PERMISSION_MESSAGE, showNoPermissionToast } from './permissionFeedback'
 
 const ERROR_MESSAGES: Record<string, string> = {
@@ -495,12 +495,7 @@ function fileToBase64(file: File): Promise<{ data: string; mimeType: string }> {
 }
 
 async function request<T>(url: string, options: RequestInit = {}, timeoutMs = 30000): Promise<T> {
-  const token = localStorage.getItem('token')
   const headers: Record<string, string> = {}
-
-  if (token) {
-    headers['Authorization'] = `Bearer ${token}`
-  }
 
   if (!(options.body instanceof FormData) && options.body !== undefined) {
     headers['Content-Type'] = 'application/json'
@@ -525,13 +520,13 @@ async function request<T>(url: string, options: RequestInit = {}, timeoutMs = 30
   try {
     const response = await fetch(`${BASE_URL}${url}`, {
       ...options,
+      credentials: 'include',
       headers: { ...headers, ...(options.headers as Record<string, string>) },
       signal: controller.signal,
     })
 
-    if (response.status === 401 && url !== '/auth/login') {
-      localStorage.removeItem('token')
-      localStorage.removeItem('user')
+    if (response.status === 401 && url !== '/auth/login' && url !== '/auth/me') {
+      window.dispatchEvent(new Event('auth:unauthorized'))
       window.location.href = '/login'
       throw new Error('Unauthorized')
     }
@@ -549,6 +544,7 @@ async function request<T>(url: string, options: RequestInit = {}, timeoutMs = 30
       throw new ApiRequestError(normalizeErrorMessage(error.detail || error, response.status), response.status)
     }
 
+    if (response.status === 204) return undefined as T
     const data = await response.json()
     if (traceAgent) {
       traceCustomerAgent('RESPONSE', {
@@ -582,12 +578,7 @@ async function streamRequest(
   timeoutMs = 150000,
   signal?: AbortSignal,
 ): Promise<void> {
-  const token = localStorage.getItem('token')
   const headers: Record<string, string> = {}
-
-  if (token) {
-    headers['Authorization'] = `Bearer ${token}`
-  }
 
   if (!(options.body instanceof FormData) && options.body !== undefined) {
     headers['Content-Type'] = 'application/json'
@@ -609,13 +600,13 @@ async function streamRequest(
   try {
     const response = await fetch(`${BASE_URL}${url}`, {
       ...options,
+      credentials: 'include',
       headers: { ...headers, ...(options.headers as Record<string, string>) },
       signal: controller.signal,
     })
 
     if (response.status === 401 && url !== '/auth/login') {
-      localStorage.removeItem('token')
-      localStorage.removeItem('user')
+      window.dispatchEvent(new Event('auth:unauthorized'))
       window.location.href = '/login'
       throw new Error('Unauthorized')
     }
@@ -720,9 +711,8 @@ export const api = {
         { method: 'POST', body: JSON.stringify({ parameters }) },
       ),
       download: async (runId: string, index: number, filename: string) => {
-        const token = localStorage.getItem('token')
         const response = await fetch(`${BASE_URL}/tools/ecommerce-data-fill/runs/${encodeURIComponent(runId)}/files/${index}`, {
-          headers: token ? { Authorization: `Bearer ${token}` } : {},
+          credentials: 'include',
         })
         if (!response.ok) throw new ApiRequestError('下载结果失败', response.status)
         const url = URL.createObjectURL(await response.blob())
@@ -739,12 +729,13 @@ export const api = {
       request('/auth/register', { method: 'POST', body: JSON.stringify(data) }),
 
     login: (username: string, password: string) =>
-      request<{ access_token: string; token_type: string; user: any }>(
+      request<AuthResponse>(
         '/auth/login',
         { method: 'POST', body: JSON.stringify({ username, password }) }
       ),
 
-    me: () => request('/auth/me'),
+    me: () => request<User>('/auth/me'),
+    logout: () => request<void>('/auth/logout', { method: 'POST' }),
     updateMe: (data: { username?: string; email?: string; display_name?: string }) =>
       request('/auth/me', { method: 'PUT', body: JSON.stringify(data) }),
     changePassword: (data: { current_password: string; new_password: string }) =>
@@ -1299,13 +1290,10 @@ export const api = {
     for (const file of files) {
       formData.append('files', file)
     }
-    const token = localStorage.getItem('token')
-    const headers: Record<string, string> = {}
-    if (token) headers['Authorization'] = `Bearer ${token}`
     return fetch(`${BASE_URL}/products/images/upload`, {
       method: 'POST',
       body: formData,
-      headers,
+      credentials: 'include',
     }).then((r) => {
       if (!r.ok) throw new Error('Upload failed')
       return r.json()
@@ -1317,13 +1305,10 @@ export const api = {
     for (const file of files) {
       formData.append('files', file)
     }
-    const token = localStorage.getItem('token')
-    const headers: Record<string, string> = {}
-    if (token) headers['Authorization'] = `Bearer ${token}`
     return fetch(`${BASE_URL}/products/videos/upload`, {
       method: 'POST',
       body: formData,
-      headers,
+      credentials: 'include',
     }).then((r) => {
       if (!r.ok) throw new Error('Upload failed')
       return r.json()

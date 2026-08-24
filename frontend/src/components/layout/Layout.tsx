@@ -1,5 +1,3 @@
-import { useEffect } from 'react'
-import { useAuthStore } from '../../store/authStore'
 import Header from './Header'
 
 interface LayoutProps {
@@ -7,12 +5,6 @@ interface LayoutProps {
 }
 
 export default function Layout({ children }: LayoutProps) {
-  const { loadFromStorage } = useAuthStore()
-
-  useEffect(() => {
-    loadFromStorage()
-  }, [loadFromStorage])
-
   return (
     <div className="min-h-screen bg-gradient-subtle text-apple-text">
       <div className="fixed inset-0 overflow-hidden pointer-events-none">

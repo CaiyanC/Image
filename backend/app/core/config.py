@@ -89,7 +89,22 @@ class Settings:
     ALLOW_INSECURE_MODEL_ENDPOINTS: bool = os.getenv("ALLOW_INSECURE_MODEL_ENDPOINTS", "false").lower() == "true"
     ALGORITHM: str = "HS256"
     ENABLE_PUBLIC_REGISTRATION: bool = os.getenv("ENABLE_PUBLIC_REGISTRATION", "false").lower() == "true"
-    ACCESS_TOKEN_EXPIRE_MINUTES: int = int(os.getenv("ACCESS_TOKEN_EXPIRE_MINUTES", "1440"))
+    ACCESS_TOKEN_EXPIRE_MINUTES: int = int(os.getenv("ACCESS_TOKEN_EXPIRE_MINUTES", "60"))
+    AUTH_TOKEN_ISSUER: str = os.getenv(
+        "AUTH_TOKEN_ISSUER", f"caiyan-auth-{APP_ENV or 'unknown'}"
+    ).strip()
+    AUTH_TOKEN_AUDIENCE: str = os.getenv(
+        "AUTH_TOKEN_AUDIENCE", f"caiyan-api-{APP_ENV or 'unknown'}"
+    ).strip()
+    AUTH_COOKIE_NAME: str = os.getenv(
+        "AUTH_COOKIE_NAME", f"caiyan_session_{APP_ENV or 'unknown'}"
+    ).strip()
+    AUTH_COOKIE_SECURE: bool = os.getenv(
+        "AUTH_COOKIE_SECURE", "true" if APP_ENV == "prod" else "false"
+    ).lower() == "true"
+    AUTH_COOKIE_SAMESITE: str = os.getenv("AUTH_COOKIE_SAMESITE", "lax").strip().lower()
+    ALLOW_INSECURE_LOCAL_PROD: bool = os.getenv("ALLOW_INSECURE_LOCAL_PROD", "false").lower() == "true"
+    ALLOW_ADMIN_BOOTSTRAP: bool = os.getenv("ALLOW_ADMIN_BOOTSTRAP", "false").lower() == "true"
     # Flash preplanning and the bounded answer writer can occasionally need
     # more than the old 30-second transport window. A premature timeout is
     # more damaging here than a modestly slower answer because it activates
@@ -140,6 +155,7 @@ class Settings:
     DEFAULT_ADMIN_EMAIL: str = os.getenv("DEFAULT_ADMIN_EMAIL", "admin@example.com")
     DEFAULT_ADMIN_PASSWORD: str = os.getenv("DEFAULT_ADMIN_PASSWORD", "")
 
+    CORS_ORIGINS_EXPLICIT: bool = bool(os.getenv("CORS_ORIGINS", "").strip())
     CORS_ORIGINS: list[str] = _cors_origins(
         ",".join((
             "http://localhost:3000", "http://127.0.0.1:3000",
@@ -207,6 +223,39 @@ def validate_runtime_isolation(current_settings: Settings) -> None:
         raise RuntimeError(
             f"Refusing to start {app_env} environment with CELERY_WORKER_NAME={current_settings.CELERY_WORKER_NAME}; "
             f"expected {expected_worker_name}"
+        )
+
+
+def validate_security_settings(current_settings: Settings) -> None:
+    secret = current_settings.SECRET_KEY.strip()
+    weak_values = {"", "change-me", "changeme", "secret", "your-secret-key"}
+    if len(secret) < 32 or secret.lower() in weak_values:
+        raise RuntimeError("SECRET_KEY must be a non-placeholder secret of at least 32 characters")
+    if not 5 <= current_settings.ACCESS_TOKEN_EXPIRE_MINUTES <= 480:
+        raise RuntimeError("ACCESS_TOKEN_EXPIRE_MINUTES must be between 5 and 480")
+    if current_settings.AUTH_COOKIE_SAMESITE not in {"lax", "strict"}:
+        raise RuntimeError("AUTH_COOKIE_SAMESITE must be lax or strict")
+    for name, value in (
+        ("AUTH_TOKEN_ISSUER", current_settings.AUTH_TOKEN_ISSUER),
+        ("AUTH_TOKEN_AUDIENCE", current_settings.AUTH_TOKEN_AUDIENCE),
+        ("AUTH_COOKIE_NAME", current_settings.AUTH_COOKIE_NAME),
+    ):
+        if not value:
+            raise RuntimeError(f"{name} must not be empty")
+
+    if current_settings.APP_ENV != "prod":
+        return
+    if not current_settings.MODEL_CREDENTIAL_ENCRYPTION_KEY:
+        raise RuntimeError("MODEL_CREDENTIAL_ENCRYPTION_KEY must be configured in production")
+    if not current_settings.CORS_ORIGINS_EXPLICIT:
+        raise RuntimeError("CORS_ORIGINS must be explicitly configured in production")
+    if current_settings.DEFAULT_ADMIN_PASSWORD and not current_settings.ALLOW_ADMIN_BOOTSTRAP:
+        raise RuntimeError(
+            "DEFAULT_ADMIN_PASSWORD must be removed after bootstrap, or ALLOW_ADMIN_BOOTSTRAP explicitly enabled"
+        )
+    if not current_settings.AUTH_COOKIE_SECURE and not current_settings.ALLOW_INSECURE_LOCAL_PROD:
+        raise RuntimeError(
+            "Production auth cookies must be Secure unless ALLOW_INSECURE_LOCAL_PROD is explicitly enabled"
         )
 
 

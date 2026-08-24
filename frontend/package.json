@@ -11,7 +11,7 @@
     "dev:dev": "vite --host 0.0.0.0 --port 5276 --mode dev",
     "dev:local": "vite --host 0.0.0.0 --port 5276 --mode dev",
     "build": "tsc -b && vite build",
-    "serve:prod": "serve -s dist -l 5275",
+    "serve:prod": "serve -s dist -l 5275 -c serve.json",
     "preview": "vite preview",
     "lint": "eslint ."
   },

@@ -29,7 +29,10 @@ def list_available_tools(
 
 
 def _is_management(db: Session, user_id: str) -> bool:
-    return any(group["group_name"] in FULL_ACCESS_GROUP_NAMES for group in get_user_groups(db, user_id))
+    return any(
+        group["group_name"] in FULL_ACCESS_GROUP_NAMES and group["group_role"] == "admin"
+        for group in get_user_groups(db, user_id)
+    )
 
 
 def _get_ecommerce_tool(db: Session) -> Tool:

@@ -3,6 +3,7 @@ param(
     [string]$FrontendUrl = "http://127.0.0.1:5275",
     [string]$LogPath = "",
     [string]$StatePath = "",
+    [string]$RuntimeRoot = "",
     [int]$NotifyCooldownMinutes = 30,
     [int]$TimeoutSeconds = 8,
     [bool]$EnableWatchdog = $true
@@ -10,11 +11,16 @@ param(
 
 $ErrorActionPreference = "Stop"
 
+if (-not $RuntimeRoot) {
+    $RuntimeRoot = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot "..\.."))
+}
+$RuntimeRoot = [System.IO.Path]::GetFullPath($RuntimeRoot)
+
 if (-not $LogPath) {
-    $LogPath = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot "..\..\logs\health_check.log"))
+    $LogPath = Join-Path $RuntimeRoot "logs\health_check.log"
 }
 if (-not $StatePath) {
-    $StatePath = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot "..\..\backend\runtime\health_check_state.json"))
+    $StatePath = Join-Path $RuntimeRoot "backend\runtime\health_check_state.json"
 }
 
 New-Item -ItemType Directory -Force -Path (Split-Path $LogPath -Parent) | Out-Null
@@ -146,25 +152,83 @@ function Test-ProdWorker {
     }
 }
 
+function Get-ActiveProductionRelease {
+    $pointerPath = Join-Path $RuntimeRoot "backend\runtime\production-release.json"
+    if (-not (Test-Path $pointerPath)) {
+        return [pscustomobject]@{ root = $RuntimeRoot; commit = ""; legacy = $true }
+    }
+    try {
+        $pointer = Get-Content $pointerPath -Raw -Encoding utf8 | ConvertFrom-Json
+        $releaseRoot = [System.IO.Path]::GetFullPath([string]$pointer.release_root)
+        $serviceScript = Join-Path $releaseRoot "deploy\scripts\service_control_windows.ps1"
+        if (-not $pointer.commit -or -not (Test-Path $serviceScript)) {
+            throw "release pointer is incomplete"
+        }
+        return [pscustomobject]@{
+            root = $releaseRoot
+            commit = [string]$pointer.commit
+            legacy = $false
+        }
+    } catch {
+        Write-HealthLog "ERROR" "active production release pointer is invalid: $($_.Exception.Message)"
+        return $null
+    }
+}
+
+function Test-BackendReleaseVersion {
+    $release = Get-ActiveProductionRelease
+    if (-not $release -or $release.legacy) {
+        return [pscustomobject]@{ ok = $true; detail = "legacy release pointer not present" }
+    }
+    try {
+        $version = Invoke-RestMethod -Uri "$BaseUrl/api/health/version" -TimeoutSec $TimeoutSeconds
+        $ok = ([string]$version.env -eq "prod") -and ([string]$version.commit -eq $release.commit)
+        return [pscustomobject]@{
+            ok = $ok
+            detail = "release env=$($version.env) commit=$($version.commit) expected=$($release.commit)"
+        }
+    } catch {
+        return [pscustomobject]@{ ok = $false; detail = "release version failed: $($_.Exception.Message)" }
+    }
+}
+
 function Invoke-WatchdogAction {
     param([string]$Action)
-    $watchdogScript = Join-Path $PSScriptRoot "service_control_windows.ps1"
+    $release = Get-ActiveProductionRelease
+    if (-not $release) {
+        return
+    }
+    $watchdogScript = Join-Path $release.root "deploy\scripts\service_control_windows.ps1"
     if (-not (Test-Path $watchdogScript)) {
         Write-HealthLog "ERROR" "watchdog script not found: $watchdogScript"
         return
     }
     Write-HealthLog "WARN" "invoking prod watchdog action: $Action"
-    & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $watchdogScript -Action $Action | Out-Null
+    $arguments = @(
+        "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", $watchdogScript,
+        "-Action", $Action,
+        "-RepoRoot", $release.root,
+        "-RuntimeRoot", $RuntimeRoot,
+        "-DependencyRoot", $RuntimeRoot,
+        "-EnvFile", (Join-Path $RuntimeRoot "backend\.env"),
+        "-LogPath", (Join-Path $RuntimeRoot "logs\watchdog.log"),
+        "-ExpectedCommit", $release.commit
+    )
+    if ($release.legacy) {
+        $arguments += "-AllowLegacySharedProcess"
+    }
+    & powershell.exe @arguments | Out-Null
 }
 
 $state = Read-State
 $now = Get-Date
 $live = Test-Endpoint "/api/health/live"
 $ready = Test-Endpoint "/api/health/ready"
+$releaseVersion = Test-BackendReleaseVersion
 $frontend = Test-HttpOk $FrontendUrl
 $redis = Test-Redis
 $worker = Test-ProdWorker
-$backendHealthy = $live.ok -and $ready.ok
+$backendHealthy = $live.ok -and $ready.ok -and $releaseVersion.ok
 $healthy = $backendHealthy -and $frontend.ok -and $redis.ok -and $worker.ok
 
 if (-not $healthy -and $EnableWatchdog) {
@@ -183,10 +247,11 @@ if (-not $healthy -and $EnableWatchdog) {
 
     $live = Test-Endpoint "/api/health/live"
     $ready = Test-Endpoint "/api/health/ready"
+    $releaseVersion = Test-BackendReleaseVersion
     $frontend = Test-HttpOk $FrontendUrl
     $redis = Test-Redis
     $worker = Test-ProdWorker
-    $backendHealthy = $live.ok -and $ready.ok
+    $backendHealthy = $live.ok -and $ready.ok -and $releaseVersion.ok
     $healthy = $backendHealthy -and $frontend.ok -and $redis.ok -and $worker.ok
 }
 
@@ -207,7 +272,7 @@ if ($healthy) {
     exit 0
 }
 
-$reason = @($live.detail, $ready.detail, $frontend.detail, $redis.detail, $worker.detail) -join "; "
+$reason = @($live.detail, $ready.detail, $releaseVersion.detail, $frontend.detail, $redis.detail, $worker.detail) -join "; "
 Write-HealthLog "ERROR" "health check failed: $reason"
 
 $lastNotifyAt = $null

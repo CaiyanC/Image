@@ -41,6 +41,27 @@ def test_same_sku_rag_prompts_keep_named_heat_source_compatibility_exact():
         assert "does not by itself entail" in system
 
 
+def test_recommendation_strict_audit_keeps_compound_capabilities_atomic():
+    system = service._same_sku_knowledge_strict_entailment_messages(
+        "两个人露营，想要能煮面和简单炒菜的锅具。",
+        "这款锅能满足煮面和简单炒菜。",
+        json.dumps({
+            "same_sku_recommendation_candidates": [{
+                "sku": "CW-C01-37",
+                "sealed_evidence": {
+                    "content.long_description_cn": "可用于烧水、煮面或烹制热食",
+                },
+            }],
+        }, ensure_ascii=False),
+    )[0]["content"]
+
+    assert "Atomic capability boundary" in system
+    assert "every component" in system
+    assert "generic umbrella" in system
+    assert "Ordinary-operation semantic entailment" in system
+    assert "does not require" in system
+
+
 def test_same_sku_strict_audit_separates_gift_scene_from_recipient_fit():
     system = service._same_sku_knowledge_strict_entailment_messages(
         "CW-C83适合作为送给露营爱好者的礼物吗？",
@@ -207,8 +228,9 @@ def test_strict_entailment_prompt_keeps_task_use_below_categorical_success():
     assert "可用于烧水/煮面" in system_instruction
     assert "没问题/完全可以/满足烧水煮面需求/满足两人使用/够两人煮面" in system_instruction
 
-    assert "Named-operation override" in system_instruction
-    assert "符合记录" in system_instruction
+    assert "Named-operation boundary" in system_instruction
+    assert "Ordinary-operation semantic entailment" in system_instruction
+    assert "Exact quantities, specialized recipe results, safety" in system_instruction
 
 
 def test_compound_form_boundary_allows_explicit_same_sku_named_component():
@@ -224,7 +246,8 @@ def test_recommendation_group_task_boundary_does_not_upgrade_broad_cooking():
 
     assert "broad cooking evidence" in boundary
     assert "keep the customer's named task unconfirmed" in boundary
-    assert "only when the same-SKU packet explicitly states" in boundary
+    assert "directly states the named operation" in boundary
+    assert "complete ordinary-operation causal bundle" in boundary
     assert "specific recipe, dish, or operation" in boundary
     assert "general supported/bounded ordinary-use allowance" in boundary
 
@@ -1851,6 +1874,92 @@ def test_factor_type_review_promotes_operative_cooking_purpose_without_must_word
     assert "does not need to use words such as must" in captured["system"]
 
 
+def test_factor_type_review_atomizes_independently_checkable_capabilities(monkeypatch):
+    captured = {}
+
+    async def fake_chat_completion(*_args, **kwargs):
+        captured["system"] = kwargs["messages"][0]["content"]
+        return json.dumps({
+            "reviews": [{
+                "factor_index": 0,
+                "factor_type": "factual",
+                "decision_kind": "concrete_capability",
+                "dimension": "",
+                "importance": "required",
+                "selection_role": "operative_purpose",
+                "merge_into_factor_index": None,
+                "atomic_components": [
+                    {"factor": "能煮面", "customer_basis": "顾客主要要煮面"},
+                    {"factor": "能简单炒菜", "customer_basis": "顾客还要简单炒菜"},
+                ],
+            }]
+        }, ensure_ascii=False)
+
+    monkeypatch.setattr(service.customer_llm_service, "chat_completion", fake_chat_completion)
+    reviewed = asyncio.run(service._semantic_review_recommendation_factor_types(
+        SimpleNamespace(),
+        question="主要煮面和简单炒菜，推荐一款锅具。",
+        factors=[{
+            "factor": "适合煮面和简单炒菜",
+            "customer_basis": "顾客主要煮面和简单炒菜",
+            "dimension": "",
+            "factor_type": "factual",
+            "decision_kind": "concrete_capability",
+            "importance": "required",
+            "selection_role": "operative_purpose",
+        }],
+    ))
+
+    assert [item["factor"] for item in reviewed] == ["能煮面", "能简单炒菜"]
+    assert [item["importance"] for item in reviewed] == ["required", "required"]
+    assert [item["selection_role"] for item in reviewed] == [
+        "operative_purpose",
+        "operative_purpose",
+    ]
+    assert "Atomic capability decomposition" in captured["system"]
+
+
+def test_compact_semantic_atomizer_splits_compound_capability_without_candidates(monkeypatch):
+    captured = {}
+
+    async def fake_chat_completion(*_args, **kwargs):
+        captured["purpose"] = kwargs["purpose"]
+        captured["system"] = kwargs["messages"][0]["content"]
+        captured["payload"] = json.loads(kwargs["messages"][1]["content"])
+        return json.dumps({
+            "factor_groups": [{
+                "factor_index": 0,
+                "components": [
+                    {"factor": "能煮面", "customer_basis": "主要煮面"},
+                    {"factor": "能简单炒菜", "customer_basis": "还要简单炒菜"},
+                ],
+            }]
+        }, ensure_ascii=False)
+
+    monkeypatch.setattr(service.customer_llm_service, "chat_completion", fake_chat_completion)
+    original = [{
+        "factor": "能煮面和简单炒菜",
+        "customer_basis": "顾客主要煮面和简单炒菜",
+        "factor_type": "factual",
+        "decision_kind": "concrete_capability",
+        "importance": "required",
+        "selection_role": "operative_purpose",
+    }]
+
+    atomized = asyncio.run(service._semantic_atomize_recommendation_factors(
+        SimpleNamespace(),
+        question="主要煮面和简单炒菜，推荐一款锅具。",
+        factors=original,
+    ))
+
+    assert captured["purpose"] == "semantic_recommendation_factor_atomization"
+    assert "no product data is supplied" in captured["system"]
+    assert "sealed_evidence" not in json.dumps(captured["payload"])
+    assert [item["factor"] for item in atomized] == ["能煮面", "能简单炒菜"]
+    assert all(item["importance"] == "required" for item in atomized)
+    assert all(item["selection_role"] == "operative_purpose" for item in atomized)
+
+
 def test_selection_role_reconciliation_promotes_missing_operative_purpose(monkeypatch):
     captured = {}
 
@@ -2302,6 +2411,20 @@ def test_decision_factor_contract_marks_recipient_background_as_context(monkeypa
     captured = {}
 
     async def fake_chat_completion(*_args, **kwargs):
+        if kwargs["purpose"] == "semantic_recommendation_factor_atomization":
+            payload = json.loads(kwargs["messages"][1]["content"])
+            return json.dumps({
+                "factor_groups": [
+                    {
+                        "factor_index": item["factor_index"],
+                        "components": [{
+                            "factor": item["factor"],
+                            "customer_basis": item["customer_basis"],
+                        }],
+                    }
+                    for item in payload["factors"]
+                ]
+            })
         captured["system"] = kwargs["messages"][0]["content"]
         return json.dumps({
             "requested_product_form_factor": None,
@@ -2344,6 +2467,20 @@ def test_decision_factor_prompt_keeps_named_method_as_product_capability(monkeyp
                     "factor_index": 0,
                     "selection_role": "operative_purpose",
                 }],
+            })
+        if kwargs["purpose"] == "semantic_recommendation_factor_atomization":
+            payload = json.loads(kwargs["messages"][1]["content"])
+            return json.dumps({
+                "factor_groups": [
+                    {
+                        "factor_index": item["factor_index"],
+                        "components": [{
+                            "factor": item["factor"],
+                            "customer_basis": item["customer_basis"],
+                        }],
+                    }
+                    for item in payload["factors"]
+                ]
             })
         captured["system"] = kwargs["messages"][0]["content"]
         return json.dumps({
@@ -2556,14 +2693,28 @@ def test_semantic_coverage_prompt_maps_normalized_product_form_to_customer_langu
 
 
 def test_semantic_coverage_candidate_limit_bounds_factor_matrix():
-    assert service._semantic_coverage_candidate_limit(10, 6) == 8
+    assert service._semantic_coverage_candidate_limit(10, 6) == 10
     assert service._semantic_coverage_candidate_limit(16, 2) == 16
     assert service._semantic_coverage_candidate_limit(16, 3) == 16
-    assert service._semantic_coverage_candidate_limit(16, 6) == 8
+    assert service._semantic_coverage_candidate_limit(16, 6) == 12
     assert service._semantic_coverage_candidate_limit(24, 2) == 24
-    assert service._semantic_coverage_candidate_limit(24, 3) == 16
+    assert service._semantic_coverage_candidate_limit(24, 3) == 24
     assert service._semantic_coverage_candidate_limit(3, 8) == 3
     assert service._semantic_coverage_candidate_limit(0, 4) == 0
+
+
+def test_coverage_projection_preserves_same_sku_usage_instructions():
+    instruction = "小火预热后倒油，油温升高后放入食材。" * 30
+    projected = service._semantic_coverage_candidate_projection([{
+        "candidate_index": 0,
+        "sku": "CW-C78",
+        "sealed_evidence": {
+            "specs.usage_instruction": instruction,
+        },
+    }])
+
+    evidence = projected[0]["sealed_evidence"]
+    assert evidence["specs.usage_instruction"] == instruction[:520]
 
 
 def test_semantic_coverage_downgrades_title_only_capability_evidence(monkeypatch):
@@ -3065,6 +3216,69 @@ def test_semantic_structured_field_is_adapted_to_same_sku_rag_without_local_fiel
     assert adapted["qa_evidence_query"] == "CW-S10-1 容量是多少？"
     assert adapted["semantic_original_formal_fields"] == ["capacity"]
     assert adapted["semantic_adapter_source"] == "semantic_structured_fields_to_same_sku_rag"
+
+
+def test_semantic_structured_field_uses_validated_context_sku_over_model_display_name():
+    adapted = service._semantic_structured_fields_to_product_qa_preplan(
+        {
+            "called": True,
+            "route_family": "product_bound_qa",
+            "context_usage": "result_context",
+            "context_result_indexes": [1],
+            "evidence_kind": "structured_field",
+            "subject_text": "激川单锅",
+            "canonical_fields": ["weight"],
+            "field_type": "weight",
+        },
+        "那重量呢？",
+        context_sku="cw-s10-1",
+    )
+
+    assert adapted is not None
+    assert adapted["subject_text"] == "CW-S10-1"
+    assert adapted["semantic_context_result_sku"] == "CW-S10-1"
+    assert adapted["semantic_context_subject_text"] == "激川单锅"
+    assert adapted["evidence_kind"] == "product_qa"
+
+
+def test_single_product_agent_context_exposes_result_identity_ledger():
+    message = SimpleNamespace(
+        sources_json=json.dumps([
+            {
+                "type": "agent_context",
+                "current_sku": "cw-s10-1",
+                "result_skus": ["cw-s10-1"],
+            }
+        ])
+    )
+
+    class _Query:
+        def filter(self, *_args):
+            return self
+
+        def order_by(self, *_args):
+            return self
+
+        def limit(self, _limit):
+            return self
+
+        def all(self):
+            return [message]
+
+    class _Db:
+        def query(self, *_args):
+            return _Query()
+
+    context = service._latest_recommendation_context_for_sources(_Db(), "conv-1")
+
+    assert context["active_single_product_anchor"] == "CW-S10-1"
+    assert context["result_reference_skus"] == ["CW-S10-1"]
+    assert context["ordered_result_skus"] == ["CW-S10-1"]
+    assert context["last_referenced_sku"] == "CW-S10-1"
+    assert service._semantic_context_result_skus(
+        {"context_result_indexes": [1]},
+        service._semantic_prior_result_context_skus(context),
+    ) == ["CW-S10-1"]
 
 
 def test_semantic_formal_fact_enters_same_sku_rag_packet_without_structured_writer(monkeypatch):
@@ -4537,6 +4751,20 @@ def test_factor_contract_separates_catalogue_portability_from_personal_burden(mo
                     {"factor_index": 1, "selection_role": "operative_purpose"},
                     {"factor_index": 2, "selection_role": "ranking_quality"},
                 ],
+            })
+        if kwargs["purpose"] == "semantic_recommendation_factor_atomization":
+            payload = json.loads(kwargs["messages"][1]["content"])
+            return json.dumps({
+                "factor_groups": [
+                    {
+                        "factor_index": item["factor_index"],
+                        "components": [{
+                            "factor": item["factor"],
+                            "customer_basis": item["customer_basis"],
+                        }],
+                    }
+                    for item in payload["factors"]
+                ]
             })
         captured["extraction_system"] = kwargs["messages"][0]["content"]
         return json.dumps({
@@ -7278,6 +7506,50 @@ def test_general_guidance_safety_review_preserves_approved_draft(monkeypatch):
     assert audit["status"] == "approved"
 
 
+def test_general_safety_guidance_can_answer_after_empty_rag(monkeypatch):
+    calls = []
+
+    async def fake_chat_completion(_db, *_args, **kwargs):
+        calls.append(kwargs["purpose"])
+        if kwargs["purpose"] == "semantic_general_guidance_after_rag_missing":
+            return json.dumps({
+                "answer": "不要把燃气罐留在密闭、暴晒或高温的车内；请移到阴凉处，并按气罐说明和当地运输规定处理。",
+            }, ensure_ascii=False)
+        return json.dumps({
+            "safe": True,
+            "answer": "ignored when safe",
+            "reason": "conservative prohibition",
+        }, ensure_ascii=False)
+
+    monkeypatch.setattr(service.customer_llm_service, "chat_completion", fake_chat_completion)
+    result = asyncio.run(service._semantic_general_guidance_after_rag_missing(
+        SimpleNamespace(),
+        question="燃气罐可以放在密闭车里暴晒吗？",
+        semantic_preplan={"qa_or_usage_care": True, "question_type": "safety"},
+    ))
+
+    assert result is not None
+    assert "不要" in result["answer"]
+    assert result["debug"]["agent_mode"] == "semantic_general_guidance_after_rag_missing"
+    assert calls == [
+        "semantic_general_guidance_after_rag_missing",
+        "semantic_general_guidance_safety_review",
+    ]
+
+
+def test_comparison_executor_accepts_typed_conditional_choice_index():
+    assert service._semantic_comparison_adjudicated_choice_index({
+        "selected_index": None,
+        "conditional_choice_index": 0,
+        "evidence_fields": ["capacity"],
+    }) == 0
+    assert service._semantic_comparison_adjudicated_choice_index({
+        "selected_index": 1,
+        "conditional_choice_index": None,
+    }) == 1
+    assert service._semantic_comparison_adjudicated_choice_index(None) is None
+
+
 def test_general_guidance_safety_review_rejects_unanchored_capability_without_evidence(monkeypatch):
     async def fake_chat_completion(_db, messages, **kwargs):
         assert kwargs["purpose"] == "semantic_general_guidance_safety_review"
@@ -7673,6 +7945,46 @@ def test_semantic_comparison_narrative_recovery_reuses_the_same_sealed_packet(mo
     assert "draft_answer" not in captured["payload"]
     assert captured["payload"]["sealed_evidence"] == packet
     assert captured["grounding_kwargs"]["strict_entailment"] is True
+
+
+def test_comparison_narrative_accepts_sku_followed_by_chinese_prose(monkeypatch):
+    calls = []
+
+    async def fake_chat_completion(*_args, **kwargs):
+        calls.append(kwargs["purpose"])
+        return json.dumps({
+            "answer": (
+                "CW-C78的容量更大：大锅为3L；"
+                "CW-C01-37的锅为900ML。这里比较的是两款已列出的锅体容量。"
+            ),
+            "used_evidence_fields": ["capacity"],
+        }, ensure_ascii=False)
+
+    async def fake_grounded(*_args, **_kwargs):
+        return True
+
+    monkeypatch.setattr(service.customer_llm_service, "chat_completion", fake_chat_completion)
+    monkeypatch.setattr(service, "_same_sku_evidence_answer_is_grounded", fake_grounded)
+
+    result = asyncio.run(service._semantic_comparison_narrative(
+        SimpleNamespace(),
+        question="CW-C78和CW-C01-37哪个容量更大？",
+        participants=[
+            {"participant_index": 0, "product_name": "享野套锅", "sku": "CW-C78"},
+            {"participant_index": 1, "product_name": "1－2人野营锅7件套", "sku": "CW-C01-37"},
+        ],
+        evidence_packet={
+            "capacity": [
+                {"participant_index": 0, "value": "[大锅] 3L，[小锅] 1.7L，[水壶] 0.8L", "source": "specs.capacity"},
+                {"participant_index": 1, "value": "锅：900ML，碗：450ML", "source": "specs.capacity"},
+            ],
+        },
+        selected_index=0,
+    ))
+
+    assert result is not None
+    assert result["answer"].startswith("CW-C78的容量更大")
+    assert calls == ["semantic_comparison_narrative"]
 
 
 def test_fresh_recommendation_context_keeps_semantic_boundaries_without_old_skus():

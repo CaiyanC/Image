@@ -1,61 +1,91 @@
 from pathlib import Path
 
 
-SCRIPT = (
-    Path(__file__).resolve().parents[2]
-    / "deploy"
-    / "scripts"
-    / "service_control_windows.ps1"
-)
+ROOT = Path(__file__).resolve().parents[2]
+SERVICE_SCRIPT = ROOT / "deploy" / "scripts" / "service_control_windows.ps1"
+HEALTH_SCRIPT = ROOT / "deploy" / "scripts" / "health_check_windows.ps1"
+PREPARE_SCRIPT = ROOT / "deploy" / "scripts" / "prepare_production_release.ps1"
+START_PROD = ROOT / "start-prod.bat"
+STOP_PROD = ROOT / "stop-prod.bat"
 
 
-def _script_text() -> str:
-    return SCRIPT.read_text(encoding="utf-8")
+def _text(path: Path) -> str:
+    return path.read_text(encoding="utf-8")
 
 
-def test_backend_stop_uses_best_effort_process_cleanup_and_final_port_gate():
-    script = _script_text()
+def test_backend_stop_is_identity_checked_and_has_explicit_legacy_transition():
+    script = _text(SERVICE_SCRIPT)
 
     assert "function Stop-ProcessTreeBestEffort" in script
     assert "function Stop-BackendListeners" in script
     assert "Wait-PortReleased -Port $ProdBackendPort" in script
-    assert "backend port $ProdBackendPort is clear" in script
-
-
-def test_backend_stop_rejects_unresolved_or_unexpected_remaining_listener():
-    script = _script_text()
-
-    assert "cannot be resolved after stop attempt" in script
-    assert "is not a production backend after stop attempt" in script
     assert "Test-ProductionBackendProcess" in script
+    assert "[switch]$AllowLegacySharedProcess" in script
+    assert "$executable -eq $ProdPython" in script
+    assert "$executable -eq $LegacyPython" in script
+    assert "multiprocessing.spawn" in script
 
 
-def test_deploy_backend_keeps_runtime_identity_and_commit_gates():
-    script = _script_text()
+def test_all_action_enforces_release_identity_health_and_commit_gates():
+    script = _text(SERVICE_SCRIPT)
 
+    assert "$ProdPython" in script
+    assert "$ExpectedBackendRoot" in script
     assert "Test-BackendListenerIntegrity" in script
     assert "Test-BackendHealthEndpoints" in script
     assert '/api/health/live"' in script
-    assert "backend health/live/ready check failed after deploy restart" in script
-    assert "Test-BackendVersion -Commit $Commit" in script
-    assert "backend version pid cannot be resolved" in script
+    assert "Test-BackendVersion -Commit $ExpectedCommit" in script
     assert "backend commit mismatch" in script
-    assert "backend code_root mismatch" in script
-    assert "backend cwd mismatch" in script
+    assert "backend environment mismatch" in script
+    assert '$env:APP_BRANCH = "master"' in script
 
 
-def test_frontend_starts_production_dist_with_persistent_logs():
-    script = _script_text()
+def test_worker_and_frontend_use_release_code_with_persistent_runtime_paths():
+    script = _text(SERVICE_SCRIPT)
 
+    assert '$ProdLogDir = Join-Path $RuntimeRoot "logs\\prod"' in script
+    assert '$ProdUploadDir = [System.IO.Path]::GetFullPath((Join-Path $RuntimeRoot "backend\\uploads"))' in script
+    assert '$env:CAIYAN_RUNTIME_UPLOAD_DIR = $ProdUploadDir' in script
+    assert '$cmd -like "*$ExpectedBackendRoot*"' in script
+    assert '$executable -eq $ProdPython' in script
     assert '$ProdFrontendDir = Join-Path $RepoRoot "frontend"' in script
-    assert '$ProdFrontendOutLog = Join-Path $ProdLogDir "frontend.out.log"' in script
-    assert '$ProdFrontendErrLog = Join-Path $ProdLogDir "frontend.err.log"' in script
-    assert 'Test-Path (Join-Path $ProdFrontendDir "dist\\index.html")' in script
-    assert 'Start-Process -FilePath "npm.cmd"' in script
-    assert '@("run", "serve:prod")' in script
-    assert "-WorkingDirectory $ProdFrontendDir" in script
-    assert "-RedirectStandardOutput $ProdFrontendOutLog" in script
-    assert "-RedirectStandardError $ProdFrontendErrLog" in script
-    assert "http://127.0.0.1:$ProdFrontendPort" in script
+    assert '$ProdServeCommand' in script
+    assert '@("-s", "dist", "-l", "$ProdFrontendPort", "-c", "serve.json")' in script
     assert "5276" not in script
     assert "8001" not in script
+
+
+def test_release_preparation_requires_master_clean_tree_and_detached_worktree():
+    script = _text(PREPARE_SCRIPT)
+
+    assert '$branch -ne "master"' in script
+    assert "git -C $SourceRepo diff --quiet" in script
+    assert "git -C $SourceRepo diff --cached --quiet" in script
+    assert "worktree add --detach" in script
+    assert "npm" in script and "ci" in script and "run build" in script
+    assert "backend\\runtime\\prod-venv" in script
+    assert "production-release.json" in script
+
+
+def test_start_and_stop_resolve_the_immutable_release_pointer():
+    start_script = _text(START_PROD)
+    stop_script = _text(STOP_PROD)
+
+    assert "prepare_production_release.ps1" in start_script
+    assert '-RepoRoot "%RELEASE_ROOT%"' in start_script
+    assert '-ExpectedCommit "%RELEASE_COMMIT%"' in start_script
+    assert "-AllowLegacySharedProcess" in start_script
+    assert "production-release.json" in stop_script
+    assert '-RepoRoot "%ACTIVE_RELEASE_ROOT%"' in stop_script
+    assert '-ExpectedCommit "%ACTIVE_RELEASE_COMMIT%"' in stop_script
+
+
+def test_health_watchdog_recovers_the_active_release_not_the_mutable_source_tree():
+    script = _text(HEALTH_SCRIPT)
+
+    assert "function Get-ActiveProductionRelease" in script
+    assert "production-release.json" in script
+    assert "function Test-BackendReleaseVersion" in script
+    assert '"-RepoRoot", $release.root' in script
+    assert '"-ExpectedCommit", $release.commit' in script
+    assert "$releaseVersion.ok" in script

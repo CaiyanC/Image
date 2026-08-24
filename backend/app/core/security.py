@@ -1,9 +1,10 @@
 from datetime import datetime, timedelta, timezone
+import uuid
 from typing import Optional
 import jwt
 from jwt import InvalidTokenError
 from passlib.context import CryptContext
-from fastapi import Depends, HTTPException, status
+from fastapi import Cookie, Depends, HTTPException, status
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from sqlalchemy.orm import Session
 
@@ -16,7 +17,7 @@ from ..models.user_group import UserGroup
 from ..models.permissions import GroupPermission, Permission
 
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
-security = HTTPBearer()
+security = HTTPBearer(auto_error=False)
 
 
 def verify_password(plain_password: str, password_hash: str) -> bool:
@@ -32,30 +33,52 @@ def create_access_token(data: dict, expires_delta: Optional[timedelta] = None) -
     expire = datetime.now(timezone.utc) + (
         expires_delta or timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES)
     )
-    to_encode.update({"exp": expire})
+    to_encode.setdefault("ver", 0)
+    to_encode.update({
+        "exp": expire,
+        "iat": datetime.now(timezone.utc),
+        "jti": str(uuid.uuid4()),
+        "iss": settings.AUTH_TOKEN_ISSUER,
+        "aud": settings.AUTH_TOKEN_AUDIENCE,
+        "typ": "access",
+    })
     return jwt.encode(to_encode, settings.SECRET_KEY, algorithm=settings.ALGORITHM)
 
 
 def get_current_user(
-    credentials: HTTPAuthorizationCredentials = Depends(security),
+    credentials: HTTPAuthorizationCredentials | None = Depends(security),
+    session_cookie: str | None = Cookie(default=None, alias=settings.AUTH_COOKIE_NAME),
     db: Session = Depends(get_db),
 ) -> User:
-    token = credentials.credentials
+    token = credentials.credentials if credentials else session_cookie
     credentials_exception = HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,
         detail="Could not validate credentials",
         headers={"WWW-Authenticate": "Bearer"},
     )
     try:
-        payload = jwt.decode(token, settings.SECRET_KEY, algorithms=[settings.ALGORITHM])
-        user_id: str = payload.get("sub")
-        if user_id is None:
+        if not token:
             raise credentials_exception
-    except InvalidTokenError:
+        payload = jwt.decode(
+            token,
+            settings.SECRET_KEY,
+            algorithms=[settings.ALGORITHM],
+            audience=settings.AUTH_TOKEN_AUDIENCE,
+            issuer=settings.AUTH_TOKEN_ISSUER,
+        )
+        user_id = payload.get("sub")
+        if not isinstance(user_id, str) or not user_id or payload.get("typ") != "access":
+            raise credentials_exception
+        token_version = int(payload.get("ver", -1))
+    except (InvalidTokenError, TypeError, ValueError):
         raise credentials_exception
 
     user = db.query(User).filter(User.id == user_id).first()
-    if user is None or not user.is_active:
+    if (
+        user is None
+        or not user.is_active
+        or token_version != int(user.auth_version or 0)
+    ):
         raise credentials_exception
     return user
 
@@ -102,6 +125,7 @@ def _is_in_management(db: Session, user_id: str) -> bool:
     return db.query(UserGroup).join(Group, UserGroup.group_id == Group.id).filter(
         UserGroup.user_id == user_id,
         Group.group_name.in_(FULL_ACCESS_GROUP_NAMES),
+        UserGroup.group_role == "admin",
     ).first() is not None
 
 

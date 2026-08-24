@@ -26,8 +26,8 @@ export default function Header() {
     return isSuperAdmin || user?.permissions?.includes(permissionKey)
   }
 
-  function handleLogout() {
-    logout()
+  async function handleLogout() {
+    await logout()
     navigate('/login')
   }
 

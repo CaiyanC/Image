@@ -105,41 +105,71 @@ pause
 exit /b 0
 
 :load_env_prod
-set "CAIYAN_ENV_FILE=%~dp0backend\.env"
-for /f "usebackq eol=# tokens=1,* delims==" %%a in ("%~dp0backend\.env") do (
+if not defined CAIYAN_ENV_FILE set "CAIYAN_ENV_FILE=%~dp0backend\.env"
+if not exist "%CAIYAN_ENV_FILE%" (
+    echo Production environment file is missing: %CAIYAN_ENV_FILE%
+    exit /b 1
+)
+for /f "usebackq eol=# tokens=1,* delims==" %%a in ("%CAIYAN_ENV_FILE%") do (
     if not "%%a"=="" set "%%a=%%b"
 )
+if defined CAIYAN_RUNTIME_UPLOAD_DIR set "UPLOAD_DIR=%CAIYAN_RUNTIME_UPLOAD_DIR%"
+if defined CAIYAN_RUNTIME_LOG_DIR set "LOG_DIR=%CAIYAN_RUNTIME_LOG_DIR%"
 exit /b 0
 
 :backend
 title CaiYan Backend - 8000
 cd /d "%~dp0backend"
 call :load_env_prod
+if errorlevel 1 exit /b %errorlevel%
 set "LOG_DIR_WIN=%LOG_DIR:/=\%"
 if "%COMPUTERNAME%"=="" set "COMPUTERNAME=localhost"
-if not exist "..\%LOG_DIR_WIN%" mkdir "..\%LOG_DIR_WIN%"
-echo Production backend env: APP_ENV=%APP_ENV% PORT=%BACKEND_PORT% ENV_FILE=%CAIYAN_ENV_FILE%
-if not exist "venv\Scripts\activate.bat" (
-    python -m venv venv
+if defined CAIYAN_RUNTIME_LOG_DIR (
+    if not exist "%LOG_DIR_WIN%" mkdir "%LOG_DIR_WIN%"
+) else (
+    if not exist "..\%LOG_DIR_WIN%" mkdir "..\%LOG_DIR_WIN%"
 )
-call "venv\Scripts\activate.bat"
-python -m pip install -r requirements.txt
-python -m uvicorn app.main:app --host 0.0.0.0 --port %BACKEND_PORT% --workers 4 --timeout-keep-alive 120
+echo Production backend env: APP_ENV=%APP_ENV% PORT=%BACKEND_PORT% ENV_FILE=%CAIYAN_ENV_FILE%
+set "PYTHON_EXE=%CAIYAN_PYTHON_EXE%"
+if not defined PYTHON_EXE (
+    if not exist "venv\Scripts\python.exe" python -m venv venv
+    set "PYTHON_EXE=%CD%\venv\Scripts\python.exe"
+    "!PYTHON_EXE!" -m pip install -r requirements.txt
+)
+if not exist "%PYTHON_EXE%" (
+    echo Production Python executable is missing: %PYTHON_EXE%
+    exit /b 1
+)
+"%PYTHON_EXE%" -m uvicorn app.main:app --app-dir "%~dp0backend" --host 0.0.0.0 --port %BACKEND_PORT% --workers 4 --timeout-keep-alive 120
 exit /b %errorlevel%
 
 :worker
 title CaiYan Celery Worker
 cd /d "%~dp0backend"
 call :load_env_prod
+if errorlevel 1 exit /b %errorlevel%
 set "LOG_DIR_WIN=%LOG_DIR:/=\%"
 if "%COMPUTERNAME%"=="" set "COMPUTERNAME=localhost"
-if not exist "..\%LOG_DIR_WIN%" mkdir "..\%LOG_DIR_WIN%"
-if not exist "venv\Scripts\activate.bat" (
-    python -m venv venv
+if defined CAIYAN_RUNTIME_LOG_DIR (
+    if not exist "%LOG_DIR_WIN%" mkdir "%LOG_DIR_WIN%"
+    set "WORKER_PID_FILE=%LOG_DIR_WIN%\celery.pid"
+    set "WORKER_LOG_FILE=%LOG_DIR_WIN%\celery.log"
+) else (
+    if not exist "..\%LOG_DIR_WIN%" mkdir "..\%LOG_DIR_WIN%"
+    set "WORKER_PID_FILE=..\%LOG_DIR_WIN%\celery.pid"
+    set "WORKER_LOG_FILE=..\%LOG_DIR_WIN%\celery.log"
 )
-call "venv\Scripts\activate.bat"
-python -m pip install -r requirements.txt
-python -m celery -A app.core.celery_app.celery_app worker --loglevel=info --pool=solo -Q %CELERY_QUEUE% -n %CELERY_WORKER_NAME%@%COMPUTERNAME% --pidfile=..\%LOG_DIR_WIN%\celery.pid --logfile=..\%LOG_DIR_WIN%\celery.log
+set "PYTHON_EXE=%CAIYAN_PYTHON_EXE%"
+if not defined PYTHON_EXE (
+    if not exist "venv\Scripts\python.exe" python -m venv venv
+    set "PYTHON_EXE=%CD%\venv\Scripts\python.exe"
+    "!PYTHON_EXE!" -m pip install -r requirements.txt
+)
+if not exist "%PYTHON_EXE%" (
+    echo Production Python executable is missing: %PYTHON_EXE%
+    exit /b 1
+)
+"%PYTHON_EXE%" -m celery --workdir "%~dp0backend" -A app.core.celery_app.celery_app worker --loglevel=info --pool=solo -Q %CELERY_QUEUE% -n %CELERY_WORKER_NAME%@%COMPUTERNAME% --pidfile="%WORKER_PID_FILE%" --logfile="%WORKER_LOG_FILE%"
 exit /b %errorlevel%
 
 :frontend

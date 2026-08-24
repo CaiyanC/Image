@@ -2,8 +2,12 @@ param(
     [ValidateSet("Redis", "Backend", "RestartBackend", "DeployBackend", "Frontend", "Worker", "All", "StopAll", "Watchdog")]
     [string]$Action = "All",
     [string]$RepoRoot = "",
+    [string]$RuntimeRoot = "",
+    [string]$DependencyRoot = "",
+    [string]$EnvFile = "",
     [string]$LogPath = "",
-    [string]$ExpectedCommit = ""
+    [string]$ExpectedCommit = "",
+    [switch]$AllowLegacySharedProcess
 )
 
 $ErrorActionPreference = "Stop"
@@ -11,9 +15,23 @@ $ErrorActionPreference = "Stop"
 if (-not $RepoRoot) {
     $RepoRoot = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot "..\.."))
 }
-if (-not $LogPath) {
-    $LogPath = Join-Path $RepoRoot "logs\watchdog.log"
+if (-not $RuntimeRoot) {
+    $RuntimeRoot = $RepoRoot
 }
+if (-not $DependencyRoot) {
+    $DependencyRoot = $RuntimeRoot
+}
+if (-not $EnvFile) {
+    $EnvFile = Join-Path $RuntimeRoot "backend\.env"
+}
+if (-not $LogPath) {
+    $LogPath = Join-Path $RuntimeRoot "logs\watchdog.log"
+}
+
+$RepoRoot = [System.IO.Path]::GetFullPath($RepoRoot)
+$RuntimeRoot = [System.IO.Path]::GetFullPath($RuntimeRoot)
+$DependencyRoot = [System.IO.Path]::GetFullPath($DependencyRoot)
+$EnvFile = [System.IO.Path]::GetFullPath($EnvFile)
 
 New-Item -ItemType Directory -Force -Path (Split-Path $LogPath -Parent) | Out-Null
 
@@ -21,12 +39,23 @@ $ProdBackendPort = 8000
 $ProdFrontendPort = 5275
 $ProdQueue = "celery_prod"
 $ProdWorkerName = "worker_prod"
-$ProdLogDir = Join-Path $RepoRoot "logs\prod"
+$ProdLogDir = Join-Path $RuntimeRoot "logs\prod"
 $ProdWorkerPidFile = Join-Path $ProdLogDir "celery.pid"
 $ProdFrontendDir = Join-Path $RepoRoot "frontend"
 $ProdFrontendOutLog = Join-Path $ProdLogDir "frontend.out.log"
 $ProdFrontendErrLog = Join-Path $ProdLogDir "frontend.err.log"
 $ExpectedBackendRoot = [System.IO.Path]::GetFullPath((Join-Path $RepoRoot "backend"))
+$ProdPython = [System.IO.Path]::GetFullPath((Join-Path $DependencyRoot "backend\runtime\prod-venv\Scripts\python.exe"))
+$LegacyPython = [System.IO.Path]::GetFullPath((Join-Path $RuntimeRoot "backend\venv\Scripts\python.exe"))
+$ProdServeCommand = [System.IO.Path]::GetFullPath((Join-Path $DependencyRoot "frontend\node_modules\.bin\serve.cmd"))
+$ProdUploadDir = [System.IO.Path]::GetFullPath((Join-Path $RuntimeRoot "backend\uploads"))
+
+$env:CAIYAN_ENV_FILE = $EnvFile
+$env:CAIYAN_RUNTIME_UPLOAD_DIR = $ProdUploadDir
+$env:CAIYAN_RUNTIME_LOG_DIR = $ProdLogDir
+$env:CAIYAN_PYTHON_EXE = $ProdPython
+$env:APP_COMMIT = $ExpectedCommit
+$env:APP_BRANCH = "master"
 
 function Write-WatchdogLog {
     param([string]$Level, [string]$Message)
@@ -73,13 +102,71 @@ function Get-ProcessById {
     return Get-CimInstance Win32_Process -Filter "ProcessId=$ProcessId" -ErrorAction SilentlyContinue
 }
 
+function Get-NormalizedProcessPath {
+    param($Process)
+    if (-not $Process -or -not $Process.ExecutablePath) {
+        return ""
+    }
+    try {
+        return [System.IO.Path]::GetFullPath([string]$Process.ExecutablePath)
+    } catch {
+        return ""
+    }
+}
+
 function Test-ProductionBackendProcess {
     param($Process)
     if (-not $Process) {
         return $false
     }
     $cmd = [string]$Process.CommandLine
-    return $cmd -like "*uvicorn app.main:app*" -and $cmd -like "*--port $ProdBackendPort*"
+    $executable = Get-NormalizedProcessPath -Process $Process
+    if (-not $executable) {
+        return $false
+    }
+    $releaseProcess = (
+        $cmd -like "*uvicorn app.main:app*" -and
+        $cmd -like "*--port $ProdBackendPort*" -and
+        $cmd -like "*$ExpectedBackendRoot*" -and
+        $executable -eq $ProdPython
+    )
+    $legacyProcess = (
+        $AllowLegacySharedProcess -and
+        $cmd -like "*uvicorn app.main:app*" -and
+        $cmd -like "*--port $ProdBackendPort*" -and
+        $executable -eq $LegacyPython
+    )
+    if ($releaseProcess -or $legacyProcess) {
+        return $true
+    }
+
+    # Uvicorn worker children can own the listening socket on Windows while their
+    # command line only contains multiprocessing.spawn. Validate those children
+    # through both their dedicated interpreter and their uvicorn parent.
+    if ($cmd -notlike "*multiprocessing.spawn*") {
+        return $false
+    }
+    $parent = Get-ProcessById -ProcessId ([int]$Process.ParentProcessId)
+    if (-not $parent) {
+        return $false
+    }
+    $parentCmd = [string]$parent.CommandLine
+    $parentExecutable = Get-NormalizedProcessPath -Process $parent
+    $releaseChild = (
+        $executable -eq $ProdPython -and
+        $parentExecutable -eq $ProdPython -and
+        $parentCmd -like "*uvicorn app.main:app*" -and
+        $parentCmd -like "*--port $ProdBackendPort*" -and
+        $parentCmd -like "*$ExpectedBackendRoot*"
+    )
+    $legacyChild = (
+        $AllowLegacySharedProcess -and
+        $executable -eq $LegacyPython -and
+        $parentExecutable -eq $LegacyPython -and
+        $parentCmd -like "*uvicorn app.main:app*" -and
+        $parentCmd -like "*--port $ProdBackendPort*"
+    )
+    return $releaseChild -or $legacyChild
 }
 
 function Test-BackendListenerIntegrity {
@@ -110,36 +197,29 @@ function Test-BackendVersion {
         Write-WatchdogLog "ERROR" "backend version endpoint failed: $($_.Exception.Message)"
         return $false
     }
-    $codeRoot = [System.IO.Path]::GetFullPath([string]$version.code_root)
-    $cwd = [System.IO.Path]::GetFullPath([string]$version.cwd)
-    if ($codeRoot -ne $ExpectedBackendRoot) {
-        Write-WatchdogLog "ERROR" "backend code_root mismatch: expected=$ExpectedBackendRoot actual=$codeRoot"
-        return $false
-    }
-    if ($cwd -ne $ExpectedBackendRoot) {
-        Write-WatchdogLog "ERROR" "backend cwd mismatch: expected=$ExpectedBackendRoot actual=$cwd"
-        return $false
-    }
     if ($Commit -and ([string]$version.commit) -ne $Commit) {
         Write-WatchdogLog "ERROR" "backend commit mismatch: expected=$Commit actual=$($version.commit)"
         return $false
     }
-    $versionPid = 0
-    if (-not [int]::TryParse([string]$version.pid, [ref]$versionPid) -or $versionPid -le 0 -or -not (Get-ProcessById -ProcessId $versionPid)) {
-        Write-WatchdogLog "ERROR" "backend version pid cannot be resolved: $($version.pid)"
+    if ([string]$version.env -ne "prod") {
+        Write-WatchdogLog "ERROR" "backend environment mismatch: expected=prod actual=$($version.env)"
         return $false
     }
-    Write-WatchdogLog "INFO" "backend version verified commit=$($version.commit) code_root=$codeRoot cwd=$cwd pid=$($version.pid)"
+    Write-WatchdogLog "INFO" "backend public version verified commit=$($version.commit) env=$($version.env)"
     return $true
 }
 
 function Test-ProdWorker {
     $workers = Get-CimInstance Win32_Process | Where-Object {
-        $cmd = $_.CommandLine
+        $cmd = [string]$_.CommandLine
+        $executable = Get-NormalizedProcessPath -Process $_
         $cmd -and (
             $cmd -like "*$ProdWorkerName@*" -or
             $cmd -like "*-Q $ProdQueue*"
-        )
+        ) -and
+        $cmd -like "*celery*" -and
+        $cmd -like "*$ExpectedBackendRoot*" -and
+        $executable -eq $ProdPython
     }
     return [bool]$workers
 }
@@ -216,7 +296,7 @@ function Stop-BackendListeners {
                 $orphans = @(Get-CimInstance Win32_Process -ErrorAction SilentlyContinue | Where-Object {
                     $cmd = [string]$_.CommandLine
                     $_.ParentProcessId -eq $pidValue -and
-                    $cmd -like "*$ExpectedBackendRoot*venv*python*" -and
+                    (Get-NormalizedProcessPath -Process $_) -eq $ProdPython -and
                     $cmd -like "*multiprocessing.spawn*"
                 })
                 if (-not $orphans) {
@@ -439,13 +519,13 @@ function Start-Frontend {
         Write-WatchdogLog "ERROR" "production frontend dist is missing: $frontendIndex"
         return $false
     }
-    if (-not (Get-Command "npm.cmd" -ErrorAction SilentlyContinue)) {
-        Write-WatchdogLog "ERROR" "npm.cmd is not available for production frontend startup"
+    if (-not (Test-Path $ProdServeCommand)) {
+        Write-WatchdogLog "ERROR" "production serve command is missing: $ProdServeCommand"
         return $false
     }
     New-Item -ItemType Directory -Force -Path $ProdLogDir | Out-Null
     Write-WatchdogLog "WARN" "starting production frontend from $ProdFrontendDir on port $ProdFrontendPort"
-    $frontendProcess = Start-Process -FilePath "npm.cmd" -ArgumentList @("run", "serve:prod") `
+    $frontendProcess = Start-Process -FilePath $ProdServeCommand -ArgumentList @("-s", "dist", "-l", "$ProdFrontendPort", "-c", "serve.json") `
         -WorkingDirectory $ProdFrontendDir -WindowStyle Hidden -PassThru `
         -RedirectStandardOutput $ProdFrontendOutLog -RedirectStandardError $ProdFrontendErrLog
     Write-WatchdogLog "INFO" "production frontend launcher pid=$($frontendProcess.Id) stdout=$ProdFrontendOutLog stderr=$ProdFrontendErrLog"
@@ -505,6 +585,13 @@ function Ensure-All {
     $backendOk = $false
     if ($redisOk -and $postgresOk) {
         $backendOk = Start-Backend
+        if ($backendOk) {
+            $backendOk = (
+                (Test-BackendListenerIntegrity) -and
+                (Test-BackendHealthEndpoints) -and
+                (Test-BackendVersion -Commit $ExpectedCommit)
+            )
+        }
     } else {
         Write-WatchdogLog "ERROR" "Backend start skipped because Redis or PostgreSQL is not ready"
     }

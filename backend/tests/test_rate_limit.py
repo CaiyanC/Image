@@ -45,13 +45,16 @@ class RateLimitTest(unittest.TestCase):
 
         enforce_rate_limit(user_id="user-1", scope="knowledge.retry", limit=1, window_seconds=60)
 
-    def test_fail_open_when_redis_is_unavailable(self):
+    def test_uses_bounded_local_fallback_when_redis_is_unavailable(self):
         set_rate_limit_redis_client(FailingRedis())
 
         with self.assertLogs("app.rate_limit", level="WARNING") as logs:
             enforce_rate_limit(user_id="user-1", scope="auth.login", limit=1, window_seconds=60)
 
-        self.assertIn("fail open and allow request", "\n".join(logs.output))
+        self.assertIn("using bounded in-process rate limit fallback", "\n".join(logs.output))
+        with self.assertRaises(HTTPException) as caught:
+            enforce_rate_limit(user_id="user-1", scope="auth.login", limit=1, window_seconds=60)
+        self.assertEqual(caught.exception.status_code, 429)
 
     def test_first_request_sets_ttl_for_new_bucket(self):
         enforce_rate_limit(user_id="user-1", scope="auth.login", limit=8, window_seconds=60)

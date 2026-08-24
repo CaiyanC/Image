@@ -11,6 +11,7 @@ from app.core.permission_constants import (
     FINANCE_GROUP_NAME,
     IT_GROUP_NAME,
     PERMISSION_DEFS,
+    SYSTEM_ADMIN_PERMISSION,
 )
 from app.models.group import Group
 from app.models.permissions import GroupPermission, Permission
@@ -52,7 +53,9 @@ class DepartmentSeedTest(unittest.TestCase):
         self.assertEqual({name for name, _ in DEFAULT_GROUPS}, names)
         membership = self.db.query(UserGroup).filter(UserGroup.user_id == "legacy-user").one()
         self.assertEqual(membership.group.group_name, BRAND_GROUP_NAME)
-        all_permission_keys = {key for key, _, _ in PERMISSION_DEFS}
+        all_permission_keys = {
+            key for key, _, _ in PERMISSION_DEFS if key != SYSTEM_ADMIN_PERMISSION
+        }
         for group_name in (EXECUTIVE_OFFICE_GROUP_NAME, IT_GROUP_NAME):
             group = self.db.query(Group).filter(Group.group_name == group_name).one()
             permission_keys = {
@@ -81,6 +84,33 @@ class DepartmentSeedTest(unittest.TestCase):
             .all()
         }
         self.assertEqual(permission_keys, {"history.view"})
+
+    def test_legacy_merge_preserves_admin_role_and_permission_union(self):
+        user = User(id="merge-user", username="merge", password_hash="hash")
+        target = Group(id="brand-target", group_name=BRAND_GROUP_NAME)
+        legacy = Group(id="brand-legacy", group_name="AI内容岗")
+        first = Permission(id="permission-1", permission_key="test.first", permission_name="first")
+        second = Permission(id="permission-2", permission_key="test.second", permission_name="second")
+        self.db.add_all([user, target, legacy, first, second])
+        self.db.flush()
+        self.db.add_all([
+            UserGroup(user_id=user.id, group_id=target.id, group_role="member"),
+            UserGroup(user_id=user.id, group_id=legacy.id, group_role="admin"),
+            GroupPermission(group_id=target.id, permission_id=first.id),
+            GroupPermission(group_id=legacy.id, permission_id=second.id),
+        ])
+        self.db.commit()
+
+        _seed_default_groups(self.db)
+
+        self.assertIsNone(self.db.query(Group).filter(Group.group_name == "AI内容岗").first())
+        membership = self.db.query(UserGroup).filter_by(user_id=user.id, group_id=target.id).one()
+        self.assertEqual(membership.group_role, "admin")
+        permission_ids = {
+            permission_id for (permission_id,) in self.db.query(GroupPermission.permission_id)
+            .filter(GroupPermission.group_id == target.id).all()
+        }
+        self.assertEqual(permission_ids, {first.id, second.id})
 
     def test_restart_preserves_intentionally_empty_preset_permissions(self):
         _seed_default_groups(self.db)

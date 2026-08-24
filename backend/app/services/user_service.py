@@ -32,16 +32,18 @@ def _is_management_user(db: Session, user_id: str) -> bool:
     return db.query(UserGroup).join(Group, UserGroup.group_id == Group.id).filter(
         UserGroup.user_id == user_id,
         Group.group_name.in_(FULL_ACCESS_GROUP_NAMES),
+        UserGroup.group_role == "admin",
     ).first() is not None
 
 
 def _active_management_count(db: Session) -> int:
-    return db.query(User).join(UserGroup, UserGroup.user_id == User.id).join(
+    return db.query(User.id).join(UserGroup, UserGroup.user_id == User.id).join(
         Group, UserGroup.group_id == Group.id
     ).filter(
         User.is_active == True,  # noqa: E712
         Group.group_name.in_(FULL_ACCESS_GROUP_NAMES),
-    ).count()
+        UserGroup.group_role == "admin",
+    ).distinct().count()
 
 
 def create_user(db: Session, user_data: UserCreate):
@@ -132,6 +134,9 @@ def update_user(db: Session, user_id: str, user_data: UserUpdate):
             )
     if "password" in update_dict:
         update_dict["password_hash"] = get_password_hash(update_dict.pop("password"))
+        user.auth_version = int(user.auth_version or 0) + 1
+    if update_dict.get("is_active") is False and user.is_active:
+        user.auth_version = int(user.auth_version or 0) + 1
     if "username" in update_dict:
         username = str(update_dict["username"] or "").strip()
         if not username:
@@ -199,6 +204,7 @@ def change_own_password(db: Session, user_id: str, current_password: str, new_pa
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="New password must be 8 to 128 characters")
 
     user.password_hash = get_password_hash(new_password)
+    user.auth_version = int(user.auth_version or 0) + 1
     db.commit()
     return {"detail": "Password updated"}
 
@@ -211,6 +217,7 @@ def reset_user_password(db: Session, user_id: str, new_password: str):
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="New password must be 8 to 128 characters")
 
     user.password_hash = get_password_hash(new_password)
+    user.auth_version = int(user.auth_version or 0) + 1
     db.commit()
     db.refresh(user)
     return user
@@ -233,8 +240,12 @@ def delete_user(db: Session, user_id: str, current_user_id: str = None):
 
     for membership in db.query(UserGroup).filter(UserGroup.user_id == user_id).all():
         db.delete(membership)
-    db.query(Generation).filter(Generation.user_id == user_id).delete(synchronize_session=False)
-    db.query(OperationLog).filter(OperationLog.operator_id == user_id).delete(synchronize_session=False)
+    db.query(Generation).filter(Generation.user_id == user_id).update(
+        {Generation.user_id: None}, synchronize_session=False
+    )
+    db.query(OperationLog).filter(OperationLog.operator_id == user_id).update(
+        {OperationLog.operator_id: None}, synchronize_session=False
+    )
     db.flush()
     db.delete(user)
     db.commit()

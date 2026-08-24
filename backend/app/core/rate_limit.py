@@ -16,6 +16,8 @@ _LAST_REDIS_WARNING_AT = 0.0
 _WARNING_INTERVAL_SECONDS = 30
 _KEY_PREFIX = "rate_limit"
 _FILE_LOGGING_CONFIGURED = False
+_LOCAL_BUCKETS: dict[str, tuple[int, float]] = {}
+_MAX_LOCAL_BUCKETS = 10_000
 
 
 def enforce_rate_limit(
@@ -31,6 +33,7 @@ def enforce_rate_limit(
     client = _get_redis_client()
     if client is None:
         _warn_redis_unavailable("Redis rate limit client is not configured")
+        _enforce_local_rate_limit(key=_build_key(scope, user_id), limit=limit, window_seconds=window_seconds, detail=detail)
         return
 
     key = _build_key(scope, user_id)
@@ -44,6 +47,7 @@ def enforce_rate_limit(
                 client.expire(key, int(window_seconds))
     except RedisError as exc:
         _warn_redis_unavailable(f"Redis rate limit check failed: {exc}")
+        _enforce_local_rate_limit(key=key, limit=limit, window_seconds=window_seconds, detail=detail)
         return
 
     if count > limit:
@@ -106,6 +110,8 @@ def _is_trusted_proxy(address, networks) -> bool:
 
 
 def reset_rate_limits() -> None:
+    with _LOCK:
+        _LOCAL_BUCKETS.clear()
     client = _get_redis_client()
     if client is None:
         return
@@ -148,7 +154,28 @@ def _warn_redis_unavailable(message: str) -> None:
     if now - _LAST_REDIS_WARNING_AT < _WARNING_INTERVAL_SECONDS:
         return
     _LAST_REDIS_WARNING_AT = now
-    _LOGGER.warning("%s; fail open and allow request", message)
+    _LOGGER.warning("%s; using bounded in-process rate limit fallback", message)
+
+
+def _enforce_local_rate_limit(*, key: str, limit: int, window_seconds: int, detail: str) -> None:
+    now = time.monotonic()
+    with _LOCK:
+        if len(_LOCAL_BUCKETS) >= _MAX_LOCAL_BUCKETS:
+            expired = [bucket_key for bucket_key, (_, expires_at) in _LOCAL_BUCKETS.items() if expires_at <= now]
+            for bucket_key in expired:
+                _LOCAL_BUCKETS.pop(bucket_key, None)
+            if len(_LOCAL_BUCKETS) >= _MAX_LOCAL_BUCKETS:
+                oldest_key = min(_LOCAL_BUCKETS, key=lambda bucket_key: _LOCAL_BUCKETS[bucket_key][1])
+                _LOCAL_BUCKETS.pop(oldest_key, None)
+
+        count, expires_at = _LOCAL_BUCKETS.get(key, (0, now + window_seconds))
+        if expires_at <= now:
+            count, expires_at = 0, now + window_seconds
+        count += 1
+        _LOCAL_BUCKETS[key] = (count, expires_at)
+
+    if count > limit:
+        raise HTTPException(status_code=429, detail=detail)
 
 
 def _configure_file_logging() -> None:

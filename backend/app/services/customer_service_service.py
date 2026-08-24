@@ -8439,6 +8439,18 @@ def _validate_semantic_comparison_adjudication(
     }
 
 
+def _semantic_comparison_adjudicated_choice_index(
+    adjudication: dict[str, Any] | None,
+) -> int | None:
+    """Read the model's typed direct or conditional participant choice."""
+    value = adjudication if isinstance(adjudication, dict) else {}
+    for key in ("selected_index", "conditional_choice_index"):
+        index = value.get(key)
+        if type(index) is int:
+            return index
+    return None
+
+
 def _comparison_live_formal_conflicts_by_sku(
     db: Session,
     bundles: list[tuple[Product | None, ProductSpecs | None, ProductBusiness | None, ProductContent | None]],
@@ -9071,7 +9083,7 @@ _SEMANTIC_MEASUREMENT_SUBJECTIVITY_BOUNDARY = (
     "narrow ordinary-use conclusion only for a broad, unnamed activity when its cited same-SKU facts jointly establish that "
     "broad use. This allowance does not authorize a named operation, recipe, or concrete task from product form plus heat-source "
     "compatibility: a pot/cookware form and compatible stoves do not by themselves prove 能烧水 or 能煮面. For a named "
-    "operation, require a same-SKU content or QA statement that directly states that operation or a genuinely equivalent one. "
+    "operation, use the ordinary-operation causal-evidence boundary below: direct wording is sufficient but is not the only semantic proof path. "
     "State the supporting facts transparently and do not pretend the catalogue used the customer's exact task wording. "
     "This semantic synthesis is not a literal-quote requirement and does not authorize a stronger quantity, guarantee, "
     "personal-experience, or whole-plan conclusion. bounded must stay conditional; partial or unverified must not be "
@@ -9092,7 +9104,7 @@ _SEMANTIC_MEASUREMENT_SUBJECTIVITY_BOUNDARY = (
     "comparison baseline: phrases such as 在同类中较轻、比一般产品轻 or equivalent comparative claims require the other "
      "recorded value(s) or an explicit same-SKU comparative statement. A later caveat never repairs an unsupported stronger conclusion. "
      "A negative or conditional statement that an outcome remains unconfirmed, including ‘是否适合仍需结合实际情况判断’ or ‘是否适合还要根据个人需求’, is evidence-boundary wording rather than an affirmative outcome; do not reject it unless another clause actually asserts the outcome. "
-     "Named-operation override: when the customer names a concrete recipe, dish, or operation, a people range, capacity, broad cooking scene, compatible heat source, or generic product form is only adjacent evidence. Unless the same-SKU packet explicitly records that operation or a genuinely equivalent operation, do not say the product can, works, is suitable, is appropriate, or is enough for that named task, including wording such as ‘符合记录’ or a conditional version, even when the sentence also reports the group fit. Report the broader recorded facts and keep the named task unconfirmed. This override takes precedence over the general ordinary-use synthesis allowance above. "
+     "Named-operation boundary: a people range, capacity, broad cooking scene, compatible heat source, or generic product form alone is only adjacent evidence. For ordinary non-safety operations, apply the complete same-SKU causal-evidence boundary below; when neither direct evidence nor a complete causal bundle establishes the task, keep it unconfirmed. Exact quantities, specialized recipe results, safety, and compatibility still require their own direct evidence. "
 )
 
 
@@ -9132,6 +9144,35 @@ _SEMANTIC_EMPTY_SAME_SKU_GAP_BOUNDARY = (
     "the identity label does not need to be repeated in the empty evidence packet. Do not say that the product record is absent when the identity is resolved, and do not add any capability, specification, or negative product fact. "
 )
 
+_SEMANTIC_ATOMIC_CAPABILITY_BOUNDARY = (
+    "Atomic capability boundary: when one customer factor or sentence contains multiple independently checkable "
+    "named operations, methods, contents, or capabilities, adjudicate every component even if an upstream semantic "
+    "draft combined them into one label. Mark the complete factor supported only when the same SKU directly supports "
+    "every component (or a genuinely equivalent operation for each one). Evidence for one component cannot be "
+    "transferred to another, and a generic umbrella such as cooking, preparing food, or making hot food cannot fill a "
+    "missing specific method. If some but not all components are evidenced, keep the complete factor partial; if none "
+    "are evidenced, keep it unverified. The writer and final audit must preserve that component-level boundary and "
+    "must not say that the whole combined need is met from partial evidence. Resolve the components semantically from "
+    "the complete customer request, not with substring or conjunction-word matching. "
+)
+
+_SEMANTIC_ORDINARY_OPERATION_CAUSAL_BOUNDARY = (
+    "Ordinary-operation semantic entailment: for an ordinary, non-safety product operation, support does not require "
+    "the catalogue to repeat the customer's exact verb or dish. A directly stated same-SKU operation is sufficient, "
+    "but a semantically complete same-SKU causal bundle may also be sufficient when the supplied functional component, "
+    "operating instructions, compatible operating context, and relevant physical traits jointly establish that ordinary "
+    "use. For example, a real pot component together with usable heating/cooking instructions can establish ordinary "
+    "noodle cooking, and a real frying-pan component together with oil/food cooking instructions or an explicit frying "
+    "surface can establish simple stir-frying. Judge the complete evidence packet semantically; do not require a literal "
+    "task phrase. A title, keyword, broad category, generic cookware label, compatible heat source by itself, or broad "
+    "marketing language such as making hot food is not a complete causal bundle. This allowance never authorizes an "
+    "exact quantity or serving, a specialized recipe result, safety, material safety, or a named fuel/heat-source "
+    "compatibility absent direct evidence. For a compound request, independently establish every atomic operation. "
+    "This ordinary-operation rule supersedes any earlier instruction that an ordinary named cooking operation always "
+    "requires an exact content/QA phrase; it does not weaken the exact evidence rules for safety, measurements, "
+    "compatibility, or guarantees. "
+)
+
 _SEMANTIC_RECOMMENDATION_GROUP_TASK_BOUNDARY = (
     "When the customer asks about a group outcome, do not discard a useful candidate merely because the catalogue lacks a literal promise. "
     "A recorded people range or explicit group-fit statement may be stated as that recorded group reference. A numeric people range supports the customer's stated count only when that count falls inside the recorded range. A different range does not establish suitability merely because a product intended for more people could physically be used by fewer, or vice versa; keep the recorded range separate unless same-SKU evidence directly establishes the requested group relation. Even an inclusive range is a usage reference, not a serving, appetite, or sufficiency guarantee. Keep an ordinary capability distinct from "
@@ -9142,17 +9183,17 @@ _SEMANTIC_RECOMMENDATION_GROUP_TASK_BOUNDARY = (
     "evidence directly establishes it; a later caveat does not repair an unsupported guarantee. "
     "When a named task is combined with a group or amount, do not turn that ordinary-use synthesis into categorical wording such as "
     "‘没问题/完全可以/满足两人使用/够两人煮面’ unless the same-SKU evidence directly establishes the task-specific amount or outcome. "
-    "A conditional selection phrase such as ‘可作为两人煮面的选择’/‘可以考虑用于煮面’ still asserts the named task; do not attach the named task to the recommendation at all unless the same-SKU evidence explicitly records that operation. "
+    "A conditional selection phrase such as ‘可作为两人煮面的选择’/‘可以考虑用于煮面’ still asserts the named task; attach it only when same-SKU evidence directly states it or the complete ordinary-operation causal bundle establishes it. "
     "If the packet only gives product form, capacity, audience, broad cooking evidence, heat-source compatibility, or a product title/keyword, report that broader recorded basis "
     "and keep the customer's named task unconfirmed; do not write ‘可用于烧水/煮面’ merely from those adjacent fields. "
-    "Use that ordinary-use wording only when the same-SKU packet explicitly states the named operation or a genuinely equivalent operation. "
+    "Use that ordinary-use wording only when the same-SKU packet directly states the named operation, a genuinely equivalent operation, or supplies the complete ordinary-operation causal bundle below. "
     "A product name, title, keyword, model label, or extraction-style label containing words such as 煮面/烧水 is identity or discovery context, not by itself operation evidence. "
     "Keep storage and carrying as separate evidence dimensions. A same-SKU statement such as ‘全套收纳紧凑’ or ‘全套收纳不占空间’ may support the recorded storage meaning, but it does not by itself establish convenient carrying, easy transport, low carrying burden, or portability. Do not append 携带/便携/好带 to a storage conclusion unless the same-SKU packet separately states that carrying meaning. "
     "A factor whose typed selection_role is background_context is complete customer context, not a requested product verdict. Preserve it for semantic consistency and ranking, but do not make it a hard eligibility gate. When that background factor is partial or unverified, normally omit it from customer-facing prose instead of asserting the fit or adding an unnecessary ‘资料未确认是否适合’ caveat. When it is supported by a direct same-SKU people range or scene statement, you may report that narrower catalogue record with attribution, but do not strengthen it into sufficiency, throughput, or a broader personal-fit guarantee. "
     "When a participant count is merely incidental scene context and no decision_factor_status represents group fit, do not introduce a group-suitability claim or an unsolicited ‘是否适合该人数未确认’ caveat. In an ordinary request such as ‘三个人露营想用高山气罐，推荐一款炉具’, answer the evidenced stove form and fuel compatibility; the headcount does not itself create a throughput question. "
     "Internal ontology values in identity.product_form are semantic typing only, never customer-facing evidence text. Render the already established form in natural Chinese from the candidate identity; never output raw tokens such as single_cookware, cookware_set, griddle, waterware, or snake_case labels, and never introduce them with wording such as ‘资料记录’. "
     "This named-task rule overrides the general supported/bounded ordinary-use allowance above: when the factor names a specific recipe, dish, or operation "
-    "and the sealed packet lacks that operation or an equivalent one, the writer must not say the product is suitable for, a choice for, or can be considered for "
+    "and the sealed packet lacks both direct operation evidence and a complete ordinary-operation causal bundle, the writer must not say the product is suitable for, a choice for, or can be considered for "
     "that task, even with conditional wording such as ‘可作为’/‘可以考虑’ or a later caveat. Recommend the product on the verified broader basis instead and keep the named task unconfirmed. "
     "State the recorded people range separately, and keep task-specific sufficiency unconfirmed. "
     "The same distinction applies to ordinary individual use: a bounded practical-fit factor may support wording such as '可作为一个人日常喝水使用' "
@@ -9163,11 +9204,13 @@ _SEMANTIC_RECOMMENDATION_GROUP_TASK_BOUNDARY = (
     "record that explicitly states outdoor cooking, small-portion cooking, food preparation, or a genuinely equivalent broad cooking use "
     "may establish that same broad activity. Preserve the broad semantic level: do not silently rewrite it as boiling water, cooking "
     "noodles, a particular dish, a serving guarantee, or another more specific task. "
+    + _SEMANTIC_ATOMIC_CAPABILITY_BOUNDARY
+    + _SEMANTIC_ORDINARY_OPERATION_CAUSAL_BOUNDARY
 )
 
 _SEMANTIC_RECOMMENDATION_FINAL_PRIORITY = (
     "Final delivery priority: if the customer only says 别太重/轻便 and the selected same-SKU packet has a numeric weight but no explicit product-level lightness or portability descriptor, write the recorded weight only. Do not write ‘符合你的轻便需求’、‘满足轻便要求’、‘比较轻便’、‘携带方便’ or an equivalent personal-fit conclusion from that number. If the customer names a concrete task such as 烧水、煮面 and the packet only records broad cooking, quick boiling, capacity, heat source, or product form, report those broader facts separately and say the named task is not directly confirmed; do not attach that task to the recommendation with ‘适合’、‘可用于’、‘可以考虑’ or a softer synonym. If the selected candidates mix a single pot and a cookware set, do not call the group ‘套锅’ or ‘锅具套装’; identify each candidate with its own recorded form, while the generic word ‘锅具’ is safe. Do not replace either boundary with a caveat followed by the same conclusion. "
-    "In particular, ‘烹饪’、‘烹制热食’、‘炒菜’ or another broad food-preparation description cannot be paraphrased as ‘能煮面’ merely because noodles are commonly cooked; the final answer must preserve that semantic level. "
+    "In particular, ‘烹饪’、‘烹制热食’、‘炒菜’ or another broad food-preparation description alone cannot be paraphrased as ‘能煮面’ merely because noodles are commonly cooked; the final answer must preserve that semantic level unless the complete same-SKU ordinary-operation causal bundle independently establishes noodle cooking. "
     "Conversely, do not treat an open-ended request to make some simple hot food or do ordinary camp cooking as though the customer named "
     "a specific recipe or operation. Direct same-SKU evidence for outdoor cooking, small-portion cooking, food preparation, or a genuinely "
     "equivalent broad use may support that same broad purpose; it still does not prove any unstated dish, method, amount, or sufficiency. "
@@ -10138,11 +10181,13 @@ async def _semantic_review_recommendation_factor_types(
 ) -> list[dict[str, Any]] | None:
     """Let Flash reconcile factor semantics before candidates are shown.
 
-    The compact second pass normally corrects only semantic type metadata. It
-    may also perform one narrowly typed repair: merge a standalone evidence-
-    provenance modifier back into the concrete factor that it modifies in the
-    complete question. The pass still cannot retrieve, inspect, or rank any
-    product, and Python never interprets customer wording to perform a merge.
+    The compact second pass normally corrects semantic type metadata. It may
+    also perform two narrowly typed repairs: merge a standalone evidence-
+    provenance modifier back into the concrete factor that it modifies, or
+    atomize an accidentally combined set of independently checkable customer
+    capabilities. The pass still cannot retrieve, inspect, or rank any
+    product, and Python never interprets customer wording to perform either
+    repair.
     """
     if not factors:
         return factors
@@ -10180,14 +10225,15 @@ async def _semantic_review_recommendation_factor_types(
                 {
                     "role": "system",
                     "content": (
-                        "Return only JSON. Independently review the semantic type metadata and importance of every supplied customer factor. You cannot add, split, route, retrieve, inspect products, or rank anything. Preserve factor, customer_basis, and order except for the one narrow provenance-modifier reconciliation described below. The complete original question is authoritative; customer_basis is a non-authoritative semantic draft that may overstate words such as explicitly requires. Required means either that the customer states a genuinely non-negotiable eligibility condition, or that absence of the factor would make the recommended item unable to fulfil the operative purpose of this request. The customer does not need to use words such as must or required when the activity is the reason the requested item is being chosen. Preferred means a ranking quality whose absence still leaves the item able to fulfil the requested purpose. A descriptive quality, ranking priority, or ordinary preference remains preferred when it only changes which otherwise suitable item is better. Do not preserve or reconstruct an upstream required label merely because the factor appeared in a requirement array. "
+                        "Return only JSON. Independently review the semantic type metadata and importance of every supplied customer factor. You cannot invent a factor, route, retrieve, inspect products, or rank anything. Preserve factor, customer_basis, and order except for the two narrow semantic repairs described below: the narrow provenance-modifier reconciliation and atomic capability decomposition. The complete original question is authoritative; customer_basis is a non-authoritative semantic draft that may overstate words such as explicitly requires. Required means either that the customer states a genuinely non-negotiable eligibility condition, or that absence of the factor would make the recommended item unable to fulfil the operative purpose of this request. The customer does not need to use words such as must or required when the activity is the reason the requested item is being chosen. Preferred means a ranking quality whose absence still leaves the item able to fulfil the requested purpose. A descriptive quality, ranking priority, or ordinary preference remains preferred when it only changes which otherwise suitable item is better. Do not preserve or reconstruct an upstream required label merely because the factor appeared in a requirement array. "
                         "Use factor_type=factual with decision_kind=concrete_capability for an intrinsic product fact or descriptor, or for the operative action/capability that the chosen product must support, such as recorded compact size, product-level lightness, portability, material, compatibility, the product's own cleanability/easy-care or compact/easy-storage property, or cookware selected so the customer can prepare food. Keep that action at the customer's breadth; broad food preparation is not proof of a named recipe. "
                         "Use factor_type=practical_fit with decision_kind=scenario_fit for a person/group/use/scene relation. Use practical_fit with decision_kind=subjective_outcome for a customer-dependent result such as ease of operation, personal cleaning or packing effort, personal burden, gift suitability, whether storage will feel effortless for this person, or whether it will save enough space for this person's particular packing plan. Asking for the item itself to be easy to clean, easy to maintain, compact to store, easy/convenient to store, or cleanable/storable is an intrinsic product descriptor and remains factual even when phrased as a preference; asking whether cleaning or packing will feel easy for this particular person is the personal outcome. A nearby intrinsic trait may be evidence considered later, but it does not turn the requested outcome into a factual factor. "
                         "Keep dimension=budget only when the customer's stated meaning is actually about price, affordability, value tier, or budget; otherwise preserve a meaningful non-budget dimension or use an empty string. fixed_product_form must remain required factual/concrete_capability with dimension=product_form. fixed_formal_predicate is an exact semantic binding to a typed catalogue predicate and must preserve its supplied importance and factual/concrete_capability type. fixed_assignment_role must remain practical_fit/subjective_outcome. Preserve recipient_background_context as typed semantic metadata; do not convert it into a product fact or erase it during this review. "
                         "Planned party-size review boundary: when the complete question asks the assistant to choose a capacity-bearing vessel, cookware set, or waterware and makes the planned headcount part of sizing or serving that item, the group relation is practical_fit/scenario_fit with selection_role=operative_purpose and importance=required. It is not background context merely because the wording is conversational or the trip scene appears first. Keep this group-fit factor separate from a large-capacity ranking quality; capacity alone cannot prove the requested people relation. For a griddle/frying plate, stove, accessory, or another item whose requested function is compatibility, surface use, cleaning, or another capability rather than stated group capacity or throughput, a participant count must remain preferred background context unless the question explicitly makes cooking surface, simultaneous service, group throughput, or service capacity the operative selection purpose. For example, in ‘三个人露营，想选容量大、方便收纳的锅具’, the three-person cookware relation is required; in ‘三个人露营想用高山气罐，推荐一款炉具’, the three people are background and fuel compatibility is the operative capability; in ‘已有卡式炉，想买两个人露营用、资料明确好清洁的烤盘’, the group count is background while griddle form, stove compatibility, and documented cleanability are the operative conditions. Resolve this from the complete question and requested physical form, not literal phrase matching. Before returning, reject any review that reverses those semantic relationships. "
                         "For fixed_product_form only, independently preserve the complete physical composition expressed by the question. If the upstream factor reduced a requested set, full set, kit, bundle, or explicitly singular item to a broader category, return a concise revised_factor and revised_customer_basis that restore the set-versus-single meaning. Otherwise return both as empty strings. Never rewrite an ordinary factor, invent package contents, or infer composition from candidate data. "
                         "One narrow reconciliation is allowed when, and only when, an upstream factor is merely a generic evidence-provenance modifier such as 'has explicit documentation' and the complete question semantically attaches that modifier to another supplied concrete property, method, operation, or capability. On the generic modifier's review, set merge_into_factor_index to the index of that concrete factor. Do not merge independent customer needs, a product form, an assignment role, or a formal predicate. Do not use this field merely because two factors are related. When a customer asks for a product for a named operation and also asks for explicit documentation without naming a different property, the documented object is that named operation; unrelated specifications or documentation cannot satisfy it. The retained target becomes a required factual/concrete_capability factor with dimension=documented_evidence. Use null or omit merge_into_factor_index for every ordinary factor. "
-                        "When the requested item itself is described as able to perform a named operation or concrete capability—such as a pot that can boil water and cook noodles—keep that factor factual/concrete_capability with importance=required. An ordinary activity may remain practical_fit/scenario_fit with importance=preferred only when it is genuinely incidental background or a ranking preference. When the complete recommendation asks to choose an item suitable for that activity, and performing the activity is the operative reason for choosing the item, absence of that capability makes the recommendation fail its purpose; preserve the activity at its original semantic breadth as required factual/concrete_capability. Do not make a broad cooking purpose more specific than the customer did, and resolve this from the complete question and customer_basis, not literal keyword matching. For every ordinary factor also classify selection_role independently: operative_purpose when the factor is why the item is being selected and its absence defeats the request; nonnegotiable_condition for another explicit eligibility condition; ranking_quality when it only makes an otherwise suitable item better; background_context when it only describes circumstances. operative_purpose and nonnegotiable_condition require importance=required; ranking_quality and background_context require importance=preferred. Do not label an activity background_context merely because the sentence also mentions a trip or scene: test whether the requested item would still accomplish the customer's stated reason without that activity. Highest-priority party-role correction: ignore an upstream factor label or customer_basis that adds words such as ‘需要适合三人’ when the complete original question merely states the party size. In the exact stove/fuel and griddle/cleaning examples above, the participant factor must be background_context/preferred; it must never be operative_purpose/required. In the exact capacity-bearing cookware example above, the three-person vessel relation is operative_purpose/required. This final correction overrides an upstream draft's wording. The review may correct factor_type, decision_kind, dimension, importance, and the narrowly allowed fixed product-form precision above, but cannot add a factor or change another factor's meaning. Schema exactly: {\"reviews\":[{\"factor_index\":0,\"factor_type\":\"factual|practical_fit\",\"decision_kind\":\"concrete_capability|scenario_fit|subjective_outcome\",\"dimension\":\"string\",\"importance\":\"required|preferred\",\"selection_role\":\"operative_purpose|nonnegotiable_condition|ranking_quality|background_context\",\"merge_into_factor_index\":null,\"revised_factor\":\"\",\"revised_customer_basis\":\"\"}]} and return one review for every supplied factor_index."
+                        "Atomic capability decomposition is allowed only when one ordinary upstream factor accidentally combines two or more independently checkable meanings that the complete question requires separately, such as cooking noodles and stir-frying. Return those meanings in atomic_components in customer order, each with a concise factor and question-grounded customer_basis. Do not use atomic_components for synonyms, explanatory subphrases, an open alternative where any one option is acceptable, a single broad outcome, or facts not independently expressed by the customer. Return an empty list when the supplied factor is already atomic. A fixed product form, fixed assignment role, fixed formal predicate, provenance modifier, or merge target/source can never be atomized. The components inherit the reviewed type, decision kind, dimension, importance, and selection role; therefore atomize only meanings that truly share those semantics. This decomposition receives no candidate evidence and exists so later same-SKU RAG can judge every requested capability independently rather than accepting a compound need from evidence for only one part. "
+                        "When the requested item itself is described as able to perform a named operation or concrete capability—such as a pot that can boil water and cook noodles—keep that factor factual/concrete_capability with importance=required. An ordinary activity may remain practical_fit/scenario_fit with importance=preferred only when it is genuinely incidental background or a ranking preference. When the complete recommendation asks to choose an item suitable for that activity, and performing the activity is the operative reason for choosing the item, absence of that capability makes the recommendation fail its purpose; preserve the activity at its original semantic breadth as required factual/concrete_capability. Do not make a broad cooking purpose more specific than the customer did, and resolve this from the complete question and customer_basis, not literal keyword matching. For every ordinary factor also classify selection_role independently: operative_purpose when the factor is why the item is being selected and its absence defeats the request; nonnegotiable_condition for another explicit eligibility condition; ranking_quality when it only makes an otherwise suitable item better; background_context when it only describes circumstances. operative_purpose and nonnegotiable_condition require importance=required; ranking_quality and background_context require importance=preferred. Do not label an activity background_context merely because the sentence also mentions a trip or scene: test whether the requested item would still accomplish the customer's stated reason without that activity. Highest-priority party-role correction: ignore an upstream factor label or customer_basis that adds words such as ‘需要适合三人’ when the complete original question merely states the party size. In the exact stove/fuel and griddle/cleaning examples above, the participant factor must be background_context/preferred; it must never be operative_purpose/required. In the exact capacity-bearing cookware example above, the three-person vessel relation is operative_purpose/required. This final correction overrides an upstream draft's wording. The review may correct factor_type, decision_kind, dimension, importance, perform the narrowly allowed fixed product-form precision, or return the narrowly allowed atomic components above; it cannot invent another meaning. Schema exactly: {\"reviews\":[{\"factor_index\":0,\"factor_type\":\"factual|practical_fit\",\"decision_kind\":\"concrete_capability|scenario_fit|subjective_outcome\",\"dimension\":\"string\",\"importance\":\"required|preferred\",\"selection_role\":\"operative_purpose|nonnegotiable_condition|ranking_quality|background_context\",\"merge_into_factor_index\":null,\"revised_factor\":\"\",\"revised_customer_basis\":\"\",\"atomic_components\":[{\"factor\":\"one independently checkable meaning\",\"customer_basis\":\"question-grounded basis\"}]}]} and return one review for every supplied factor_index."
                     ),
                 },
                 {
@@ -10199,7 +10245,7 @@ async def _semantic_review_recommendation_factor_types(
                 },
             ],
             temperature=0,
-            max_tokens=min(int(runtime["max_tokens"]), max(240, len(factors) * 70)),
+            max_tokens=min(int(runtime["max_tokens"]), max(320, len(factors) * 110)),
             purpose="semantic_recommendation_factor_type_review",
             api_model_override=runtime["model"],
             response_format=runtime["response_format"],
@@ -10226,6 +10272,35 @@ async def _semantic_review_recommendation_factor_types(
         revised_customer_basis = str(
             review.get("revised_customer_basis") or ""
         ).strip()
+        raw_atomic_components = review.get("atomic_components") or []
+        if not isinstance(raw_atomic_components, list):
+            return None
+        atomic_components: list[dict[str, str]] = []
+        seen_atomic_components: set[tuple[str, str]] = set()
+        for component in raw_atomic_components:
+            if not isinstance(component, dict):
+                return None
+            component_factor = str(component.get("factor") or "").strip()
+            component_basis = str(component.get("customer_basis") or "").strip()
+            component_key = (
+                re.sub(r"\s+", "", component_factor).casefold(),
+                re.sub(r"\s+", "", component_basis).casefold(),
+            )
+            if (
+                not component_factor
+                or len(component_factor) > 80
+                or not component_basis
+                or len(component_basis) > 160
+                or component_key in seen_atomic_components
+            ):
+                return None
+            seen_atomic_components.add(component_key)
+            atomic_components.append({
+                "factor": component_factor,
+                "customer_basis": component_basis,
+            })
+        if atomic_components and not 2 <= len(atomic_components) <= 4:
+            return None
         importance = {
             "must-have": "required",
             "must_have": "required",
@@ -10264,6 +10339,14 @@ async def _semantic_review_recommendation_factor_types(
         if (
             (revised_factor or revised_customer_basis)
             and original.get("requested_product_form_factor") is not True
+        ):
+            return None
+        if atomic_components and (
+            original.get("requested_product_form_factor") is True
+            or original.get("requested_role_factor") is True
+            or type(original.get("formal_predicate_index")) is int
+            or merge_into_factor_index is not None
+            or bool(revised_factor)
         ):
             return None
         if merge_into_factor_index is not None:
@@ -10307,6 +10390,7 @@ async def _semantic_review_recommendation_factor_types(
             "merge_into_factor_index": merge_into_factor_index,
             "revised_factor": revised_factor,
             "revised_customer_basis": revised_customer_basis,
+            "atomic_components": atomic_components,
         }
     if set(by_index) != set(range(len(factors))):
         return None
@@ -10324,6 +10408,11 @@ async def _semantic_review_recommendation_factor_types(
     ):
         return None
     merge_targets = set(merge_by_source.values())
+    if any(
+        by_index[index].get("atomic_components")
+        for index in {*merge_by_source, *merge_targets}
+    ):
+        return None
     reviewed: list[dict[str, Any]] = []
     for index, factor in enumerate(factors):
         if index in merge_by_source:
@@ -10335,6 +10424,7 @@ async def _semantic_review_recommendation_factor_types(
                 "merge_into_factor_index",
                 "revised_factor",
                 "revised_customer_basis",
+                "atomic_components",
             }
         }
         if index in merge_targets:
@@ -10359,8 +10449,17 @@ async def _semantic_review_recommendation_factor_types(
                 "factor": revised_factor,
                 "customer_basis": revised_basis,
             })
-        reviewed.append(reviewed_factor)
-    if not reviewed:
+        atomic_components = by_index[index].get("atomic_components") or []
+        if atomic_components:
+            for component in atomic_components:
+                reviewed.append({
+                    **reviewed_factor,
+                    "factor": component["factor"],
+                    "customer_basis": component["customer_basis"],
+                })
+        else:
+            reviewed.append(reviewed_factor)
+    if not reviewed or len(reviewed) > 8:
         return None
     return reviewed
 
@@ -10655,6 +10754,151 @@ async def _semantic_reconcile_documented_factor_scope(
             })
         reconciled.append(item)
     return reconciled or None
+
+
+async def _semantic_atomize_recommendation_factors(
+    db: Session,
+    *,
+    question: str,
+    factors: list[dict[str, Any]],
+) -> list[dict[str, Any]] | None:
+    """Let Flash split combined customer needs before candidate evidence.
+
+    This compact pass receives the customer question and already typed factor
+    contract, but no catalogue rows, SKUs, retrieval text, or product facts.
+    Python validates only the returned opaque factor indexes and text shape;
+    the model owns whether a meaning is atomic.  Separating this concern from
+    the broad type-review prompt prevents one supported sub-capability from
+    authorizing an entire compound factor later in same-SKU coverage.
+    """
+    review_indexes = [
+        index
+        for index, factor in enumerate(factors or [])
+        if isinstance(factor, dict)
+        and factor.get("requested_product_form_factor") is not True
+        and factor.get("requested_role_factor") is not True
+        and type(factor.get("formal_predicate_index")) is not int
+    ]
+    if not review_indexes:
+        return factors
+    runtime = customer_agent_planner_service._semantic_preplan_runtime_settings()
+    payload_factors = [
+        {
+            "factor_index": index,
+            "factor": str(factors[index].get("factor") or "").strip(),
+            "customer_basis": str(
+                factors[index].get("customer_basis") or ""
+            ).strip(),
+            "factor_type": str(factors[index].get("factor_type") or "").strip(),
+            "decision_kind": str(
+                factors[index].get("decision_kind") or ""
+            ).strip(),
+            "importance": str(factors[index].get("importance") or "").strip(),
+            "selection_role": str(
+                factors[index].get("selection_role") or ""
+            ).strip(),
+        }
+        for index in review_indexes
+    ]
+    try:
+        raw = await customer_llm_service.chat_completion(
+            db,
+            messages=[
+                {
+                    "role": "system",
+                    "content": (
+                        "Return only JSON. Decompose each supplied customer factor into the smallest independently checkable meanings required by the complete question. "
+                        "You are not routing, retrieving, inspecting candidates, judging evidence, ranking, or writing an answer; no product data is supplied. Return exactly one factor_groups record for every supplied factor_index and preserve their order. "
+                        "Every group must contain components. Use one component when the factor is already one semantic condition. Use two to four components when one upstream label combines independent operations, methods, capabilities, contents, or outcomes that later product evidence could support separately. "
+                        "For example, a required ability to cook noodles and stir-fry has two components because evidence for cooking noodles does not prove stir-frying; a general request for simple camp cooking is one broad component and must not be expanded into recipes the customer did not name. "
+                        "Do not split synonyms, explanations, a single broad quality, or alternatives where the customer accepts any one option. Do split an all-of conjunction even if the upstream factor merged it into natural prose. Preserve the customer's semantic breadth and do not invent a need. "
+                        "Each component must contain a concise natural factor and question-grounded customer_basis. Components inherit the supplied type, importance, and selection role; do not return metadata or change them. Resolve composition semantically from the complete question, never by substring or conjunction-word matching. "
+                        "Schema exactly: {\"factor_groups\":[{\"factor_index\":0,\"components\":[{\"factor\":\"one independently checkable meaning\",\"customer_basis\":\"basis from the question\"}]}]}."
+                    ),
+                },
+                {
+                    "role": "user",
+                    "content": json.dumps(
+                        {"question": question, "factors": payload_factors},
+                        ensure_ascii=False,
+                    ),
+                },
+            ],
+            temperature=0,
+            max_tokens=min(
+                int(runtime["max_tokens"]),
+                max(220, len(review_indexes) * 100),
+            ),
+            purpose="semantic_recommendation_factor_atomization",
+            api_model_override=runtime["model"],
+            response_format=runtime["response_format"],
+            thinking=runtime["thinking"],
+        )
+    except Exception:
+        return None
+    parsed = _parse_semantic_json_object(raw)
+    groups = parsed.get("factor_groups") if isinstance(parsed, dict) else None
+    if not isinstance(groups, list) or len(groups) != len(review_indexes):
+        return None
+    components_by_index: dict[int, list[dict[str, str]]] = {}
+    for group in groups:
+        if not isinstance(group, dict):
+            return None
+        factor_index = group.get("factor_index")
+        components = group.get("components")
+        if (
+            type(factor_index) is not int
+            or factor_index not in review_indexes
+            or factor_index in components_by_index
+            or not isinstance(components, list)
+            or not 1 <= len(components) <= 4
+        ):
+            return None
+        normalized_components: list[dict[str, str]] = []
+        seen: set[tuple[str, str]] = set()
+        for component in components:
+            if not isinstance(component, dict):
+                return None
+            factor = str(component.get("factor") or "").strip()
+            basis = str(component.get("customer_basis") or "").strip()
+            key = (
+                re.sub(r"\s+", "", factor).casefold(),
+                re.sub(r"\s+", "", basis).casefold(),
+            )
+            if (
+                not factor
+                or len(factor) > 80
+                or not basis
+                or len(basis) > 160
+                or key in seen
+            ):
+                return None
+            seen.add(key)
+            normalized_components.append({
+                "factor": factor,
+                "customer_basis": basis,
+            })
+        components_by_index[factor_index] = normalized_components
+    if set(components_by_index) != set(review_indexes):
+        return None
+    atomized: list[dict[str, Any]] = []
+    for index, factor in enumerate(factors):
+        components = components_by_index.get(index)
+        if not components or len(components) == 1:
+            # A one-component response confirms the factor is already atomic.
+            # Retain the reviewed server contract rather than letting the
+            # model cosmetically rewrite its label.
+            atomized.append(factor)
+            continue
+        for component in components:
+            atomized.append({
+                **factor,
+                "factor": component["factor"],
+                "customer_basis": component["customer_basis"],
+            })
+    if not atomized or len(atomized) > 8:
+        return None
+    return atomized
 
 
 async def _semantic_recommendation_decision_factor_contract(
@@ -10978,11 +11222,17 @@ async def _semantic_recommendation_decision_factor_contract(
                 question=question,
                 factors=resolved_factors,
             )
-            return (
+            final_factors = (
                 documented_scope_factors
                 if documented_scope_factors is not None
                 else resolved_factors
             )
+            atomized_factors = await _semantic_atomize_recommendation_factors(
+                db,
+                question=question,
+                factors=final_factors,
+            )
+            return atomized_factors if atomized_factors is not None else final_factors
     return None
 
 
@@ -11004,12 +11254,13 @@ def _semantic_coverage_candidate_limit(
     if candidate_count <= 0:
         return 0
     factor_count = max(1, int(decision_factor_count or 0))
-    # Keep the matrix near the existing 48 factor/SKU-pair budget. A two-
-    # factor request can safely expose 24 RAG candidates without increasing
-    # the adjudicator's worst-case matrix, while a six-factor request remains
-    # at eight. The former fixed ceiling of 16 wasted a third of this budget
-    # and could discard a deep, corroborated same-SKU capability hit.
-    bounded = max(8, min(24, 48 // factor_count))
+    # Atomic semantic factors improve faithfulness, but must not shrink recall
+    # so far that splitting one compound need discards the relevant SKU before
+    # coverage sees it.  Keep roughly 72 factor/SKU pairs and at least ten RAG
+    # candidates.  The candidate projection below bounds long text fields, so
+    # this wider semantic window remains controlled without returning to a
+    # lexical/category admission rule.
+    bounded = max(10, min(24, 72 // factor_count))
     return min(candidate_count, bounded)
 
 
@@ -11034,6 +11285,7 @@ def _semantic_coverage_candidate_projection(
         "content.positioning": 360,
         "content.long_description_cn": 520,
         "content.long_description_en": 360,
+        "specs.usage_instruction": 520,
     }
     projected: list[dict[str, Any]] = []
     for candidate in candidates:
@@ -11293,7 +11545,7 @@ async def _semantic_recommendation_requirement_coverage_once(
                 "For a practical_fit candidate marked partial, you may cite one concrete same-SKU field that supports the narrower part of the choice; that citation authorizes only a conditional explanation, never the full requested outcome. "
                 "Do not cite fields for a factual candidate marked partial or for any unverified candidate. Partial practical fit is a usable diagnostic state, not an automatic no-match. "
                  "For a required practical-fit request about whether an item is suitable for a particular method, role, or product form, do not mark a merely related workflow, broad category, or adjacent tool as partial support. Mark it unverified unless the same-SKU evidence first establishes the requested form/role and only a narrower outcome remains conditional. Explicit stronger fit meaning such as truly/really suitable, dedicated, explicitly supported, or must support a named method/role/use is required practical-fit meaning even when it is written naturally; do not downgrade it to a preference merely because the sentence does not use a formal predicate. For that required scenario/capability factor, bounded is valid only when the requested form or role is already established by the same SKU and the evidence directly supports the narrower conditional remainder; a related vessel that merely mentions the method remains unverified. A bounded or partial status is an evidence boundary, not a required-factor match: do not place such a candidate in ranked_candidate_indexes as though it satisfies the required method/role/capability. A concrete containment request such as being able to fit a named set of tableware into a bag is the same kind of required capability: generic storage capacity, portability, or a broad ‘outdoor storage’ label does not establish it, and only semantically relevant same-SKU evidence may support it. When the customer is asking the assistant to choose a product and phrases the purpose as suitable for or intended for a cooking task, group, scenario, or outcome, treat that as practical_fit unless formal_predicates explicitly ask for a recorded compatibility or specification; do not turn the natural recommendation purpose into an all-or-nothing factual gate. "
-                  "Keep an ordinary use scene separate from an explicit product-capability request. If the customer only describes a plan such as cooking or drinking with an otherwise unspecified item, that meaning may remain practical_fit/scenario_fit. If the customer asks for an item that can perform a named operation—such as 能烧水、能煮面 or can boil water/cook noodles—preserve it as the required factual/concrete_capability factor from the candidate-free semantic contract. A pot form, capacity, heat-source compatibility, broad cooking scene, or product title/keyword is adjacent only; it cannot support that named operation. The same-SKU content or QA must directly state the operation or a genuinely equivalent one. Keep distinct beverage purposes distinct: evidence that a cup is for coffee or tea is not automatically evidence for a request to drink water, while a same-SKU usage/scenario field that explicitly mentions drinking water may support that meaning. Do not silently downgrade an explicit product-capability request to a scenario preference. "
+                  "Keep an ordinary use scene separate from an explicit product-capability request. If the customer only describes a plan such as cooking or drinking with an otherwise unspecified item, that meaning may remain practical_fit/scenario_fit. If the customer asks for an item that can perform a named operation—such as 能烧水、能煮面 or can boil water/cook noodles—preserve it as the required factual/concrete_capability factor from the candidate-free semantic contract. A pot form, capacity, heat-source compatibility, broad cooking scene, or product title/keyword alone is adjacent and cannot support that named operation. Direct same-SKU operation text is sufficient; for ordinary non-safety operations, a complete same-SKU causal bundle may also support it under the boundary below. Keep distinct beverage purposes distinct: evidence that a cup is for coffee or tea is not automatically evidence for a request to drink water, while a same-SKU usage/scenario field that explicitly mentions drinking water may support that meaning. Do not silently downgrade an explicit product-capability request to a scenario preference. "
                   + _SEMANTIC_COMPOUND_PRODUCT_FORM_BOUNDARY
                   + _SEMANTIC_RECOMMENDATION_GROUP_TASK_BOUNDARY
                 + "Select only the minimum evidence fields needed: normally one direct field for supported, and exactly two complementary "
@@ -12552,6 +12804,7 @@ async def _semantic_recommendation_subjective_factor_entailment_audit(
                         "or practicality. Keep those intrinsic attributes distinct as well: portability or easy storage does not prove low weight, "
                         "compactness does not prove portability, and a low numeric weight does not prove carrying ease. "
                         + _SEMANTIC_MEASUREMENT_SUBJECTIVITY_BOUNDARY
+                        + _SEMANTIC_ORDINARY_OPERATION_CAUSAL_BOUNDARY
                         + "Absence of a complex part or other property is not "
                         "proved merely because the excerpt does not mention it. Judge the complete factor meaning: if a factor combines "
                         "a gift role with appearance or packaging, attractive design establishes only appearance and does not establish "
@@ -13880,6 +14133,7 @@ async def _semantic_recommendation_answer_factor_consistency_audit(
                          "is an allowed catalogue fact even when the budget factor is partial or unverified; do not flag that label or its live-price caveat. "
                          "Reject only the separate affordability or budget-fit meaning. "
                         + _SEMANTIC_MEASUREMENT_SUBJECTIVITY_BOUNDARY
+                        + _SEMANTIC_ORDINARY_OPERATION_CAUSAL_BOUNDARY
                         + "For status=bounded on a preferred practical_fit factor, a transparent conditional recommendation based on the "
                         "cited same-SKU fields is consistent: wording such as ‘基于这些资料，我更推荐它作为候选’ or ‘从这些记录看，"
                         "它是更值得先看的选项’ may be used when the answer keeps the supporting traits visible. Bounded wording must not "
@@ -13901,10 +14155,10 @@ async def _semantic_recommendation_answer_factor_consistency_audit(
                         "selection plus supported same-SKU facts is not an affirmation that the unverified task works. Do not reject "
                         "such an answer merely because the question mentions that task; reject only when the answer itself claims or "
                          "clearly implies that the candidate performs the unverified task or satisfies the complete request. "
-                         "Specific-task override: when the factor itself names a concrete recipe, dish, or operation and the same-SKU packet "
-                         "does not explicitly record that operation or a genuinely equivalent one, a phrase that selects the candidate for that named task "
+                         "Specific-task boundary: when the factor itself names a concrete recipe, dish, or operation and the same-SKU packet "
+                         "has neither direct operation evidence nor the complete ordinary-operation causal bundle, a phrase that selects the candidate for that named task "
                          "is a clear implication of the task and must be rejected, including ‘可作为两人煮面的选择’ or ‘可以考虑用于煮面’ and any later caveat. "
-                         "The general bounded-selection allowance does not cover that named-task implication; the answer may recommend the candidate on broader recorded facts "
+                         "The general bounded-selection allowance does not cover that unsupported named-task implication; the answer may recommend the candidate on broader recorded facts "
                          "but must keep the named task unconfirmed. word matching. If the answer first says a factor is not established and then uses a contrast such as 但、不过、然而、只是、作为基础款 to affirm the same unavailable outcome, it is inconsistent even when the final wording is softened. Return exactly one verdict for every factor_check. For a consistent pair use an empty offending_excerpt; "
                         "for an inconsistent pair quote the shortest exact offending text from final_answer. Also return one overall_verdict "
                         "for answer relevance and internal consistency. Every factor_index and candidate_index is an opaque audit identifier: "
@@ -14752,7 +15006,19 @@ async def _semantic_recommendation_narrative(
         "long_description_cn",
         "long_description_en",
     )
-    structured_evidence_fields = ("heat_source", "capacity", "body_material", "gross_weight_g", "size_info")
+    structured_evidence_fields = (
+        "heat_source",
+        "capacity",
+        "body_material",
+        "gross_weight_g",
+        "size_info",
+        # Maintained operating steps are dynamic same-SKU RAG evidence. They
+        # are essential for semantic capability reasoning (for example,
+        # whether the supplied vessel/component and actual operating process
+        # jointly establish an ordinary use) and must not be hidden behind a
+        # product-description wording gate.
+        "usage_instruction",
+    )
     business_evidence_fields = ("price_positioning",)
     for index, row in enumerate(rows):
         sku = str(row.get("sku") or "").strip().upper()
@@ -16411,7 +16677,7 @@ async def _semantic_recommendation_narrative(
                   "A pure evidence-gap sentence such as ‘是否适合作为礼物、是否容易选错，还需结合朋友的实际喜好判断’ is a safe limitation, not a positive gift or low-choice-risk claim. Use such a sentence when the outcome is unverified; do not let the writer or audit treat the caveat itself as an affirmation. "
                   "When decision_factor_status marks recipient_background_context=true, the recipient background is ranking context only. A target_audience or entry-level label may be stated only as an attributed catalogue record and cannot be rewritten as ‘适合新手’、‘适合你朋友’ or any personal recipient-fit conclusion; keep that factor unverified unless the same-SKU evidence directly states the requested product-recipient relation. "
                   "Treat bounded_customer_outcomes as an equally important semantic boundary: a bounded practical-fit relation is not proof that the customer outcome is true. For every factor listed there, do not turn a number, capacity, usage scene, or nearby product trait into ‘够用’/‘足够’/‘满足’/‘无负担’ or another outcome conclusion. For a bounded weight/scene relation, prefer ‘如果更看重记录中的重量，我会先看这款’ plus the recorded value; do not turn it into ‘适合单人徒步使用’ or another personal scenario-fit conclusion unless the same-SKU packet directly states that relation. Report the directly recorded fact and, if needed, say that the personal outcome still depends on actual use; do not assert that the bounded outcome holds. Preserve evidence granularity: if the packet separately records ‘小巧轻便’ and ‘易携带’, keep them as separate attributed traits rather than fusing them into ‘小巧轻便易携带’. "
-                 "For a bounded task or group-fit factor, do not state a concrete capability such as ‘可用于烧水/煮面’ merely from a people range, capacity, or broad usage scene. Use that capability only when the same-SKU evidence explicitly records it; otherwise report the recorded scene/number and say the named task is not directly confirmed. If the same-SKU record explicitly uses a qualitative product descriptor such as ‘小巧轻便’, it may be retained only with clear source attribution such as ‘资料标注为“小巧轻便”’; do not present it as your own personal judgement, and do not turn numeric size into ‘不占地方’. Include only facts that answer the customer's stated priorities or explain the selected choice; omit unrelated weight, portability, storage, or selling-point details. "
+                 "For a bounded task or group-fit factor, do not state a concrete capability such as ‘可用于烧水/煮面’ merely from a people range, capacity, or broad usage scene. Use that capability only when direct same-SKU operation evidence or the complete ordinary-operation causal bundle establishes it; otherwise report the recorded scene/number and say the named task is not confirmed. If the same-SKU record explicitly uses a qualitative product descriptor such as ‘小巧轻便’, it may be retained only with clear source attribution such as ‘资料标注为“小巧轻便”’; do not present it as your own personal judgement, and do not turn numeric size into ‘不占地方’. Include only facts that answer the customer's stated priorities or explain the selected choice; omit unrelated weight, portability, storage, or selling-point details. "
                  "When the customer asks you to choose or recommend one product and one candidate is selected, lead with a clear recommendation such as '推荐这款' or '可以先看这款'; do not use a vague opening such as '这是不错的选择' without an explicit recommendation action. "
                  "When a follow-up only narrows the live catalogue category, identify the selected item as that product form (for example, ‘这是一款锅具’) rather than turning the category match into a global request-fit sentence such as ‘符合你送锅具的要求’、‘符合你对锅具的需求’ or ‘符合你的需求’. A category/form match does not decide the prior gift, practicality, storage, or beginner-personal-fit outcomes. "
                  "Respect that status in the wording: supported may be stated positively when the cited same-SKU fields jointly support the same narrow factor meaning; do not rerun a literal phrase test. Show the factual basis and do not upgrade it into a serving guarantee, personal experience, or a broader outcome. bounded practical_fit may support only a transparent conditional choice; partial and unverified must not be upgraded into a positive claim or inverted into an unsupported negative claim. Unknown simplicity, for example, does not mean the product is difficult. When a factor is partial or unverified, state the narrower recorded trait and one concise boundary instead of renaming an adjacent property as proof. A coating is not cleanability, an audience label is not simplicity, and portability is not storage unless the same-SKU evidence semantically establishes that requested meaning. "
@@ -18262,6 +18528,7 @@ async def _semantic_comparison_adjudication(
                 "Whether or not a winner is supported, evidence_fields must select one to four complete fields that most directly answer the requested comparison when such evidence exists; use an empty list only when no supplied field is directly relevant. Omit merely incidental differences. "
                 "Do not add component capacities or dimensions into a product total inside reasoning_summary, and do not invent a people count or scenario absent from the question and sealed evidence. Preserve component labels exactly when explaining why a field matters. "
                 "Treat a multi-component capacity value as separate labelled facts, not as one product total: for example, 'water vessel 1.0L, large pot 1.7L' and 'large pot 3.0L, small pot 1.7L, water vessel 0.8L' must never be summed or described as a total capacity. Compare only the same semantic component when that component is directly relevant to the customer's request. participant_forms is sealed catalogue identity context, not suitability evidence: when one participant is explicitly a single-component product such as single_cookware, its product-level capacity is the capacity of that one component and may be compared with the matching labelled pot component of a set when the complete question asks about pot capacity. Do not use product form to invent an unlabeled component, compare different component kinds, or infer group fit. If the packet has no semantically comparable component, keep both choice fields null while retaining the capacity field for a factual comparison. Never use a derived sum or a cross-component comparison as the reason for a choice. "
+                "When the customer naturally asks which cookware has larger capacity without naming one component, do not force a false product total and do not refuse a useful comparison when both packets clearly label their cooking-pot vessels. Semantically align the largest directly listed cooking-pot/main-vessel capacity for each participant, select the larger one conditionally, and state in reasoning_summary that the scope is the largest listed pot/main-vessel capacity rather than total set capacity. Use null if the labels do not establish comparable cooking vessels. This scope decision belongs to this semantic adjudicator, not to a local label or number rule. "
                 "Schema: {\"selected_participant\":\"A\"|\"B\"|null,\"conditional_choice_participant\":\"A\"|\"B\"|null,\"evidence_fields\":[\"canonical_field\"],\"reasoning_summary\":\"brief audit reason\"}. Use only one participant label: selected_participant for a directly supported bounded choice, or conditional_choice_participant for a choice that must remain conditional."
             ),
         },
@@ -18533,7 +18800,11 @@ async def _semantic_context_choice_narrative(
     }
     answer_skus = {
         str(item or "").strip().upper()
-        for item in SKU_RE.findall(answer)
+        # Reuse the canonical SKU extractor here.  The local broad regex can
+        # treat Chinese prose immediately following an ASCII SKU (for example
+        # ``CW-C78的容量更大``) as part of a second, bogus compact SKU and
+        # incorrectly reject an otherwise same-SKU answer.
+        for item in customer_agent_service._extract_skus(answer)
         if str(item or "").strip()
     }
     if answer_skus - allowed_skus:
@@ -19152,7 +19423,7 @@ async def _semantic_comparison_narrative_recovery(
     }
     answer_skus = {
         str(item or "").strip().upper()
-        for item in SKU_RE.findall(answer)
+        for item in customer_agent_service._extract_skus(answer)
         if str(item or "").strip()
     }
     if answer_skus - allowed_skus:
@@ -19433,7 +19704,7 @@ async def _semantic_comparison_narrative(
     }
     answer_skus = {
         str(item or "").strip().upper()
-        for item in SKU_RE.findall(answer)
+        for item in customer_agent_service._extract_skus(answer)
         if str(item or "").strip()
     }
     if answer_skus - allowed_skus:
@@ -19534,7 +19805,7 @@ async def _semantic_comparison_narrative(
             return recovered
         repaired_skus = {
             str(item or "").strip().upper()
-            for item in SKU_RE.findall(repaired_answer)
+            for item in customer_agent_service._extract_skus(repaired_answer)
             if str(item or "").strip()
         }
         if repaired_skus - allowed_skus:
@@ -21613,7 +21884,13 @@ async def _phase1_compare_choice_result(db: Session, plan: dict) -> dict | None:
             if plan.get("must_make_choice") and requested_field_complete
             else None
         )
-        chosen_index = adjudication.get("selected_index") if isinstance(adjudication, dict) else None
+        # A conditional participant is the expected semantic result when a
+        # sealed measurement supports a scoped relation without proving a
+        # product total or broad suitability verdict. Execute that typed model
+        # decision and let the narrative preserve its stated boundary.
+        chosen_index = _semantic_comparison_adjudicated_choice_index(
+            adjudication,
+        )
         chosen_sku = (
             str(bundles[chosen_index][0].sku or "").strip().upper()
             if isinstance(chosen_index, int) and 0 <= chosen_index < len(bundles) and bundles[chosen_index][0] is not None
@@ -30025,10 +30302,16 @@ def _semantic_structured_fields_to_product_qa_preplan(
         "ambiguity": False,
     })
     normalized_context_sku = str(context_sku or "").strip().upper()
-    if (
-        normalized_context_sku
-        and not str(adapted.get("subject_text") or "").strip()
-    ):
+    if normalized_context_sku:
+        # ``context_sku`` has already been resolved from a server-owned result
+        # ledger (or an explicit current-turn SKU) by the caller.  It is the
+        # identity authority for this execution.  Flash may helpfully expand
+        # an anaphoric turn into a display name, but that generated name must
+        # not replace the sealed SKU and send same-SKU retrieval to another
+        # product.  Keep the semantic wording only as diagnostic provenance.
+        semantic_subject = str(adapted.get("subject_text") or "").strip()
+        if semantic_subject and semantic_subject.upper() != normalized_context_sku:
+            adapted["semantic_context_subject_text"] = semantic_subject
         adapted["subject_text"] = normalized_context_sku
         adapted["semantic_context_result_sku"] = normalized_context_sku
     return adapted
@@ -30961,6 +31244,112 @@ async def _semantic_general_guidance_safety_review(
     }
 
 
+async def _semantic_general_guidance_after_rag_missing(
+    db: Session,
+    *,
+    question: str,
+    semantic_preplan: dict[str, Any] | None = None,
+) -> dict[str, Any] | None:
+    """Answer typed general care/safety when the knowledge corpus is empty.
+
+    Flash has already classified the turn as usage/care/safety.  This fallback
+    is not a route or product-fact bypass: it receives no catalogue identity,
+    SKU, or retrieved fact and may provide only conservative general risk
+    reduction.  A second semantic safety audit reviews the draft before it is
+    returned.
+    """
+    runtime = customer_agent_planner_service._semantic_preplan_runtime_settings()
+    value = semantic_preplan if isinstance(semantic_preplan, dict) else {}
+    try:
+        raw = await customer_llm_service.chat_completion(
+            db,
+            messages=[
+                {
+                    "role": "system",
+                    "content": (
+                        "Return only JSON: {answer:string}. The semantic planner has already classified this as a general usage, care, transport, fire, fuel, pressure-vessel, or safety question, and the RAG corpus returned no direct document. Answer in concise natural Chinese with conservative general risk-reduction guidance. "
+                        "You are not routing or identifying a product. Do not invent a SKU, product specification, certification, company policy, live regulation, or model-specific capability. A missing company document does not require an empty answer when the customer asks whether a generally hazardous action should be avoided. Clearly advise against the hazardous action and give only reversible, broadly safe next steps; distinguish those from facts that require a specific product manual. "
+                        "For a pressurized fuel canister in a vehicle, do not describe a closed passenger compartment or ordinary trunk as safe ventilation, and do not recommend leaving it in a parked vehicle, direct sun, heat, or overnight. For necessary short transport, avoid guarantees: follow the canister instructions and local transport rules, detach it from the appliance, protect the valve/cap, keep it upright and secured, minimize vehicle time, and remove it promptly at arrival. Do not transport a damaged, overheated, expired, or leaking canister. "
+                        "For combustion in a tent, room, vehicle, or other enclosed space, say not to use it there because ventilation does not eliminate fire and carbon-monoxide risk. Do not offer supervision or opening a window as a workaround. If there may be leakage, overheating, fire, or exposure, move people away without operating ignition sources and contact appropriate emergency or professional help. "
+                        "For an ordinary compatibility or performance question that depends on a specific model, do not guess yes or no; explain what exact product identity or manual fact is needed. Answer only the question asked and do not mention internal retrieval."
+                    ),
+                },
+                {
+                    "role": "user",
+                    "content": json.dumps({
+                        "question": question,
+                        "semantic_scope": {
+                            key: value.get(key)
+                            for key in (
+                                "question_type",
+                                "information_scope",
+                                "qa_or_usage_care",
+                                "evidence_kind",
+                                "field_type",
+                            )
+                            if value.get(key) not in (None, "", [], {})
+                        },
+                    }, ensure_ascii=False),
+                },
+            ],
+            temperature=0,
+            max_tokens=320,
+            purpose="semantic_general_guidance_after_rag_missing",
+            api_model_override=runtime["model"],
+            response_format=runtime["response_format"],
+            thinking=runtime["thinking"],
+        )
+        payload = customer_agent_planner_service._extract_json_object(
+            str(raw or "")
+        ) or {}
+    except Exception:
+        return None
+    draft = str(payload.get("answer") or "").strip()
+    if not draft:
+        return None
+    answer, safety_review = await _semantic_general_guidance_safety_review(
+        db,
+        question=question,
+        draft_answer=draft,
+        semantic_question_scope=value,
+        # This is general risk reduction rather than a positive model-specific
+        # product capability.  ``None`` keeps the safety audit from turning a
+        # valid prohibition into a product-evidence miss.
+        direct_evidence_available=None,
+    )
+    if not answer:
+        return None
+    return {
+        "answer": answer,
+        "intent": "general_chat",
+        "answer_type": "chat",
+        "confidence": "high",
+        "uncertainty": "resolved",
+        "needs_clarification": False,
+        "anomalies": [],
+        "suggested_followups": [],
+        "followups": [],
+        "warnings": [],
+        "evidence": [],
+        "sources": [{"type": "semantic_chat", "label": "通用安全指引"}],
+        "actions": [],
+        "results": [],
+        "result_skus": [],
+        "candidate_skus": [],
+        "answer_metadata": {
+            "source": "semantic_general_guidance_after_rag_missing",
+            "evidence_status": "general_safety_guidance",
+            "general_guidance_safety_review": safety_review,
+        },
+        "debug": {
+            "agent_mode": "semantic_general_guidance_after_rag_missing",
+            "knowledge_base_evidence_missing": True,
+            "general_guidance_safety_review": safety_review,
+        },
+        "skip_polish": True,
+    }
+
+
 async def _semantic_review_product_qa_missing_recovery(
     db: Session,
     *,
@@ -31185,16 +31574,26 @@ async def _semantic_first_turn_result(
             semantic_preplan,
             allow_product_qa=bool(semantic_preplan.get("qa_or_usage_care")),
         )
+        if result:
+            return result, "semantic_first_knowledge_base_meta"
+        if semantic_preplan.get("qa_or_usage_care"):
+            general_guidance = await _semantic_general_guidance_after_rag_missing(
+                db,
+                question=question,
+                semantic_preplan=semantic_preplan,
+            )
+            if general_guidance:
+                return (
+                    general_guidance,
+                    "semantic_first_knowledge_base_meta_general_guidance",
+                )
         return (
-            result
-            or _semantic_knowledge_base_meta_missing_result(
+            _semantic_knowledge_base_meta_missing_result(
                 question,
                 semantic_preplan,
                 reason="knowledge_base_meta_executor_no_result",
             ),
-            "semantic_first_knowledge_base_meta"
-            if result
-            else "semantic_first_knowledge_base_meta_missing",
+            "semantic_first_knowledge_base_meta_missing",
         )
 
     if route == "recommendation":
@@ -36152,7 +36551,10 @@ def _same_sku_knowledge_strict_entailment_messages(
                 "For a semantic compound question, a statement that the supplied evidence does not directly confirm a separately requested condition is allowed "
                 "when it is plainly an evidence boundary, not a negative product fact or product conclusion. Such a bounded record-coverage statement "
                 "does not need separate product evidence and must not be rejected merely because the record is silent on that separate condition. "
+                 + _SEMANTIC_ORDINARY_OPERATION_CAUSAL_BOUNDARY
                  + _SEMANTIC_RECOMMENDATION_FINAL_PRIORITY
+                 + _SEMANTIC_ATOMIC_CAPABILITY_BOUNDARY
+                 + _SEMANTIC_ORDINARY_OPERATION_CAUSAL_BOUNDARY
                  + "Do not rely on external common knowledge or invent a missing premise. A narrow synthesis explicitly authorized by supported decision_factor_status and grounded in the listed same-SKU fields is evidence reasoning, not external knowledge; judge whether the draft stays within that factor instead of demanding literal wording. If any other claim needs an unstated premise, return false."
             ),
         },
@@ -37341,6 +37743,14 @@ def _latest_recommendation_context_for_sources(db: Session, conversation_id: str
             if current_sku and result_skus == [current_sku] and not anchor_fallback:
                 anchor_fallback = {
                     "active_single_product_anchor": current_sku,
+                    # A product-detail/same-SKU answer is also a one-item
+                    # result set.  Persist its opaque identity ledger so the
+                    # next semantic plan can safely resolve
+                    # ``context_result_indexes: [1]`` without seeing or
+                    # inventing SKU values.
+                    "result_reference_skus": [current_sku],
+                    "ordered_result_skus": [current_sku],
+                    "last_referenced_sku": current_sku,
                     "anchor_update_reason": "confirmed_single_product_context",
                 }
     return context_fallback or anchor_fallback

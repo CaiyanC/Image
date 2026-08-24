@@ -18,7 +18,7 @@ export interface User {
 
 export interface GenerationRecord {
   id: string
-  user_id: string
+  user_id: string | null
   type: 'txt2img' | 'img2img' | 'txt2vid'
   prompt: string
   negative_prompt?: string
@@ -65,8 +65,8 @@ export interface RegisterRequest {
 }
 
 export interface AuthResponse {
-  access_token: string
-  token_type: string
+  access_token?: string | null
+  token_type: 'cookie'
   user: User
 }
 

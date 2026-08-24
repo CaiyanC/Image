@@ -337,9 +337,20 @@ def _seed_default_groups(db, *, migrate_legacy: bool = True):
             else:
                 membership.group_id = target.id
 
-        db.query(GroupPermission).filter(GroupPermission.group_id == legacy.id).delete(
-            synchronize_session=False
-        )
+        target_permission_ids = {
+            str(permission_id)
+            for (permission_id,) in db.query(GroupPermission.permission_id).filter(
+                GroupPermission.group_id == target.id
+            ).all()
+        }
+        for group_permission in db.query(GroupPermission).filter(
+            GroupPermission.group_id == legacy.id
+        ).all():
+            if str(group_permission.permission_id) in target_permission_ids:
+                db.delete(group_permission)
+            else:
+                group_permission.group_id = target.id
+                target_permission_ids.add(str(group_permission.permission_id))
         db.query(Group).filter(Group.id == legacy.id).delete(synchronize_session=False)
         existing.pop(legacy_name, None)
         changed = True

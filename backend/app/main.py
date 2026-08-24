@@ -6,16 +6,24 @@ from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from logging.handlers import TimedRotatingFileHandler
 
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.encoders import jsonable_encoder
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from sqlalchemy import text
-from .core.config import BACKEND_ROOT, PROJECT_ROOT, resolve_project_path, runtime_summary, settings, validate_runtime_isolation
+from .core.config import (
+    BACKEND_ROOT,
+    PROJECT_ROOT,
+    resolve_project_path,
+    runtime_summary,
+    settings,
+    validate_runtime_isolation,
+    validate_security_settings,
+)
 from .core.database import init_db, SessionLocal
 from .core.permission_constants import MANAGEMENT_GROUP_NAME, PRODUCT_TEAM_GROUP_NAME
-from .core.security import get_password_hash
+from .core.security import get_current_super_admin, get_password_hash
 from .models.user import User
 from .api import auth, users, generation, history, admin, products, groups, categories, drafts, customer_service, knowledge_base, files, assets, asset_search, tools, admin_tools, model_governance
 from .services import knowledge_service
@@ -47,7 +55,14 @@ async def lifespan(_: FastAPI):
     yield
 
 
-app = FastAPI(title=settings.APP_NAME, version="1.0.0", lifespan=lifespan)
+app = FastAPI(
+    title=settings.APP_NAME,
+    version="1.0.0",
+    lifespan=lifespan,
+    docs_url=None if settings.APP_ENV == "prod" else "/docs",
+    redoc_url=None if settings.APP_ENV == "prod" else "/redoc",
+    openapi_url=None if settings.APP_ENV == "prod" else "/openapi.json",
+)
 STARTED_AT = datetime.now(timezone.utc).isoformat()
 
 app.add_middleware(
@@ -57,6 +72,37 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+@app.middleware("http")
+async def enforce_cookie_origin(request: Request, call_next):
+    if (
+        request.method.upper() not in {"GET", "HEAD", "OPTIONS"}
+        and request.cookies.get(settings.AUTH_COOKIE_NAME)
+        and not request.headers.get("authorization", "").lower().startswith("bearer ")
+    ):
+        origin = (request.headers.get("origin") or "").rstrip("/")
+        if origin not in settings.CORS_ORIGINS:
+            return JSONResponse(status_code=403, content={"detail": "Invalid request origin"})
+    return await call_next(request)
+
+
+@app.middleware("http")
+async def add_security_headers(request: Request, call_next):
+    response = await call_next(request)
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["X-Frame-Options"] = "DENY"
+    response.headers["Referrer-Policy"] = "no-referrer"
+    response.headers["Permissions-Policy"] = "camera=(), microphone=(), geolocation=()"
+    if settings.APP_ENV == "prod":
+        response.headers["Content-Security-Policy"] = (
+            "default-src 'none'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'"
+        )
+        if settings.AUTH_COOKIE_SECURE:
+            response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
+    if request.url.path.startswith(("/api/auth", "/api/admin")) or request.url.path == "/api/health/version":
+        response.headers["Cache-Control"] = "no-store"
+    return response
 
 os.makedirs(settings.IMAGE_UPLOAD_DIR, exist_ok=True)
 os.makedirs(settings.GENERATED_DIR, exist_ok=True)
@@ -130,7 +176,7 @@ def seed_default_categories():
 
 
 def seed_default_admin():
-    if not settings.DEFAULT_ADMIN_PASSWORD:
+    if not settings.DEFAULT_ADMIN_PASSWORD or not settings.ALLOW_ADMIN_BOOTSTRAP:
         return
     db = SessionLocal()
     try:
@@ -163,8 +209,7 @@ def seed_default_admin():
 
 
 def startup():
-    if not settings.SECRET_KEY:
-        raise RuntimeError("SECRET_KEY is not set. Please configure it in backend/.env")
+    validate_security_settings(settings)
     validate_runtime_isolation(settings)
     summary = runtime_summary(settings)
     runtime_message = (
@@ -308,6 +353,14 @@ def _runtime_version_payload() -> dict:
     }
 
 
+def _public_version_payload() -> dict:
+    return {
+        "version": STARTUP_RUNTIME_INFO.get("version") or app.version,
+        "commit": STARTUP_RUNTIME_INFO.get("startup_commit") or "unknown",
+        "env": STARTUP_RUNTIME_INFO.get("env") or settings.APP_ENV,
+    }
+
+
 def _log_version_check() -> None:
     payload = _runtime_version_payload()
     message = (
@@ -348,4 +401,9 @@ def ready_check():
 
 @app.get("/api/health/version")
 def version_check():
+    return _public_version_payload()
+
+
+@app.get("/api/admin/runtime/version")
+def admin_version_check(_: User = Depends(get_current_super_admin)):
     return _runtime_version_payload()
