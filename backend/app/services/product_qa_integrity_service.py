@@ -53,7 +53,10 @@ def _authoritative_formal_facts(specs: ProductSpecs | None) -> dict[str, dict[st
         }
     for dimension, attribute, source in (
         ("capacity", "capacity", "product_specs.capacity"),
+        ("size", "size_info", "product_specs.size_info"),
         ("material", "body_material", "product_specs.body_material"),
+        ("color", "color", "product_specs.color"),
+        ("surface_finish", "surface_finish", "product_specs.surface_finish"),
         ("heat_source", "heat_source", "product_specs.heat_source"),
         ("usage_instruction", "usage_instruction", "product_specs.usage_instruction"),
     ):
@@ -85,7 +88,10 @@ def _product_evidence(db: Session, product: Product) -> dict[str, Any]:
             "specs": {
                 "material": getattr(specs, "body_material", None),
                 "capacity": getattr(specs, "capacity", None),
+                "size_info": getattr(specs, "size_info", None),
                 "weight_g": getattr(specs, "gross_weight_g", None),
+                "color": getattr(specs, "color", None),
+                "surface_finish": getattr(specs, "surface_finish", None),
                 "heat_source": getattr(specs, "heat_source", None),
                 "usage_instruction": getattr(specs, "usage_instruction", None),
             },
@@ -107,7 +113,10 @@ def _product_evidence(db: Session, product: Product) -> dict[str, Any]:
         "specs": {
             "material": getattr(specs, "body_material", None),
             "capacity": getattr(specs, "capacity", None),
+            "size_info": getattr(specs, "size_info", None),
             "weight_g": getattr(specs, "gross_weight_g", None),
+            "color": getattr(specs, "color", None),
+            "surface_finish": getattr(specs, "surface_finish", None),
             "heat_source": getattr(specs, "heat_source", None),
             "usage_instruction": getattr(specs, "usage_instruction", None),
         },
@@ -365,20 +374,23 @@ async def audit_product_qa_item(
                 )
         except Exception:
             verdict = {"status": "review", "reason": "语义审核暂时不可用。"}
-    # The provider adapter deliberately releases the SQLAlchemy connection
-    # before network I/O by closing the Session. That keeps the Session
-    # reusable but detaches every previously loaded ORM instance. Reload the
-    # QA by identity after both Flash passes so the verdict is written to a
-    # persistent row rather than only to the detached caller object.
-    persisted_qa = db.get(ProductQa, qa.id)
-    if persisted_qa is None:
-        raise ValueError("Product QA disappeared during semantic integrity audit")
+    # Keep the ORM instance supplied by the caller.  The development database
+    # stores this table's primary key as PostgreSQL UUID while the legacy model
+    # maps it as String.  A newly inserted row can therefore be keyed in
+    # SQLAlchemy's identity map by the generated string and, after a refresh,
+    # be loaded again by its UUID value.  Re-loading here and flushing both
+    # objects makes SQLAlchemy sort a UUID and a str primary key, which raises
+    # before the audit verdict is persisted.  All call sites pass the
+    # transaction's persistent QA instance, so there is no need to load a
+    # second identity.
     audited_at = datetime.now(timezone.utc)
     integrity_model = str(settings.SEMANTIC_PREPLAN_MODEL or "deepseek")
-    for target in ({persisted_qa, qa} if persisted_qa is not qa else {qa}):
-        target.integrity_status = verdict["status"]
-        target.integrity_reason = verdict["reason"]
-        target.integrity_model = integrity_model
-        target.integrity_audited_at = audited_at
-    db.flush()
+    qa.integrity_status = verdict["status"]
+    qa.integrity_reason = verdict["reason"]
+    qa.integrity_model = integrity_model
+    qa.integrity_audited_at = audited_at
+    # Scope the flush to the audited row.  Besides avoiding the duplicate
+    # identity issue above, this prevents unrelated pending work in a caller's
+    # Session from being flushed as a side effect of semantic auditing.
+    db.flush([qa])
     return verdict

@@ -18,6 +18,24 @@ from app.services import customer_agent_intent_service, customer_service_service
 from scripts.audit_product_qa_integrity import apply_audit_ledger, ensure_development_target
 
 
+def test_integrity_authority_includes_size_and_surface_finish():
+    specs = ProductSpecs(
+        product_id="qa-integrity-authority-product",
+        size_info='[{"label":"展开尺寸","value":"12.5*12.5*12.9","unit":"cm"}]',
+        color="锖色",
+        surface_finish="硬质氧化\n陶瓷不沾",
+    )
+
+    facts = product_qa_integrity_service._authoritative_formal_facts(specs)
+
+    assert facts["size"]["source"] == "product_specs.size_info"
+    assert "12.5*12.5*12.9" in facts["size"]["display"]
+    assert facts["color"]["source"] == "product_specs.color"
+    assert facts["color"]["display"] == "锖色"
+    assert facts["surface_finish"]["source"] == "product_specs.surface_finish"
+    assert "陶瓷不沾" in facts["surface_finish"]["display"]
+
+
 def test_rejected_qa_keeps_original_text_but_is_not_customer_visible():
     """Quarantined QA stays reviewable but cannot become customer evidence."""
     engine = create_engine(
@@ -178,6 +196,53 @@ def test_semantic_rejection_changes_only_audit_fields(monkeypatch):
         assert verdict == {"status": "rejected", "reason": "倒油指引不适用于水壶。"}
         assert qa.integrity_status == "rejected"
         assert qa.answer == "先预热再倒油。"
+    finally:
+        db.close()
+        engine.dispose()
+
+
+def test_semantic_audit_keeps_supplied_qa_identity(monkeypatch):
+    """Auditing must not reload the QA into a second UUID/string identity."""
+    engine = create_engine("sqlite:///:memory:", connect_args={"check_same_thread": False})
+    Base.metadata.create_all(engine, tables=[
+        Product.__table__, ProductQa.__table__, ProductSpecs.__table__,
+        ProductBusiness.__table__, ProductContent.__table__,
+    ])
+    db = sessionmaker(bind=engine)()
+    try:
+        product = Product(
+            id="qa-integrity-identity-product",
+            sku="QA-INTEGRITY-IDENTITY",
+            barcode="qa-integrity-identity-barcode",
+            product_name_cn="测试产品",
+            brand="alocs",
+        )
+        qa = ProductQa(
+            id="qa-integrity-identity-qa",
+            product_id=product.id,
+            question="有质保吗？",
+            answer="提供一年质保。",
+        )
+        db.add_all([product, qa])
+        db.commit()
+
+        async def approved_by_model(*_args, **_kwargs):
+            return '{"status":"approved","conflict_type":"none","reason":"Same-SKU supplemental fact."}'
+
+        monkeypatch.setattr(
+            product_qa_integrity_service.customer_llm_service,
+            "chat_completion",
+            approved_by_model,
+        )
+
+        def forbidden_reload(*_args, **_kwargs):
+            raise AssertionError("semantic audit must not reload a second QA identity")
+
+        monkeypatch.setattr(db, "get", forbidden_reload)
+        verdict = asyncio.run(product_qa_integrity_service.audit_product_qa_item(db, product, qa))
+
+        assert verdict["status"] == "approved"
+        assert qa.integrity_status == "approved"
     finally:
         db.close()
         engine.dispose()
