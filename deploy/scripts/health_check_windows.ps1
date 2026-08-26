@@ -220,16 +220,32 @@ function Invoke-WatchdogAction {
     & powershell.exe @arguments | Out-Null
 }
 
-$state = Read-State
-$now = Get-Date
-$live = Test-Endpoint "/api/health/live"
-$ready = Test-Endpoint "/api/health/ready"
-$releaseVersion = Test-BackendReleaseVersion
-$frontend = Test-HttpOk $FrontendUrl
-$redis = Test-Redis
-$worker = Test-ProdWorker
-$backendHealthy = $live.ok -and $ready.ok -and $releaseVersion.ok
-$healthy = $backendHealthy -and $frontend.ok -and $redis.ok -and $worker.ok
+$serviceMutex = New-Object System.Threading.Mutex($false, "Local\CaiYanProductionServiceControl")
+$serviceLockAcquired = $false
+try {
+    try {
+        $serviceLockAcquired = $serviceMutex.WaitOne(0)
+    } catch [System.Threading.AbandonedMutexException] {
+        $serviceLockAcquired = $true
+        Write-HealthLog "WARN" "recovered abandoned production service-control lock"
+    }
+
+    if (-not $serviceLockAcquired) {
+        Write-HealthLog "INFO" "production startup/service recovery is already in progress; skipping overlapping health run"
+        Write-Output "SKIPPED production service control already running"
+        exit 0
+    }
+
+    $state = Read-State
+    $now = Get-Date
+    $live = Test-Endpoint "/api/health/live"
+    $ready = Test-Endpoint "/api/health/ready"
+    $releaseVersion = Test-BackendReleaseVersion
+    $frontend = Test-HttpOk $FrontendUrl
+    $redis = Test-Redis
+    $worker = Test-ProdWorker
+    $backendHealthy = $live.ok -and $ready.ok -and $releaseVersion.ok
+    $healthy = $backendHealthy -and $frontend.ok -and $redis.ok -and $worker.ok
 
 if (-not $healthy -and $EnableWatchdog) {
     if (-not $redis.ok) {
@@ -297,5 +313,11 @@ Save-State ([pscustomobject]@{
     checked_at = $now.ToString("o")
 })
 
-Write-Output "UNHEALTHY $reason"
-exit 1
+    Write-Output "UNHEALTHY $reason"
+    exit 1
+} finally {
+    if ($serviceLockAcquired) {
+        try { $serviceMutex.ReleaseMutex() } catch { }
+    }
+    $serviceMutex.Dispose()
+}

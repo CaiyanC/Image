@@ -105,17 +105,15 @@ Stop-Service postgresql-x64-18
 
 ### 开机/登录自启动
 
-当前通过 Windows 任务计划程序配置登录后自启动任务。自启动只管理生产环境，不自动启动开发环境。
+当前通过 Windows 任务计划程序配置登录后自启动。自启动只管理生产环境，不自动启动开发环境。
 
-- `CaiYanStartupRedis`：登录后启动 Docker Desktop，并确保 `caiyan-redis` 容器运行。
-- `CaiYanStartupBackend`：登录后延迟 1 分钟启动生产后端 `8000`。
-- `CaiYanStartupWorker`：登录后延迟 90 秒启动生产 Celery worker，使用 `celery_prod` / `worker_prod`。
-- `CaiYanStartupFrontend`：登录后延迟 2 分钟启动生产前端 `5275`。
-- `CaiYanHealthCheck`：定时检查生产 Redis、后端、前端和 worker；只重启生产组件。
+- `CaiYanStartupProduction`：登录后延迟 15 秒执行一个串行启动器。它先等待 Docker/Redis，再从 `production-release.json` 指向的不可变 release 依次启动生产后端 `8000`、前端 `5275` 和 `celery_prod` worker。
+- `CaiYanHealthCheck`：定时检查生产 Redis、后端、前端和 worker；只修复生产组件。健康检查和启动器共用互斥锁，不会同时抢占端口。
+- 旧的 `CaiYanStartupRedis`、`CaiYanStartupBackend`、`CaiYanStartupWorker`、`CaiYanStartupFrontend` 会被安装脚本停用，避免四个任务并发启动和引用可变开发目录。
 
 说明：
 
-- Docker Desktop 是用户会话程序，不是普通 Windows 服务；当前方案是在当前 Windows 用户登录后自动启动 Docker/Redis。
+- Docker Desktop 是用户会话程序，不是普通 Windows 服务；因此这里准确含义是“开机并登录 Windows 后自动启动”，不能在无人登录的桌面会话中启动 Docker Desktop。
 - Redis 任务会先检查 `docker info`。如果 Docker 未就绪，会尝试启动 `Docker Desktop.exe` 并等待 Docker 可用。
 - 后端启动前会确认 Redis、PostgreSQL 可用。
 - 前端延迟启动，避免后端还未就绪时访问失败。
@@ -127,29 +125,33 @@ Stop-Service postgresql-x64-18
 
 | 组件 | 端口/队列 | 启动任务 |
 | --- | --- | --- |
-| Redis | `caiyan-redis` / `6379` | `CaiYanStartupRedis` |
-| 后端 | `8000` | `CaiYanStartupBackend` |
-| 前端 | `5275` | `CaiYanStartupFrontend` |
-| Worker | `celery_prod` / `worker_prod` | `CaiYanStartupWorker` |
+| Redis | `caiyan-redis` / `6379` | `CaiYanStartupProduction` |
+| 后端 | `8000` | `CaiYanStartupProduction` |
+| 前端 | `5275` | `CaiYanStartupProduction` |
+| Worker | `celery_prod` / `worker_prod` | `CaiYanStartupProduction` |
 
 查看任务：
 
 ```powershell
-Get-ScheduledTask -TaskName CaiYanStartupRedis,CaiYanStartupBackend,CaiYanStartupWorker,CaiYanStartupFrontend,CaiYanHealthCheck
+Get-ScheduledTask -TaskName CaiYanStartupProduction,CaiYanHealthCheck
 ```
 
 手动模拟开机启动：
 
 ```powershell
-Start-ScheduledTask -TaskName CaiYanStartupRedis
-Start-ScheduledTask -TaskName CaiYanStartupBackend
-Start-ScheduledTask -TaskName CaiYanStartupWorker
-Start-ScheduledTask -TaskName CaiYanStartupFrontend
+Start-ScheduledTask -TaskName CaiYanStartupProduction
 ```
 
-自启动和看门狗共用脚本：
+安装或刷新自启动任务：
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File .\deploy\scripts\install_startup_tasks_windows.ps1
+```
+
+自启动和看门狗脚本：
 
 ```text
+deploy\scripts\startup_production_windows.ps1
 deploy\scripts\service_control_windows.ps1
 ```
 
