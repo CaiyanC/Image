@@ -125,6 +125,20 @@ class Settings:
     SEMANTIC_PREPLAN_TEMPERATURE: float = float(os.getenv("SEMANTIC_PREPLAN_TEMPERATURE", "0"))
     SEMANTIC_PREPLAN_JSON_MODE: bool = os.getenv("SEMANTIC_PREPLAN_JSON_MODE", "true").lower() == "true"
     SEMANTIC_PREPLAN_THINKING_DISABLED: bool = os.getenv("SEMANTIC_PREPLAN_THINKING_DISABLED", "true").lower() == "true"
+    # Customer-service pipeline selection is an operational switch.  Keep the
+    # established path as the default and require an explicit dev-only
+    # request override before a caller can exercise the isolated v2 path.
+    CUSTOMER_SERVICE_PIPELINE: str = os.getenv("CUSTOMER_SERVICE_PIPELINE", "legacy").strip().lower()
+    CUSTOMER_SERVICE_PIPELINE_OVERRIDE_ENABLED: bool = os.getenv(
+        "CUSTOMER_SERVICE_PIPELINE_OVERRIDE_ENABLED",
+        "true" if APP_ENV == "dev" else "false",
+    ).lower() == "true"
+    CUSTOMER_SERVICE_V2_MAX_HISTORY_MESSAGES: int = int(
+        os.getenv("CUSTOMER_SERVICE_V2_MAX_HISTORY_MESSAGES", "12")
+    )
+    CUSTOMER_SERVICE_V2_MAX_RETRIEVAL_ROWS: int = int(
+        os.getenv("CUSTOMER_SERVICE_V2_MAX_RETRIEVAL_ROWS", "8")
+    )
 
     DATABASE_URL: str = os.getenv(
         "DATABASE_URL",

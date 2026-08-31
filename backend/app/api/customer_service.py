@@ -290,13 +290,16 @@ async def ask(
     parity_scope = _parity_isolation_scope(request)
     governance_token = customer_llm_service.set_governed_customer_user(current_user)
     try:
-        result = await customer_service_service.ask_customer_service(
-            db,
-            user_id=current_user.id,
-            question=body.question,
-            sku=body.sku,
-            conversation_id=body.conversation_id,
-        )
+        service_kwargs = {
+            "user_id": current_user.id,
+            "question": body.question,
+            "sku": body.sku,
+            "conversation_id": body.conversation_id,
+        }
+        pipeline_override = request.headers.get("X-Customer-Service-Pipeline")
+        if pipeline_override:
+            service_kwargs["pipeline"] = pipeline_override
+        result = await customer_service_service.ask_customer_service(db, **service_kwargs)
     finally:
         customer_llm_service.reset_governed_customer_user(governance_token)
     result = _canonicalize_parity_result(
@@ -377,14 +380,17 @@ async def ask_stream(
                 service_task = asyncio.create_task(asyncio.sleep(0, result=cached_result))
             else:
                 async def run_service():
-                    result = await customer_service_service.ask_customer_service(
-                        db,
-                        user_id=current_user.id,
-                        question=body.question,
-                        sku=body.sku,
-                        conversation_id=body.conversation_id,
-                        answer_delta_callback=on_answer_delta,
-                    )
+                    service_kwargs = {
+                        "user_id": current_user.id,
+                        "question": body.question,
+                        "sku": body.sku,
+                        "conversation_id": body.conversation_id,
+                        "answer_delta_callback": on_answer_delta,
+                    }
+                    pipeline_override = request.headers.get("X-Customer-Service-Pipeline")
+                    if pipeline_override:
+                        service_kwargs["pipeline"] = pipeline_override
+                    result = await customer_service_service.ask_customer_service(db, **service_kwargs)
                     _cache_recommendation_response(
                         current_user.id,
                         body,

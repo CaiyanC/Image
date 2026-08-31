@@ -34,6 +34,7 @@ from . import (
     customer_field_contract,
     customer_final_answer_arbiter,
     customer_llm_service,
+    customer_pipeline_service,
     customer_perf_service,
     customer_recommendation_verification_contract,
     customer_structured_query_contract,
@@ -35311,7 +35312,7 @@ async def _semantic_first_turn_result(
     )
 
 
-async def ask_customer_service(
+async def _ask_customer_service_legacy(
     db: Session,
     *,
     user_id: str,
@@ -35662,6 +35663,46 @@ async def ask_customer_service(
         branch="semantic_terminal_recovery",
         semantic_preplan=semantic_preplan,
     )
+
+
+async def ask_customer_service(
+    db: Session,
+    *,
+    user_id: str,
+    question: str,
+    sku: str | None = None,
+    conversation_id: str | None = None,
+    answer_delta_callback: Callable[[str], Awaitable[None]] | None = None,
+    pipeline: str | None = None,
+) -> dict:
+    """Dispatch the selected runtime without changing the legacy contract.
+
+    The default remains the established implementation. ``semantic_rag_v2``
+    is a separately persisted runtime and never falls through to the legacy
+    route/formatter chain when its own planning or retrieval fails.
+    """
+    selected_pipeline = customer_pipeline_service.resolve_customer_service_pipeline(pipeline)
+    if selected_pipeline == customer_pipeline_service.SEMANTIC_RAG_V2_PIPELINE:
+        from . import customer_service_semantic_rag_v2_service
+
+        return await customer_service_semantic_rag_v2_service.ask_customer_service_semantic_rag_v2(
+            db,
+            user_id=user_id,
+            question=question,
+            sku=sku,
+            conversation_id=conversation_id,
+            answer_delta_callback=answer_delta_callback,
+        )
+    return await _ask_customer_service_legacy(
+        db,
+        user_id=user_id,
+        question=question,
+        sku=sku,
+        conversation_id=conversation_id,
+        answer_delta_callback=answer_delta_callback,
+    )
+
+
 def _finalize_answer(agent_result: dict) -> dict:
     result = _normalize_agent_result(agent_result)
     primary = _pick_primary_answer_source(result)
