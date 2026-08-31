@@ -58,6 +58,8 @@ def _authoritative_formal_facts(specs: ProductSpecs | None) -> dict[str, dict[st
         ("color", "color", "product_specs.color"),
         ("surface_finish", "surface_finish", "product_specs.surface_finish"),
         ("heat_source", "heat_source", "product_specs.heat_source"),
+        ("power", "power", "product_specs.power"),
+        ("technical_advantages", "technical_advantages", "product_specs.technical_advantages"),
         ("usage_instruction", "usage_instruction", "product_specs.usage_instruction"),
     ):
         value = getattr(specs, attribute, None)
@@ -93,6 +95,8 @@ def _product_evidence(db: Session, product: Product) -> dict[str, Any]:
                 "color": getattr(specs, "color", None),
                 "surface_finish": getattr(specs, "surface_finish", None),
                 "heat_source": getattr(specs, "heat_source", None),
+                "power": getattr(specs, "power", None),
+                "technical_advantages": getattr(specs, "technical_advantages", None),
                 "usage_instruction": getattr(specs, "usage_instruction", None),
             },
             "business": {
@@ -118,6 +122,8 @@ def _product_evidence(db: Session, product: Product) -> dict[str, Any]:
             "color": getattr(specs, "color", None),
             "surface_finish": getattr(specs, "surface_finish", None),
             "heat_source": getattr(specs, "heat_source", None),
+            "power": getattr(specs, "power", None),
+            "technical_advantages": getattr(specs, "technical_advantages", None),
             "usage_instruction": getattr(specs, "usage_instruction", None),
         },
         "authoritative_formal_facts": authoritative_formal_facts,

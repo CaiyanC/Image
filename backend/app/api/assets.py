@@ -32,6 +32,7 @@ REVIEW_FIELDS = {
     "status_tag", "review_status", "authorization_status", "asset_level",
     "is_public", "ai_customer_usable", "ai_marketing_usable",
     "ai_reference_usable", "forbidden_usage", "is_latest_version",
+    "quality_status", "quality_reason", "duplicate_status", "duplicate_of_asset_id",
 }
 
 
@@ -124,6 +125,10 @@ def _require_review_permission_for_changed_fields(db: Session, user: User, paylo
         "ai_reference_usable": False,
         "forbidden_usage": None,
         "is_latest_version": True,
+        "quality_status": "usable",
+        "quality_reason": None,
+        "duplicate_status": "unique",
+        "duplicate_of_asset_id": None,
     }
     changed = {
         field for field in REVIEW_FIELDS.intersection(payload)

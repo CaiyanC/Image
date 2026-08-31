@@ -243,6 +243,43 @@ class AssetApiTest(unittest.TestCase):
         invalid_limit = self.client.get("/api/assets/search", params={"limit": 101})
         self.assertEqual(invalid_limit.status_code, 422)
 
+    def test_taxonomy_and_lifecycle_filters_are_available(self):
+        taxonomy = self.client.get("/api/assets/taxonomy")
+        self.assertEqual(taxonomy.status_code, 200, taxonomy.text)
+        payload = taxonomy.json()
+        self.assertEqual(payload["dimensions"]["scene_tags"]["values"], ["徒步", "硬核露营", "车露", "家庭露营", "雪地", "森林", "湖边", "室内"])
+        self.assertIn("suspected_duplicate", payload["quality_statuses"])
+        self.assertIn("cross_sku_reuse", payload["duplicate_statuses"])
+
+        created = self.client.post(
+            "/api/products/API-ASSET-1/assets",
+            json={
+                "category_code": "01",
+                "category_name": "产品标准图",
+                "sub_category": "白底图",
+                "material_type": "whiteBackground",
+                "url": "/uploads/assets/API-ASSET-1/quality-test.jpg",
+                "quality_status": "suspected_duplicate",
+                "quality_reason": "开发环境重复测试",
+                "duplicate_status": "suspected_duplicate",
+                "duplicate_of_asset_id": "known-source",
+            },
+        )
+        self.assertEqual(created.status_code, 200, created.text)
+        asset = created.json()
+        self.assertEqual(asset["quality_status"], "suspected_duplicate")
+        self.assertEqual(asset["duplicate_status"], "suspected_duplicate")
+
+        filtered = self.client.get("/api/assets/search", params={"quality_status": "suspected_duplicate"})
+        self.assertEqual(filtered.status_code, 200, filtered.text)
+        self.assertEqual([item["id"] for item in filtered.json()["items"]], [asset["id"]])
+
+        expression_only = self.client.get("/api/assets/search", params={"expression_tags": "卖点图"})
+        self.assertEqual(expression_only.status_code, 200, expression_only.text)
+
+        invalid_tag = self.client.get("/api/assets/search", params={"scene_tags": "studio"})
+        self.assertEqual(invalid_tag.status_code, 422)
+
 
 if __name__ == "__main__":
     unittest.main()

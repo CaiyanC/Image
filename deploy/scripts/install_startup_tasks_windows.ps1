@@ -2,6 +2,7 @@ param(
     [string]$RuntimeRoot = "",
     [string]$UserId = $env:USERNAME,
     [string]$TaskName = "CaiYanStartupProduction",
+    [string]$DevelopmentTaskName = "CaiYanStartupDevelopment",
     [switch]$RunNow
 )
 
@@ -16,13 +17,19 @@ $sourceScript = Join-Path $RuntimeRoot "deploy\scripts\startup_production_window
 if (-not (Test-Path -LiteralPath $sourceScript)) {
     throw "startup source script is missing: $sourceScript"
 }
+$developmentSourceScript = Join-Path $RuntimeRoot "deploy\scripts\startup_development_windows.ps1"
+if (-not (Test-Path -LiteralPath $developmentSourceScript)) {
+    throw "development startup source script is missing: $developmentSourceScript"
+}
 
 # The scheduled task uses a runtime copy so a temporary git branch switch cannot
 # make the boot entry point disappear. Re-running this installer refreshes it.
 $runtimeScriptDir = Join-Path $RuntimeRoot "backend\runtime\startup"
 $runtimeScript = Join-Path $runtimeScriptDir "startup_production_windows.ps1"
+$developmentRuntimeScript = Join-Path $runtimeScriptDir "startup_development_windows.ps1"
 New-Item -ItemType Directory -Force -Path $runtimeScriptDir | Out-Null
 Copy-Item -LiteralPath $sourceScript -Destination $runtimeScript -Force
+Copy-Item -LiteralPath $developmentSourceScript -Destination $developmentRuntimeScript -Force
 
 $powerShellExe = Join-Path $env:SystemRoot "System32\WindowsPowerShell\v1.0\powershell.exe"
 if (-not (Test-Path -LiteralPath $powerShellExe)) {
@@ -55,6 +62,32 @@ Register-ScheduledTask `
     -Description "Start the active immutable CaiYan production release after Windows logon." `
     -Force | Out-Null
 
+$quotedDevelopmentScript = '"' + $developmentRuntimeScript + '"'
+$quotedDevelopmentRoot = '"' + $RuntimeRoot + '"'
+$developmentAction = New-ScheduledTaskAction `
+    -Execute $powerShellExe `
+    -Argument "-NoProfile -ExecutionPolicy Bypass -File $quotedDevelopmentScript -RuntimeRoot $quotedDevelopmentRoot"
+$developmentTrigger = New-ScheduledTaskTrigger -AtLogOn -User $UserId
+$developmentTrigger.Delay = "PT20S"
+$developmentPrincipal = New-ScheduledTaskPrincipal -UserId $UserId -LogonType Interactive -RunLevel Limited
+$developmentSettings = New-ScheduledTaskSettingsSet `
+    -StartWhenAvailable `
+    -AllowStartIfOnBatteries `
+    -DontStopIfGoingOnBatteries `
+    -MultipleInstances IgnoreNew `
+    -ExecutionTimeLimit (New-TimeSpan -Minutes 15) `
+    -RestartCount 3 `
+    -RestartInterval (New-TimeSpan -Minutes 2)
+
+Register-ScheduledTask `
+    -TaskName $DevelopmentTaskName `
+    -Action $developmentAction `
+    -Trigger $developmentTrigger `
+    -Principal $developmentPrincipal `
+    -Settings $developmentSettings `
+    -Description "Start the isolated CaiYan development backend, worker, and frontend after Windows logon." `
+    -Force | Out-Null
+
 $legacyTasks = @(
     "CaiYanStartupRedis",
     "CaiYanStartupBackend",
@@ -82,5 +115,7 @@ if ($RunNow) {
 
 Write-Output "TASK=$TaskName"
 Write-Output "SCRIPT=$runtimeScript"
+Write-Output "DEVELOPMENT_TASK=$DevelopmentTaskName"
+Write-Output "DEVELOPMENT_SCRIPT=$developmentRuntimeScript"
 Write-Output "USER=$UserId"
 Write-Output "LEGACY_TASKS_DISABLED=$($legacyTasks -join ',')"

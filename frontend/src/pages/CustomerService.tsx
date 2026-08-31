@@ -23,9 +23,14 @@ interface ChatMessage {
   followups?: string[]
   warnings?: string[]
   evidence?: Array<Record<string, unknown>>
+  answer_metadata?: Record<string, unknown>
+  agent_quality?: Record<string, unknown>
   debug?: Record<string, unknown>
   feedback?: Record<string, unknown> | null
   sources?: Array<Record<string, unknown>>
+  sku?: string | null
+  result_skus?: string[]
+  candidate_skus?: string[]
   actions?: AgentAction[]
   results?: ProductSearchResult[]
   steps?: AgentStep[]
@@ -63,6 +68,9 @@ const CUSTOMER_SERVICE_DRAFT_VERSION = 2
 
 export default function CustomerService() {
   const { isManagement, user } = useAuthStore()
+  const canManageQa = isManagement || Boolean(
+    user?.permissions?.includes('product.qa.manage') || user?.permissions?.includes('product.edit'),
+  )
   const initialConversationKey = useMemo(() => createLocalConversationKey(), [])
   const [activeConversationKey, setActiveConversationKey] = useState<ConversationKey>(initialConversationKey)
   const [conversationStates, setConversationStates] = useState<Record<ConversationKey, CustomerConversationState>>(() => ({
@@ -314,9 +322,14 @@ export default function CustomerService() {
                     followups: dedupe(event.followups || event.suggested_followups || []),
                     warnings: dedupe(event.warnings || []),
                     evidence: event.evidence || [],
+                    answer_metadata: event.answer_metadata || {},
+                    agent_quality: event.agent_quality || {},
                     debug: event.debug || {},
                     feedback: event.feedback || null,
                     sources: event.sources,
+                    sku: event.sku,
+                    result_skus: event.result_skus || [],
+                    candidate_skus: event.candidate_skus || [],
                     actions: event.actions || [],
                     results: event.results || [],
                     steps: event.steps || [],
@@ -677,11 +690,19 @@ export default function CustomerService() {
                     />
                   )}
                   {message.role === 'assistant' && !message.streaming && message.content && (
-                    <FeedbackBar
-                      feedback={message.feedback}
-                      loading={feedbackLoadingId === (message.message_id || message.id)}
-                      onFeedback={(rating) => sendFeedback(message, rating)}
-                    />
+                    <div className="flex flex-wrap items-center gap-2">
+                      <FeedbackBar
+                        feedback={message.feedback}
+                        loading={feedbackLoadingId === (message.message_id || message.id)}
+                        onFeedback={(rating) => sendFeedback(message, rating)}
+                      />
+                      {canManageQa && (
+                        <AddQaButton
+                          message={message}
+                          question={previousUserQuestionForMessage(messages, index)}
+                        />
+                      )}
+                    </div>
                   )}
                   {message.role === 'assistant' && !message.streaming && debugMode && isManagement && (
                     <DebugPanel message={message} />
@@ -1008,6 +1029,85 @@ function FeedbackBar({
       ))}
     </div>
   )
+}
+
+function AddQaButton({ message, question }: { message: ChatMessage; question: string }) {
+  const navigate = useNavigate()
+  if (!question.trim()) return null
+
+  const skus = skuCandidatesFromMessage(message)
+  const boundSku = skus.length === 1 ? skus[0] : ''
+
+  function openQaForm() {
+    const params = new URLSearchParams({ question: question.trim() })
+    if (boundSku) params.set('sku', boundSku)
+    navigate(`/products/qa/new?${params.toString()}`)
+  }
+
+  return (
+    <button
+      type="button"
+      onClick={openQaForm}
+      title={boundSku ? `已从结构化回答来源带入 ${boundSku}` : '回答未绑定唯一 SKU，请在下一页确认'}
+      className="rounded-lg border border-teal-100 bg-teal-50 px-2 py-1 text-[11px] text-teal-700 transition-colors hover:bg-teal-100"
+    >
+      {boundSku ? `添加 QA · ${boundSku}` : '添加 QA'}
+    </button>
+  )
+}
+
+function previousUserQuestionForMessage(messages: ChatMessage[], index: number): string {
+  for (let cursor = index - 1; cursor >= 0; cursor -= 1) {
+    if (messages[cursor].role === 'user') return messages[cursor].content.trim()
+  }
+  return ''
+}
+
+function skuCandidatesFromMessage(message: ChatMessage): string[] {
+  const candidates: string[] = []
+  const add = (value: unknown) => {
+    if (value === null || value === undefined || typeof value === 'object') return
+    const normalized = String(value).trim().toUpperCase()
+    if (normalized && !candidates.includes(normalized)) candidates.push(normalized)
+  }
+  const addList = (value: unknown) => {
+    if (!Array.isArray(value)) return
+    value.forEach(add)
+  }
+
+  add(message.sku)
+  addList(message.result_skus)
+  addList(message.candidate_skus)
+  for (const item of message.results || []) add(item.sku)
+  for (const item of message.evidence || []) add(item.sku)
+
+  const metadata = message.answer_metadata || {}
+  add(metadata.current_sku)
+  add(metadata.resolved_sku)
+  add(metadata.final_choice_sku)
+  for (const source of message.sources || []) {
+    add(source.sku)
+    addList(source.result_skus)
+    addList(source.candidate_skus)
+    const recommendationContext = source.recommendation_context
+    if (recommendationContext && typeof recommendationContext === 'object') {
+      const context = recommendationContext as Record<string, unknown>
+      addList(context.recommended_skus)
+      addList(context.ordered_result_skus)
+    }
+    const candidateContext = source.candidate_context
+    if (candidateContext && typeof candidateContext === 'object') {
+      const context = candidateContext as Record<string, unknown>
+      addList(context.candidate_skus)
+      addList(context.ordered_result_skus)
+    }
+    if (Array.isArray(source.results)) {
+      source.results.forEach((row) => {
+        if (row && typeof row === 'object') add((row as Record<string, unknown>).sku)
+      })
+    }
+  }
+  return candidates
 }
 
 function DebugPanel({ message }: { message: ChatMessage }) {

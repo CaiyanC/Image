@@ -188,6 +188,43 @@ class AssetServiceTest(unittest.TestCase):
         })
         self.assertEqual(validated["scene_tags"], ["家庭露营"])
 
+    def test_controlled_tags_reject_new_values_outside_the_dictionary(self):
+        with self.assertRaises(HTTPException) as ctx:
+            asset_service.validate_asset_tags({"scene_tags": ["studio"]})
+        self.assertEqual(ctx.exception.status_code, 422)
+
+    def test_quality_and_duplicate_metadata_are_persisted_and_serialized(self):
+        asset = asset_service.create_asset(
+            self.db,
+            "ASSET-1",
+            {
+                "category_code": "01",
+                "category_name": "产品标准图",
+                "sub_category": "白底图",
+                "material_type": "whiteBackground",
+                "url": "/uploads/assets/ASSET-1/one.jpg",
+                "quality_status": "suspected_duplicate",
+                "quality_reason": "开发环境重复测试",
+                "duplicate_status": "suspected_duplicate",
+                "duplicate_of_asset_id": "asset-source",
+            },
+        )
+
+        payload = asset_service.model_to_dict(asset)
+        self.assertEqual(payload["quality_status"], "suspected_duplicate")
+        self.assertEqual(payload["quality_reason"], "开发环境重复测试")
+        self.assertEqual(payload["duplicate_status"], "suspected_duplicate")
+        self.assertEqual(payload["duplicate_of_asset_id"], "asset-source")
+
+        updated = asset_service.update_asset(
+            self.db,
+            "ASSET-1",
+            asset.id,
+            {"quality_status": "invalid", "quality_reason": "开发环境无效素材测试"},
+        )
+        self.assertEqual(updated.quality_status, "invalid")
+        self.assertEqual(updated.quality_reason, "开发环境无效素材测试")
+
 
 if __name__ == "__main__":
     unittest.main()

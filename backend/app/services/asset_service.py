@@ -12,6 +12,12 @@ from sqlalchemy.orm import Session
 from ..core.config import settings
 from ..models.product import Product
 from ..models.product_asset import ProductAsset
+from .asset_taxonomy import (
+    CONTROLLED_TAG_DICTIONARY,
+    DUPLICATE_STATUS_VALUES,
+    EXPRESSION_REQUIREMENTS,
+    QUALITY_STATUS_VALUES,
+)
 
 
 DEFAULT_BRAND = "alocs"
@@ -22,12 +28,6 @@ DEFAULT_STATUS = "待审核"
 AI_GENERATED_CATEGORY_CODE = "07"
 ARCHIVE_CATEGORY_CODE = "08"
 ARCHIVE_CATEGORY_NAME = "参考归档禁用图"
-
-EXPRESSION_REQUIREMENTS = {
-    "卖点图": "selling_point_tags",
-    "场景图": "scene_tags",
-    "氛围图": "mood_tags",
-}
 
 logger = logging.getLogger(__name__)
 
@@ -79,12 +79,44 @@ def parse_tags(tags: Any) -> dict[str, list[str]]:
     return json.loads(normalize_tags(parsed))
 
 
-def validate_asset_tags(tags: Any) -> dict[str, list[str]]:
+def validate_asset_tags(
+    tags: Any,
+    *,
+    legacy_controlled_values: dict[str, set[str]] | None = None,
+    enforce_expression_requirements: bool = True,
+) -> dict[str, list[str]]:
     normalized = parse_tags(tags)
-    for expression, required_key in EXPRESSION_REQUIREMENTS.items():
-        if expression in normalized.get("expression_tags", []) and not normalized.get(required_key):
-            raise HTTPException(status_code=422, detail=f"{expression} 必须选择对应标签")
+    legacy_controlled_values = legacy_controlled_values or {}
+    for key, allowed_values in CONTROLLED_TAG_DICTIONARY.items():
+        values = set(normalized.get(key, []))
+        allowed_legacy = legacy_controlled_values.get(key, set())
+        unsupported = sorted(values - set(allowed_values) - allowed_legacy)
+        if unsupported:
+            allowed = "、".join(allowed_values)
+            raise HTTPException(
+                status_code=422,
+                detail=f"{key} 存在不支持的标签：{'、'.join(unsupported)}；可选值：{allowed}",
+            )
+    if enforce_expression_requirements:
+        for expression, required_key in EXPRESSION_REQUIREMENTS.items():
+            if expression in normalized.get("expression_tags", []) and not normalized.get(required_key):
+                raise HTTPException(status_code=422, detail=f"{expression} 必须选择对应标签")
     return normalized
+
+
+def validate_asset_lifecycle_values(data: dict[str, Any]) -> None:
+    quality_status = data.get("quality_status")
+    if quality_status is not None and quality_status not in QUALITY_STATUS_VALUES:
+        raise HTTPException(
+            status_code=422,
+            detail=f"quality_status 必须是：{'、'.join(QUALITY_STATUS_VALUES)}",
+        )
+    duplicate_status = data.get("duplicate_status")
+    if duplicate_status is not None and duplicate_status not in DUPLICATE_STATUS_VALUES:
+        raise HTTPException(
+            status_code=422,
+            detail=f"duplicate_status 必须是：{'、'.join(DUPLICATE_STATUS_VALUES)}",
+        )
 
 
 def model_to_dict(asset: ProductAsset) -> dict[str, Any]:
@@ -116,6 +148,10 @@ def model_to_dict(asset: ProductAsset) -> dict[str, Any]:
         "checksum_sha256": asset.checksum_sha256,
         "width": asset.width,
         "height": asset.height,
+        "quality_status": asset.quality_status,
+        "quality_reason": asset.quality_reason,
+        "duplicate_status": asset.duplicate_status,
+        "duplicate_of_asset_id": asset.duplicate_of_asset_id,
         "resolution": asset.resolution,
         "aspect_ratio": asset.aspect_ratio,
         "asset_level": asset.asset_level,
@@ -183,12 +219,24 @@ def search_assets(
     channel: str | None = None,
     review_status: str | None = None,
     authorization_status: str | None = None,
+    quality_status: str | None = None,
+    duplicate_status: str | None = None,
     expression_tags: list[str] | None = None,
     selling_point_tags: list[str] | None = None,
     scene_tags: list[str] | None = None,
     mood_tags: list[str] | None = None,
     limit: int = 100,
 ) -> list[ProductAsset]:
+    validate_asset_lifecycle_values({
+        "quality_status": quality_status,
+        "duplicate_status": duplicate_status,
+    })
+    validate_asset_tags({
+        "expression_tags": expression_tags or [],
+        "selling_point_tags": selling_point_tags or [],
+        "scene_tags": scene_tags or [],
+        "mood_tags": mood_tags or [],
+    }, enforce_expression_requirements=False)
     query = db.query(ProductAsset)
     for column, value in (
         (ProductAsset.sku, sku),
@@ -196,6 +244,8 @@ def search_assets(
         (ProductAsset.channel, channel),
         (ProductAsset.review_status, review_status),
         (ProductAsset.authorization_status, authorization_status),
+        (ProductAsset.quality_status, quality_status),
+        (ProductAsset.duplicate_status, duplicate_status),
     ):
         if value:
             query = query.filter(column == value)
@@ -298,6 +348,7 @@ def create_asset(
 ) -> ProductAsset:
     ensure_product_exists(db, sku)
     payload = apply_category_invariants(apply_status_movement(dict(data)))
+    validate_asset_lifecycle_values(payload)
     category_code = str(payload.get("category_code") or "").strip()
     category_name = str(payload.get("category_name") or "").strip()
     url = str(payload.get("url") or "").strip()
@@ -342,6 +393,10 @@ def create_asset(
         checksum_sha256=payload.get("checksum_sha256"),
         width=payload.get("width"),
         height=payload.get("height"),
+        quality_status=payload.get("quality_status") or "usable",
+        quality_reason=payload.get("quality_reason"),
+        duplicate_status=payload.get("duplicate_status") or "unique",
+        duplicate_of_asset_id=payload.get("duplicate_of_asset_id"),
         resolution=payload.get("resolution"),
         aspect_ratio=payload.get("aspect_ratio"),
         asset_level=payload.get("asset_level") or "C",
@@ -391,6 +446,21 @@ def update_asset(db: Session, sku: str, asset_id: str, data: dict[str, Any]) -> 
         apply_status_movement(dict(data)),
         current_category_code=asset.category_code,
     )
+    validate_asset_lifecycle_values(payload)
+    validated_tags = None
+    if "tags" in payload:
+        current_tags = parse_tags(asset.tags)
+        legacy_controlled_values = {
+            key: set(value)
+            for key, value in current_tags.items()
+            if key in CONTROLLED_TAG_DICTIONARY and isinstance(value, list)
+        }
+        validated_tags = normalize_tags(
+            validate_asset_tags(
+                payload["tags"],
+                legacy_controlled_values=legacy_controlled_values,
+            )
+        )
     allowed = {
         "category_code",
         "category_name",
@@ -417,6 +487,10 @@ def update_asset(db: Session, sku: str, asset_id: str, data: dict[str, Any]) -> 
         "checksum_sha256",
         "width",
         "height",
+        "quality_status",
+        "quality_reason",
+        "duplicate_status",
+        "duplicate_of_asset_id",
         "resolution",
         "aspect_ratio",
         "asset_level",
@@ -442,7 +516,7 @@ def update_asset(db: Session, sku: str, asset_id: str, data: dict[str, Any]) -> 
         if key not in allowed:
             continue
         if key == "tags":
-            setattr(asset, key, normalize_tags(validate_asset_tags(value)))
+            setattr(asset, key, validated_tags or "{}")
         else:
             setattr(asset, key, value)
     db.commit()
@@ -453,7 +527,15 @@ def update_asset(db: Session, sku: str, asset_id: str, data: dict[str, Any]) -> 
 def update_asset_tags(db: Session, sku: str, asset_id: str, tags: dict[str, list[str]]) -> ProductAsset:
     ensure_product_exists(db, sku)
     asset = get_asset(db, sku, asset_id)
-    asset.tags = normalize_tags(validate_asset_tags(tags))
+    current_tags = parse_tags(asset.tags)
+    legacy_controlled_values = {
+        key: set(value)
+        for key, value in current_tags.items()
+        if key in CONTROLLED_TAG_DICTIONARY and isinstance(value, list)
+    }
+    asset.tags = normalize_tags(
+        validate_asset_tags(tags, legacy_controlled_values=legacy_controlled_values)
+    )
     db.commit()
     db.refresh(asset)
     return asset

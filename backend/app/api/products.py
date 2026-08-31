@@ -9,7 +9,7 @@ from sqlalchemy.orm import Session
 from ..core.config import settings
 from ..core.database import get_db
 from ..core.rate_limit import enforce_rate_limit
-from ..core.security import require_permission, require_product_permission
+from ..core.security import require_any_permission, require_permission, require_product_permission, require_product_qa_permission
 from ..models.user import User
 from ..schemas.product import (
     ProductCreate, ProductUpdate,
@@ -58,6 +58,29 @@ async def _audit_review_product_qas(db: Session, product, current_user: User) ->
         db.commit()
         product_service.invalidate_product_detail_cache(db, product.sku)
     return verdicts
+
+
+def _qa_write_response(qa, integrity_audit: dict, vector_sync: dict) -> dict:
+    qa_payload = product_service.model_to_dict(qa)
+    embedding = vector_sync.get("embedding") if isinstance(vector_sync, dict) else {}
+    ready_for_rag = bool(
+        qa_payload
+        and qa_payload.get("integrity_status") == "approved"
+        and isinstance(vector_sync, dict)
+        and not vector_sync.get("error")
+        and bool(vector_sync.get("ready_for_rag"))
+    )
+    return {
+        # Keep the QA fields at the top level for existing API consumers while
+        # exposing an explicit receipt for the in-product QA workflow.
+        **(qa_payload or {}),
+        "qa": qa_payload,
+        "integrity_audit": integrity_audit,
+        "vector_sync": vector_sync,
+        "embedding": embedding,
+        "ready_for_rag": ready_for_rag,
+        "status": "ready_for_rag" if ready_for_rag else "saved_not_ready_for_rag",
+    }
 
 # ?? Vector sync endpoints ??
 
@@ -443,7 +466,7 @@ async def update_product_content(
 @router.get("/{sku}/qa")
 def list_qa(
     sku: str,
-    current_user: User = Depends(require_product_permission("read")),
+    current_user: User = Depends(require_any_permission("product.read", "product.qa.manage", "product.edit")),
     db: Session = Depends(get_db),
 ):
     return [product_service.model_to_dict(item) for item in product_service.get_qa_items(db, sku)]
@@ -453,7 +476,7 @@ def list_qa(
 async def import_qa_batch(
     body: QaBatchImportRequest,
     request: Request,
-    current_user: User = Depends(require_product_permission("update")),
+    current_user: User = Depends(require_product_qa_permission()),
     db: Session = Depends(get_db),
 ):
     items = [item.model_dump() for item in body.items]
@@ -489,13 +512,19 @@ async def add_qa(
     sku: str,
     body: ProductQaCreate,
     request: Request,
-    current_user: User = Depends(require_product_permission("update")),
+    current_user: User = Depends(require_product_qa_permission()),
     db: Session = Depends(get_db),
 ):
     qa = product_service.add_qa_item(db, sku, body.model_dump())
     product = product_service.get_product_by_sku(db, sku)
-    await product_qa_integrity_service.audit_product_qa_item(db, product, qa, user=current_user)
+    integrity_audit = await product_qa_integrity_service.audit_product_qa_item(
+        db,
+        product,
+        qa,
+        user=current_user,
+    )
     db.commit()
+    db.refresh(qa)
     product_service.invalidate_product_detail_cache(db, sku)
     operation_log_service.log_operation(
         db,
@@ -506,10 +535,11 @@ async def add_qa(
         target_id=qa.id,
         target_name=sku,
         request_data=body.model_dump(),
+        response_data={"integrity_audit": integrity_audit},
         request=request,
     )
-    product_service.sync_product_to_vector_db(db, sku)
-    return product_service.model_to_dict(qa)
+    vector_sync = product_service.sync_product_to_vector_db(db, sku)
+    return _qa_write_response(qa, integrity_audit, vector_sync)
 
 
 @router.put("/{sku}/qa/{qa_id}")
@@ -518,15 +548,21 @@ async def update_qa(
     qa_id: str,
     body: dict,
     request: Request,
-    current_user: User = Depends(require_product_permission("update")),
+    current_user: User = Depends(require_product_qa_permission()),
     db: Session = Depends(get_db),
 ):
     product = product_service.get_product_by_sku(db, sku)
     if product is None or not any(str(item.id) == str(qa_id) for item in product_service.get_qa_items(db, sku)):
         raise HTTPException(status_code=404, detail="QA item not found for product")
     qa = product_service.update_qa_item(db, qa_id, body)
-    await product_qa_integrity_service.audit_product_qa_item(db, product, qa, user=current_user)
+    integrity_audit = await product_qa_integrity_service.audit_product_qa_item(
+        db,
+        product,
+        qa,
+        user=current_user,
+    )
     db.commit()
+    db.refresh(qa)
     product_service.invalidate_product_detail_cache(db, sku)
     operation_log_service.log_operation(
         db,
@@ -537,10 +573,11 @@ async def update_qa(
         target_id=qa.id,
         target_name=sku,
         request_data=body,
+        response_data={"integrity_audit": integrity_audit},
         request=request,
     )
-    product_service.sync_product_to_vector_db(db, sku)
-    return product_service.model_to_dict(qa)
+    vector_sync = product_service.sync_product_to_vector_db(db, sku)
+    return _qa_write_response(qa, integrity_audit, vector_sync)
 
 
 @router.delete("/{sku}/qa/{qa_id}")
@@ -548,7 +585,7 @@ def delete_qa(
     sku: str,
     qa_id: str,
     request: Request,
-    current_user: User = Depends(require_product_permission("update")),
+    current_user: User = Depends(require_product_qa_permission()),
     db: Session = Depends(get_db),
 ):
     product_service.delete_qa_item(db, qa_id)
@@ -562,8 +599,16 @@ def delete_qa(
         target_name=sku,
         request=request,
     )
-    product_service.sync_product_to_vector_db(db, sku)
-    return {"ok": True}
+    vector_sync = product_service.sync_product_to_vector_db(db, sku)
+    return {
+        "ok": True,
+        "vector_sync": vector_sync,
+        "ready_for_rag": bool(
+            isinstance(vector_sync, dict)
+            and not vector_sync.get("error")
+            and vector_sync.get("ready_for_rag")
+        ),
+    }
 
 
 @router.get("/{sku}/qa-negative")
@@ -580,7 +625,7 @@ def upsert_qa_negative(
     sku: str,
     body: ProductQaNegativeCreate,
     request: Request,
-    current_user: User = Depends(require_product_permission("update")),
+    current_user: User = Depends(require_product_qa_permission()),
     db: Session = Depends(get_db),
 ):
     qa_negative = product_service.upsert_qa_negative(db, sku, body.model_dump())

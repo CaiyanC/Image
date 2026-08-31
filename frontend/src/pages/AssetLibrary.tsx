@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { api } from '../services/api'
 import { SecureImage, SecureVideo } from '../components/SecureFile'
-import type { AssetTags, ProductAsset, ProductListItem } from '../types'
+import type { AssetTags, AssetTaxonomy, ProductAsset, ProductListItem } from '../types'
 import {
   AMAZON_SLOTS,
   ASSET_CATEGORIES,
@@ -47,9 +47,24 @@ export default function AssetLibrary() {
   const [batchCustomInputs, setBatchCustomInputs] = useState<Record<string, string>>({})
   const [confirmClearOpen, setConfirmClearOpen] = useState(false)
   const [promptText, setPromptText] = useState('')
+  const [taxonomy, setTaxonomy] = useState<AssetTaxonomy | null>(null)
+  const [tagPresets, setTagPresets] = useState(TAG_PRESETS)
 
   useEffect(() => {
     api.products.list(0, 100).then(result => setProducts(result.items)).catch(() => setProducts([]))
+  }, [])
+
+  useEffect(() => {
+    api.assets.taxonomy().then(data => {
+      setTaxonomy(data)
+      setTagPresets(current => {
+        const next = { ...current }
+        for (const [key, dimension] of Object.entries(data.dimensions)) next[key] = dimension.values
+        return next
+      })
+    }).catch(() => {
+      // Keep bundled presets as a safe UI fallback if the API is unavailable.
+    })
   }, [])
 
   useEffect(() => {
@@ -375,6 +390,7 @@ export default function AssetLibrary() {
                 pending={pendingBatchTags}
                 customInputs={batchCustomInputs}
                 setCustomInputs={setBatchCustomInputs}
+                tagPresets={tagPresets}
                 onToggle={togglePendingTag}
                 onCommit={commitBatchTags}
                 onCancel={() => setBatchTagsOpen(false)}
@@ -403,6 +419,7 @@ export default function AssetLibrary() {
                     editingTags={editingTagsAssetId === asset.id}
                     customInputs={customTagInputs}
                     setCustomInputs={setCustomTagInputs}
+                    tagPresets={tagPresets}
                     onToggleSelect={() => toggleSelect(asset.id)}
                     onOpenLightbox={() => setLightboxAsset(asset)}
                     onEdit={() => openEdit(asset)}
@@ -423,6 +440,8 @@ export default function AssetLibrary() {
           asset={editingAsset}
           form={editForm}
           setForm={setEditForm}
+          qualityStatuses={taxonomy?.quality_statuses || ['usable', 'pending_tagging', 'suspected_duplicate', 'invalid', 'archived']}
+          duplicateStatuses={taxonomy?.duplicate_statuses || ['unique', 'cross_sku_reuse', 'suspected_duplicate']}
           onClose={() => setEditingAsset(null)}
           onSave={saveEdit}
         />
@@ -532,10 +551,11 @@ function BatchToolbar({ count, total, allSelected, onSelectAll, onClearSelection
   )
 }
 
-function BatchTagPanel({ pending, customInputs, setCustomInputs, onToggle, onCommit, onCancel }: {
+function BatchTagPanel({ pending, customInputs, setCustomInputs, tagPresets, onToggle, onCommit, onCancel }: {
   pending: Array<{ key: string; tag: string }>
   customInputs: Record<string, string>
   setCustomInputs: (value: Record<string, string>) => void
+  tagPresets: Record<string, string[]>
   onToggle: (key: string, tag: string) => void
   onCommit: () => void
   onCancel: () => void
@@ -554,7 +574,7 @@ function BatchTagPanel({ pending, customInputs, setCustomInputs, onToggle, onCom
           <div key={dim.key} className="rounded-lg bg-white/70 p-3">
             <div className="mb-2 text-xs font-black text-apple-gray-medium">{dim.label}</div>
             <div className="flex flex-wrap gap-1.5">
-              {(TAG_PRESETS[dim.key] || []).map(tag => {
+                {(tagPresets[dim.key] || []).map(tag => {
                 const active = pending.some(item => item.key === dim.key && item.tag === tag)
                 return (
                   <button key={tag} className={`rounded-full px-2 py-1 text-xs font-bold ${active ? 'bg-teal-600 text-white' : dim.color}`} onClick={() => onToggle(dim.key, tag)}>
@@ -582,12 +602,13 @@ function BatchTagPanel({ pending, customInputs, setCustomInputs, onToggle, onCom
   )
 }
 
-function AssetCard({ asset, selected, editingTags, customInputs, setCustomInputs, onToggleSelect, onOpenLightbox, onEdit, onDelete, onToggleTags, onAddTag, onRemoveTag }: {
+function AssetCard({ asset, selected, editingTags, customInputs, setCustomInputs, tagPresets, onToggleSelect, onOpenLightbox, onEdit, onDelete, onToggleTags, onAddTag, onRemoveTag }: {
   asset: ProductAsset
   selected: boolean
   editingTags: boolean
   customInputs: Record<string, string>
   setCustomInputs: (value: Record<string, string>) => void
+  tagPresets: Record<string, string[]>
   onToggleSelect: () => void
   onOpenLightbox: () => void
   onEdit: () => void
@@ -618,6 +639,10 @@ function AssetCard({ asset, selected, editingTags, customInputs, setCustomInputs
         <div className="truncate text-xs font-black text-apple-text" title={buildNamingFormat(asset)}>{buildNamingFormat(asset)}</div>
         <div className="mt-1 text-[11px] font-bold text-apple-gray-medium">{asset.sub_category || '未分类'} · {asset.status_tag || '待审核'}</div>
       </div>
+      <div className="mt-2 flex flex-wrap gap-1 text-[10px] font-bold text-stone-600">
+        <span className="rounded-full bg-stone-100 px-2 py-0.5">质量：{asset.quality_status || 'usable'}</span>
+        <span className="rounded-full bg-stone-100 px-2 py-0.5">重复：{asset.duplicate_status || 'unique'}</span>
+      </div>
       <div className="mt-2 flex flex-wrap gap-1">
         {TAG_DIMENSIONS.flatMap(dim => (asset.tags?.[dim.key] || []).map(tag => (
           <button key={`${dim.key}-${tag}`} onClick={() => onRemoveTag(asset, dim.key, tag)} className={`rounded-full px-2 py-0.5 text-[11px] font-bold ${dim.color}`}>
@@ -638,7 +663,7 @@ function AssetCard({ asset, selected, editingTags, customInputs, setCustomInputs
             <div key={dim.key} className="mb-3 last:mb-0">
               <div className="mb-1 text-[10px] font-black text-apple-gray-medium">{dim.label}</div>
               <div className="flex flex-wrap gap-1">
-                {(TAG_PRESETS[dim.key] || []).slice(0, 8).map(tag => (
+                {(tagPresets[dim.key] || []).slice(0, 8).map(tag => (
                   <button key={tag} className={`rounded-full px-2 py-0.5 text-[11px] font-bold ${dim.color}`} onClick={() => onAddTag(asset, dim.key, tag)}>{tag}</button>
                 ))}
               </div>
@@ -659,10 +684,12 @@ function AssetCard({ asset, selected, editingTags, customInputs, setCustomInputs
   )
 }
 
-function EditModal({ asset, form, setForm, onClose, onSave }: {
+function EditModal({ asset, form, setForm, qualityStatuses, duplicateStatuses, onClose, onSave }: {
   asset: ProductAsset
   form: EditForm
   setForm: (value: EditForm) => void
+  qualityStatuses: string[]
+  duplicateStatuses: string[]
   onClose: () => void
   onSave: () => void
 }) {
@@ -686,6 +713,20 @@ function EditModal({ asset, form, setForm, onClose, onSave }: {
             <Field label="语言" value={form.language_tag || ''} onChange={value => setForm({ ...form, language_tag: value })} />
             <Field label="版本" value={form.version_tag || ''} onChange={value => setForm({ ...form, version_tag: value })} />
             <Field label="日期" value={form.date_tag || ''} onChange={value => setForm({ ...form, date_tag: value })} />
+            <label className="text-xs font-bold text-apple-gray-medium">
+              质量状态
+              <select className="glass-input mt-1 h-10 w-full px-3 text-sm" value={form.quality_status || 'usable'} onChange={event => setForm({ ...form, quality_status: event.target.value })}>
+                {qualityStatuses.map(status => <option key={status} value={status}>{status}</option>)}
+              </select>
+            </label>
+            <label className="text-xs font-bold text-apple-gray-medium">
+              重复状态
+              <select className="glass-input mt-1 h-10 w-full px-3 text-sm" value={form.duplicate_status || 'unique'} onChange={event => setForm({ ...form, duplicate_status: event.target.value })}>
+                {duplicateStatuses.map(status => <option key={status} value={status}>{status}</option>)}
+              </select>
+            </label>
+            <Field label="质量说明" value={form.quality_reason || ''} onChange={value => setForm({ ...form, quality_reason: value || null })} />
+            <Field label="重复源素材 ID" value={form.duplicate_of_asset_id || ''} onChange={value => setForm({ ...form, duplicate_of_asset_id: value || null })} />
             <label className="text-xs font-bold text-apple-gray-medium">
               状态
               <select className="glass-input mt-1 h-10 w-full px-3 text-sm" value={form.status_tag || ''} onChange={event => setForm({ ...form, status_tag: event.target.value })}>

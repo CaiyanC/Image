@@ -7,6 +7,16 @@ from typing import Any
 
 _EMPTY_VALUES = {"", "/", "-", "--", "未知", "暂无", "无", "null", "none"}
 
+# These are model-owned product-form refinements inside a broad catalogue
+# subject.  They are deliberately typed semantic state, not aliases searched
+# in the customer question or a local candidate filter.  The same-SKU RAG
+# adjudicator decides whether a recalled row actually expresses the subtype.
+SEMANTIC_SUBJECT_SUBTYPE_KINDS = {
+    "stove": frozenset({"card_stove", "alcohol_stove", "gas_stove"}),
+    "waterware": frozenset({"kettle", "cup"}),
+    "accessories": frozenset({"storage_bag"}),
+}
+
 
 @dataclass
 class RecommendationRequestContract:
@@ -17,6 +27,10 @@ class RecommendationRequestContract:
     # the first form before same-SKU semantic coverage runs.
     subject_kinds: list[str] = field(default_factory=list)
     subject_subtype: str | None = None
+    # When true, the subtype came from the validated semantic preplan and must
+    # be adjudicated by same-SKU RAG.  Legacy contracts keep the old subtype
+    # helper for compatibility with their dedicated unit tests.
+    semantic_subject_subtype: bool = False
     # A semantic recommendation may carry a meaning-bearing subject_text
     # without Flash confidently assigning one of the closed catalogue kinds.
     # In that case the semantic coverage model must adjudicate product form
@@ -471,7 +485,7 @@ def _recommendation_contract_from_validated_semantic_constraints(
     """
     if not isinstance(constraints, dict):
         return None
-    allowed = {"subject_kind", "subject_kinds", "people", "heat_sources", "scenarios", "weight_preference", "price_preference", "storage_preference", "dishwasher_safe", "structure_preference"}
+    allowed = {"subject_kind", "subject_kinds", "subject_subtype", "people", "heat_sources", "scenarios", "weight_preference", "price_preference", "storage_preference", "dishwasher_safe", "structure_preference"}
     if not constraints or any(key not in allowed for key in constraints):
         return None
     contract = RecommendationRequestContract()
@@ -508,6 +522,20 @@ def _recommendation_contract_from_validated_semantic_constraints(
     if subject_kind is not None:
         contract.subject_kind = subject_kind
         contract.subject_category = subject_categories[subject_kind]
+    subject_subtype = constraints.get("subject_subtype")
+    if subject_subtype is not None:
+        if not isinstance(subject_subtype, str) or not subject_subtype.strip():
+            return None
+        subject_subtype = subject_subtype.strip()
+        allowed_subtypes = SEMANTIC_SUBJECT_SUBTYPE_KINDS.get(subject_kind, frozenset())
+        if subject_subtype not in allowed_subtypes:
+            return None
+        contract.subject_subtype = subject_subtype
+        contract.semantic_subject_subtype = True
+        contract.field_provenance["subject_subtype"] = {
+            "source_turn": 1,
+            "provenance": "validated_semantic_constraints",
+        }
     people = constraints.get("people")
     if people is not None:
         if not isinstance(people, dict) or set(people) != {"min", "max"}:
@@ -534,7 +562,10 @@ def _recommendation_contract_from_validated_semantic_constraints(
         contract.heat_sources = list(dict.fromkeys(heat_map[item] for item in heat_sources))
         _append_unique(contract.hard_constraints, "heat_source")
     scenarios = constraints.get("scenarios")
-    allowed_scenarios = {"camping", "hiking", "self_drive", "seaside", "soup", "hotpot"}
+    # The live semantic adapter receives only scene context from Flash.  Named
+    # dishes/operations belong to the semantic RAG evidence requirement; the
+    # legacy soup token must not become a hard filter for a task such as 煮面.
+    allowed_scenarios = {"camping", "hiking", "self_drive", "seaside", "hotpot"}
     if scenarios is not None:
         if not isinstance(scenarios, list) or not scenarios or len(scenarios) > 5:
             return None
@@ -783,6 +814,9 @@ def build_semantic_recommendation_request_contract(
     to rediscover the customer's meaning.  ``semantic_subject_text`` is the
     already-validated subject identity from the same semantic preplan; its
     narrow ontology adapter keeps a cup and kettle from crossing SKU scope.
+    A model-supplied ``subject_subtype`` remains the authoritative semantic
+    refinement for the live recommendation path; it is passed to the RAG
+    coverage adjudicator rather than converted into a local name match.
     """
     contract = _recommendation_contract_from_validated_semantic_constraints(
         semantic_constraints
@@ -800,8 +834,13 @@ def build_semantic_recommendation_request_contract(
             return None
         contract.subject_category = contract.subject_category or subject_category
         contract.subject_kind = contract.subject_kind or subject_kind
+        if subject_subtype and contract.subject_subtype and contract.subject_subtype != subject_subtype:
+            # The model supplied two incompatible semantic views of the
+            # requested product form.  Do not let either one silently win.
+            return None
         if subject_subtype and not contract.subject_subtype:
             contract.subject_subtype = subject_subtype
+            contract.semantic_subject_subtype = True
         contract.field_provenance["subject_category"] = {
             "source_turn": 1,
             "provenance": "validated_semantic_subject",
@@ -1605,7 +1644,11 @@ def _subject_evidence(contract: RecommendationRequestContract, row: dict[str, An
     if contract.subject_category == "水具" and not any(term in category for term in ("水具", "水壶", "水杯")):
         evidence["status"] = "conflict"
         return False, evidence, "subject_category_mismatch"
-    if contract.subject_kind == "waterware" and not _waterware_subject_identity_is_valid(contract, row):
+    if (
+        contract.subject_kind == "waterware"
+        and not contract.semantic_subject_subtype
+        and not _waterware_subject_identity_is_valid(contract, row)
+    ):
         evidence.update({"status": "conflict", "field_source": "product_identity"})
         return False, evidence, "subject_category_mismatch"
     if contract.subject_category == "咖啡器具" and "咖啡器具" not in category:
@@ -1908,13 +1951,47 @@ def verify_recommendation_candidates(
         evidence["subject"] = subject_evidence
         if subject_reason:
             rejection_reasons.append(subject_reason)
-        subtype_ok, subtype_evidence, subtype_reason = _stove_subtype_evidence(contract, row)
+        # A subtype emitted by the validated semantic preplan is a product
+        # identity meaning, not a deterministic name predicate.  Defer it to
+        # the same-SKU RAG coverage adjudicator, which can distinguish a
+        # product whose own evidence establishes the subtype from a product
+        # that merely mentions it as a compatible fuel or nearby comparison.
+        # Keep the legacy helper for contracts built by the retired/local
+        # compatibility path and its focused tests.
+        if contract.semantic_subject_subtype:
+            subtype_ok = True
+            subtype_evidence = _condition(
+                "deferred",
+                "semantic_same_sku_rag",
+                contract.subject_subtype,
+                subject_subtype=contract.subject_subtype,
+            )
+            subtype_reason = None
+        else:
+            subtype_ok, subtype_evidence, subtype_reason = _stove_subtype_evidence(contract, row)
         if subtype_evidence is not None:
             evidence["subject_subtype"] = subtype_evidence
         if subtype_reason:
             rejection_reasons.append(subtype_reason)
         subject_ok = subject_ok and subtype_ok
-        waterware_subtype_ok, waterware_subtype_evidence, waterware_subtype_reason = _waterware_subtype_evidence(contract, row)
+        if contract.semantic_subject_subtype:
+            # The semantic preplan has already expressed the requested
+            # waterware form.  Product names are not a reliable identity
+            # authority here: a maintained cup may be named ``悠然杯`` or
+            # ``camping mug`` without containing one of the legacy literal
+            # aliases.  Keep the broad category check above, then let the
+            # same-SKU RAG coverage adjudicator establish cup vs. kettle from
+            # the product's own evidence.
+            waterware_subtype_ok = True
+            waterware_subtype_evidence = _condition(
+                "deferred",
+                "semantic_same_sku_rag",
+                contract.subject_subtype,
+                subject_subtype=contract.subject_subtype,
+            )
+            waterware_subtype_reason = None
+        else:
+            waterware_subtype_ok, waterware_subtype_evidence, waterware_subtype_reason = _waterware_subtype_evidence(contract, row)
         if waterware_subtype_evidence is not None:
             evidence["subject_subtype"] = waterware_subtype_evidence
         if waterware_subtype_reason:

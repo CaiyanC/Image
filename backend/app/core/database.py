@@ -167,6 +167,10 @@ def _ensure_product_assets_compat():
             "checksum_sha256": "VARCHAR(64)",
             "width": "INTEGER",
             "height": "INTEGER",
+            "quality_status": "VARCHAR(32) DEFAULT 'usable'",
+            "quality_reason": "TEXT",
+            "duplicate_status": "VARCHAR(32) DEFAULT 'unique'",
+            "duplicate_of_asset_id": "VARCHAR(36)",
             "resolution": "VARCHAR(32)",
             "aspect_ratio": "VARCHAR(16)",
             "asset_level": "VARCHAR(10) DEFAULT 'C'",
@@ -208,6 +212,8 @@ def _ensure_product_assets_compat():
                 "editable_flag = COALESCE(editable_flag, FALSE), "
                 "review_status = COALESCE(review_status, 'pending'), "
                 "authorization_status = COALESCE(authorization_status, 'unknown'), "
+                "quality_status = COALESCE(quality_status, 'usable'), "
+                "duplicate_status = COALESCE(duplicate_status, 'unique'), "
                 "file_name = COALESCE(file_name, url), "
                 "product_version = COALESCE(product_version, version_tag)"
             ))
@@ -410,12 +416,14 @@ def _seed_default_permissions(db):
 
     permissions = {p.permission_key: p for p in db.query(Permission).all()}
     changed = False
+    newly_created_permission_keys: set[str] = set()
     for key, name, permission_type in PERMISSION_DEFS:
         permission = permissions.get(key)
         if not permission:
             permission = Permission(permission_key=key, permission_name=name, permission_type=permission_type)
             db.add(permission)
             permissions[key] = permission
+            newly_created_permission_keys.add(key)
             changed = True
         else:
             if permission.permission_name != name:
@@ -475,6 +483,29 @@ def _seed_default_permissions(db):
                 continue
             pair = (str(group.id), str(permission.id))
             if pair not in existing_pairs:
+                db.add(GroupPermission(group_id=group.id, permission_id=permission.id))
+                existing_pairs.add(pair)
+                changed = True
+
+    # A newly introduced permission should be granted to its declared preset
+    # departments once, even when this database already has customized group
+    # permissions.  Do not re-add it on later startups after an administrator
+    # deliberately removes it: only permission rows created in this seed pass
+    # receive the one-time default assignment.
+    if newly_created_permission_keys:
+        for group_name, permission_keys in group_permission_map.items():
+            group = groups.get(group_name)
+            if not group:
+                continue
+            for permission_key in newly_created_permission_keys:
+                if permission_key not in permission_keys:
+                    continue
+                permission = permissions.get(permission_key)
+                if not permission:
+                    continue
+                pair = (str(group.id), str(permission.id))
+                if pair in existing_pairs:
+                    continue
                 db.add(GroupPermission(group_id=group.id, permission_id=permission.id))
                 existing_pairs.add(pair)
                 changed = True

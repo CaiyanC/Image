@@ -1466,9 +1466,70 @@ def test_semantic_subject_text_binds_water_cup_subtype_for_same_sku_scope():
         ],
     )
 
-    assert matched.verification_level != "rejected"
-    assert kettle.verification_level == "rejected"
-    assert "subject_subtype_mismatch" in kettle.rejection_reasons
+    assert matched.verification_level == "fully_verified"
+    assert kettle.verification_level == "fully_verified"
+    assert matched.evidence_by_constraint["subject_subtype"]["status"] == "deferred"
+    assert kettle.evidence_by_constraint["subject_subtype"]["status"] == "deferred"
+
+
+def test_semantic_water_cup_subtype_does_not_require_literal_name_alias():
+    contract = build_semantic_recommendation_request_contract(
+        question="推荐一款能装水的户外杯子",
+        semantic_constraints={
+            "subject_kind": "waterware",
+            "subject_subtype": "cup",
+        },
+        predicate_constraints=[],
+        semantic_subject_text="户外杯子",
+    )
+
+    result = verify_recommendation_candidates(
+        contract,
+        [
+            _row(
+                "TW-402-37",
+                category="水杯",
+                product_name_cn="悠然杯",
+                product_name_en="camping mug",
+            ),
+        ],
+    )[0]
+
+    assert result.verification_level == "fully_verified"
+    assert result.evidence_by_constraint["subject_subtype"]["status"] == "deferred"
+    assert "subject_subtype_mismatch" not in result.rejection_reasons
+
+
+def test_semantic_stove_subtype_is_deferred_to_same_sku_rag_not_name_matching():
+    contract = build_semantic_recommendation_request_contract(
+        question="推荐卡式炉",
+        semantic_constraints={
+            "subject_kind": "stove",
+            "subject_subtype": "card_stove",
+        },
+        predicate_constraints=[],
+        semantic_subject_text="卡式炉",
+    )
+
+    assert contract is not None
+    assert contract.subject_kind == "stove"
+    assert contract.subject_subtype == "card_stove"
+    assert contract.semantic_subject_subtype is True
+    card_stove, alcohol_stove = verify_recommendation_candidates(
+        contract,
+        [
+            _row("CARD", category="炉具", product_name_cn="魔盒卡式炉"),
+            _row("ALCOHOL", category="炉具", product_name_cn="旋焰酒精炉"),
+        ],
+    )
+
+    # Both rows are only broad stove-scope candidates at this stage.  The
+    # semantic RAG coverage call, not a local product-name predicate, decides
+    # which row establishes the requested subtype.
+    assert card_stove.verification_level == "fully_verified"
+    assert alcohol_stove.verification_level == "fully_verified"
+    assert card_stove.evidence_by_constraint["subject_subtype"]["status"] == "deferred"
+    assert alcohol_stove.evidence_by_constraint["subject_subtype"]["status"] == "deferred"
 
 
 def test_semantic_untyped_subject_leaves_catalogue_scope_to_same_sku_coverage():

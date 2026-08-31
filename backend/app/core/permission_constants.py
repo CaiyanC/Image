@@ -17,6 +17,7 @@ IT_GROUP_NAME = "IT部"
 TOOL_MANAGE_PERMISSION = "tool.manage"
 ECOMMERCE_DATA_FILL_PERMISSION = "finance.ecommerce_data_fill"
 SYSTEM_ADMIN_PERMISSION = "system.admin"
+PRODUCT_QA_MANAGE_PERMISSION = "product.qa.manage"
 
 # Compatibility aliases used by authorization code and older tests.
 MANAGEMENT_GROUP_NAME = EXECUTIVE_OFFICE_GROUP_NAME
@@ -69,6 +70,7 @@ PERMISSION_DEFS = [
     ("product.read", "查看产品", "page"),
     ("product.create", "创建产品", "button"),
     ("product.edit", "编辑产品", "button"),
+    (PRODUCT_QA_MANAGE_PERMISSION, "管理产品 QA", "button"),
     ("product.delete", "删除产品", "button"),
     ("product.review", "审核产品", "button"),
     ("media.upload", "上传素材", "button"),
@@ -100,6 +102,7 @@ ROUTE_DEFS = [
     ("/products/create", "新增产品", "page"),
     ("/products/create/:draftId", "编辑产品草稿", "page"),
     ("/products/edit/:sku", "编辑产品", "page"),
+    ("/products/qa/new", "添加产品 QA", "page"),
     ("/products/drafts", "草稿箱", "page"),
     ("/admin/users", "用户管理", "page"),
     ("/admin/groups", "部门权限", "page"),
@@ -129,7 +132,8 @@ GROUP_PERMISSION_KEYS = {
     HR_ADMIN_GROUP_NAME: list(_OFFICE_KEYS),
     FINANCE_GROUP_NAME: list(_OFFICE_KEYS),
     PRODUCT_DEPARTMENT_GROUP_NAME: [
-        "product.read", "product.create", "product.edit", "product.delete", "product.review",
+        "product.read", "product.create", "product.edit", PRODUCT_QA_MANAGE_PERMISSION,
+        "product.delete", "product.review",
         "media.download", "tag.edit", "ai.call", "ai.generate", "ai.customer_service",
         "competitor.view", "new_product.view", "export.approved",
     ],
@@ -137,11 +141,11 @@ GROUP_PERMISSION_KEYS = {
     CROSS_BORDER_ECOMMERCE_GROUP_NAME: list(_COMMERCE_KEYS),
     ECOMMERCE_ONE_GROUP_NAME: list(_COMMERCE_KEYS),
     BUSINESS_GROUP_NAME: [
-        "product.read", "media.download", "ai.call", "ai.generate",
+        "product.read", PRODUCT_QA_MANAGE_PERMISSION, "media.download", "ai.call", "ai.generate",
         "ai.customer_service", "new_product.view",
     ],
     QUALITY_GROUP_NAME: [
-        "product.read", "product.edit", "product.review", "media.review", "media.download",
+        "product.read", "product.edit", PRODUCT_QA_MANAGE_PERMISSION, "product.review", "media.review", "media.download",
         "tag.edit", "ai.call", "ai.customer_service", "new_product.view",
     ],
     VISUAL_ONE_GROUP_NAME: list(_VISUAL_KEYS),
@@ -169,7 +173,8 @@ PERMISSION_ROUTE_MAP = {
     "profile.view": ["/profile", "/tools"],
     "product.read": ["/products", "/assets", "/assets/search", "/products/drafts"],
     "product.create": ["/products/create", "/products/create/:draftId"],
-    "product.edit": ["/products/create", "/products/edit/:sku", "/products/drafts"],
+    "product.edit": ["/products/create", "/products/edit/:sku", "/products/drafts", "/products/qa/new"],
+    PRODUCT_QA_MANAGE_PERMISSION: ["/products/qa/new"],
     "product.delete": ["/products"],
     ECOMMERCE_DATA_FILL_PERMISSION: ["/tools/ecommerce-data-fill"],
     SYSTEM_ADMIN_PERMISSION: [

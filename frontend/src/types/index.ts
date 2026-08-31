@@ -261,6 +261,15 @@ export interface AssetTags {
   language_tags?: string[]
 }
 
+export interface AssetTaxonomy {
+  dimensions: Record<string, { values: string[] }>
+  expression_requirements: Record<string, string>
+  quality_statuses: string[]
+  duplicate_statuses: string[]
+  legacy_tag_keys: string[]
+  pilot_required_fields: Record<string, string[]>
+}
+
 export interface ProductAsset {
   id: string
   sku: string
@@ -283,8 +292,18 @@ export interface ProductAsset {
   status_tag?: string | null
   file_name?: string | null
   file_format?: string | null
+  original_file_name?: string | null
+  mime_type?: string | null
+  file_size_bytes?: number | null
+  checksum_sha256?: string | null
+  width?: number | null
+  height?: number | null
   resolution?: string | null
   aspect_ratio?: string | null
+  quality_status?: string
+  quality_reason?: string | null
+  duplicate_status?: string
+  duplicate_of_asset_id?: string | null
   asset_level: string
   is_real_product: boolean
   is_ai_generated: boolean

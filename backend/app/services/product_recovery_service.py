@@ -2,6 +2,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 from fastapi import HTTPException
+from fastapi.encoders import jsonable_encoder
 from sqlalchemy.orm import Session
 
 from ..models.product_operation_snapshot import ProductOperationSnapshot
@@ -128,7 +129,12 @@ def _clean_snapshot_data(data: dict | None) -> dict | None:
                     copy.pop("updated_at", None)
                     items.append(copy)
             cleaned[key] = items
-    return cleaned
+    # PostgreSQL UUID columns are returned as ``uuid.UUID`` objects even when
+    # the legacy ORM model exposes them as strings.  Snapshot columns are JSON,
+    # so normalize every remaining nested value before SQLAlchemy hands it to
+    # the JSON serializer.  This keeps the audit/recovery record independent
+    # of the database driver's concrete scalar types.
+    return jsonable_encoder(cleaned)
 
 
 def _payload_from_detail(detail: dict) -> dict:
