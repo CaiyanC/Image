@@ -40,6 +40,7 @@ const PERMISSION_LABELS: Record<string, string> = {
   'product.read': '查看产品数据',
   'product.create': '新增产品数据',
   'product.edit': '修改产品数据',
+  'product.qa.manage': '管理产品 QA（可单独授权）',
   'product.delete': '删除产品数据',
   'product.review': '审核产品数据',
   'media.upload': '上传素材',

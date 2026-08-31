@@ -16,6 +16,7 @@ const ProductManagement = lazy(() => import('./pages/ProductManagement'))
 const AssetLibrary = lazy(() => import('./pages/AssetLibrary'))
 const AssetSearch = lazy(() => import('./pages/AssetSearch'))
 const CustomerService = lazy(() => import('./pages/CustomerService'))
+const ProductQaCreate = lazy(() => import('./pages/ProductQaCreate'))
 const KnowledgeBase = lazy(() => import('./pages/KnowledgeBase'))
 const FileKnowledgeBase = lazy(() => import('./pages/FileKnowledgeBase'))
 const ProductCreate = lazy(() => import('./pages/ProductCreate'))
@@ -61,6 +62,23 @@ function PermissionRoute({
   const { authenticated, isManagement, user } = useAuthStore()
   if (!authenticated) return <Navigate to="/login" replace />
   if (!hasPermission(user, isManagement, permissionKey)) return <Navigate to={fallback} replace />
+  return <>{children}</>
+}
+
+function AnyPermissionRoute({
+  permissionKeys,
+  fallback = '/no-access',
+  children,
+}: {
+  permissionKeys: string[]
+  fallback?: string
+  children: React.ReactNode
+}) {
+  const { authenticated, isManagement, user } = useAuthStore()
+  if (!authenticated) return <Navigate to="/login" replace />
+  if (!isManagement && !permissionKeys.some((key) => hasPermission(user, isManagement, key))) {
+    return <Navigate to={fallback} replace />
+  }
   return <>{children}</>
 }
 
@@ -228,6 +246,16 @@ export default function App() {
                 <ProductCreate />
               </Layout>
             </PermissionRoute>
+          }
+        />
+        <Route
+          path="/products/qa/new"
+          element={
+            <AnyPermissionRoute permissionKeys={['product.qa.manage', 'product.edit']}>
+              <Layout>
+                <ProductQaCreate />
+              </Layout>
+            </AnyPermissionRoute>
           }
         />
         <Route

@@ -230,3 +230,8 @@ def require_product_permission(action: str):
         )
 
     return checker
+
+
+def require_product_qa_permission():
+    """Allow QA writers without granting them the rest of product editing."""
+    return require_any_permission("product.qa.manage", "product.edit")

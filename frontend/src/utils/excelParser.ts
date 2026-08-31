@@ -80,6 +80,43 @@ export function parseDate(raw: unknown): string {
   return s
 }
 
+/**
+ * Parse the product metadata workbook's 毛重(g) cell into grams.
+ *
+ * The column is labelled in grams, but the workbook contains a few cells
+ * written with an explicit kg suffix (for example `1.74kg`).  A plain
+ * parseFloat would silently store 1.74 instead of 1740.  Only a single
+ * explicit measurement is accepted; a compound value such as
+ * "锅500g / 炉1640g" is left as 0 for the import preview to surface instead
+ * of guessing a total.
+ */
+export function parseGrossWeightToGrams(raw: unknown): number {
+  if (raw === null || raw === undefined || raw === '') return 0
+  if (typeof raw === 'number') return Number.isFinite(raw) ? raw : 0
+
+  const text = String(raw)
+    .normalize('NFKC')
+    .replace(/,/g, '')
+    .trim()
+  if (!text) return 0
+
+  const measurements = [...text.matchAll(/(-?\d+(?:\.\d+)?)\s*(kg|千克|g|克)(?![A-Za-z])/gi)]
+  if (measurements.length === 1) {
+    const value = Number(measurements[0][1])
+    if (!Number.isFinite(value)) return 0
+    const unit = measurements[0][2].toLowerCase()
+    return unit === 'kg' || unit === '千克' ? value * 1000 : value
+  }
+  if (measurements.length > 1) return 0
+
+  // With no explicit unit, the column contract is grams. This also keeps
+  // simple cells such as "约160" compatible with the previous importer.
+  const numeric = text.match(/-?\d+(?:\.\d+)?/)
+  if (!numeric) return 0
+  const value = Number(numeric[0])
+  return Number.isFinite(value) ? value : 0
+}
+
 export function parseMultilineToArray(raw: string): string[] {
   if (!raw) return []
   return String(raw)
@@ -338,7 +375,7 @@ export function parseL1L4Excel(file: File): Promise<ImportProductData[]> {
           const sizeInfoRaw = getCell(row, colMap, '尺寸信息')
           const capacityRaw = getCell(row, colMap, '容量信息')
           const grossWeightRaw = getCell(row, colMap, '毛重(g)')
-          const grossWeightG = grossWeightRaw ? parseFloat(grossWeightRaw) || 0 : 0
+          const grossWeightG = parseGrossWeightToGrams(grossWeightRaw)
           const bodyMaterial = getCell(row, colMap, '主体材质')
           const color = getCell(row, colMap, '主色系')
           const surfaceFinish = getCell(row, colMap, '表面处理')

@@ -4,6 +4,8 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 SERVICE_SCRIPT = ROOT / "deploy" / "scripts" / "service_control_windows.ps1"
 HEALTH_SCRIPT = ROOT / "deploy" / "scripts" / "health_check_windows.ps1"
+STARTUP_SCRIPT = ROOT / "deploy" / "scripts" / "startup_production_windows.ps1"
+STARTUP_INSTALLER = ROOT / "deploy" / "scripts" / "install_startup_tasks_windows.ps1"
 PREPARE_SCRIPT = ROOT / "deploy" / "scripts" / "prepare_production_release.ps1"
 START_PROD = ROOT / "start-prod.bat"
 STOP_PROD = ROOT / "stop-prod.bat"
@@ -25,6 +27,7 @@ def test_backend_stop_is_identity_checked_and_has_explicit_legacy_transition():
     assert "$executable -eq $LegacyPython" in script
     assert "multiprocessing.spawn" in script
     assert "$parentCmd -like \"*$ProdPython*\"" in script
+    assert '$cmd -like "*$ProdPython*"' in script
 
 
 def test_all_action_enforces_release_identity_health_and_commit_gates():
@@ -95,3 +98,19 @@ def test_health_watchdog_recovers_the_active_release_not_the_mutable_source_tree
     assert '"-RepoRoot", $release.root' in script
     assert '"-ExpectedCommit", $release.commit' in script
     assert "$releaseVersion.ok" in script
+    assert "Local\\CaiYanProductionServiceControl" in script
+
+
+def test_single_startup_task_uses_active_release_and_serializes_recovery():
+    startup = _text(STARTUP_SCRIPT)
+    installer = _text(STARTUP_INSTALLER)
+
+    assert "production-release.json" in startup
+    assert '"-RepoRoot", $releaseRoot' in startup
+    assert '"-ExpectedCommit", $expectedCommit' in startup
+    assert "Local\\CaiYanProductionServiceControl" in startup
+    assert "Remove-OrphanedBackendWorkers" in startup
+    assert "multiprocessing.spawn" in startup
+    assert "CaiYanStartupProduction" in installer
+    assert "New-ScheduledTaskTrigger -AtLogOn" in installer
+    assert "Disable-ScheduledTask" in installer

@@ -2,7 +2,7 @@ const API_BASE_ENV = import.meta.env.VITE_API_BASE_URL || '/api'
 const BASE_URL = resolveApiBaseUrl(API_BASE_ENV)
 const TRACE_CUSTOMER_AGENT = import.meta.env.VITE_TRACE_CUSTOMER_AGENT === 'true'
 
-import type { AssetGrouped, AssetTags, AssetUploadResponse, AuthResponse, Product, ProductAsset, ProductListResponse, ProductDraft, User } from '../types'
+import type { AssetGrouped, AssetTags, AssetTaxonomy, AssetUploadResponse, AuthResponse, Product, ProductAsset, ProductListResponse, ProductDraft, User } from '../types'
 import { NO_PERMISSION_MESSAGE, showNoPermissionToast } from './permissionFeedback'
 
 const ERROR_MESSAGES: Record<string, string> = {
@@ -13,6 +13,8 @@ const ERROR_MESSAGES: Record<string, string> = {
   'Super admin privileges required': '没有管理员权限',
   'Public registration is disabled': '公开注册已关闭，请联系管理员创建账号',
   'Permission required: product.edit': '没有产品编辑权限',
+  'Permission required: product.qa.manage': '没有产品 QA 管理权限',
+  'Permission required: product.qa.manage or product.edit': '没有产品 QA 管理权限',
   'Permission required: product.read': '没有产品查看权限',
   'Permission required: product.create': '没有产品创建权限',
   'Permission required: product.delete': '没有产品删除权限',
@@ -331,6 +333,25 @@ export interface ProductSearchResult {
   value?: unknown
 }
 
+export interface ProductQaCreateResponse {
+  id?: string
+  product_id?: string
+  question?: string
+  answer?: string
+  integrity_status?: string
+  integrity_reason?: string | null
+  qa?: Record<string, unknown> | null
+  integrity_audit?: {
+    status?: string
+    reason?: string
+    [key: string]: unknown
+  }
+  vector_sync?: Record<string, unknown> | null
+  embedding?: Record<string, unknown> | null
+  ready_for_rag: boolean
+  status: 'ready_for_rag' | 'saved_not_ready_for_rag' | string
+}
+
 export interface AgentStep {
   type: string
   label: string
@@ -351,6 +372,8 @@ export interface CustomerServiceAskResult {
   followups?: string[]
   warnings?: string[]
   evidence?: Array<Record<string, unknown>>
+  answer_metadata?: Record<string, unknown>
+  agent_quality?: Record<string, unknown>
   debug?: Record<string, unknown>
   feedback?: Record<string, unknown> | null
   sku: string | null
@@ -359,6 +382,8 @@ export interface CustomerServiceAskResult {
   actions: AgentAction[]
   results: ProductSearchResult[]
   steps: AgentStep[]
+  result_skus?: string[]
+  candidate_skus?: string[]
 }
 
 export interface KnowledgeBaseHealth {
@@ -1025,7 +1050,7 @@ export const api = {
     // QA
     listQa: (sku: string) => request(`/products/${sku}/qa`),
     addQa: (sku: string, data: { question: string; answer: string; tags?: unknown; priority?: number }) =>
-      request(`/products/${sku}/qa`, { method: 'POST', body: JSON.stringify(data) }),
+      request<ProductQaCreateResponse>(`/products/${sku}/qa`, { method: 'POST', body: JSON.stringify(data) }),
     updateQa: (sku: string, qaId: string, data: Record<string, unknown>) =>
       request(`/products/${sku}/qa/${qaId}`, { method: 'PUT', body: JSON.stringify(data) }),
     deleteQa: (sku: string, qaId: string) =>
@@ -1085,12 +1110,15 @@ export const api = {
   },
 
   assets: {
+    taxonomy: () => request<AssetTaxonomy>('/assets/taxonomy'),
     search: (params: {
       sku?: string
       category?: string
       channel?: string
       review_status?: string
       authorization_status?: string
+      quality_status?: string
+      duplicate_status?: string
       expression_tags?: string[]
       selling_point_tags?: string[]
       scene_tags?: string[]

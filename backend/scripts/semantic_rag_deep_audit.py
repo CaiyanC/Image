@@ -356,7 +356,13 @@ CASES: list[dict[str, Any]] = [
     {
         "id": "natural_pour_over_boundary",
         "question": "咖啡器具里请推荐两款真正适合手冲的产品，并说明各自适合谁。",
-        "expect_no_result": True,
+        # CW-K31 now has approved same-SKU QA explicitly covering pour-over
+        # use and grind adjustment.  This is a valid RAG-backed result even
+        # though the customer asked for two products and the corpus may only
+        # support one; the retired no-result expectation would incorrectly
+        # push the live semantic path back toward the old non-RAG gate.
+        "expect_result": True,
+        "expect_skus": ["CW-K31"],
     },
     {
         "id": "natural_cup_category_scope",
@@ -686,7 +692,10 @@ def _run_parity(base_url: str, token: str) -> dict[str, Any]:
 
 def main() -> int:
     base_url = sys.argv[1] if len(sys.argv) > 1 else BASE_URL
-    login_status, login_body, _ = _post(base_url, "/api/auth/login", {"username": "admin", "password": "admin123"}, "")
+    # Browser login intentionally returns an HttpOnly cookie and no bearer
+    # token.  This audit is a non-browser HTTP client, so use the dedicated
+    # trusted-script token endpoint instead of depending on cookie state.
+    login_status, login_body, _ = _post(base_url, "/api/auth/token", {"username": "admin", "password": "admin123"}, "")
     if login_status != 200 or not login_body.get("access_token"):
         print(json.dumps({"login_status": login_status, "login": login_body}, ensure_ascii=False))
         return 2

@@ -39,6 +39,8 @@ def test_same_sku_rag_prompts_keep_named_heat_source_compatibility_exact():
         assert "明火直烧" in system
         assert "酒精炉" in system
         assert "does not by itself entail" in system
+        assert "Source-role boundary for same-SKU RAG" in system
+        assert "Do not copy or amplify slogans" in system
 
 
 def test_recommendation_strict_audit_keeps_compound_capabilities_atomic():
@@ -215,6 +217,8 @@ def test_generic_strict_verdict_allows_natural_same_sku_conjunctions():
     )
 
     assert "do not turn this audit into a literal adjacency or exact-phrase test" in messages[0]["content"]
+    assert "Storage-space outcome" in messages[0]["content"]
+    assert "便携/易携带 supports product-level portability only" in messages[0]["content"]
 
 
 def test_strict_entailment_prompt_keeps_task_use_below_categorical_success():
@@ -275,6 +279,8 @@ def test_named_operation_boundary_rejects_adjacent_same_sku_evidence():
         assert "product title/keyword" in prompt
         assert "named operation" in prompt
         assert "genuinely equivalent" in prompt
+        assert "Storage-space outcome" in prompt
+        assert "storage-space support requires" in prompt
 
 
 def test_same_sku_strict_audit_rejects_sanitized_identity_conflict():
@@ -587,6 +593,68 @@ def test_semantic_retrieval_fusion_keeps_deep_corroborated_focus_hit_ahead():
     assert fused.index("DIRECT-1") < fused.index("GENERIC-A")
 
 
+def test_semantic_catalogue_hybrid_fusion_keeps_vector_hit_inside_scoped_window(monkeypatch):
+    category_rows = [
+        {"sku": f"CATEGORY-{index}", "product_name_cn": "category item"}
+        for index in range(24)
+    ]
+    category_rows.append({"sku": "VECTOR-HIT", "product_name_cn": "semantic match"})
+    scoped_calls = []
+
+    async def fake_semantic_retrieve(*_args, **kwargs):
+        if kwargs.get("skus"):
+            scoped_calls.append(list(kwargs["skus"]))
+            if "VECTOR-HIT" not in kwargs["skus"]:
+                return []
+            return [{
+                "sku": "VECTOR-HIT",
+                "content": "same SKU evidence for the natural-language request",
+                "metadata": {
+                    "section": "qa",
+                    "source_id": "product:VECTOR-HIT:qa:request",
+                },
+            }]
+        return [{
+            "sku": "VECTOR-HIT",
+            "content": "broad vector hit for the natural-language request",
+            "metadata": {
+                "section": "content",
+                "source_id": "product:VECTOR-HIT:content:request",
+            },
+        }]
+
+    def fake_keyword_retrieve(*_args, **kwargs):
+        if kwargs.get("sku"):
+            return []
+        return [
+            {
+                "sku": row["sku"],
+                "content": "generic category lexical context",
+                "metadata": {
+                    "section": "content",
+                    "source_id": f"product:{row['sku']}:content:category",
+                },
+            }
+            for row in category_rows[:24]
+        ]
+
+    monkeypatch.setattr(service.knowledge_service, "semantic_retrieve", fake_semantic_retrieve)
+    monkeypatch.setattr(service.knowledge_service, "keyword_retrieve", fake_keyword_retrieve)
+
+    recalled = asyncio.run(service._semantic_catalogue_recall_rows(
+        object(),
+        "能放进背包、容量小一点的户外杯子，推荐一款",
+        category_rows[:24],
+        catalogue_rows=category_rows,
+        semantic_focus_queries=["小容量便携户外饮水"],
+    ))
+
+    assert scoped_calls
+    assert "VECTOR-HIT" in scoped_calls[0]
+    hit = next(row for row in recalled if row["sku"] == "VECTOR-HIT")
+    assert any(item["source_id"] == "product:VECTOR-HIT:qa:request" for item in hit["_semantic_rag_evidence"])
+
+
 def test_semantic_catalogue_hybrid_recall_uses_complete_query_before_focus(monkeypatch):
     keyword_queries = []
     rows = [{"sku": "POT-1", "product_name_cn": "Pot"}]
@@ -875,8 +943,8 @@ def test_semantic_catalogue_recall_adds_rag_only_live_catalogue_skus(monkeypatch
         catalogue_rows=catalogue_rows,
     ))
 
-    assert [row["sku"] for row in recalled] == ["INITIAL-1", "RAG-NEW-1"]
-    assert recalled[1]["_semantic_rag_evidence"][0]["content"] == "餐具分类收纳"
+    assert [row["sku"] for row in recalled] == ["RAG-NEW-1", "INITIAL-1"]
+    assert recalled[0]["_semantic_rag_evidence"][0]["content"] == "餐具分类收纳"
 
 
 def test_semantic_catalogue_recall_excludes_no_longer_recommendable_lifecycle_rows(monkeypatch):
@@ -1248,7 +1316,41 @@ def test_recommendation_rag_keeps_direct_qa_after_verbose_content_source():
         key.startswith("rag.qa:method.") and "适用于手冲" in value
         for key, value in evidence.items()
     )
-    assert len(evidence) <= 8
+    assert len(evidence) <= 12
+
+
+def test_recommendation_rag_keeps_late_content_capability_after_unrelated_qa():
+    """A bounded packet must not hide a later unit from one long same-SKU source."""
+    content = "\n".join([
+        "内容信息:",
+        "- 中文描述: 适合户外烹饪。",
+        "- 使用说明: 使用中小火加热。",
+        "- 结构说明: 组件可嵌套收纳。",
+        "- 性能说明: 防风设计让火焰更稳定。",
+        "- 清洁说明: 使用后及时清洁。",
+        "- 容量说明: 900ML主锅和450ML碗，可用于烧水、煮面或烹制热食。",
+    ])
+    evidence = service._recommendation_rag_evidence_by_field({
+        "sku": "CW-C01-37",
+        "capacity": "900ML；450ML",
+        "gross_weight_g": 595,
+        "_semantic_rag_evidence": [
+            {"section": "content", "content": content},
+            *[
+                {
+                    "section": f"qa:unrelated-{index}",
+                    "content": f"Q: 无关问题{index}\nA: 无关回答{index}",
+                }
+                for index in range(5)
+            ],
+        ],
+    })
+
+    assert any(
+        "可用于烧水、煮面或烹制热食" in value
+        for value in evidence.values()
+    )
+    assert len(evidence) <= 12
 
 
 def test_heat_source_conflict_keeps_unrelated_same_sku_rag_content_available():
@@ -1315,6 +1417,23 @@ def test_live_heat_source_provenance_keeps_approved_qa_positive_extension(monkey
     assert row["heat_source"] == "卡式炉、电磁炉"
     assert row["heat_source_evidence_conflict"] is False
     assert conflicts == []
+
+
+def test_approved_heat_source_qa_corroborates_structured_value_over_marketing_comparison():
+    qas = [SimpleNamespace(
+        question="旋焰酒精炉用什么燃料？",
+        answer="适用95%液体工业酒精。",
+        tags='["历史自然问法", "燃料"]',
+    )]
+
+    assert service._approved_heat_source_qa_corroborates_structured_value(
+        qas,
+        "95%液体工业酒精",
+    ) is True
+    assert service._approved_heat_source_qa_corroborates_structured_value(
+        qas,
+        "卡式炉",
+    ) is False
 
 
 def test_recommendation_predicate_packet_masks_a_genuine_live_field_conflict():
@@ -1652,6 +1771,9 @@ def test_semantic_constraint_grounding_uses_flash_context_partition_without_phra
         system = kwargs["messages"][0]["content"]
         assert "context_partition" in system
         assert "never create a new phrase" in system
+        assert "Storage-space outcome" in system
+        assert "便携/易携带 supports product-level portability only" in system
+        assert "storage-space support requires" in system
         return json.dumps({
             "recommendation_constraints": {"scenarios": ["camping"]},
             "predicate_constraints": [],
@@ -1711,6 +1833,8 @@ def test_decision_factor_prompt_requires_product_form_and_explicit_evidence(monk
         assert "Final party-size self-check" in system
         assert "Never omit a planned participant count when it defines" in system
         assert "never set it for the customer's own planned party" in system
+        assert "Broad equipment-scope boundary" in system
+        assert "手冲咖啡器具" in system
         return json.dumps({
             "requested_product_form_factor": {
                 "factor": "drinking cup product form",
@@ -1747,6 +1871,19 @@ def test_decision_factor_prompt_requires_product_form_and_explicit_evidence(monk
         "product_form",
         "documented_evidence",
     ]
+
+
+def test_live_preplan_prompt_preserves_planned_party_size_after_compaction():
+    system = planner._semantic_preplan_messages(
+        question="三个人周末短途露营，要能烧水又要能煮面的锅具，推荐一款",
+        deterministic_plan={},
+        context={},
+    )[0]["content"]
+
+    assert "Planned-party semantic check" in system
+    assert "preserve that headcount as people={min,max}" in system
+    assert "required practical_fit/scenario_fit factor" in system
+    assert "A group count remains background_context/preferred for a stove, griddle, accessory" in system
 
 
 def test_factor_type_review_corrects_storage_outcome_without_changing_factor(monkeypatch):
@@ -1834,7 +1971,7 @@ def test_factor_type_review_promotes_named_product_operation_to_required(monkeyp
     assert "named operation or concrete capability" in captured["system"]
 
 
-def test_factor_type_review_promotes_operative_cooking_purpose_without_must_word(monkeypatch):
+def test_factor_type_review_keeps_ordinary_cooking_purpose_conditionable(monkeypatch):
     captured = {}
 
     async def fake_chat_completion(*_args, **kwargs):
@@ -1843,21 +1980,22 @@ def test_factor_type_review_promotes_operative_cooking_purpose_without_must_word
         return json.dumps({
             "reviews": [{
                 "factor_index": 0,
-                "factor_type": "factual",
-                "decision_kind": "concrete_capability",
+                "factor_type": "practical_fit",
+                "decision_kind": "scenario_fit",
                 "dimension": "",
-                "importance": "preferred",
+                "importance": "required",
                 "selection_role": "operative_purpose",
+                "conditional_recommendation_allowed": True,
             }]
         })
 
     monkeypatch.setattr(service.customer_llm_service, "chat_completion", fake_chat_completion)
     reviewed = asyncio.run(service._semantic_review_recommendation_factor_types(
         SimpleNamespace(),
-        question="两个人周末露营，想煮点简单热食，推荐一套合适的锅具。",
+        question="我已经有酒精炉，准备两个人煮面，想买轻便的锅，现有资料里推荐哪款？",
         factors=[{
-            "factor": "适合两人露营煮食",
-            "customer_basis": "客户选锅是为了两人露营时准备简单热食",
+            "factor": "两个人煮面场景",
+            "customer_basis": "客户准备两个人煮面，所以想选一口锅",
             "dimension": "",
             "factor_type": "practical_fit",
             "decision_kind": "scenario_fit",
@@ -1865,13 +2003,17 @@ def test_factor_type_review_promotes_operative_cooking_purpose_without_must_word
         }],
     ))
 
-    assert reviewed[0]["factor_type"] == "factual"
-    assert reviewed[0]["decision_kind"] == "concrete_capability"
+    assert reviewed[0]["factor_type"] == "practical_fit"
+    assert reviewed[0]["decision_kind"] == "scenario_fit"
     assert reviewed[0]["importance"] == "required"
     assert reviewed[0]["selection_role"] == "operative_purpose"
+    assert reviewed[0]["conditional_recommendation_allowed"] is True
     assert captured["payload"]["factors"][0]["importance"] == ""
     assert "operative purpose" in captured["system"]
     assert "does not need to use words such as must" in captured["system"]
+    assert "Highest-priority contrast before returning" in captured["system"]
+    assert "conditional_recommendation_allowed=true" in captured["system"]
+    assert "product-capability claim" in captured["system"]
 
 
 def test_factor_type_review_atomizes_independently_checkable_capabilities(monkeypatch):
@@ -2679,6 +2821,8 @@ def test_semantic_coverage_prompt_maps_normalized_product_form_to_customer_langu
     assert "single_cookware establishes only the pot" in captured["system"]
     assert "approved same-SKU QA/content field" in captured["system"]
     assert "explicit pour-over capability when the customer asks broadly" in captured["system"]
+    assert "broad equipment scope such as" in captured["system"]
+    assert "same-SKU identity.category for the supplied scope is sufficient" in captured["system"]
     assert "title or identity field that merely contains the method word" in captured["system"]
     assert "broad activity such as cooking" in captured["system"]
     assert "never silently specialize a broad verb" in captured["system"]
@@ -2690,6 +2834,269 @@ def test_semantic_coverage_prompt_maps_normalized_product_form_to_customer_langu
     assert "A recipient/background such as" in captured["system"]
     assert "mark the customer-fit factor unverified" in captured["system"]
     assert "recipient_background_context=true" in captured["system"]
+    assert "Keep the adjudication JSON compact" in captured["system"]
+    assert "server fills omitted candidates conservatively as unverified" in captured["system"]
+
+
+def test_scope_only_recommendation_keeps_empty_factor_contract_and_retries_missing_fit(monkeypatch):
+    calls = []
+    responses = iter([
+        {
+            "decision_factors": [],
+            "coverage": [],
+            "candidate_usability": [{"candidate_index": 0, "status": "usable"}],
+            "subtype_identity_assessments": [{
+                "candidate_index": 0,
+                "status": "supported",
+                "evidence_fields": ["identity.product_name"],
+            }],
+            "request_fit": [],
+            "ranked_candidate_indexes": [],
+        },
+        {
+            "decision_factors": [],
+            "coverage": [],
+            "candidate_usability": [{"candidate_index": 0, "status": "usable"}],
+            "subtype_identity_assessments": [{
+                "candidate_index": 0,
+                "status": "supported",
+                "evidence_fields": ["identity.product_name"],
+            }],
+            "request_fit": [{"candidate_index": 0, "status": "supported"}],
+            "ranked_candidate_indexes": [0],
+        },
+    ])
+
+    async def fake_chat_completion(*_args, **kwargs):
+        calls.append(kwargs)
+        return json.dumps(next(responses), ensure_ascii=False)
+
+    monkeypatch.setattr(service.customer_llm_service, "chat_completion", fake_chat_completion)
+    coverage = asyncio.run(service._semantic_recommendation_requirement_coverage(
+        SimpleNamespace(),
+        question="推荐卡式炉",
+        candidates=[{
+            "candidate_index": 0,
+            "sku": "KD23-MFL",
+            "product_name": "魔盒卡式炉",
+            "product_form": "stove",
+            "sealed_evidence": {
+                "identity.product_name": "魔盒卡式炉",
+                "identity.product_form": "stove",
+            },
+        }],
+        semantic_requirements=[],
+        requested_catalogue_subject="卡式炉",
+        requested_catalogue_subject_subtype="card_stove",
+    ))
+
+    assert coverage is not None
+    assert coverage["scope_only_recommendation"] is True
+    assert coverage["decision_factors"] == []
+    assert coverage["subtype_identity_assessments"] == [{
+        "candidate_index": 0,
+        "status": "supported",
+        "evidence_fields": ["identity.product_name"],
+    }]
+    assert coverage["request_fit"] == [{"candidate_index": 0, "status": "supported"}]
+    assert coverage["ranked_candidate_indexes"] == [0]
+    assert len(calls) == 2
+    payload = json.loads(calls[-1]["messages"][1]["content"])
+    assert payload["requested_catalogue_subject_subtype"] == "card_stove"
+    assert "Scope-only recommendation contract" in calls[-1]["messages"][0]["content"]
+    assert "Requested product subtype boundary" in calls[-1]["messages"][0]["content"]
+    assert "not a heat-source compatibility predicate" in calls[-1]["messages"][0]["content"]
+    assert "Apply this subtype condition to both request_fit and ranked_candidate_indexes" in calls[-1]["messages"][0]["content"]
+    assert "mentions the subtype as a compatible heat source/fuel" in calls[-1]["messages"][0]["content"]
+    assert "Do not invent a decision factor" in calls[-1]["messages"][0]["content"]
+    assert "not a literal phrase or keyword match" in calls[-1]["messages"][0]["content"]
+    assert "specs.heat_source only says what heat source or fuel" in calls[-1]["messages"][0]["content"]
+    assert "shared variant/template title" in calls[-1]["messages"][0]["content"]
+    assert "title that says 分体式卡式炉 or 魔盒卡式炉" in calls[-1]["messages"][0]["content"]
+    assert "a same-SKU identity statement can support the subtype" in calls[-1]["messages"][0]["content"]
+
+
+def test_coverage_retry_reports_invalid_factor_field_and_feeds_detail_back_to_flash(monkeypatch):
+    calls = []
+
+    def response(*, invalid: bool):
+        factor = {
+            "factor": "明确能力",
+            "customer_basis": "客户需要明确能力记录",
+            "dimension": "",
+            "factor_type": "wrong_type" if invalid else "factual",
+            "decision_kind": "concrete_capability",
+            "importance": "required",
+            "supported_candidate_indexes": [0],
+            "bounded_candidate_indexes": [],
+            "partial_candidate_indexes": [],
+            "unverified_candidate_indexes": [],
+            "evidence_usage": [{
+                "candidate_index": 0,
+                "evidence": [{"field": "rag.qa.0.0"}],
+            }],
+        }
+        return {
+            "decision_factors": [factor],
+            "coverage": [],
+            "candidate_usability": [{"candidate_index": 0, "status": "usable"}],
+            "request_fit": [{"candidate_index": 0, "status": "supported"}],
+            "ranked_candidate_indexes": [0],
+        }
+
+    async def fake_chat_completion(*_args, **kwargs):
+        calls.append(kwargs)
+        return json.dumps(response(invalid=len(calls) == 1), ensure_ascii=False)
+
+    monkeypatch.setattr(service.customer_llm_service, "chat_completion", fake_chat_completion)
+    diagnostic = {}
+    result = asyncio.run(service._semantic_recommendation_requirement_coverage(
+        SimpleNamespace(),
+        question="推荐一款有明确能力记录的产品",
+        candidates=[{
+            "candidate_index": 0,
+            "sku": "RAG-1",
+            "product_name": "测试产品",
+            "sealed_evidence": {"rag.qa.0.0": "明确记录该能力"},
+        }],
+        semantic_requirements=[],
+        validation_diagnostic=diagnostic,
+    ))
+
+    assert result is not None
+    assert len(calls) == 2
+    retry_payload = json.loads(calls[1]["messages"][1]["content"])
+    detail = retry_payload["consistency_repair"]["previous_validation_failure_detail"]
+    assert detail["factor_index"] == 0
+    assert detail["invalid_fields"] == [{
+        "field": "factor_type",
+        "value": "wrong_type",
+        "rule": "enum",
+        "allowed": ["factual", "practical_fit"],
+    }]
+    assert diagnostic["retry_count"] == 1
+    assert diagnostic["retry_failures"][0]["failure"] == "invalid_decision_factor_fields"
+    assert diagnostic["retry_failures"][0]["failure_detail"] == detail
+
+
+def test_subtype_identity_assessment_removes_semantically_wrong_scope_rows(monkeypatch):
+    async def fake_chat_completion(*_args, **_kwargs):
+        return json.dumps({
+            "decision_factors": [],
+            "coverage": [],
+            "candidate_usability": {"usable": [0, 1], "restricted": [], "uncertain": []},
+            # The broad request-fit verdict is intentionally over-inclusive;
+            # the candidate-level semantic identity assessment is the typed
+            # correction under test.
+            "request_fit": {"supported": [0, 1], "partial": [], "unverified": []},
+            "subtype_identity_assessments": [
+                {
+                    "candidate_index": 0,
+                    "status": "supported",
+                    "evidence_fields": ["identity.product_name"],
+                },
+                {
+                    "candidate_index": 1,
+                    "status": "unverified",
+                    "evidence_fields": ["rag.qa.0.0"],
+                },
+            ],
+            "ranked_candidate_indexes": [0, 1],
+        }, ensure_ascii=False)
+
+    monkeypatch.setattr(service.customer_llm_service, "chat_completion", fake_chat_completion)
+    coverage = asyncio.run(service._semantic_recommendation_requirement_coverage(
+        SimpleNamespace(),
+        question="有没有推荐的卡式炉？",
+        candidates=[
+            {
+                "candidate_index": 0,
+                "sku": "KD23-MFL",
+                "product_name": "魔盒卡式炉",
+                "product_form": "stove",
+                "sealed_evidence": {
+                    "identity.product_name": "魔盒卡式炉",
+                    "identity.product_form": "stove",
+                },
+            },
+            {
+                "candidate_index": 1,
+                "sku": "CS-G25",
+                "product_name": "分体式燃气炉",
+                "product_form": "stove",
+                "sealed_evidence": {
+                    "identity.product_name": "分体式燃气炉",
+                    "identity.product_form": "stove",
+                    "rag.qa.0.0": "支持高山气罐和卡式气罐",
+                },
+            },
+        ],
+        semantic_requirements=[],
+        requested_catalogue_subject="卡式炉",
+        requested_catalogue_subject_subtype="card_stove",
+    ))
+
+    assert coverage is not None
+    assert coverage["subtype_identity_assessments"] == [
+        {
+            "candidate_index": 0,
+            "status": "supported",
+            "evidence_fields": ["identity.product_name"],
+        },
+        {
+            "candidate_index": 1,
+            "status": "unverified",
+            "evidence_fields": ["rag.qa.0.0"],
+        },
+    ]
+    assert coverage["request_fit"] == [
+        {"candidate_index": 0, "status": "supported"},
+        {"candidate_index": 1, "status": "unverified"},
+    ]
+    assert coverage["request_supported_candidate_indexes"] == [0]
+    assert coverage["ranked_candidate_indexes"] == [0]
+
+
+def test_subtype_identity_positive_without_sealed_field_is_downgraded(monkeypatch):
+    async def fake_chat_completion(*_args, **_kwargs):
+        return json.dumps({
+            "decision_factors": [],
+            "coverage": [],
+            "candidate_usability": [{"candidate_index": 0, "status": "usable"}],
+            "request_fit": [{"candidate_index": 0, "status": "supported"}],
+            "subtype_identity_assessments": [{
+                "candidate_index": 0,
+                "status": "supported",
+                "evidence_fields": ["missing.identity.field"],
+            }],
+            "ranked_candidate_indexes": [0],
+        }, ensure_ascii=False)
+
+    monkeypatch.setattr(service.customer_llm_service, "chat_completion", fake_chat_completion)
+    coverage = asyncio.run(service._semantic_recommendation_requirement_coverage_once(
+        SimpleNamespace(),
+        question="推荐卡式炉",
+        candidates=[{
+            "candidate_index": 0,
+            "sku": "CS-G25",
+            "product_name": "分体式燃气炉",
+            "product_form": "stove",
+            "sealed_evidence": {"identity.product_form": "stove"},
+        }],
+        semantic_requirements=[],
+        requested_catalogue_subject="卡式炉",
+        requested_catalogue_subject_subtype="card_stove",
+    ))
+
+    assert coverage is not None
+    assert coverage["subtype_identity_assessments"] == [{
+        "candidate_index": 0,
+        "status": "unverified",
+        "evidence_fields": [],
+    }]
+    assert coverage["request_fit"] == [{"candidate_index": 0, "status": "unverified"}]
+    assert coverage["request_supported_candidate_indexes"] == []
+    assert coverage["ranked_candidate_indexes"] == []
 
 
 def test_semantic_coverage_candidate_limit_bounds_factor_matrix():
@@ -2701,6 +3108,213 @@ def test_semantic_coverage_candidate_limit_bounds_factor_matrix():
     assert service._semantic_coverage_candidate_limit(24, 3) == 24
     assert service._semantic_coverage_candidate_limit(3, 8) == 3
     assert service._semantic_coverage_candidate_limit(0, 4) == 0
+
+
+def test_targeted_coverage_consistency_repair_cannot_promote_missing_factor(monkeypatch):
+    captured = {}
+
+    async def fake_chat_completion(*_args, **kwargs):
+        captured.update(kwargs)
+        return json.dumps({
+            "repairs": [{
+                "factor_index": 0,
+                "candidate_index": 0,
+                "factor_status": "supported",
+                "request_fit": "supported",
+                "evidence_fields": ["rag.qa.0.0"],
+            }],
+        })
+
+    monkeypatch.setattr(service.customer_llm_service, "chat_completion", fake_chat_completion)
+    coverage = {
+        "decision_factors": [{
+            "factor": "能烧水",
+            "customer_basis": "客户要能烧水",
+            "factor_type": "factual",
+            "decision_kind": "concrete_capability",
+            "importance": "required",
+            "supported_candidate_indexes": [],
+            "bounded_candidate_indexes": [],
+            "partial_candidate_indexes": [],
+            "unverified_candidate_indexes": [0],
+            "evidence_usage": [],
+        }],
+        "candidate_usability": [{"candidate_index": 0, "status": "usable"}],
+        "request_fit": [{"candidate_index": 0, "status": "supported"}],
+        "request_supported_candidate_indexes": [0],
+        "request_partial_candidate_indexes": [],
+        "ordinarily_usable_candidate_indexes": [0],
+        "usable_candidate_indexes": [],
+        "ranked_candidate_indexes": [],
+    }
+    candidates = [{
+        "candidate_index": 0,
+        "sku": "POT-1",
+        "product_name": "测试锅",
+        "sealed_evidence": {
+            "rag.qa.0.0": "满足煮奶、煮面等小份烹饪需求",
+            "rag.qa.1.0": "不相关的另一条 QA",
+        },
+    }]
+    issues = service._semantic_recommendation_coverage_consistency_issues(coverage)
+
+    result = asyncio.run(service._semantic_recommendation_repair_coverage_consistency(
+        SimpleNamespace(),
+        question="能烧水的锅",
+        candidates=candidates,
+        coverage=coverage,
+        consistency_issues=issues,
+    ))
+
+    payload = json.loads(captured["messages"][1]["content"])
+    assert captured["purpose"] == "semantic_recommendation_coverage_consistency_repair"
+    assert len(payload["targets"]) == 1
+    assert payload["targets"][0]["candidate"]["sealed_evidence"] == {
+        "rag.qa.0.0": "满足煮奶、煮面等小份烹饪需求",
+        "rag.qa.1.0": "不相关的另一条 QA",
+    }
+    assert result["status"] == "repaired"
+    assert result["repairs"][0]["factor_status"] == "unverified"
+    assert coverage["decision_factors"][0]["supported_candidate_indexes"] == []
+    assert coverage["decision_factors"][0]["unverified_candidate_indexes"] == [0]
+    assert coverage["request_fit"] == [{"candidate_index": 0, "status": "unverified"}]
+    assert coverage["request_supported_candidate_indexes"] == []
+
+
+def test_coverage_consistency_repair_runs_before_full_packet_retry(monkeypatch):
+    once_calls = []
+    repair_calls = []
+
+    def contradictory_coverage():
+        return {
+            "decision_factors": [{
+                "factor": "documented capability",
+                "factor_type": "factual",
+                "decision_kind": "concrete_capability",
+                "importance": "required",
+                "supported_candidate_indexes": [],
+                "bounded_candidate_indexes": [],
+                "partial_candidate_indexes": [],
+                "unverified_candidate_indexes": [0],
+            }],
+            "candidate_usability": [{"candidate_index": 0, "status": "usable"}],
+            "request_fit": [{"candidate_index": 0, "status": "supported"}],
+            "request_supported_candidate_indexes": [0],
+            "request_partial_candidate_indexes": [],
+            "ordinarily_usable_candidate_indexes": [0],
+            "ranked_candidate_indexes": [],
+        }
+
+    async def fake_coverage_once(*_args, **kwargs):
+        once_calls.append(kwargs.get("consistency_repair"))
+        return contradictory_coverage()
+
+    async def fake_repair(*_args, **kwargs):
+        repair_calls.append(kwargs["consistency_issues"])
+        coverage = kwargs["coverage"]
+        factor = coverage["decision_factors"][0]
+        factor["supported_candidate_indexes"] = [0]
+        factor["unverified_candidate_indexes"] = []
+        coverage["request_fit"][0]["status"] = "supported"
+        coverage["request_supported_candidate_indexes"] = [0]
+        coverage["ranked_candidate_indexes"] = [0]
+        return {"called": True, "status": "repaired", "repairs": [{
+            "factor_index": 0,
+            "candidate_index": 0,
+        }]}
+
+    monkeypatch.setattr(
+        service,
+        "_semantic_recommendation_requirement_coverage_once",
+        fake_coverage_once,
+    )
+    monkeypatch.setattr(
+        service,
+        "_semantic_recommendation_repair_coverage_consistency",
+        fake_repair,
+    )
+
+    result = asyncio.run(service._semantic_recommendation_requirement_coverage(
+        SimpleNamespace(),
+        question="推荐一个有明确能力记录的锅",
+        candidates=[{
+            "candidate_index": 0,
+            "sku": "POT-1",
+            "sealed_evidence": {"rag.qa.0.0": "明确记录"},
+        }],
+        semantic_requirements=[],
+    ))
+
+    assert result is not None
+    assert len(once_calls) == 1
+    assert len(repair_calls) == 1
+    assert result["consistency_reconciled"] is True
+    assert result["consistency_repair"]["remaining_issues"] == []
+
+
+def test_failed_coverage_consistency_repair_closes_candidate_without_full_retry(monkeypatch):
+    once_calls = 0
+
+    async def fake_coverage_once(*_args, **_kwargs):
+        nonlocal once_calls
+        once_calls += 1
+        return {
+            "decision_factors": [{
+                "factor": "documented capability",
+                "factor_type": "factual",
+                "decision_kind": "concrete_capability",
+                "importance": "required",
+                "supported_candidate_indexes": [],
+                "bounded_candidate_indexes": [],
+                "partial_candidate_indexes": [],
+                "unverified_candidate_indexes": [0],
+            }],
+            "candidate_usability": [{"candidate_index": 0, "status": "usable"}],
+            "request_fit": [{"candidate_index": 0, "status": "supported"}],
+            "request_supported_candidate_indexes": [0],
+            "request_partial_candidate_indexes": [],
+            "ordinarily_usable_candidate_indexes": [0],
+            "usable_candidate_indexes": [0],
+            "ranked_candidate_indexes": [0],
+        }
+
+    async def failed_repair(*_args, **_kwargs):
+        return {
+            "called": True,
+            "status": "unavailable",
+            "repairs": [],
+            "provider_error": "timeout",
+        }
+
+    monkeypatch.setattr(
+        service,
+        "_semantic_recommendation_requirement_coverage_once",
+        fake_coverage_once,
+    )
+    monkeypatch.setattr(
+        service,
+        "_semantic_recommendation_repair_coverage_consistency",
+        failed_repair,
+    )
+
+    result = asyncio.run(service._semantic_recommendation_requirement_coverage(
+        SimpleNamespace(),
+        question="推荐一个有明确能力记录的锅",
+        candidates=[{
+            "candidate_index": 0,
+            "sku": "POT-1",
+            "sealed_evidence": {"rag.qa.0.0": "仅有相邻信息"},
+        }],
+        semantic_requirements=[],
+    ))
+
+    assert once_calls == 1
+    assert result is not None
+    assert result["consistency_closed"] is True
+    assert result["request_fit"] == [{"candidate_index": 0, "status": "unverified"}]
+    assert result["request_supported_candidate_indexes"] == []
+    assert result["ranked_candidate_indexes"] == []
+    assert result["decision_factors"][0]["unverified_candidate_indexes"] == [0]
 
 
 def test_coverage_projection_preserves_same_sku_usage_instructions():
@@ -2876,6 +3490,54 @@ def test_post_audit_replacement_projects_only_factor_bound_same_sku_evidence():
     assert projected == {
         "identity.product_form": "cookware_set",
         "content.usage_scenarios": "户外小份烹饪",
+    }
+
+
+def test_subtype_projection_binds_only_flash_approved_same_sku_fields():
+    projected = service._semantic_recommendation_subtype_evidence_projection(
+        [
+            {
+                "candidate_index": 0,
+                "sku": "KD23-MFL",
+                "sealed_evidence": {
+                    "identity.product_name": "魔盒卡式炉",
+                    "identity.product_form": "stove",
+                    "specs.heat_source": "卡式气罐",
+                },
+            },
+            {
+                "candidate_index": 1,
+                "sku": "CS-B15S",
+                "sealed_evidence": {
+                    "identity.product_name": "围雪炉-酒精版",
+                    "content.title_cn": "户外卡式炉具",
+                },
+            },
+        ],
+        {
+            "subtype_identity_assessments": [
+                {
+                    "candidate_index": 0,
+                    "status": "supported",
+                    "evidence_fields": [
+                        "identity.product_name",
+                        "specs.heat_source",
+                    ],
+                },
+                {
+                    "candidate_index": 1,
+                    "status": "unverified",
+                    "evidence_fields": ["content.title_cn"],
+                },
+            ],
+        },
+    )
+
+    assert projected == {
+        0: {
+            "identity.product_name": "魔盒卡式炉",
+            "specs.heat_source": "卡式气罐",
+        }
     }
 
 
@@ -3620,6 +4282,8 @@ def test_same_sku_selection_prefers_complete_direct_qa_over_drifting_profile():
     assert "Do not append a broader profile" in system
     assert "semantic identity consistency inside one SKU" in system
     assert "switches from an aluminium cookware set to a kettle or cast-iron pot" in system
+    assert "Source-role boundary for same-SKU RAG" in system
+    assert "This is semantic source-role reasoning, not literal token matching" in system
 
 
 def test_same_sku_direct_qa_finite_list_rejects_common_knowledge_additions():
@@ -3670,33 +4334,9 @@ def test_selected_product_qa_writer_keeps_current_dimension_and_material_boundar
     assert "Answer only the operative dimension" in prompt
     assert "omit those unrelated claims" in prompt
     assert "does not by itself entail durability" in prompt
+    assert "Source-role boundary for same-SKU RAG" in prompt
+    assert "Do not copy or amplify slogans" in prompt
     assert "treat that A as the complete evidence universe" in prompt
-
-
-def test_suitability_boundary_rewrite_does_not_list_unasked_qa_dimensions(monkeypatch):
-    captured = {}
-
-    async def fake_chat_completion(*_args, **kwargs):
-        captured["messages"] = kwargs["messages"]
-        return json.dumps({"answer": "产品问答中将它描述为品质出众。", "evidence_quotes": []}, ensure_ascii=False)
-
-    monkeypatch.setattr(service.customer_llm_service, "chat_completion", fake_chat_completion)
-
-    rewritten = asyncio.run(service._rewrite_suitability_boundary_from_same_sku_evidence(
-        SimpleNamespace(),
-        question="产品品质出众吗？",
-        semantic_focus="品质是否出众",
-        draft="产品问答中提到包装精美，适合作为礼物。",
-        evidence="Q: 适合当礼物送人吗？\nA: 包装精美、品质出众，是送给户外露营爱好者的礼物。",
-        recorded_qa_selected=True,
-    ))
-
-    assert rewritten[0] == "产品问答中将它描述为品质出众。"
-    prompt = captured["messages"][0]["content"]
-    assert "retain a trait only when it explains the requested dimension" in prompt
-    assert "omit other claims in the A even when they are exact" in prompt
-    payload = json.loads(captured["messages"][1]["content"])
-    assert payload["semantic_focus"] == "品质是否出众"
 
 
 def test_same_sku_rag_filters_secondary_capacity_rendering_before_answer_writer():
@@ -4124,6 +4764,7 @@ def test_missing_recovery_neutralizes_conflicted_product_identity(monkeypatch):
     assert "Conflict status has priority" in captured["system"]
     assert "Do not infer a named recipe, dish, or operation" in captured["system"]
     assert "keep the task unconfirmed" in captured["system"]
+    assert "Source-role boundary for same-SKU RAG" in captured["system"]
 
 
 def test_conflicted_formal_field_recovery_hides_unrequested_authoritative_fields(monkeypatch):
@@ -4590,6 +5231,102 @@ def test_budget_fact_fallback_does_not_turn_single_cookware_weight_into_set_clai
     assert "整套约" not in fallback["answer"]
 
 
+def test_fact_fallback_does_not_expose_internal_product_form_enum():
+    fallback = service._sealed_recommendation_fact_fallback(
+        question="按资料推荐一口锅。",
+        fallback={"ranked_candidate_indexes": [0]},
+        rows=[{
+            "sku": "POT-1",
+            "product_name_cn": "测试单锅",
+            "capacity": "1400ML",
+            "heat_source": "酒精炉、气炉",
+        }],
+        coverage={
+            "decision_factors": [{
+                "factor": "锅具形态",
+                "factor_type": "factual",
+                "decision_kind": "concrete_capability",
+                "importance": "required",
+                "supported_candidate_indexes": [0],
+                "evidence_usage": [{
+                    "candidate_index": 0,
+                    "evidence": [{
+                        "field": "identity.product_form",
+                        "excerpt": "single_cookware",
+                    }],
+                }],
+            }],
+        },
+    )
+
+    assert fallback is not None
+    assert "single_cookware" not in fallback["answer"]
+    assert "容量" in fallback["answer"] or "热源" in fallback["answer"]
+
+
+def test_fact_fallback_cannot_publish_candidate_missing_one_required_factor():
+    coverage = {
+        "ordinarily_usable_candidate_indexes": [0, 1],
+        "request_supported_candidate_indexes": [0, 1],
+        "request_partial_candidate_indexes": [],
+        "request_fit": [
+            {"candidate_index": 0, "status": "supported"},
+            {"candidate_index": 1, "status": "supported"},
+        ],
+        "decision_factors": [
+            {
+                "factor": "能烧水",
+                "factor_type": "factual",
+                "decision_kind": "concrete_capability",
+                "importance": "required",
+                "supported_candidate_indexes": [0],
+                "bounded_candidate_indexes": [],
+                "partial_candidate_indexes": [],
+                "unverified_candidate_indexes": [1],
+                "evidence_usage": [{
+                    "candidate_index": 0,
+                    "evidence": [{"field": "rag.content.0.0", "excerpt": "可用于烧水"}],
+                }],
+            },
+            {
+                "factor": "能煮面",
+                "factor_type": "factual",
+                "decision_kind": "concrete_capability",
+                "importance": "required",
+                "supported_candidate_indexes": [1],
+                "bounded_candidate_indexes": [],
+                "partial_candidate_indexes": [],
+                "unverified_candidate_indexes": [0],
+                "evidence_usage": [{
+                    "candidate_index": 1,
+                    "evidence": [{"field": "rag.content.0.1", "excerpt": "可用于煮面"}],
+                }],
+            },
+        ],
+    }
+
+    assert service._semantic_recommendation_selection_has_coverage(coverage, [1]) is False
+    fallback = service._sealed_recommendation_fact_fallback(
+        question="三个人露营要能烧水又能煮面，推荐一款锅",
+        fallback={"ranked_candidate_indexes": [1]},
+        rows=[
+            {
+                "sku": "POT-A",
+                "product_name_cn": "烧水锅",
+                "capacity": "2L",
+            },
+            {
+                "sku": "POT-B",
+                "product_name_cn": "煮面锅",
+                "capacity": "1.5L",
+            },
+        ],
+        coverage=coverage,
+    )
+
+    assert fallback is None
+
+
 def test_fact_fallback_drops_fields_attached_to_unverified_scenario_factor():
     fallback = service._sealed_recommendation_fact_fallback(
         question="想选一套适合短途露营的锅具",
@@ -4878,6 +5615,126 @@ def test_required_scenario_bounded_evidence_cannot_reopen_rag_pool():
         coverage,
         question="咖啡器具里请推荐真正适合手冲的产品",
     ) == []
+
+
+def test_typed_ordinary_scenario_can_open_conditional_same_sku_candidate():
+    coverage = {
+        "ordinarily_usable_candidate_indexes": [0],
+        "request_supported_candidate_indexes": [],
+        "request_partial_candidate_indexes": [],
+        "request_fit": [{"candidate_index": 0, "status": "unverified"}],
+        "ranked_candidate_indexes": [],
+        "decision_factors": [
+            {
+                "factor": "锅具形态",
+                "factor_type": "factual",
+                "decision_kind": "concrete_capability",
+                "importance": "required",
+                "requested_product_form_factor": True,
+                "supported_candidate_indexes": [0],
+                "bounded_candidate_indexes": [],
+                "partial_candidate_indexes": [],
+                "unverified_candidate_indexes": [],
+                "evidence_usage": [{
+                    "candidate_index": 0,
+                    "evidence": [{"field": "identity.product_form", "excerpt": "single_cookware"}],
+                }],
+            },
+            {
+                "factor": "酒精炉兼容",
+                "factor_type": "factual",
+                "decision_kind": "concrete_capability",
+                "importance": "required",
+                "supported_candidate_indexes": [0],
+                "bounded_candidate_indexes": [],
+                "partial_candidate_indexes": [],
+                "unverified_candidate_indexes": [],
+                "evidence_usage": [{
+                    "candidate_index": 0,
+                    "evidence": [{"field": "specs.heat_source", "excerpt": "酒精炉"}],
+                }],
+            },
+            {
+                "factor": "两个人煮面场景",
+                "factor_type": "practical_fit",
+                "decision_kind": "scenario_fit",
+                "importance": "required",
+                "selection_role": "operative_purpose",
+                "conditional_recommendation_allowed": True,
+                "supported_candidate_indexes": [],
+                "bounded_candidate_indexes": [],
+                "partial_candidate_indexes": [],
+                "unverified_candidate_indexes": [0],
+                "evidence_usage": [],
+            },
+        ],
+    }
+
+    assert service._semantic_recommendation_conditional_candidate_indexes(coverage) == [0]
+    assert service._semantic_recommendation_apply_conditional_candidate_projection(coverage) == [0]
+    assert coverage["request_partial_candidate_indexes"] == [0]
+    assert coverage["request_fit"] == [{"candidate_index": 0, "status": "partial"}]
+    assert service._semantic_recommendation_selection_has_coverage(coverage, [0]) is True
+
+
+def test_conditional_candidate_requires_two_distinct_same_sku_fields():
+    coverage = {
+        "ordinarily_usable_candidate_indexes": [0],
+        "decision_factors": [{
+            "factor": "两个人煮面场景",
+            "factor_type": "practical_fit",
+            "decision_kind": "scenario_fit",
+            "importance": "required",
+            "conditional_recommendation_allowed": True,
+            "supported_candidate_indexes": [],
+            "bounded_candidate_indexes": [],
+            "partial_candidate_indexes": [],
+            "unverified_candidate_indexes": [0],
+            "evidence_usage": [{
+                "candidate_index": 0,
+                "evidence": [{"field": "specs.capacity", "excerpt": "1400ML"}],
+            }],
+        }],
+    }
+
+    assert service._semantic_recommendation_conditional_candidate_indexes(coverage) == []
+
+
+def test_conditional_marker_cannot_open_explicit_capability_or_named_method():
+    for factor in (
+        {
+            "factor": "能煮面",
+            "factor_type": "factual",
+            "decision_kind": "concrete_capability",
+            "importance": "required",
+            "conditional_recommendation_allowed": True,
+        },
+        {
+            "factor": "真正适合手冲",
+            "factor_type": "practical_fit",
+            "decision_kind": "scenario_fit",
+            "importance": "required",
+            "conditional_recommendation_allowed": False,
+        },
+    ):
+        coverage = {
+            "ordinarily_usable_candidate_indexes": [0],
+            "decision_factors": [{
+                **factor,
+                "supported_candidate_indexes": [],
+                "bounded_candidate_indexes": [0],
+                "partial_candidate_indexes": [],
+                "unverified_candidate_indexes": [],
+                "evidence_usage": [{
+                    "candidate_index": 0,
+                    "evidence": [
+                        {"field": "specs.capacity", "excerpt": "1400ML"},
+                        {"field": "specs.heat_source", "excerpt": "酒精炉"},
+                    ],
+                }],
+            }],
+        }
+        assert service._semantic_recommendation_conditional_candidate_indexes(coverage) == []
 
 
 def test_semantic_requirement_keeps_preference_pool_closed_when_factor_contract_drops_it():
@@ -5602,6 +6459,71 @@ def test_subjective_factor_entailment_downgrades_named_tasks_from_adjacent_facts
     assert "specs.heat_source" in system_instruction
 
 
+def test_required_conditionable_scenario_is_audited_before_candidate_projection(monkeypatch):
+    captured = {}
+
+    async def fake_chat_completion(*_args, **kwargs):
+        captured["payload"] = json.loads(kwargs["messages"][1]["content"])
+        return json.dumps({
+            "verdicts": [{
+                "factor_index": 0,
+                "candidate_index": 0,
+                "entailed": False,
+            }]
+        })
+
+    monkeypatch.setattr(service.customer_llm_service, "chat_completion", fake_chat_completion)
+    coverage = {
+        "decision_factors": [{
+            "factor": "适合两人份煮面",
+            "factor_type": "practical_fit",
+            "decision_kind": "scenario_fit",
+            "importance": "required",
+            "selection_role": "operative_purpose",
+            "conditional_recommendation_allowed": True,
+            "supported_candidate_indexes": [0],
+            "bounded_candidate_indexes": [],
+            "partial_candidate_indexes": [],
+            "unverified_candidate_indexes": [],
+            "evidence_usage": [{
+                "candidate_index": 0,
+                "evidence": [
+                    {"field": "specs.capacity", "excerpt": "1400ML"},
+                    {"field": "content.target_audience", "excerpt": "1-2 人露营者"},
+                ],
+            }],
+        }],
+        "request_fit": [{"candidate_index": 0, "status": "supported"}],
+        "request_supported_candidate_indexes": [0],
+        "request_partial_candidate_indexes": [],
+        "ranked_candidate_indexes": [0],
+        "supported_candidate_indexes": [0],
+        "partial_candidate_indexes": [],
+        "usable_candidate_indexes": [0],
+    }
+
+    result = asyncio.run(service._semantic_recommendation_subjective_factor_entailment_audit(
+        SimpleNamespace(),
+        question="两个人露营想找一口煮面的锅",
+        candidates=[{
+            "candidate_index": 0,
+            "product_name": "测试单锅",
+            "product_form": "single_cookware",
+            "sealed_evidence": {
+                "specs.capacity": "1400ML",
+                "content.target_audience": "1-2 人露营者",
+            },
+        }],
+        coverage=coverage,
+    ))
+
+    assert result["status"] == "downgraded"
+    assert coverage["decision_factors"][0]["supported_candidate_indexes"] == []
+    assert coverage["decision_factors"][0]["unverified_candidate_indexes"] == [0]
+    assert captured["payload"]["pairs"][0]["conditional_recommendation_allowed"] is True
+    assert captured["payload"]["pairs"][0]["importance"] == "required"
+
+
 def test_subjective_factor_audit_does_not_overrule_verified_exact_formal_predicate(monkeypatch):
     async def fail_if_called(*_args, **_kwargs):
         raise AssertionError("verified typed predicate must not be re-judged")
@@ -5776,6 +6698,89 @@ def test_required_concrete_capability_audit_runs_for_practical_fit_typed_factor(
     assert captured["payload"]["pairs"][0]["factor"] == "\u80fd\u70e7\u6c34"
 
 
+def test_required_capability_audit_keeps_neighboring_operations_separate(monkeypatch):
+    captured = {}
+
+    async def fake_chat_completion(*_args, **kwargs):
+        captured["system"] = kwargs["messages"][0]["content"]
+        captured["payload"] = json.loads(kwargs["messages"][1]["content"])
+        return json.dumps({
+            "verdicts": [
+                {"factor_index": 0, "candidate_index": 0, "entailed": False},
+                {"factor_index": 1, "candidate_index": 0, "entailed": True},
+            ],
+        }, ensure_ascii=False)
+
+    monkeypatch.setattr(service.customer_llm_service, "chat_completion", fake_chat_completion)
+    coverage = {
+        "decision_factors": [
+            {
+                "factor": "\u80fd\u70e7\u6c34",
+                "factor_type": "factual",
+                "decision_kind": "concrete_capability",
+                "importance": "required",
+                "supported_candidate_indexes": [0],
+                "bounded_candidate_indexes": [],
+                "partial_candidate_indexes": [],
+                "unverified_candidate_indexes": [],
+                "evidence_usage": [{
+                    "candidate_index": 0,
+                    "evidence": [{
+                        "field": "rag.content.0.3",
+                        "excerpt": "\u6ee1\u8db3\u716e\u5976\u3001\u716e\u9762\u7b49\u5c0f\u4efd\u70f9\u996a\u9700\u6c42",
+                    }],
+                }],
+            },
+            {
+                "factor": "\u80fd\u716e\u9762",
+                "factor_type": "factual",
+                "decision_kind": "concrete_capability",
+                "importance": "required",
+                "supported_candidate_indexes": [0],
+                "bounded_candidate_indexes": [],
+                "partial_candidate_indexes": [],
+                "unverified_candidate_indexes": [],
+                "evidence_usage": [{
+                    "candidate_index": 0,
+                    "evidence": [{
+                        "field": "rag.content.0.3",
+                        "excerpt": "\u6ee1\u8db3\u716e\u5976\u3001\u716e\u9762\u7b49\u5c0f\u4efd\u70f9\u996a\u9700\u6c42",
+                    }],
+                }],
+            },
+        ],
+        "request_fit": [{"candidate_index": 0, "status": "supported"}],
+        "request_supported_candidate_indexes": [0],
+        "request_partial_candidate_indexes": [],
+        "ranked_candidate_indexes": [0],
+        "supported_candidate_indexes": [0],
+        "partial_candidate_indexes": [],
+        "usable_candidate_indexes": [0],
+    }
+    result = asyncio.run(service._semantic_recommendation_subjective_factor_entailment_audit(
+        SimpleNamespace(),
+        question="\u4e09\u4e2a\u4eba\u9732\u8425\u8981\u80fd\u70e7\u6c34\u53c8\u80fd\u716e\u9762\uff0c\u63a8\u8350\u4e00\u6b3e\u9505",
+        candidates=[{
+            "candidate_index": 0,
+            "product_name": "18\u516b\u89d2\u5976\u9505\uff08\u767d\uff09",
+            "product_form": "single_cookware",
+            "sealed_evidence": {
+                "rag.content.0.3": "\u6ee1\u8db3\u716e\u5976\u3001\u716e\u9762\u7b49\u5c0f\u4efd\u70f9\u996a\u9700\u6c42",
+            },
+        }],
+        coverage=coverage,
+        candidate_indexes=[0],
+    ))
+
+    assert result["status"] == "downgraded"
+    assert result["downgraded_pairs"] == [{"factor_index": 0, "candidate_index": 0}]
+    assert coverage["decision_factors"][0]["supported_candidate_indexes"] == []
+    assert coverage["decision_factors"][1]["supported_candidate_indexes"] == [0]
+    assert service._semantic_recommendation_selection_has_coverage(coverage, [0]) is False
+    assert "judge every factual concrete-capability pair separately" in captured["system"]
+    assert "heat milk and cook noodles" in captured["system"]
+
+
 def test_preferred_factual_lightness_is_semantically_audited(monkeypatch):
     captured = {}
 
@@ -5933,6 +6938,52 @@ def test_rag_evidence_completion_never_promotes_unverified_or_product_form(monke
     ))
 
     assert result == {"called": False, "status": "not_needed", "completed": []}
+    assert coverage["decision_factors"][0]["unverified_candidate_indexes"] == [0]
+
+
+def test_rag_evidence_completion_cannot_reopen_a_closed_consistency_pair(monkeypatch):
+    async def fail_if_called(*_args, **_kwargs):
+        raise AssertionError("a consistency-closed pair cannot be re-adjudicated")
+
+    monkeypatch.setattr(service.customer_llm_service, "chat_completion", fail_if_called)
+    coverage = {
+        "ranked_candidate_indexes": [0],
+        "semantic_consistency_protected_pairs": [{
+            "factor_index": 0,
+            "candidate_index": 0,
+        }],
+        "decision_factors": [{
+            "factor": "能烧水",
+            "factor_type": "factual",
+            "decision_kind": "concrete_capability",
+            "importance": "required",
+            "supported_candidate_indexes": [],
+            "bounded_candidate_indexes": [],
+            "partial_candidate_indexes": [],
+            "unverified_candidate_indexes": [0],
+            "evidence_usage": [],
+        }],
+    }
+
+    result = asyncio.run(service._semantic_recommendation_rag_evidence_completion(
+        SimpleNamespace(),
+        question="要能烧水的锅",
+        candidates=[{
+            "candidate_index": 0,
+            "product_name": "测试奶锅",
+            "sealed_evidence": {
+                "rag.content.0.0": "满足煮奶、煮面等小份烹饪需求",
+            },
+        }],
+        coverage=coverage,
+    ))
+
+    assert result["called"] is False
+    assert result["protected_pairs_skipped"] == [{
+        "factor_index": 0,
+        "candidate_index": 0,
+    }]
+    assert coverage["decision_factors"][0]["supported_candidate_indexes"] == []
     assert coverage["decision_factors"][0]["unverified_candidate_indexes"] == [0]
 
 
@@ -6111,7 +7162,7 @@ def test_preferred_factual_completeness_can_recover_direct_same_sku_rag(monkeypa
     assert coverage["decision_factors"][0]["unverified_candidate_indexes"] == []
 
 
-def test_rag_evidence_completion_stays_inside_existing_ranked_scope(monkeypatch):
+def test_rag_evidence_completion_scans_recalled_rag_scope(monkeypatch):
     captured = {}
 
     async def fake_chat_completion(*_args, **kwargs):
@@ -6160,10 +7211,593 @@ def test_rag_evidence_completion_stays_inside_existing_ranked_scope(monkeypatch)
         coverage=coverage,
     ))
 
-    assert [pair["candidate_index"] for pair in captured["pairs"]] == [1]
+    assert [pair["candidate_index"] for pair in captured["pairs"]] == [1, 0]
     assert completion["promoted_candidate_indexes"] == [1]
     assert coverage["decision_factors"][0]["supported_candidate_indexes"] == [1]
     assert coverage["decision_factors"][0]["unverified_candidate_indexes"] == [0]
+
+
+def test_rag_evidence_completion_reaches_late_recalled_candidate(monkeypatch):
+    captured = {}
+
+    async def fake_chat_completion(*_args, **kwargs):
+        captured.update(json.loads(kwargs["messages"][1]["content"]))
+        return json.dumps({
+            "selections": [{
+                "factor_index": 0,
+                "candidate_index": 12,
+                "decision": "supported",
+                "evidence_fields": ["rag.qa.12.0"],
+            }],
+        })
+
+    monkeypatch.setattr(service.customer_llm_service, "chat_completion", fake_chat_completion)
+    coverage = {
+        "ranked_candidate_indexes": [0],
+        "decision_factors": [{
+            "factor": "documented named operation",
+            "dimension": "documented_evidence",
+            "factor_type": "factual",
+            "decision_kind": "concrete_capability",
+            "importance": "required",
+            "supported_candidate_indexes": [],
+            "bounded_candidate_indexes": [],
+            "partial_candidate_indexes": [],
+            "unverified_candidate_indexes": list(range(13)),
+            "evidence_usage": [],
+        }],
+    }
+    candidates = [
+        {
+            "candidate_index": index,
+            "product_name": f"Candidate {index}",
+            "sealed_evidence": {f"rag.qa.{index}.0": "same-SKU evidence"},
+        }
+        for index in range(13)
+    ]
+    candidates[12]["sealed_evidence"]["rag.qa.12.0"] = (
+        "same-SKU QA explicitly states the requested operation"
+    )
+
+    completion = asyncio.run(service._semantic_recommendation_rag_evidence_completion(
+        SimpleNamespace(),
+        question="Recommend a product with the documented named operation.",
+        candidates=candidates,
+        coverage=coverage,
+    ))
+
+    assert 12 in [pair["candidate_index"] for pair in captured["pairs"]]
+    assert completion["promoted_candidate_indexes"] == [12]
+    assert coverage["decision_factors"][0]["supported_candidate_indexes"] == [12]
+
+
+def test_semantic_entailment_closure_blocks_later_rag_repromotion(monkeypatch):
+    calls = []
+
+    async def fake_chat_completion(*_args, **kwargs):
+        calls.append(kwargs["purpose"])
+        if kwargs["purpose"] == "semantic_recommendation_subjective_factor_entailment":
+            return json.dumps({
+                "verdicts": [{
+                    "factor_index": 0,
+                    "candidate_index": 0,
+                    "entailed": False,
+                }],
+            })
+        raise AssertionError("a semantically closed pair must not be re-promoted")
+
+    monkeypatch.setattr(service.customer_llm_service, "chat_completion", fake_chat_completion)
+    coverage = {
+        "ranked_candidate_indexes": [0],
+        "decision_factors": [{
+            "factor": "documented named operation",
+            "dimension": "documented_evidence",
+            "factor_type": "factual",
+            "decision_kind": "concrete_capability",
+            "importance": "required",
+            "supported_candidate_indexes": [0],
+            "bounded_candidate_indexes": [],
+            "partial_candidate_indexes": [],
+            "unverified_candidate_indexes": [],
+            "evidence_usage": [{
+                "candidate_index": 0,
+                "evidence": [{
+                    "field": "rag.qa.0.0",
+                    "excerpt": "nearby but insufficient evidence",
+                }],
+            }],
+        }],
+    }
+    candidates = [{
+        "candidate_index": 0,
+        "product_name": "Candidate",
+        "sealed_evidence": {
+            "rag.qa.0.0": "nearby but insufficient evidence",
+        },
+    }]
+
+    audit = asyncio.run(service._semantic_recommendation_subjective_factor_entailment_audit(
+        SimpleNamespace(),
+        question="Recommend a product with the documented named operation.",
+        candidates=candidates,
+        coverage=coverage,
+        candidate_indexes=[0],
+    ))
+    completion = asyncio.run(service._semantic_recommendation_rag_evidence_completion(
+        SimpleNamespace(),
+        question="Recommend a product with the documented named operation.",
+        candidates=candidates,
+        coverage=coverage,
+    ))
+
+    assert audit["downgraded_pairs"] == [{"factor_index": 0, "candidate_index": 0}]
+    assert coverage["semantic_evidence_closed_pairs"] == [{
+        "factor_index": 0,
+        "candidate_index": 0,
+    }]
+    assert completion["called"] is False
+    assert completion["protected_pairs_skipped"] == [{
+        "factor_index": 0,
+        "candidate_index": 0,
+    }]
+    assert calls == ["semantic_recommendation_subjective_factor_entailment"]
+
+
+def test_semantic_entailment_audit_records_same_sku_pairs_for_recovery_reuse(monkeypatch):
+    async def fake_chat_completion(*_args, **kwargs):
+        payload = json.loads(kwargs["messages"][1]["content"])
+        return json.dumps({
+            "verdicts": [
+                {
+                    "factor_index": pair["factor_index"],
+                    "candidate_index": pair["candidate_index"],
+                    "entailed": True,
+                }
+                for pair in payload["pairs"]
+            ]
+        }, ensure_ascii=False)
+
+    monkeypatch.setattr(
+        service.customer_llm_service,
+        "chat_completion",
+        fake_chat_completion,
+    )
+    coverage = {
+        "decision_factors": [{
+            "factor": "documented named operation",
+            "factor_type": "factual",
+            "decision_kind": "concrete_capability",
+            "importance": "required",
+            "supported_candidate_indexes": [0, 1],
+            "bounded_candidate_indexes": [],
+            "partial_candidate_indexes": [],
+            "unverified_candidate_indexes": [],
+            "evidence_usage": [
+                {
+                    "candidate_index": 0,
+                    "evidence": [{
+                        "field": "rag.content.0.0",
+                        "excerpt": "candidate 0 directly states the operation",
+                    }],
+                },
+                {
+                    "candidate_index": 1,
+                    "evidence": [{
+                        "field": "rag.content.1.0",
+                        "excerpt": "candidate 1 directly states the operation",
+                    }],
+                },
+            ],
+        }],
+    }
+    candidates = [
+        {
+            "candidate_index": 0,
+            "product_name": "Candidate 0",
+            "sealed_evidence": {
+                "rag.content.0.0": "candidate 0 directly states the operation",
+            },
+        },
+        {
+            "candidate_index": 1,
+            "product_name": "Candidate 1",
+            "sealed_evidence": {
+                "rag.content.1.0": "candidate 1 directly states the operation",
+            },
+        },
+    ]
+
+    result = asyncio.run(service._semantic_recommendation_subjective_factor_entailment_audit(
+        SimpleNamespace(),
+        question="Recommend a product with the documented named operation.",
+        candidates=candidates,
+        coverage=coverage,
+        candidate_indexes=[0, 1],
+    ))
+
+    assert result["status"] == "approved"
+    assert coverage["semantic_entailment_audited_pairs"] == [
+        {"factor_index": 0, "candidate_index": 0},
+        {"factor_index": 0, "candidate_index": 1},
+    ]
+    assert service._semantic_recommendation_entailment_audited_candidate_indexes(
+        coverage
+    ) == {0, 1}
+
+
+def test_post_audit_recovery_reuses_surviving_semantic_candidate_without_reaudit(monkeypatch):
+    subjective_calls = []
+    writer_calls = []
+    factor_audit_calls = []
+
+    async def fake_rag_completion(*_args, **_kwargs):
+        return {
+            "called": False,
+            "status": "not_needed",
+            "promoted_candidate_indexes": [],
+        }
+
+    async def fake_subjective_audit(*_args, **kwargs):
+        candidate_indexes = list(kwargs.get("candidate_indexes") or [])
+        subjective_calls.append(candidate_indexes)
+        coverage = kwargs["coverage"]
+        if candidate_indexes == [0, 1]:
+            coverage["semantic_entailment_audited_pairs"] = [
+                {"factor_index": 0, "candidate_index": 0},
+                {"factor_index": 0, "candidate_index": 1},
+            ]
+            return {
+                "called": True,
+                "status": "approved",
+                "downgraded_pairs": [],
+            }
+        # The late revalidation of candidate 0 confirms that its evidence
+        # failure remains real. Candidate 1 must remain covered by the
+        # initial same-packet semantic judgement.
+        assert candidate_indexes == [0]
+        factor = coverage["decision_factors"][0]
+        factor["supported_candidate_indexes"] = [1]
+        factor["unverified_candidate_indexes"] = [0]
+        coverage["request_supported_candidate_indexes"] = [1]
+        coverage["ranked_candidate_indexes"] = [1]
+        coverage["request_fit"] = [
+            {"candidate_index": 0, "status": "unverified"},
+            {"candidate_index": 1, "status": "supported"},
+        ]
+        return {
+            "called": True,
+            "status": "downgraded",
+            "downgraded_pairs": [{"factor_index": 0, "candidate_index": 0}],
+        }
+
+    async def fake_factor_audit(*_args, **kwargs):
+        selected = list(kwargs.get("selected_candidate_indexes") or [])
+        factor_audit_calls.append(selected)
+        if selected == [0, 1]:
+            return {
+                "called": True,
+                "status": "rejected",
+                "violations": [{
+                    "factor_index": 0,
+                    "candidate_index": 0,
+                    "offending_excerpt": "candidate 0 is not directly supported",
+                    "impact": "evidence",
+                }],
+            }
+        assert selected == [1]
+        return {
+            "called": True,
+            "status": "approved",
+            "violations": [],
+            "consolidated_semantic_audit": True,
+            "strict_entailment_checked": True,
+            "strict_entailment_grounded": True,
+            "strict_entailment_offending_claim": "",
+            "strict_entailment_reason": "",
+        }
+
+    async def fake_chat_completion(*_args, **kwargs):
+        purpose = kwargs["purpose"]
+        writer_calls.append(purpose)
+        if purpose == "semantic_recommendation_narrative":
+            return json.dumps({
+                "ranked_candidate_indexes": [0, 1],
+                "evidence_usage": [
+                    {"candidate_index": 0, "fields": ["content.usage_scenarios"]},
+                    {"candidate_index": 1, "fields": ["content.usage_scenarios"]},
+                ],
+                "answer": (
+                    "推荐 Candidate 0（SKU-0）和 Candidate 1（SKU-1），"
+                    "资料记录了两款产品的户外烹饪场景。"
+                ),
+            }, ensure_ascii=False)
+        assert purpose == "semantic_recommendation_natural_recovery"
+        return json.dumps({
+            "answer": "推荐 Candidate 1（SKU-1），资料记录了该商品的户外烹饪场景。",
+        }, ensure_ascii=False)
+
+    async def fake_factor_contract(*_args, **_kwargs):
+        return []
+
+    async def fake_coverage(*_args, **_kwargs):
+        return {
+            "decision_factors": [{
+                "factor": "documented named operation",
+                "factor_type": "factual",
+                "decision_kind": "concrete_capability",
+                "importance": "required",
+                "supported_candidate_indexes": [0, 1],
+                "bounded_candidate_indexes": [],
+                "partial_candidate_indexes": [],
+                "unverified_candidate_indexes": [],
+                "evidence_usage": [
+                    {
+                        "candidate_index": 0,
+                        "evidence": [{
+                            "field": "content.usage_scenarios",
+                            "excerpt": "outdoor cooking",
+                        }],
+                    },
+                    {
+                        "candidate_index": 1,
+                        "evidence": [{
+                            "field": "content.usage_scenarios",
+                            "excerpt": "outdoor cooking",
+                        }],
+                    },
+                ],
+            }],
+            "ordinarily_usable_candidate_indexes": [0, 1],
+            "request_supported_candidate_indexes": [0, 1],
+            "request_partial_candidate_indexes": [],
+            "supported_candidate_indexes": [0, 1],
+            "partial_candidate_indexes": [],
+            "request_fit": [
+                {"candidate_index": 0, "status": "supported"},
+                {"candidate_index": 1, "status": "supported"},
+            ],
+            "ranked_candidate_indexes": [0, 1],
+        }
+
+    monkeypatch.setattr(service.customer_llm_service, "chat_completion", fake_chat_completion)
+    monkeypatch.setattr(service, "_semantic_recommendation_decision_factor_contract", fake_factor_contract)
+    monkeypatch.setattr(service, "_semantic_recommendation_requirement_coverage", fake_coverage)
+    monkeypatch.setattr(service, "_semantic_recommendation_rag_evidence_completion", fake_rag_completion)
+    monkeypatch.setattr(service, "_semantic_recommendation_subjective_factor_entailment_audit", fake_subjective_audit)
+    monkeypatch.setattr(service, "_semantic_recommendation_answer_factor_consistency_audit", fake_factor_audit)
+
+    diagnostics = []
+    result = asyncio.run(service._semantic_recommendation_narrative(
+        SimpleNamespace(),
+        question="Recommend a product with the documented named operation.",
+        rows=[
+            {
+                "sku": "SKU-0",
+                "product_name_cn": "Candidate 0",
+                "category": "cookware",
+                "usage_scenarios": "outdoor cooking",
+            },
+            {
+                "sku": "SKU-1",
+                "product_name_cn": "Candidate 1",
+                "category": "cookware",
+                "usage_scenarios": "outdoor cooking",
+            },
+        ],
+        verifications=[
+            SimpleNamespace(
+                sku="SKU-0",
+                evidence_by_constraint={},
+                unsupported_constraints=[],
+                unsupported_preferences=[],
+            ),
+            SimpleNamespace(
+                sku="SKU-1",
+                evidence_by_constraint={},
+                unsupported_constraints=[],
+                unsupported_preferences=[],
+            ),
+        ],
+        diagnostics=diagnostics,
+    ))
+
+    assert result is not None
+    assert result["ranked_candidate_indexes"] == [1]
+    assert writer_calls == [
+        "semantic_recommendation_narrative",
+        "semantic_recommendation_natural_recovery",
+    ]
+    assert factor_audit_calls == [[0, 1], [1]]
+    # Candidate 1 was already judged in the initial same-packet entailment
+    # call. A third [1] call would reopen the valid RAG verdict.
+    assert subjective_calls == [[0, 1], [0]]
+    recovery_audit = next(
+        item
+        for item in diagnostics
+        if item.get("stage") == "semantic_post_audit_recovery_entailment"
+    )
+    assert recovery_audit["status"] == "reused_prior_semantic_entailment"
+    assert recovery_audit["audited_candidate_indexes_reused"] == [1]
+    assert recovery_audit["pending_candidate_indexes"] == []
+
+
+def test_post_audit_recovery_continues_through_multiple_closed_rag_candidates(monkeypatch):
+    selection_calls = []
+    writer_calls = []
+    factor_audit_calls = []
+    subjective_calls = []
+
+    async def fake_rag_completion(*_args, **_kwargs):
+        return {
+            "called": False,
+            "status": "not_needed",
+            "promoted_candidate_indexes": [],
+        }
+
+    async def fake_subjective_audit(*_args, **kwargs):
+        candidate_indexes = list(kwargs.get("candidate_indexes") or [])
+        subjective_calls.append(candidate_indexes)
+        coverage = kwargs["coverage"]
+        if candidate_indexes == [0, 1, 2]:
+            coverage["semantic_entailment_audited_pairs"] = [
+                {"factor_index": 0, "candidate_index": index}
+                for index in candidate_indexes
+            ]
+        return {
+            "called": True,
+            "status": "approved",
+            "downgraded_pairs": [],
+        }
+
+    async def fake_candidate_selection(*_args, **kwargs):
+        eligible = list(kwargs.get("eligible_candidate_indexes") or [])
+        selection_calls.append(eligible)
+        return {
+            "ranked_candidate_indexes": eligible[:1],
+            "selection_only": True,
+        }
+
+    async def fake_factor_audit(*_args, **kwargs):
+        selected = list(kwargs.get("selected_candidate_indexes") or [])
+        factor_audit_calls.append(selected)
+        if selected in ([0], [1]):
+            return {
+                "called": True,
+                "status": "rejected",
+                "violations": [{
+                    "factor_index": 0,
+                    "candidate_index": selected[0],
+                    "offending_excerpt": "candidate evidence does not establish the operation",
+                    "impact": "evidence",
+                }],
+            }
+        assert selected == [2]
+        return {
+            "called": True,
+            "status": "approved",
+            "violations": [],
+            "consolidated_semantic_audit": True,
+            "strict_entailment_checked": True,
+            "strict_entailment_grounded": True,
+            "strict_entailment_offending_claim": "",
+            "strict_entailment_reason": "",
+        }
+
+    async def fake_chat_completion(*_args, **kwargs):
+        purpose = kwargs["purpose"]
+        writer_calls.append(purpose)
+        if purpose == "semantic_recommendation_narrative":
+            return json.dumps({
+                "ranked_candidate_indexes": [0],
+                "evidence_usage": [{
+                    "candidate_index": 0,
+                    "fields": ["content.features"],
+                }],
+                "answer": "推荐 Candidate 0，资料记录了该商品的相关操作。",
+            }, ensure_ascii=False)
+        assert purpose == "semantic_recommendation_natural_recovery"
+        payload = json.loads(kwargs["messages"][1]["content"])
+        selected = payload["selected_same_sku_products"][0]
+        return json.dumps({
+            "answer": (
+                f"推荐 {selected.get('product_name')}，"
+                "资料记录了该商品的相关操作。"
+            ),
+        }, ensure_ascii=False)
+
+    async def fake_factor_contract(*_args, **_kwargs):
+        return []
+
+    async def fake_coverage(*_args, **_kwargs):
+        evidence_usage = [
+            {
+                "candidate_index": index,
+                "evidence": [{
+                    "field": "content.features",
+                    "excerpt": f"candidate {index} directly records the operation",
+                }],
+            }
+            for index in range(3)
+        ]
+        return {
+            "decision_factors": [{
+                "factor": "documented named operation",
+                "customer_basis": "the customer requires the operation",
+                "factor_type": "factual",
+                "decision_kind": "concrete_capability",
+                "importance": "required",
+                "supported_candidate_indexes": [0, 1, 2],
+                "bounded_candidate_indexes": [],
+                "partial_candidate_indexes": [],
+                "unverified_candidate_indexes": [],
+                "evidence_usage": evidence_usage,
+            }],
+            "ordinarily_usable_candidate_indexes": [0, 1, 2],
+            "request_supported_candidate_indexes": [0, 1, 2],
+            "request_partial_candidate_indexes": [],
+            "supported_candidate_indexes": [0, 1, 2],
+            "partial_candidate_indexes": [],
+            "request_fit": [
+                {"candidate_index": index, "status": "supported"}
+                for index in range(3)
+            ],
+            "ranked_candidate_indexes": [0, 1, 2],
+        }
+
+    monkeypatch.setattr(service.customer_llm_service, "chat_completion", fake_chat_completion)
+    monkeypatch.setattr(service, "_semantic_recommendation_decision_factor_contract", fake_factor_contract)
+    monkeypatch.setattr(service, "_semantic_recommendation_requirement_coverage", fake_coverage)
+    monkeypatch.setattr(service, "_semantic_recommendation_rag_evidence_completion", fake_rag_completion)
+    monkeypatch.setattr(service, "_semantic_recommendation_subjective_factor_entailment_audit", fake_subjective_audit)
+    monkeypatch.setattr(service, "_semantic_recommendation_candidate_selection", fake_candidate_selection)
+    monkeypatch.setattr(service, "_semantic_recommendation_answer_factor_consistency_audit", fake_factor_audit)
+
+    diagnostics = []
+    result = asyncio.run(service._semantic_recommendation_narrative(
+        SimpleNamespace(),
+        question="Recommend one product with the documented operation.",
+        rows=[
+            {
+                "sku": f"SKU-{index}",
+                "product_name_cn": f"Candidate {index}",
+                "category": "cookware",
+                "features": f"candidate {index} directly records the operation",
+            }
+            for index in range(3)
+        ],
+        verifications=[
+            SimpleNamespace(
+                sku=f"SKU-{index}",
+                evidence_by_constraint={},
+                unsupported_constraints=[],
+                unsupported_preferences=[],
+            )
+            for index in range(3)
+        ],
+        single_recommendation_requested=True,
+        diagnostics=diagnostics,
+    ))
+
+    assert result is not None
+    assert result["ranked_candidate_indexes"] == [2]
+    assert writer_calls == [
+        "semantic_recommendation_narrative",
+        "semantic_recommendation_natural_recovery",
+        "semantic_recommendation_natural_recovery",
+    ]
+    assert factor_audit_calls == [[0], [1], [2]]
+    assert selection_calls == [[1, 2], [2]]
+    assert subjective_calls == [[0, 1, 2], [0], [1], [2]]
+    recovery_attempts = [
+        item
+        for item in diagnostics
+        if item.get("stage") == "semantic_candidate_selection_post_audit_recovery"
+        and item.get("status") == "trying"
+    ]
+    assert [item["replacement_candidate_indexes"] for item in recovery_attempts] == [
+        [1],
+        [2],
+    ]
 
 
 def test_required_factor_intersection_keeps_candidate_when_preference_is_missing():
@@ -7137,7 +8771,137 @@ def test_recommendation_final_audits_receive_writer_outcome_boundaries(monkeypat
     assert "single_cookware establishes only the pot" in captured["writer_system"]
     assert "specific recipe, dish, or operation" in captured["writer_system"]
     assert "general supported/bounded ordinary-use allowance" in captured["writer_system"]
+    assert "The recovery packet is a focused projection" in captured["writer_system"]
+    assert "An omitted field or property is not evidence" in captured["writer_system"]
+    assert "never write '你提到/您提到'" in captured["writer_system"]
     assert "目录价位定位为入门款" not in captured["writer_system"]
+
+
+def test_conditionable_scenario_marker_enters_boundary_first_when_coverage_is_supported(
+    monkeypatch,
+):
+    calls = []
+    captured = {}
+
+    async def fake_chat_completion(_db, messages, **kwargs):
+        calls.append(kwargs["purpose"])
+        if kwargs["purpose"] == "semantic_recommendation_natural_recovery":
+            payload = json.loads(messages[1]["content"])
+            captured["payload"] = payload
+            return json.dumps({
+                "answer": (
+                    "可以先看测试锅，资料记录容量为1.4L、重量为300g；"
+                    "两个人煮面是否合适仍需结合实际需求判断。"
+                ),
+            }, ensure_ascii=False)
+        return json.dumps({
+            "ranked_candidate_indexes": [0],
+            "evidence_usage": [{"candidate_index": 0, "fields": ["specs.capacity"]}],
+            "answer": "推荐测试锅，资料记录容量为1.4L。",
+        }, ensure_ascii=False)
+
+    async def fake_factor_contract(*_args, **_kwargs):
+        return []
+
+    async def fake_coverage(*_args, **_kwargs):
+        return {
+            "decision_factors": [{
+                "factor": "两个人煮面场景",
+                "factor_type": "practical_fit",
+                "decision_kind": "scenario_fit",
+                "dimension": "",
+                "importance": "required",
+                "selection_role": "operative_purpose",
+                "conditional_recommendation_allowed": True,
+                # This is the transient semantic conflict under test: the
+                # marker keeps the final purpose conditional even though the
+                # broad coverage response says supported.
+                "supported_candidate_indexes": [0],
+                "bounded_candidate_indexes": [],
+                "partial_candidate_indexes": [],
+                "unverified_candidate_indexes": [],
+                "evidence_usage": [{
+                    "candidate_index": 0,
+                    "evidence": [
+                        {"field": "specs.capacity", "excerpt": "1.4L"},
+                        {"field": "content.usage_scenarios", "excerpt": "户外烹饪"},
+                    ],
+                }],
+            }],
+            "ordinarily_usable_candidate_indexes": [0],
+            "request_supported_candidate_indexes": [0],
+            "request_partial_candidate_indexes": [],
+            "request_unverified_candidate_indexes": [],
+            "supported_candidate_indexes": [0],
+            "partial_candidate_indexes": [],
+            "usable_candidate_indexes": [0],
+            "ranked_candidate_indexes": [0],
+        }
+
+    async def fake_rag_completion(*_args, **_kwargs):
+        return {
+            "called": False,
+            "status": "not_needed",
+            "promoted_candidate_indexes": [],
+        }
+
+    async def fake_subjective_audit(*_args, **_kwargs):
+        return {
+            "called": False,
+            "status": "not_needed",
+            "downgraded_pairs": [],
+        }
+
+    async def fake_factor_audit(*_args, **_kwargs):
+        return {
+            "called": True,
+            "status": "approved",
+            "violations": [],
+            "consolidated_semantic_audit": True,
+            "strict_entailment_checked": True,
+            "strict_entailment_grounded": True,
+            "strict_entailment_offending_claim": "",
+            "strict_entailment_reason": "",
+        }
+
+    monkeypatch.setattr(service.customer_llm_service, "chat_completion", fake_chat_completion)
+    monkeypatch.setattr(service, "_semantic_recommendation_decision_factor_contract", fake_factor_contract)
+    monkeypatch.setattr(service, "_semantic_recommendation_requirement_coverage", fake_coverage)
+    monkeypatch.setattr(service, "_semantic_recommendation_rag_evidence_completion", fake_rag_completion)
+    monkeypatch.setattr(service, "_semantic_recommendation_subjective_factor_entailment_audit", fake_subjective_audit)
+    monkeypatch.setattr(service, "_semantic_recommendation_answer_factor_consistency_audit", fake_factor_audit)
+
+    result = asyncio.run(service._semantic_recommendation_narrative(
+        SimpleNamespace(),
+        question="两个人露营想煮面，推荐一口锅。",
+        rows=[{
+            "sku": "POT-1",
+            "product_name_cn": "测试锅",
+            "category": "锅具",
+            "capacity": "1.4L",
+            "gross_weight_g": 300,
+            "usage_scenarios": "户外烹饪",
+        }],
+        verifications=[SimpleNamespace(
+            sku="POT-1",
+            evidence_by_constraint={},
+            unsupported_constraints=[],
+            unsupported_preferences=[],
+        )],
+        single_recommendation_requested=True,
+        requested_catalogue_subject="锅具",
+        diagnostics=captured.setdefault("diagnostics", []),
+    ))
+
+    assert result is not None
+    assert calls == ["semantic_recommendation_natural_recovery"]
+    assert captured["payload"]["selected_same_sku_products"][0][
+        "conditional_recommendation_factors"
+    ] == ["两个人煮面场景"]
+    assert any(
+        item.get("status") == "boundary_first_packet"
+        for item in captured["diagnostics"]
+    )
 
 
 def test_supplemental_boundary_uses_customer_question_not_retrieval_hint():
@@ -8010,6 +9774,34 @@ def test_fresh_recommendation_context_keeps_semantic_boundaries_without_old_skus
     prompt_text = service._recommendation_context_prompt_text(fresh)
     assert "storage ease" in prompt_text
     assert "不是本轮硬筛选条件" in prompt_text
+
+
+def test_recommendation_context_can_keep_scope_without_stale_prior_semantics():
+    context = {
+        "recommended_skus": ["CW-C78"],
+        "product_scope": "锅具",
+        "user_question": "朋友刚开始露营，我想送一件实用又好收纳的礼物。",
+        "semantic_recommendation_requirements": ["送礼"],
+        "semantic_recommendation_preferences": ["好收纳"],
+        "semantic_recommendation_factor_context": [{
+            "factor": "gift suitability",
+            "factor_type": "practical_fit",
+            "dimension": "gift",
+            "decision_kind": "subjective_outcome",
+            "importance": "preferred",
+            "status": "unverified",
+        }],
+    }
+
+    prompt_text = service._recommendation_context_prompt_text(
+        context,
+        include_prior_semantics=False,
+    )
+
+    assert "锅具" in prompt_text
+    assert "送礼" not in prompt_text
+    assert "好收纳" not in prompt_text
+    assert "gift suitability" not in prompt_text
 
 
 def test_sources_persist_boundary_first_factor_context_for_followup():

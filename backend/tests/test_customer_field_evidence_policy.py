@@ -1196,6 +1196,20 @@ def test_strict_same_sku_entailment_allows_a_safe_compound_evidence_gap():
     assert "not a negative product fact" in messages[0]["content"]
 
 
+def test_strict_same_sku_entailment_preserves_record_absence_as_uncertainty():
+    """A missing catalogue label must not become a categorical product negative."""
+    messages = customer_service_service._same_sku_knowledge_strict_entailment_messages(
+        "这个套锅有没有不粘涂层？",
+        "没有不粘涂层，资料只标注硬质氧化。",
+        "资料只标注材质为硬质氧化铝合金、表面工艺为硬质氧化，未标注不粘涂层。",
+    )
+
+    system = messages[0]["content"]
+    assert "record-absence boundary" in system.lower()
+    assert "categorical negative" in system.lower()
+    assert "未标注" in system
+
+
 def test_same_sku_coverage_treats_a_named_compound_evidence_gap_as_complete():
     """Coverage must keep a verified part instead of demanding an invented second fact."""
     messages = customer_service_service._same_sku_knowledge_coverage_messages(
@@ -1784,8 +1798,8 @@ def test_same_sku_rag_repairs_conflicting_capacity_without_repeating_secondary_n
     assert result["answer_metadata"]["evidence_status"] == "matched"
 
 
-def test_same_sku_rag_marketing_claim_is_downgraded_to_safe_missing(monkeypatch):
-    """A grounded same-SKU chunk cannot authorize unsupported gifting claims."""
+def test_same_sku_rag_marketing_claim_is_repaired_by_semantic_boundary(monkeypatch):
+    """A marketing-heavy draft is rejected by semantic grounding and repaired in-place."""
     sku = "RAG-GIFT-100"
     safe_missing = {
         "sku": sku,
@@ -1818,13 +1832,21 @@ def test_same_sku_rag_marketing_claim_is_downgraded_to_safe_missing(monkeypatch)
     async def fake_completion(_db, *, messages, **kwargs):
         if kwargs.get("purpose") == "semantic_product_knowledge_evidence_selection":
             return '{"indexes":[0],"confidence":"high","identity_consistent":true}'
+        if kwargs.get("purpose") == "sealed_same_sku_knowledge_answer_repair":
+            return json.dumps({
+                "answer": "产品问答记录中将它描述为可作为礼物参考；是否适合具体收礼人，仍需结合实际喜好判断。",
+                "evidence_quotes": [],
+            }, ensure_ascii=False)
         return json.dumps({
             "answer": "品质出众、包装精美，非常适合作为礼物。",
             "evidence_quotes": ["包装精美、品质出众，是送给户外露营爱好者的绝佳礼物"],
         }, ensure_ascii=False)
 
-    async def grounded(*_args, **_kwargs):
-        return True
+    grounding_answers = []
+
+    async def grounded(_db, _question, answer, _payload, _evidence, **_kwargs):
+        grounding_answers.append(answer)
+        return len(grounding_answers) > 1
 
     async def covered(*_args, **_kwargs):
         return True
@@ -1846,14 +1868,12 @@ def test_same_sku_rag_marketing_claim_is_downgraded_to_safe_missing(monkeypatch)
     )
 
     assert result is not None
+    assert "品质出众、包装精美" in grounding_answers[0]
+    assert result["answer"] == "产品问答记录中将它描述为可作为礼物参考；是否适合具体收礼人，仍需结合实际喜好判断。"
     assert "品质出众" not in result["answer"]
     assert "包装精美" not in result["answer"]
-    assert "适合作为礼物" not in result["answer"]
-    assert result["evidence"] == []
-    assert result["sources"] == []
-    assert result["answer_metadata"]["evidence_status"] == "missing"
-    assert result["answer_metadata"]["field_evidence_missing"] is True
-    assert result["debug"]["agent_mode"] == "sealed_product_qa_safe_missing"
+    assert result["answer_metadata"]["evidence_status"] == "matched"
+    assert result["debug"]["agent_mode"] == "sealed_same_sku_knowledge_rag"
     assert result["skip_polish"] is True
 
 

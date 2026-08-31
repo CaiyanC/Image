@@ -63,6 +63,45 @@ def test_semantic_preplan_normalizes_scalar_people_transport_shape():
     }
 
 
+def test_semantic_preplan_normalizes_flash_boolean_strings_without_truthiness():
+    provider_shape = {
+        "route_family": "recommendation",
+        "route_hint": "recommendation",
+        "question_type": "recommendation",
+        "entities": [],
+        "subject_text": "锅具",
+        "entity_scope": "category_scope",
+        "canonical_fields": [],
+        "confidence": "high",
+        "ambiguity": "low",
+        "evidence_required": "false",
+        "evidence_kind": "structured_field",
+        "compound": "false",
+        "decision_requested": "true",
+        "unsafe_or_fabricated_answer_requested": "false",
+        "qa_or_usage_care": "none",
+        "unknown_field": "false",
+        "recommendation_constraints": {"subject_kind": "cookware"},
+        "predicate_constraints": [],
+        "recommendation_evidence_requirements": [],
+        "recommendation_soft_preferences": [],
+    }
+
+    result = customer_agent_planner_service._validate_semantic_preplan(
+        provider_shape,
+        raw_content=json.dumps(provider_shape, ensure_ascii=False),
+    )
+
+    assert result["fallback_reason"] == ""
+    assert result["ambiguity"] is False
+    assert result["evidence_required"] is False
+    assert result["compound"] is False
+    assert result["decision_requested"] is True
+    assert result["unsafe_or_fabricated_answer_requested"] is False
+    assert result["qa_or_usage_care"] is False
+    assert result["unknown_field"] is False
+
+
 def test_semantic_predicate_keeps_headcount_and_volume_units_distinct():
     malformed = customer_agent_planner_service._validated_structured_query_constraints(
         [{
@@ -127,6 +166,71 @@ def test_semantic_preplan_lifts_malformed_storage_enum_to_soft_context():
         "\u5b9e\u7528",
         "easy_to_store",
     ]
+
+
+def test_semantic_constraint_subset_preserves_dependent_product_form_scope():
+    # A malformed unrelated enum must not erase a valid form that Flash
+    # already expressed as subject_kind + subject_subtype. The pair is
+    # semantic scope for later RAG adjudication, not a local keyword route.
+    subset = customer_agent_planner_service._validated_recommendation_constraint_subset({
+        "subject_kind": "waterware",
+        "subject_subtype": "cup",
+        "scenarios": ["outdoor"],
+        "storage_preference": "compact_storage",
+    })
+
+    assert subset == {
+        "subject_kind": "waterware",
+        "subject_subtype": "cup",
+        "storage_preference": "compact_storage",
+    }
+
+
+def test_semantic_constraint_grounding_keeps_scope_when_flash_omits_unchanged_form(
+    monkeypatch,
+):
+    async def fake_chat_completion(*_args, **kwargs):
+        assert kwargs["purpose"] == "semantic_recommendation_constraint_grounding"
+        return json.dumps({
+            "recommendation_constraints": {
+                "storage_preference": "compact_storage",
+            },
+            "predicate_constraints": [],
+            "evidence_spans": {
+                "storage_preference": ["不占地方"],
+            },
+            "context_partition": {
+                "evidence": [],
+                "soft": [],
+                "unrepresented": [],
+            },
+        })
+
+    monkeypatch.setattr(
+        customer_agent_planner_service.customer_llm_service,
+        "chat_completion",
+        fake_chat_completion,
+    )
+
+    grounded = asyncio.run(
+        customer_agent_planner_service._semantic_recommendation_constraint_grounding(
+            None,
+            question="我想找一个放包里不占地方的户外小杯子，推荐一下。",
+            recommendation_constraints={
+                "subject_kind": "waterware",
+                "subject_subtype": "cup",
+                "storage_preference": "compact_storage",
+            },
+            predicate_constraints=[],
+        )
+    )
+
+    assert grounded is not None
+    assert grounded["recommendation_constraints"] == {
+        "subject_kind": "waterware",
+        "subject_subtype": "cup",
+        "storage_preference": "compact_storage",
+    }
 
 
 def test_semantic_preplan_normalizes_catalogue_category_scope_transport():
@@ -518,6 +622,49 @@ def test_bare_category_context_clears_copied_current_turn_requirements(monkeypat
     assert normalized["unrepresented_recommendation_requirements"] == []
 
 
+def test_ambiguous_category_clarification_enters_live_catalogue_scope(monkeypatch):
+    monkeypatch.setattr(
+        customer_service_service,
+        "_phase1_catalog_rows",
+        lambda *_args: [{"category": "锅具"}],
+    )
+    monkeypatch.setattr(
+        customer_service_service,
+        "_database_category_scope_ref",
+        lambda _rows, _subject: "锅具",
+    )
+
+    normalized = customer_service_service._normalize_semantic_catalogue_continuation(
+        object(),
+        {
+            "called": True,
+            "route_family": "clarification",
+            "route_hint": "clarification",
+            "question_type": "clarification",
+            "subject_text": "锅具",
+            "entity_scope": "category_scope",
+            "entities": ["锅具"],
+            "canonical_fields": [],
+            "predicate_constraints": [],
+            "recommendation_constraints": {},
+            "recommendation_evidence_requirements": [],
+            "recommendation_soft_preferences": [],
+            "unrepresented_recommendation_requirements": [],
+            "decision_requested": False,
+            "ambiguity": True,
+            "confidence": 0.35,
+            "confidence_label": "low",
+        },
+        {"recommended_skus": ["CW-OLD-1"], "product_scope": "锅具"},
+        question="锅具",
+    )
+
+    assert normalized["route_family"] == "recommendation"
+    assert normalized["catalogue_category_ref"] == "锅具"
+    assert normalized["semantic_catalogue_scope_only_continuation"] is True
+    assert customer_service_service._semantic_preplan_confident(normalized, minimum=0.65)
+
+
 def test_semantic_preplan_prompt_receives_prior_scope_as_discourse_context():
     messages = customer_agent_planner_service._semantic_preplan_messages(
         question="如果我用酒精炉呢？",
@@ -535,6 +682,21 @@ def test_semantic_preplan_prompt_receives_prior_scope_as_discourse_context():
     assert payload["prior_recommendation_scope"]["subject_kind"] == "cookware"
     assert "prior_recommendation_scope" in messages[0]["content"]
     assert "heat source" in messages[0]["content"]
+
+
+def test_semantic_preplan_prompt_separates_requested_product_from_heat_source():
+    messages = customer_agent_planner_service._semantic_preplan_messages(
+        question="有没有推荐的卡式炉？",
+        deterministic_plan={},
+        context={},
+    )
+
+    prompt = messages[0]["content"]
+    assert "subject_kind=stove" in prompt
+    assert "subject_subtype=card_stove" in prompt
+    assert "heat_sources empty" in prompt
+    assert "支持卡式炉的锅" in prompt
+    assert "heat_sources=[card_stove]" in prompt
 
 
 def test_semantic_recommendation_route_survives_failed_constraint_schema_repair(monkeypatch):
@@ -878,6 +1040,46 @@ def test_recommendation_ambiguity_diagnostic_does_not_bypass_semantic_rag():
 
     non_recommendation = dict(preplan, route_family="product_bound_qa")
     assert not customer_service_service._semantic_first_turn_is_owned(non_recommendation)
+
+
+def test_ambiguous_product_navigation_or_clarification_with_subject_is_semantic_owned():
+    for route_family, question_type in (
+        ("product_navigation", "navigation"),
+        ("clarification", "clarification"),
+    ):
+        preplan = {
+            "called": True,
+            "route_family": route_family,
+            "route_hint": route_family,
+            "question_type": question_type,
+            "subject_text": "锅具",
+            "entities": ["锅具"],
+            "canonical_fields": [],
+            "confidence": 0.9,
+            "confidence_label": "high",
+            "ambiguity": True,
+            "evidence_required": False,
+            "fallback_reason": "",
+        }
+
+        assert customer_service_service._semantic_first_turn_is_owned(preplan)
+
+    low_confidence_category = {
+        "called": True,
+        "route_family": "clarification",
+        "route_hint": "clarification",
+        "question_type": "unknown_field",
+        "subject_text": "锅具",
+        "entities": [],
+        "canonical_fields": [],
+        "confidence": 0.35,
+        "confidence_label": "low",
+        "ambiguity": True,
+        "evidence_required": False,
+        "fallback_reason": "",
+    }
+
+    assert customer_service_service._semantic_first_turn_is_owned(low_confidence_category)
 
 
 def test_comparison_ambiguity_reaches_entity_sealing_before_clarification():

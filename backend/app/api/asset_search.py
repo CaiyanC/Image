@@ -4,9 +4,17 @@ from sqlalchemy.orm import Session
 from ..core.database import get_db
 from ..core.security import require_product_permission
 from ..models.user import User
-from ..services import asset_service
+from ..services import asset_service, asset_taxonomy
 
 router = APIRouter(prefix="/api/assets", tags=["asset-search"])
+
+
+@router.get("/taxonomy")
+def get_asset_taxonomy(
+    current_user: User = Depends(require_product_permission("read")),
+):
+    del current_user
+    return asset_taxonomy.dictionary_payload()
 
 
 @router.get("/search")
@@ -16,6 +24,8 @@ def search_assets(
     channel: str | None = None,
     review_status: str | None = None,
     authorization_status: str | None = None,
+    quality_status: str | None = None,
+    duplicate_status: str | None = None,
     expression_tags: list[str] = Query(default=[]),
     selling_point_tags: list[str] = Query(default=[]),
     scene_tags: list[str] = Query(default=[]),
@@ -32,6 +42,8 @@ def search_assets(
         channel=channel,
         review_status=review_status,
         authorization_status=authorization_status,
+        quality_status=quality_status,
+        duplicate_status=duplicate_status,
         expression_tags=expression_tags,
         selling_point_tags=selling_point_tags,
         scene_tags=scene_tags,

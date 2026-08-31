@@ -17,6 +17,8 @@ class ProductAsset(Base):
             "sub_category",
             "material_type",
         ),
+        Index("idx_product_assets_checksum", "checksum_sha256"),
+        Index("idx_product_assets_quality_status", "quality_status"),
     )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True)
@@ -50,6 +52,14 @@ class ProductAsset(Base):
     checksum_sha256: Mapped[str | None] = mapped_column(String(64), nullable=True)
     width: Mapped[int | None] = mapped_column(Integer, nullable=True)
     height: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    quality_status: Mapped[str] = mapped_column(
+        String(32), nullable=False, default="usable", server_default="usable"
+    )
+    quality_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    duplicate_status: Mapped[str] = mapped_column(
+        String(32), nullable=False, default="unique", server_default="unique"
+    )
+    duplicate_of_asset_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
     resolution: Mapped[str | None] = mapped_column(String(32), nullable=True)
     aspect_ratio: Mapped[str | None] = mapped_column(String(16), nullable=True)
     asset_level: Mapped[str] = mapped_column(String(10), nullable=False, default="C")

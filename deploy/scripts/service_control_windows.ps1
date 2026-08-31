@@ -293,7 +293,10 @@ function Stop-BackendListeners {
                 $orphans = @(Get-CimInstance Win32_Process -ErrorAction SilentlyContinue | Where-Object {
                     $cmd = [string]$_.CommandLine
                     $_.ParentProcessId -eq $pidValue -and
-                    (Get-NormalizedProcessPath -Process $_) -eq $ProdPython -and
+                    (
+                        (Get-NormalizedProcessPath -Process $_) -eq $ProdPython -or
+                        $cmd -like "*$ProdPython*"
+                    ) -and
                     $cmd -like "*multiprocessing.spawn*"
                 })
                 if (-not $orphans) {

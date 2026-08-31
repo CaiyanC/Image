@@ -30,6 +30,10 @@ class ProductAssetBase(BaseModel):
     checksum_sha256: Optional[str] = None
     width: Optional[int] = None
     height: Optional[int] = None
+    quality_status: str = "usable"
+    quality_reason: Optional[str] = None
+    duplicate_status: str = "unique"
+    duplicate_of_asset_id: Optional[str] = None
     resolution: Optional[str] = None
     aspect_ratio: Optional[str] = None
     asset_level: str = "C"
@@ -82,6 +86,8 @@ class ProductAssetUpdate(BaseModel):
     checksum_sha256: Optional[str] = None
     width: Optional[int] = None
     height: Optional[int] = None
+    quality_status: Optional[str] = None
+    quality_reason: Optional[str] = None
     resolution: Optional[str] = None
     aspect_ratio: Optional[str] = None
     asset_level: Optional[str] = None
@@ -107,6 +113,8 @@ class ProductAssetUpdate(BaseModel):
 class ProductAssetResponse(ProductAssetBase):
     id: str
     sku: str
+    duplicate_status: str = "unique"
+    duplicate_of_asset_id: Optional[str] = None
     seq: int
     sort_order: int
     created_at: Optional[datetime] = None

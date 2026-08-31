@@ -105,21 +105,20 @@ Stop-Service postgresql-x64-18
 
 ### 开机/登录自启动
 
-当前通过 Windows 任务计划程序配置登录后自启动任务。自启动只管理生产环境，不自动启动开发环境。
+当前通过 Windows 任务计划程序配置登录后自启动。生产和开发环境分别由独立任务管理，使用不同端口、数据库、Redis DB 和 Celery 队列。
 
-- `CaiYanStartupRedis`：登录后启动 Docker Desktop，并确保 `caiyan-redis` 容器运行。
-- `CaiYanStartupBackend`：登录后延迟 1 分钟启动生产后端 `8000`。
-- `CaiYanStartupWorker`：登录后延迟 90 秒启动生产 Celery worker，使用 `celery_prod` / `worker_prod`。
-- `CaiYanStartupFrontend`：登录后延迟 2 分钟启动生产前端 `5275`。
-- `CaiYanHealthCheck`：定时检查生产 Redis、后端、前端和 worker；只重启生产组件。
+- `CaiYanStartupProduction`：登录后延迟 15 秒执行一个串行启动器。它先等待 Docker/Redis，再从 `production-release.json` 指向的不可变 release 依次启动生产后端 `8000`、前端 `5275` 和 `celery_prod` worker。
+- `CaiYanStartupDevelopment`：登录后延迟 20 秒执行开发启动器。它加载 `backend\.env.dev`，只启动开发后端 `8001`、前端 `5276` 和 `celery_dev` worker，并验证运行环境是 `dev`、数据库不是生产库。
+- `CaiYanHealthCheck`：定时检查生产 Redis、后端、前端和 worker；只修复生产组件。健康检查和启动器共用互斥锁，不会同时抢占端口。
+- 旧的 `CaiYanStartupRedis`、`CaiYanStartupBackend`、`CaiYanStartupWorker`、`CaiYanStartupFrontend` 会被安装脚本停用，避免四个任务并发启动和引用可变开发目录。
 
 说明：
 
-- Docker Desktop 是用户会话程序，不是普通 Windows 服务；当前方案是在当前 Windows 用户登录后自动启动 Docker/Redis。
+- Docker Desktop 是用户会话程序，不是普通 Windows 服务；因此这里准确含义是“开机并登录 Windows 后自动启动”，不能在无人登录的桌面会话中启动 Docker Desktop。
 - Redis 任务会先检查 `docker info`。如果 Docker 未就绪，会尝试启动 `Docker Desktop.exe` 并等待 Docker 可用。
 - 后端启动前会确认 Redis、PostgreSQL 可用。
 - 前端延迟启动，避免后端还未就绪时访问失败。
-- 开发环境不设置开机自启。需要开发时手动运行 `start-dev.bat`，停止时运行 `stop-dev.bat`。
+- 开发环境可通过 `CaiYanStartupDevelopment` 在登录后自动启动；需要手动启动或停止时仍使用 `start-dev.bat` / `stop-dev.bat`。
 - PM2 的 `cc-connect` 和 Docker 的 `new-api` / `LibreChat` 相关容器属于其他项目，本项目运维脚本不管理它们。
 - 端口 `8000` orphan 是单独遗留项，需要管理员 PowerShell 专项排查，不由日常自启动任务处理。
 
@@ -127,29 +126,34 @@ Stop-Service postgresql-x64-18
 
 | 组件 | 端口/队列 | 启动任务 |
 | --- | --- | --- |
-| Redis | `caiyan-redis` / `6379` | `CaiYanStartupRedis` |
-| 后端 | `8000` | `CaiYanStartupBackend` |
-| 前端 | `5275` | `CaiYanStartupFrontend` |
-| Worker | `celery_prod` / `worker_prod` | `CaiYanStartupWorker` |
+| Redis | `caiyan-redis` / `6379` | `CaiYanStartupProduction` |
+| 后端 | `8000` | `CaiYanStartupProduction` |
+| 前端 | `5275` | `CaiYanStartupProduction` |
+| Worker | `celery_prod` / `worker_prod` | `CaiYanStartupProduction` |
 
 查看任务：
 
 ```powershell
-Get-ScheduledTask -TaskName CaiYanStartupRedis,CaiYanStartupBackend,CaiYanStartupWorker,CaiYanStartupFrontend,CaiYanHealthCheck
+Get-ScheduledTask -TaskName CaiYanStartupProduction,CaiYanStartupDevelopment,CaiYanHealthCheck
 ```
 
 手动模拟开机启动：
 
 ```powershell
-Start-ScheduledTask -TaskName CaiYanStartupRedis
-Start-ScheduledTask -TaskName CaiYanStartupBackend
-Start-ScheduledTask -TaskName CaiYanStartupWorker
-Start-ScheduledTask -TaskName CaiYanStartupFrontend
+Start-ScheduledTask -TaskName CaiYanStartupProduction
+Start-ScheduledTask -TaskName CaiYanStartupDevelopment
 ```
 
-自启动和看门狗共用脚本：
+安装或刷新自启动任务：
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File .\deploy\scripts\install_startup_tasks_windows.ps1
+```
+
+自启动和看门狗脚本：
 
 ```text
+deploy\scripts\startup_production_windows.ps1
 deploy\scripts\service_control_windows.ps1
 ```
 

@@ -18,6 +18,7 @@ from ..models.product_media import ProductMedia
 from ..models.product_asset import ProductAsset
 from ..models.product_prompts import ProductPrompts
 from ..models.product_qa import ProductQa, ProductQaNegative
+from ..models.knowledge_base import KnowledgeChunk
 from ..models.product_associations import (
     ListingChannel, ProductListingChannel,
     SalesRegion, ProductSalesRegion,
@@ -58,13 +59,20 @@ def sync_product_to_vector_db(db: Session, sku: str) -> dict:
         db.commit()
         invalidate_product_detail_cache(db, sku)
 
-        # Try embedding (non-blocking; fails gracefully if API key expired)
+        # Embed synchronously before reporting success.  QA is customer-visible
+        # only after the integrity audit and this embedding receipt both pass;
+        # a provider failure is reported to the caller instead of being hidden.
         import asyncio
+        embedding_result: dict[str, object] = {
+            "total": 0,
+            "embedded": 0,
+            "failed": 0,
+        }
         try:
             try:
                 asyncio.get_running_loop()
             except RuntimeError:
-                asyncio.run(
+                embedding_result = asyncio.run(
                     product_vector_index_service.embed_pending_chunks(
                         db,
                         sku=sku,
@@ -77,11 +85,37 @@ def sync_product_to_vector_db(db: Session, sku: str) -> dict:
                         asyncio.run,
                         product_vector_index_service.embed_pending_chunks(db, sku=sku),
                     )
-                    future.result(timeout=30)
-        except Exception:
-            pass  # Embedding failure is OK, keyword search still works
+                    embedding_result = future.result(timeout=30)
+        except Exception as exc:
+            embedding_result = {
+                "total": 0,
+                "embedded": 0,
+                "failed": 0,
+                "error": str(exc)[:2000],
+            }
 
-        return {"sku": sku, "documents": result["documents"], "chunks": result["chunks"]}
+        normalized_sku = str(sku or "").strip().upper()
+        pending_product_chunks = db.query(KnowledgeChunk).filter(
+            KnowledgeChunk.sku == normalized_sku,
+            KnowledgeChunk.source_type == "product",
+            KnowledgeChunk.embedding_status == "pending",
+        ).count()
+        failed_product_chunks = db.query(KnowledgeChunk).filter(
+            KnowledgeChunk.sku == normalized_sku,
+            KnowledgeChunk.source_type == "product",
+            KnowledgeChunk.embedding_status == "failed",
+        ).count()
+        embedding_result["pending"] = pending_product_chunks
+        embedding_result["failed_chunks"] = failed_product_chunks
+        embedding_result["ready"] = not pending_product_chunks and not failed_product_chunks and not embedding_result.get("error")
+
+        return {
+            "sku": sku,
+            "documents": result["documents"],
+            "chunks": result["chunks"],
+            "embedding": embedding_result,
+            "ready_for_rag": bool(embedding_result["ready"]),
+        }
     except Exception as e:
         db.rollback()
         return {"sku": sku, "error": str(e)}
