@@ -1343,14 +1343,10 @@ export const api = {
     for (const file of files) {
       formData.append('files', file)
     }
-    return fetch(`${BASE_URL}/products/images/upload`, {
+    return request<{ urls: string[] }>('/products/images/upload', {
       method: 'POST',
       body: formData,
-      credentials: 'include',
-    }).then((r) => {
-      if (!r.ok) throw new Error('Upload failed')
-      return r.json()
-    })
+    }, 120000)
   },
 
   uploadVideo: (files: File[]): Promise<{ urls: string[] }> => {
@@ -1358,13 +1354,9 @@ export const api = {
     for (const file of files) {
       formData.append('files', file)
     }
-    return fetch(`${BASE_URL}/products/videos/upload`, {
+    return request<{ urls: string[] }>('/products/videos/upload', {
       method: 'POST',
       body: formData,
-      credentials: 'include',
-    }).then((r) => {
-      if (!r.ok) throw new Error('Upload failed')
-      return r.json()
-    })
+    }, 300000)
   },
 }

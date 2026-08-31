@@ -484,7 +484,12 @@ function UploadArea({
       <div className="mb-5 grid gap-3 rounded-xl border border-dashed border-teal-300 bg-teal-50/50 p-4 md:grid-cols-[1fr_1.2fr]">
         <label className="flex min-h-32 cursor-pointer items-center justify-center rounded-lg bg-white/80 text-sm font-bold text-teal-700">
           选择提示词图片
-          <input type="file" accept="image/*" className="hidden" onChange={event => event.target.files && uploadFiles(event.target.files, 'aiPrompt', promptText)} />
+          <input type="file" accept="image/*" className="hidden" onChange={event => {
+            const input = event.currentTarget
+            const files = input.files
+            if (!files) return
+            void uploadFiles(files, 'aiPrompt', promptText).finally(() => { input.value = '' })
+          }} />
         </label>
         <textarea
           className="glass-input min-h-32 p-3 text-sm"
@@ -504,7 +509,12 @@ function UploadArea({
         multiple
         accept={activeCategory === '06' ? 'video/mp4,video/webm,video/quicktime,.mov' : 'image/*'}
         className="hidden"
-        onChange={event => event.target.files && uploadFiles(event.target.files)}
+        onChange={event => {
+          const input = event.currentTarget
+          const files = input.files
+          if (!files) return
+          void uploadFiles(files).finally(() => { input.value = '' })
+        }}
       />
     </label>
   )
@@ -524,7 +534,12 @@ function SlotUploadGrid({
       {slots.map(slot => (
         <label key={slot.key} className="flex min-h-28 cursor-pointer items-center justify-center rounded-xl border border-dashed border-teal-300 bg-white/55 text-center text-sm font-black text-teal-700 hover:bg-teal-50">
           {uploading ? '上传中...' : slot.label}
-          <input type="file" multiple accept={slot.accept} className="hidden" onChange={event => event.target.files && uploadFiles(event.target.files, slot.key)} />
+          <input type="file" multiple accept={slot.accept} className="hidden" onChange={event => {
+            const input = event.currentTarget
+            const files = input.files
+            if (!files) return
+            void uploadFiles(files, slot.key).finally(() => { input.value = '' })
+          }} />
         </label>
       ))}
     </div>

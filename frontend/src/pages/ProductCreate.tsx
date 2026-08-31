@@ -542,20 +542,23 @@ export default function ProductCreate() {
   async function handleMediaUpload(key: string, event: React.ChangeEvent<HTMLInputElement>) {
     const files = event.target.files
     if (!files) return
+    const input = event.currentTarget
     for (const file of Array.from(files)) {
       try {
         const response = key === 'social_video_urls'
           ? await api.uploadVideo([file])
           : await api.uploadImage([file])
         const imageUrl = response.urls[0]
-        const images = getMediaImages(key)
-        setMedia({ ...media, [key]: [...images, imageUrl] })
+        setMedia(current => {
+          const images = (current as any)[key] || []
+          return { ...current, [key]: [...images, imageUrl] }
+        })
       } catch (err) {
         console.error('Image upload failed:', err)
         showNotice('error', '图片上传失败')
       }
     }
-    event.target.value = ''
+    input.value = ''
   }
 
   function addChannelVersion(channel: string) {
@@ -651,19 +654,21 @@ export default function ProductCreate() {
   async function handleChannelVersionUpload(channel: string, vi: number, type: 'ecommerce_main' | 'detail_module', event: React.ChangeEvent<HTMLInputElement>) {
     const files = event.target.files
     if (!files) return
-    const versions = media.channel_versions || {}
-    const existing = versions[channel] || []
-    if (vi >= existing.length) return
-    let images = (existing[vi] as any)[type] || []
+    const input = event.currentTarget
     for (const file of Array.from(files)) {
       try {
         const response = await api.uploadImage([file])
-        images = [...images, response.urls[0]]
-        setMedia({
-          ...media,
-          channel_versions: {
-            ...versions,
-            [channel]: existing.map((v, i) => i === vi ? { ...v, [type]: images } : v)
+        setMedia(current => {
+          const versions = current.channel_versions || {}
+          const existing = versions[channel] || []
+          if (vi >= existing.length) return current
+          const images = (existing[vi] as any)[type] || []
+          return {
+            ...current,
+            channel_versions: {
+              ...versions,
+              [channel]: existing.map((v, i) => i === vi ? { ...v, [type]: [...images, response.urls[0]] } : v)
+            }
           }
         })
       } catch (err) {
@@ -671,7 +676,7 @@ export default function ProductCreate() {
         showNotice('error', '图片上传失败')
       }
     }
-    event.target.value = ''
+    input.value = ''
   }
 
   function getProductData() {
