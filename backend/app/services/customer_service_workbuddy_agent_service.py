@@ -45,7 +45,7 @@ PIPELINE_VERSION = customer_pipeline_service.WORKBUDDY_AGENT_PIPELINE
 # remains the only component that chooses a tool or decides how to answer.
 _MAX_HISTORY_MESSAGES = 20
 _MAX_TOOL_ROUNDS = 2
-_MAX_GROUNDING_RETRIES = 1
+_MAX_GROUNDING_RETRIES_PER_ERROR = 1
 _MAX_TOOL_CALLS_PER_ROUND = 3
 _PREFETCH_RETRIEVAL_POOL = 48
 _PREFETCH_RESULT_LIMIT = 12
@@ -137,7 +137,7 @@ def _agent_system_prompt() -> str:
         "返回当前主数据、已审核 QA 和相关知识。这个过程由你根据语义和上下文决定，不使用关键词路由。"
         "语义检索命中的商品只是候选，不等于客户已经选择了它。只有当前问题、页面引用或正常"
         "对话上下文能把对象唯一确认到某个商品时，才能用确定语气绑定该商品；对象仍不明确时，"
-        "可以用‘如果你指的是……’提供候选信息并自然追问，但不要把候选写成已确认商品。"
+        "必须先用‘如果你指的是……’明确候选身份，再提供候选信息并自然追问；不得先给无条件结论，也不要把候选写成已确认商品。"
         "商品事实必须保留其 SKU 归属，不能把一个 SKU 的容量、重量、材质、适用热源或 QA"
         "移给另一个 SKU。对客户提出的每个必要条件，都要在每个候选 SKU 自己的证据中分别"
         "核对；某项没有明确写出、只有更宽泛的描述，或只出现在另一个 SKU 中，都不能视为该"
@@ -169,8 +169,8 @@ def _agent_system_prompt() -> str:
         "最终答复对象里只有 answer 必填；工具调用对象不含 answer。若 selected_skus 非空，则 identity_status 必须为 confirmed，"
         "并为每个入选 SKU 给出至少一条 claims；单商品 claim 用 sku，跨商品比较或差值结论用 skus，"
         "且只能引用直接支持它、fact_authority=true、属于所声明 SKU 的证据。"
-        "候选或无法确认的商品放在 candidate_skus，identity_status 使用 candidate 或 unresolved，"
-        "不能放进 selected_skus。价格、库存、到货时间等实时状态只能由对应实时工具证明；当前工具"
+        "候选或无法确认的商品放在 candidate_skus，identity_status 使用 candidate 或 unresolved；此时 answer 必须保持条件式，"
+        "needs_clarification=true，且不能放进 selected_skus。价格、库存、到货时间等实时状态只能由对应实时工具证明；当前工具"
         "没有实时价格库存能力时，应在确认商品后直接说明无法核实，不能用 active_flag、生命周期或"
         "静态文案推断现货、可售或当前可购买；即使客户没有主动询问库存，也不要在推荐理由中做这种"
         "升级。也不要再次要求客户确认已经明确给出的 SKU。其余字段没有把握就省略。"
@@ -1001,6 +1001,27 @@ def _response_needs_current_fact_evidence(response: dict[str, Any]) -> bool:
     return answer_type in {"product_detail", "recommendation", "comparison"}
 
 
+def _candidate_identity_requires_clarification(response: dict[str, Any]) -> bool:
+    """Validate the model's own identity metadata without reading customer wording."""
+    if not _clip_text(response.get("answer"), _PUBLIC_ANSWER_LIMIT):
+        return False
+    identity_status = str(
+        response.get("identity_status")
+        or response.get("identity_resolution")
+        or ""
+    ).strip().lower()
+    if identity_status not in {
+        "candidate",
+        "candidate_only",
+        "ambiguous",
+        "unresolved",
+        "no_match",
+    }:
+        return False
+    answer_type = str(response.get("answer_type") or "").strip().lower()
+    return not bool(response.get("needs_clarification")) and answer_type != "clarification"
+
+
 def _has_current_fact_evidence(evidence: list[dict[str, Any]]) -> bool:
     return any(bool(item.get("fact_authority")) for item in evidence)
 
@@ -1064,9 +1085,11 @@ async def _run_agent(
     if semantic_prefetch:
         prefetch_message_index = len(messages) - 1
         messages.insert(prefetch_message_index, {
-            "role": "user",
+            "role": "system",
             "content": json.dumps(
                 {
+                    "internal_context": "semantic_catalog_prefetch",
+                    "customer_authored": False,
                     "semantic_catalog_prefetch": {
                         "query": question,
                         "evidence_role": "candidate_discovery_only",
@@ -1086,7 +1109,7 @@ async def _run_agent(
     tool_events: list[dict[str, Any]] = []
     llm_call_count = 0
     tool_round_count = 0
-    grounding_retry_count = 0
+    grounding_retry_counts: dict[str, int] = {}
     last_metadata: dict[str, Any] = {}
 
     while tool_round_count < _MAX_TOOL_ROUNDS:
@@ -1107,7 +1130,9 @@ async def _run_agent(
             fact_response = _response_needs_current_fact_evidence(response)
             grounding_error = ""
             grounding_error_details: list[dict[str, Any]] = []
-            if fact_response and not _has_current_fact_evidence(evidence):
+            if _candidate_identity_requires_clarification(response):
+                grounding_error = "candidate_identity_clarification_required"
+            elif fact_response and not _has_current_fact_evidence(evidence):
                 grounding_error = "current_fact_evidence_required"
             elif fact_response:
                 _accepted_claims, grounding_error_details = _validated_claims(
@@ -1117,25 +1142,35 @@ async def _run_agent(
                 if grounding_error_details:
                     grounding_error = "claim_provenance_invalid"
             if (
-                grounding_retry_count < _MAX_GROUNDING_RETRIES
+                grounding_retry_counts.get(grounding_error, 0)
+                < _MAX_GROUNDING_RETRIES_PER_ERROR
                 and grounding_error
             ):
-                grounding_retry_count += 1
+                grounding_retry_counts[grounding_error] = (
+                    grounding_retry_counts.get(grounding_error, 0) + 1
+                )
                 messages.append({"role": "assistant", "content": raw})
+                protocol_instruction = (
+                    "你给出的 identity_status 表示商品对象仍是候选或尚未确认，但 needs_clarification 没有同步为 true。"
+                    "请保持 candidate_skus，不要写入 selected_skus；重写自然答案时先明确‘如果你指的是……’，"
+                    "再条件式提供候选资料并自然追问，同时返回 needs_clarification=true。"
+                    if grounding_error == "candidate_identity_clarification_required"
+                    else (
+                        "你刚才的结构化事实声明没有通过本轮证据归属检查。历史客服回复和"
+                        "semantic_catalog_prefetch 只能帮助理解对象，不能证明当前事实；"
+                        "每条 claim 也只能引用 fact_authority=true、且覆盖其声明全部 SKU 的"
+                        "本轮证据。请根据语义自行决定是修正 claims，还是继续调用"
+                        "read_product/search_knowledge 补齐资料后再回答。若只是普通沟通，"
+                        "请移除不必要的事实声明。"
+                    )
+                )
                 messages.append({
                     "role": "user",
                     "content": json.dumps(
                         {
                             "agent_protocol_error": grounding_error,
                             "rejected_claims": grounding_error_details,
-                            "instruction": (
-                                "你刚才的结构化事实声明没有通过本轮证据归属检查。历史客服回复和"
-                                "semantic_catalog_prefetch 只能帮助理解对象，不能证明当前事实；"
-                                "每条 claim 也只能引用 fact_authority=true、且覆盖其声明全部 SKU 的"
-                                "本轮证据。请根据语义自行决定是修正 claims，还是继续调用"
-                                "read_product/search_knowledge 补齐资料后再回答。若只是普通沟通，"
-                                "请移除不必要的事实声明。"
-                            ),
+                            "instruction": protocol_instruction,
                         },
                         ensure_ascii=False,
                     ),
@@ -1144,7 +1179,8 @@ async def _run_agent(
             await _emit_accepted_answer(answer_delta_callback, buffered_deltas, response)
             last_metadata["semantic_prefetch_count"] = len(semantic_prefetch)
             last_metadata["semantic_prefetch_error"] = prefetch_error
-            last_metadata["grounding_retry_count"] = grounding_retry_count
+            last_metadata["grounding_retry_count"] = sum(grounding_retry_counts.values())
+            last_metadata["grounding_retry_counts"] = dict(grounding_retry_counts)
             return response, evidence, tool_events, llm_call_count, last_metadata
 
         round_results: list[dict[str, Any]] = []
@@ -1180,6 +1216,8 @@ async def _run_agent(
         tool_round_count += 1
         messages.append({"role": "assistant", "content": raw})
         tool_payload = {
+            "internal_context": "agent_tool_results",
+            "customer_authored": False,
             "tool_results": round_results,
             "identity_contract": {
                 "retrieval_candidate": "检索命中只代表语义候选，不自动证明客户所指商品。",
@@ -1199,7 +1237,7 @@ async def _run_agent(
             ),
         }
         messages.append({
-            "role": "user",
+            "role": "system",
             "content": json.dumps(tool_payload, ensure_ascii=False, default=str),
         })
         tool_result_message_indexes.append(len(messages) - 1)
@@ -1237,7 +1275,8 @@ async def _run_agent(
     await _emit_accepted_answer(answer_delta_callback, buffered_deltas, response)
     last_metadata["semantic_prefetch_count"] = len(semantic_prefetch)
     last_metadata["semantic_prefetch_error"] = prefetch_error
-    last_metadata["grounding_retry_count"] = grounding_retry_count
+    last_metadata["grounding_retry_count"] = sum(grounding_retry_counts.values())
+    last_metadata["grounding_retry_counts"] = dict(grounding_retry_counts)
     return response, evidence, tool_events, llm_call_count, last_metadata
 
 
@@ -1612,6 +1651,7 @@ async def ask_customer_service_workbuddy_agent(
         "tool_call_count": len(tool_events),
         "semantic_prefetch_count": int(llm_metadata.get("semantic_prefetch_count") or 0),
         "grounding_retry_count": int(llm_metadata.get("grounding_retry_count") or 0),
+        "grounding_retry_counts": dict(llm_metadata.get("grounding_retry_counts") or {}),
         "evidence_ids": selected_evidence_ids,
         "identity_status": identity_status,
         "claims": claims,
@@ -1631,6 +1671,7 @@ async def ask_customer_service_workbuddy_agent(
         "semantic_prefetch_count": int(llm_metadata.get("semantic_prefetch_count") or 0),
         "semantic_prefetch_error": llm_metadata.get("semantic_prefetch_error"),
         "grounding_retry_count": int(llm_metadata.get("grounding_retry_count") or 0),
+        "grounding_retry_counts": dict(llm_metadata.get("grounding_retry_counts") or {}),
         "llm_call_count": llm_call_count,
         "page_sku": page_sku,
         "active_context_sku": context_skus[0] if len(context_skus) == 1 else None,

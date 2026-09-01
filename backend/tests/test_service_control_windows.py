@@ -28,6 +28,11 @@ def test_backend_stop_is_identity_checked_and_has_explicit_legacy_transition():
     assert "multiprocessing.spawn" in script
     assert "$parentCmd -like \"*$ProdPython*\"" in script
     assert '$cmd -like "*$ProdPython*"' in script
+    assert "function Test-ImmutableReleaseBackendCommand" in script
+    assert '$RepoRootLeaf -match "^[0-9a-fA-F]{40}$"' in script
+    assert '$ProdReleasesRootLeaf -like "*-prod-releases"' in script
+    assert "$immutableReleaseProcess" in script
+    assert "$immutableReleaseChild" in script
 
 
 def test_all_action_enforces_release_identity_health_and_commit_gates():
