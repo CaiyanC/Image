@@ -39,11 +39,13 @@ class SettingsConfigTest(unittest.TestCase):
         if app_env == "prod":
             settings.DATABASE_URL = "postgresql+psycopg2://user:secret@localhost:5432/product_knowledge"
             settings.UPLOAD_DIR = "uploads"
+            settings.REDIS_URL = "redis://localhost:6379/0"
             settings.CELERY_QUEUE = "celery_prod"
             settings.CELERY_WORKER_NAME = "worker_prod"
         else:
             settings.DATABASE_URL = "postgresql+psycopg2://user:secret@localhost:5432/product_knowledge_dev"
             settings.UPLOAD_DIR = "uploads_dev"
+            settings.REDIS_URL = "redis://localhost:6379/1"
             settings.CELERY_QUEUE = "celery_dev"
             settings.CELERY_WORKER_NAME = "worker_dev"
         return settings
@@ -181,6 +183,25 @@ class SettingsConfigTest(unittest.TestCase):
     def test_environment_validation_accepts_correct_prod_and_dev_celery_isolation(self):
         config.validate_runtime_isolation(self._runtime_settings("prod"))
         config.validate_runtime_isolation(self._runtime_settings("dev"))
+
+    def test_environment_validation_rejects_crossed_redis_databases(self):
+        settings = self._runtime_settings("prod")
+        settings.REDIS_URL = "redis://localhost:6379/1"
+        with self.assertRaisesRegex(RuntimeError, "Redis database"):
+            config.validate_runtime_isolation(settings)
+
+        settings = self._runtime_settings("dev")
+        settings.REDIS_URL = "redis://localhost:6379/0"
+        with self.assertRaisesRegex(RuntimeError, "Redis database"):
+            config.validate_runtime_isolation(settings)
+
+    def test_runtime_summary_redacts_redis_credentials_and_reports_database(self):
+        settings = self._runtime_settings("dev")
+        settings.REDIS_URL = "redis://redis-user:redis-secret@localhost:6379/1"
+        summary = config.runtime_summary(settings)
+        self.assertEqual(summary["redis_database"], 1)
+        self.assertNotIn("redis-secret", str(summary))
+        self.assertNotIn("redis-user", str(summary))
 
     def test_runtime_summary_does_not_expose_database_password(self):
         settings = config.Settings()

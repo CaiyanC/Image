@@ -122,6 +122,90 @@ def client_and_token(monkeypatch):
         tmpdir.cleanup()
 
 
+def _dedicated_agent_result(answer_delta_callback=None):
+    answer = "Agent 独立入口已使用语义 RAG。"
+    if answer_delta_callback is not None:
+        async def emit():
+            await answer_delta_callback(answer)
+
+        return answer, emit
+    return answer, None
+
+
+def test_dedicated_agent_endpoints_select_agent_in_prod(client_and_token, monkeypatch):
+    client, headers = client_and_token
+    from app.api import customer_service as customer_service_api
+    from app.core.config import settings
+
+    monkeypatch.setattr(settings, "APP_ENV", "prod")
+    monkeypatch.setattr(settings, "CUSTOMER_SERVICE_PIPELINE", "legacy")
+    monkeypatch.setattr(settings, "CUSTOMER_SERVICE_PIPELINE_OVERRIDE_ENABLED", False)
+    calls = []
+
+    async def fake_ask_customer_service(db, **kwargs):
+        calls.append(kwargs)
+        answer, emit = _dedicated_agent_result(kwargs.get("answer_delta_callback"))
+        if emit is not None:
+            await emit()
+        return {
+            "conversation_id": f"agent-conversation-{len(calls)}",
+            "message_id": f"agent-message-{len(calls)}",
+            "intent": "product_detail",
+            "answer_type": "product_detail",
+            "confidence": "high",
+            "uncertainty": "confirmed",
+            "needs_clarification": False,
+            "anomalies": [],
+            "suggested_followups": [],
+            "followups": [],
+            "warnings": [],
+            "evidence": [],
+            "agent_quality": {},
+            "answer_metadata": {},
+            "debug": {
+                "pipeline_version": "workbuddy_agent_v2",
+                "agent_mode": "workbuddy_agent_v2",
+            },
+            "pipeline_version": "workbuddy_agent_v2",
+            "agent_mode": "workbuddy_agent_v2",
+            "sku": None,
+            "answer": answer,
+            "sources": [],
+            "actions": [],
+            "results": [],
+            "steps": [],
+            "result_skus": [],
+            "candidate_skus": [],
+        }
+
+    monkeypatch.setattr(
+        customer_service_api.customer_service_service,
+        "ask_customer_service",
+        fake_ask_customer_service,
+    )
+
+    normal = client.post(
+        "/api/customer-service/agent/ask",
+        json={"question": "测试独立 Agent 入口"},
+        headers=headers,
+    )
+    stream = client.post(
+        "/api/customer-service/agent/ask-stream",
+        json={"question": "测试独立 Agent 流式入口"},
+        headers=headers,
+    )
+
+    assert normal.status_code == 200
+    assert normal.json()["pipeline_version"] == "workbuddy_agent_v2"
+    assert stream.status_code == 200
+    parsed = _parse_sse(stream.text)
+    assert parsed["answer"] == "Agent 独立入口已使用语义 RAG。"
+    assert parsed["meta"]["pipeline_version"] == "workbuddy_agent_v2"
+    assert len(calls) == 2
+    assert all(call["pipeline"] == "workbuddy_agent_v2" for call in calls)
+    assert all(call["server_selected_pipeline"] is True for call in calls)
+
+
 def test_customer_service_ask_and_stream_share_single_turn_public_shape(client_and_token, monkeypatch):
     client, headers = client_and_token
     from app.api import customer_service as customer_service_api
@@ -482,6 +566,56 @@ def test_parity_scope_does_not_reuse_snapshot_from_an_earlier_probe(client_and_t
     assert first.status_code == second.status_code == 200
     assert first.json()["result_skus"] == ["SKU-1"]
     assert second.json()["result_skus"] == ["SKU-2"]
+
+
+def test_parity_snapshot_isolated_by_customer_service_pipeline(client_and_token, monkeypatch):
+    client, headers = client_and_token
+    from app.api import customer_service as customer_service_api
+    from app.core.config import settings
+
+    monkeypatch.setattr(settings, "APP_ENV", "dev")
+    monkeypatch.setattr(settings, "CUSTOMER_SERVICE_PIPELINE_OVERRIDE_ENABLED", True)
+    calls = []
+
+    async def fake_ask_customer_service(_db, **kwargs):
+        pipeline = kwargs.get("pipeline") or "configured"
+        calls.append(pipeline)
+        return {
+            "conversation_id": f"pipeline-{pipeline}",
+            "message_id": f"pipeline-message-{pipeline}",
+            "intent": "product_detail",
+            "answer_type": "product_detail",
+            "answer": f"来自 {pipeline}。",
+            "result_skus": [pipeline],
+            "candidate_skus": [pipeline],
+            "results": [], "sources": [], "actions": [], "steps": [], "warnings": [], "evidence": [],
+        }
+
+    monkeypatch.setattr(
+        customer_service_api.customer_service_service,
+        "ask_customer_service",
+        fake_ask_customer_service,
+    )
+    common = {
+        **headers,
+        "X-Customer-Service-Parity-Isolation": "true",
+        "X-Customer-Service-Parity-Scope": "same-cross-pipeline-probe",
+    }
+    semantic = client.post(
+        "/api/customer-service/ask",
+        json={"question": Q15_1},
+        headers={**common, "X-Customer-Service-Pipeline": "semantic_rag_v2"},
+    )
+    agent = client.post(
+        "/api/customer-service/ask",
+        json={"question": Q15_1},
+        headers={**common, "X-Customer-Service-Pipeline": "workbuddy_agent_v2"},
+    )
+
+    assert semantic.status_code == agent.status_code == 200
+    assert semantic.json()["result_skus"] == ["semantic_rag_v2"]
+    assert agent.json()["result_skus"] == ["workbuddy_agent_v2"]
+    assert calls == ["semantic_rag_v2", "workbuddy_agent_v2"]
 
 
 def test_parity_snapshot_never_overwrites_conversation_bound_turn(client_and_token, monkeypatch):

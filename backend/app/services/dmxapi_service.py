@@ -742,6 +742,7 @@ async def chat_completion(
     api_model_override: str | None = None,
     response_format: dict | None = None,
     thinking: dict | None = None,
+    reasoning_effort: str | None = None,
     response_metadata: dict | None = None,
     resolved_model: ResolvedModel | None = None,
 ) -> str:
@@ -763,6 +764,8 @@ async def chat_completion(
         body["response_format"] = response_format
     if isinstance(thinking, dict) and thinking:
         body["thinking"] = thinking
+    if reasoning_effort:
+        body["reasoning_effort"] = reasoning_effort
     headers = {
         "Authorization": f"Bearer {api_key}",
         "Content-Type": "application/json",
@@ -819,6 +822,7 @@ async def chat_completion(
                 "request_max_tokens": max_tokens,
                 "request_response_format": response_format if isinstance(response_format, dict) and response_format else None,
                 "request_thinking": thinking if isinstance(thinking, dict) and thinking else None,
+                "request_reasoning_effort": reasoning_effort,
                 "usage": data.get("usage") if isinstance(data, dict) else None,
             }
         )
@@ -836,6 +840,9 @@ async def chat_completion_stream(
     max_tokens: int = 1200,
     *,
     api_model_override: str | None = None,
+    response_format: dict | None = None,
+    thinking: dict | None = None,
+    reasoning_effort: str | None = None,
     resolved_model: ResolvedModel | None = None,
 ):
     cfg = _resolved_model_config(resolved_model) if resolved_model else (_resolve_model_config(db, model) if model else get_default_model_by_type(db, "chat"))
@@ -855,6 +862,12 @@ async def chat_completion_stream(
         "max_tokens": max_tokens,
         "stream": True,
     }
+    if isinstance(response_format, dict) and response_format:
+        body["response_format"] = response_format
+    if isinstance(thinking, dict) and thinking:
+        body["thinking"] = thinking
+    if reasoning_effort:
+        body["reasoning_effort"] = reasoning_effort
     headers = {
         "Authorization": f"Bearer {api_key}",
         "Content-Type": "application/json",

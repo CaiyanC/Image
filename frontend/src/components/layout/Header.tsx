@@ -34,6 +34,12 @@ export default function Header() {
   const navItems = [
     { path: '/tools', label: '工具中心' },
     ...(has('ai.customer_service') ? [{ path: '/customer-service', label: '智能客服' }] : []),
+    ...(import.meta.env.MODE === 'dev' && has('ai.customer_service')
+      ? [{ path: '/customer-service/workbuddy', label: '智能客服 · WorkBuddy' }]
+      : []),
+    ...(has('ai.customer_service')
+      ? [{ path: '/customer-service/agent', label: '智能客服 · Agent' }]
+      : []),
     ...(isSuperAdmin ? [{ path: '/knowledge-base', label: '知识库运维' }] : []),
     ...(isSuperAdmin ? [{ path: '/file-knowledge', label: '文件知识库' }] : []),
     ...(has('ai.generate') ? [{ path: '/', label: '创作' }] : []),
@@ -50,6 +56,7 @@ export default function Header() {
     { path: '/admin/tools', label: '工具管理' },
     { path: '/admin/users', label: '用户' },
     { path: '/admin/groups', label: '部门权限' },
+    { path: '/admin/model-governance', label: '模型治理' },
     { path: '/admin/settings', label: '设置' },
     { path: '/admin/logs', label: '日志' },
   ]

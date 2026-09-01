@@ -90,6 +90,12 @@ class CustomerServiceConversation(Base):
     user_id: Mapped[str] = mapped_column(String(36), nullable=True)
     title: Mapped[str] = mapped_column(String(255), nullable=False, default="新客服会话")
     sku: Mapped[str] = mapped_column(String(100), nullable=True)
+    # Keep independent customer-service runtimes from sharing conversation
+    # state. Existing rows are treated as the legacy runtime during the
+    # compatibility upgrade; new runtimes persist their own pipeline id.
+    pipeline: Mapped[str] = mapped_column(
+        String(50), nullable=False, default="legacy", server_default="legacy"
+    )
     created_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(timezone.utc))
     updated_at: Mapped[datetime] = mapped_column(
         DateTime,

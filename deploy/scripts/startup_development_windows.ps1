@@ -245,14 +245,32 @@ function Start-DevFrontend {
         Write-StartupLog "INFO" "development frontend port 5276 is already listening"
         return
     }
+    # Scheduled tasks do not always inherit the interactive user's PATH.  A
+    # prior version found npm through Get-Command and then failed with
+    # "file not found" at logon even though Node was installed.  Resolve the
+    # command and fall back to the standard per-machine/per-user locations.
+    $npmCandidates = @()
     $npm = Get-Command npm.cmd -ErrorAction SilentlyContinue
-    if (-not $npm) {
-        $npm = Get-Command npm -ErrorAction SilentlyContinue
+    if ($npm) {
+        $npmCandidates += [string]$npm.Source
+        if (-not [string]$npm.Source) {
+            $npmCandidates += [string]$npm.Path
+        }
     }
-    if (-not $npm) {
-        throw "npm is unavailable while starting the development frontend"
+    $npmCandidates += @(
+        (Join-Path ${env:ProgramFiles} "nodejs\npm.cmd"),
+        (Join-Path ${env:APPDATA} "npm\npm.cmd")
+    )
+    $npmPath = @($npmCandidates | Where-Object { $_ -and (Test-Path -LiteralPath $_) } | Select-Object -First 1)[0]
+    if (-not $npmPath) {
+        throw "npm.cmd is unavailable while starting the development frontend"
     }
-    Start-Process -FilePath $npm.Source -ArgumentList @("run", "dev:dev") -WorkingDirectory $devFrontendRoot `
+    $cmdExe = Join-Path $env:SystemRoot "System32\cmd.exe"
+    if (-not (Test-Path -LiteralPath $cmdExe)) {
+        throw "cmd.exe is unavailable while starting the development frontend"
+    }
+    $npmInvocation = '"' + $npmPath + '" run dev:dev'
+    Start-Process -FilePath $cmdExe -ArgumentList @("/d", "/c", $npmInvocation) -WorkingDirectory $devFrontendRoot `
         -RedirectStandardOutput $devFrontendStdout -RedirectStandardError $devFrontendStderr -WindowStyle Hidden | Out-Null
     # Vite may also need more than 90 seconds during a cold dependency scan.
     if (-not (Wait-TcpPort -Port 5276 -TimeoutSeconds 180)) {

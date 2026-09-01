@@ -429,7 +429,58 @@ def create_asset(
 def create_assets_batch(db: Session, sku: str, items: list[dict[str, Any]]) -> list[ProductAsset]:
     ensure_product_exists(db, sku)
     try:
-        created = [create_asset(db, sku, item, commit=False) for item in items]
+        # Uploaded files carry a canonical checksum after image sanitization.
+        # Resolve exact matches before each flush so an upload cannot silently
+        # present an already stored file as unique.  Reuse remains allowed: it
+        # is flagged for review rather than rejected, which also supports
+        # legitimate cross-SKU campaign assets.
+        checksums = {
+            str(item.get("checksum_sha256") or "").strip().lower()
+            for item in items
+            if str(item.get("checksum_sha256") or "").strip()
+        }
+        existing_by_checksum: dict[str, list[ProductAsset]] = {}
+        if checksums:
+            existing_assets = db.query(ProductAsset).filter(
+                ProductAsset.checksum_sha256.in_(checksums)
+            ).order_by(
+                ProductAsset.created_at.asc(),
+                ProductAsset.id.asc(),
+            ).all()
+            for existing in existing_assets:
+                key = str(existing.checksum_sha256 or "").strip().lower()
+                if key:
+                    existing_by_checksum.setdefault(key, []).append(existing)
+
+        created: list[ProductAsset] = []
+        for raw_item in items:
+            item = dict(raw_item)
+            checksum = str(item.get("checksum_sha256") or "").strip().lower()
+            references = existing_by_checksum.get(checksum, []) if checksum else []
+            reference = next(
+                (candidate for candidate in references if candidate.sku == sku),
+                references[0] if references else None,
+            )
+            if reference and item.get("duplicate_status") in (None, "", "unique"):
+                # Preserve explicitly invalid/archived lifecycle decisions, but
+                # never let the normal upload default hide an exact duplicate.
+                if item.get("quality_status") not in {"invalid", "archived"}:
+                    item["quality_status"] = "suspected_duplicate"
+                item["duplicate_status"] = (
+                    "suspected_duplicate" if reference.sku == sku else "cross_sku_reuse"
+                )
+                item["duplicate_of_asset_id"] = reference.id
+                if not str(item.get("quality_reason") or "").strip():
+                    item["quality_reason"] = (
+                        f"与已有素材 {reference.sku}/{reference.id} 的文件校验和相同，"
+                        "需人工确认是否复用"
+                    )
+
+            asset = create_asset(db, sku, item, commit=False)
+            created.append(asset)
+            if checksum:
+                existing_by_checksum.setdefault(checksum, []).append(asset)
+
         db.commit()
         for item in created:
             db.refresh(item)

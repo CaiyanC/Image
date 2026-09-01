@@ -5,6 +5,7 @@ import type { User } from '../types'
 
 export default function Profile() {
   const { user, updateUser, logout } = useAuthStore()
+  const userId = user?.id
   const [profileForm, setProfileForm] = useState({
     username: user?.username || '',
     display_name: user?.display_name || '',
@@ -35,7 +36,7 @@ export default function Profile() {
   }, [user])
 
   useEffect(() => {
-    if (!user) return
+    if (!userId) return
     let active = true
     setLoadingCredentials(true)
     api.modelGovernance.myCredentials()
@@ -51,7 +52,7 @@ export default function Profile() {
     return () => {
       active = false
     }
-  }, [user?.id])
+  }, [userId])
 
   async function handleSaveProfile() {
     if (!profileForm.username.trim()) {

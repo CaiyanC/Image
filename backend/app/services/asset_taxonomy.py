@@ -73,6 +73,7 @@ PILOT_REQUIRED_FIELDS: dict[str, Any] = {
         "review_status=approved",
         "authorization_status!=unknown",
         "is_public=true",
+        "ai_reference_usable=true",
     ],
 }
 
