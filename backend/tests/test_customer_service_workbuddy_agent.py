@@ -122,6 +122,7 @@ def test_workbuddy_agent_model_selects_wide_semantic_catalog_tool(
             }, ensure_ascii=False)
         if len(llm_calls) == 2:
             assert "CW-S10-A" in messages[-1]["content"]
+            assert messages[-1]["role"] == "system"
             tool_payload = json.loads(messages[-1]["content"])
             assert "retrieval_candidate" in tool_payload["identity_contract"]
             assert "unresolved_reference" in tool_payload["identity_contract"]
@@ -580,6 +581,148 @@ def test_workbuddy_agent_unresolved_candidate_never_becomes_product_card(
     assert "claim_provenance_rejected" in result["warnings"]
 
 
+def test_workbuddy_agent_prompt_requires_conditional_candidate_identity():
+    prompt = customer_service_workbuddy_agent_service._agent_system_prompt()
+
+    assert "必须先用‘如果你指的是……’明确候选身份" in prompt
+    assert "identity_status 使用 candidate 或 unresolved；此时 answer 必须保持条件式" in prompt
+    assert "needs_clarification=true" in prompt
+
+
+def test_workbuddy_agent_candidate_identity_protocol_uses_model_metadata_only():
+    assert customer_service_workbuddy_agent_service._candidate_identity_requires_clarification({
+        "answer": "可以拆卸。",
+        "identity_status": "candidate",
+        "answer_type": "product_detail",
+        "needs_clarification": False,
+    }) is True
+    assert customer_service_workbuddy_agent_service._candidate_identity_requires_clarification({
+        "answer": "如果你指的是候选商品，可以拆卸。",
+        "identity_status": "candidate",
+        "answer_type": "product_detail",
+        "needs_clarification": True,
+    }) is False
+    assert customer_service_workbuddy_agent_service._candidate_identity_requires_clarification({
+        "answer": "CW-C83-1 可以拆卸。",
+        "identity_status": "confirmed",
+        "answer_type": "product_detail",
+        "needs_clarification": False,
+    }) is False
+
+
+def test_workbuddy_agent_reasks_model_when_candidate_metadata_skips_clarification(
+    route_client_and_db,
+    monkeypatch,
+):
+    _client, _headers, Session = route_client_and_db
+    calls = []
+
+    async def no_prefetch(*_args, **_kwargs):
+        return []
+
+    async def fake_chat(_db, messages, **_kwargs):
+        calls.append(messages)
+        if len(calls) == 1:
+            return json.dumps({
+                "answer": "可以拆卸。",
+                "identity_status": "candidate",
+                "candidate_skus": ["SKU-CANDIDATE"],
+                "answer_type": "product_detail",
+                "needs_clarification": False,
+            }, ensure_ascii=False)
+        protocol = json.loads(messages[-1]["content"])
+        assert protocol["agent_protocol_error"] == "candidate_identity_clarification_required"
+        return json.dumps({
+            "answer": "如果你指的是候选商品，它可以拆卸；请补充商品名确认。",
+            "identity_status": "candidate",
+            "candidate_skus": ["SKU-CANDIDATE"],
+            "answer_type": "clarification",
+            "needs_clarification": True,
+        }, ensure_ascii=False)
+
+    monkeypatch.setattr(
+        customer_service_workbuddy_agent_service,
+        "_prefetch_semantic_catalog",
+        no_prefetch,
+    )
+    monkeypatch.setattr(
+        customer_service_workbuddy_agent_service.customer_llm_service,
+        "chat_completion",
+        fake_chat,
+    )
+
+    with Session() as db:
+        response, evidence, tool_events, llm_call_count, metadata = asyncio.run(
+            customer_service_workbuddy_agent_service._run_agent(
+                db,
+                question="这个配件怎么使用？",
+                history=[],
+                page_sku=None,
+                context_skus=[],
+            )
+        )
+
+    assert llm_call_count == 2
+    assert evidence == []
+    assert tool_events == []
+    assert response["needs_clarification"] is True
+    assert response["answer"].startswith("如果你指的是")
+    assert metadata["grounding_retry_counts"] == {
+        "candidate_identity_clarification_required": 1,
+    }
+
+
+def test_workbuddy_agent_semantic_prefetch_is_internal_system_context(
+    monkeypatch,
+):
+    inserted_messages = []
+
+    async def fake_prefetch(*_args, **_kwargs):
+        return [{"sku": "SKU-CANDIDATE", "content": "candidate only"}]
+
+    async def fake_chat(_db, messages, **_kwargs):
+        inserted_messages.extend(messages)
+        return json.dumps({
+            "answer": "请补充具体商品名称。",
+            "identity_status": "unresolved",
+            "answer_type": "clarification",
+            "needs_clarification": True,
+        }, ensure_ascii=False)
+
+    monkeypatch.setattr(
+        customer_service_workbuddy_agent_service,
+        "_prefetch_semantic_catalog",
+        fake_prefetch,
+    )
+    monkeypatch.setattr(
+        customer_service_workbuddy_agent_service.customer_llm_service,
+        "chat_completion",
+        fake_chat,
+    )
+
+    response, _evidence, _events, _calls, _metadata = asyncio.run(
+        customer_service_workbuddy_agent_service._run_agent(
+            None,
+            question="自然问题",
+            history=[],
+            page_sku=None,
+            context_skus=[],
+        )
+    )
+
+    prefetch_message = next(
+        item for item in inserted_messages
+        if item["role"] == "system"
+        and item["content"].lstrip().startswith("{")
+        and '"internal_context": "semantic_catalog_prefetch"' in item["content"]
+    )
+    payload = json.loads(prefetch_message["content"])
+    assert response["answer_type"] == "clarification"
+    assert prefetch_message["role"] == "system"
+    assert payload["internal_context"] == "semantic_catalog_prefetch"
+    assert payload["customer_authored"] is False
+
+
 def test_workbuddy_agent_read_product_deduplicates_and_bounds_same_sku_packet(
     monkeypatch,
 ):
@@ -776,6 +919,8 @@ def test_workbuddy_agent_rechecks_model_declared_facts_before_streaming(
     async def no_prefetch(*_args, **_kwargs):
         return []
 
+    canonical_evidence_id = {"value": ""}
+
     async def fake_execute_tool(
         _db,
         *,
@@ -799,6 +944,7 @@ def test_workbuddy_agent_rechecks_model_declared_facts_before_streaming(
             fact_authority=True,
             authority_rank=100,
         )
+        canonical_evidence_id["value"] = item["evidence_id"]
         return {
             "ok": True,
             "tool": "read_product",
@@ -834,9 +980,24 @@ def test_workbuddy_agent_rechecks_model_declared_facts_before_streaming(
                     "arguments": {"skus": ["CW-S10-A"], "query": "适用炉具"},
                 }],
             }, ensure_ascii=False)
-        else:
+        elif len(provider_calls) == 3:
             tool_payload = json.loads(messages[-1]["content"])
             evidence_id = tool_payload["tool_results"][0]["results"][0]["canonical"]["evidence_id"]
+            response = json.dumps({
+                "answer": "CW-S10-A 和 OTHER 都支持酒精炉和气炉。",
+                "identity_status": "confirmed",
+                "selected_skus": ["CW-S10-A"],
+                "claims": [{
+                    "skus": ["CW-S10-A", "OTHER"],
+                    "statement": "两款都支持酒精炉和气炉。",
+                    "evidence_ids": [evidence_id],
+                }],
+                "answer_type": "product_detail",
+            }, ensure_ascii=False)
+        else:
+            protocol = json.loads(messages[-1]["content"])
+            assert protocol["agent_protocol_error"] == "claim_provenance_invalid"
+            assert protocol["rejected_claims"][0]["reason"] == "missing_fact_authority_or_cross_sku"
             response = json.dumps({
                 "answer": "CW-S10-A 当前确认支持酒精炉和气炉。",
                 "identity_status": "confirmed",
@@ -844,7 +1005,7 @@ def test_workbuddy_agent_rechecks_model_declared_facts_before_streaming(
                 "claims": [{
                     "sku": "CW-S10-A",
                     "statement": "支持酒精炉和气炉。",
-                    "evidence_ids": [evidence_id],
+                    "evidence_ids": [canonical_evidence_id["value"]],
                 }],
                 "answer_type": "product_detail",
             }, ensure_ascii=False)
@@ -887,12 +1048,17 @@ def test_workbuddy_agent_rechecks_model_declared_facts_before_streaming(
             )
         )
 
-    assert llm_call_count == 3
-    assert metadata["grounding_retry_count"] == 1
+    assert llm_call_count == 4
+    assert metadata["grounding_retry_count"] == 2
+    assert metadata["grounding_retry_counts"] == {
+        "current_fact_evidence_required": 1,
+        "claim_provenance_invalid": 1,
+    }
     assert len(tool_events) == 1
     assert evidence[0]["fact_authority"] is True
     assert "".join(emitted) == response["answer"]
     assert "旧回复" not in "".join(emitted)
+    assert "OTHER" not in "".join(emitted)
 
 
 def test_workbuddy_agent_partial_json_stream_decoder_handles_escapes():

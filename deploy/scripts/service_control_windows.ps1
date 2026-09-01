@@ -45,6 +45,13 @@ $ProdFrontendDir = Join-Path $RepoRoot "frontend"
 $ProdFrontendOutLog = Join-Path $ProdLogDir "frontend.out.log"
 $ProdFrontendErrLog = Join-Path $ProdLogDir "frontend.err.log"
 $ExpectedBackendRoot = [System.IO.Path]::GetFullPath((Join-Path $RepoRoot "backend"))
+$ProdReleasesRoot = [System.IO.Path]::GetFullPath((Split-Path $RepoRoot -Parent))
+$RepoRootLeaf = Split-Path $RepoRoot -Leaf
+$ProdReleasesRootLeaf = Split-Path $ProdReleasesRoot -Leaf
+$IsImmutableReleaseRoot = (
+    $RepoRootLeaf -match "^[0-9a-fA-F]{40}$" -and
+    $ProdReleasesRootLeaf -like "*-prod-releases"
+)
 $ProdPython = [System.IO.Path]::GetFullPath((Join-Path $DependencyRoot "backend\runtime\prod-venv\Scripts\python.exe"))
 $LegacyPython = [System.IO.Path]::GetFullPath((Join-Path $RuntimeRoot "backend\venv\Scripts\python.exe"))
 $ProdServeCommand = [System.IO.Path]::GetFullPath((Join-Path $ProdFrontendDir "node_modules\.bin\serve.cmd"))
@@ -118,6 +125,16 @@ function Get-NormalizedProcessPath {
     }
 }
 
+function Test-ImmutableReleaseBackendCommand {
+    param([string]$CommandLine)
+    if (-not $AllowLegacySharedProcess -or -not $IsImmutableReleaseRoot -or -not $CommandLine) {
+        return $false
+    }
+    $releasePrefix = [regex]::Escape($ProdReleasesRoot.TrimEnd("\") + "\")
+    $pattern = '(?i)--app-dir\s+"?' + $releasePrefix + '[0-9a-f]{40}\\backend"?(?:\s|$)'
+    return [regex]::IsMatch($CommandLine, $pattern)
+}
+
 function Test-ProductionBackendProcess {
     param($Process)
     if (-not $Process) {
@@ -138,7 +155,8 @@ function Test-ProductionBackendProcess {
         $AllowLegacySharedProcess -and
         ($executable -eq $LegacyPython -or $cmd -like "*$LegacyPython*")
     )
-    if ($releaseProcess -or $legacyProcess) {
+    $immutableReleaseProcess = Test-ImmutableReleaseBackendCommand -CommandLine $cmd
+    if ($releaseProcess -or $legacyProcess -or $immutableReleaseProcess) {
         return $true
     }
 
@@ -163,7 +181,12 @@ function Test-ProductionBackendProcess {
         $parentCmd -like "*--port $ProdBackendPort*" -and
         ($parentExecutable -eq $LegacyPython -or $parentCmd -like "*$LegacyPython*")
     )
-    return $releaseChild -or $legacyChild
+    $immutableReleaseChild = (
+        $parentCmd -like "*uvicorn app.main:app*" -and
+        $parentCmd -like "*--port $ProdBackendPort*" -and
+        (Test-ImmutableReleaseBackendCommand -CommandLine $parentCmd)
+    )
+    return $releaseChild -or $legacyChild -or $immutableReleaseChild
 }
 
 function Test-BackendListenerIntegrity {
