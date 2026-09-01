@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { AgentAction, AgentStep, ApiRequestError, ProductSearchResult, api } from '../services/api'
+import { AgentAction, AgentStep, ApiRequestError, CustomerServicePipeline, ProductSearchResult, api } from '../services/api'
 import { useAuthStore } from '../store/authStore'
 
 interface ChatMessage {
@@ -66,7 +66,20 @@ interface ConversationListItem {
 
 const CUSTOMER_SERVICE_DRAFT_VERSION = 2
 
-export default function CustomerService() {
+interface CustomerServiceProps {
+  pipeline?: CustomerServicePipeline
+  title?: string
+  subtitle?: string
+}
+
+export default function CustomerService({
+  // The normal page keeps the established semantic-RAG baseline.  The Agent
+  // page uses a dedicated server-owned endpoint, so production never needs to
+  // trust a caller-supplied pipeline override.
+  pipeline = 'semantic_rag_v2',
+  title = '智能客服',
+  subtitle = '基于产品资料和知识库回答',
+}: CustomerServiceProps = {}) {
   const { isManagement, user } = useAuthStore()
   const canManageQa = isManagement || Boolean(
     user?.permissions?.includes('product.qa.manage') || user?.permissions?.includes('product.edit'),
@@ -96,7 +109,10 @@ export default function CustomerService() {
   const conversationListRequestRef = useRef(0)
   const draftHydratedRef = useRef(false)
   const skipNextDraftPersistRef = useRef(false)
-  const draftCacheKey = useMemo(() => customerServiceDraftKey(user?.id || user?.username), [user?.id, user?.username])
+  const draftCacheKey = useMemo(
+    () => customerServiceDraftKey(user?.id || user?.username, pipeline),
+    [pipeline, user?.id, user?.username],
+  )
   const activeConversation = conversationStates[activeConversationKey] || createConversationState()
   const question = activeConversation.question
   const messages = activeConversation.messages
@@ -212,7 +228,7 @@ export default function CustomerService() {
   const loadConversationList = useCallback(async () => {
     const requestVersion = ++conversationListRequestRef.current
     try {
-      const conversationResult = await api.customerService.conversations()
+      const conversationResult = await api.customerService.conversations(0, 30, pipeline)
       if (requestVersion !== conversationListRequestRef.current) return
       // A response that began before a deletion may complete afterward.  Do
       // not let that stale list response resurrect an already deleted row.
@@ -238,7 +254,7 @@ export default function CustomerService() {
     } catch {
       // Conversation history must not block the chat surface.
     }
-  }, [draftCacheKey])
+  }, [draftCacheKey, pipeline])
 
   const loadSideData = useCallback(async () => {
     // History is an independently useful, lightweight request.  Do not wait
@@ -394,6 +410,7 @@ export default function CustomerService() {
           }
         },
         abortController.signal,
+        pipeline,
       )
       if (streamError) throw new Error(streamError)
       updateConversationMessages(requestKey, (prev) => prev.map((message) => (
@@ -448,7 +465,7 @@ export default function CustomerService() {
     const current = conversationStates[key]
     if (current?.loading || current?.messages.length) return
     try {
-      const data = await api.customerService.conversation(id) as {
+      const data = await api.customerService.conversation(id, pipeline) as {
         id: string
         messages?: ChatMessage[]
       }
@@ -482,7 +499,7 @@ export default function CustomerService() {
       || remainingItems[Math.min(Math.max(deletedIndex, 0), Math.max(remainingItems.length - 1, 0))]
     try {
       if (item.id) {
-        await api.customerService.deleteConversation(item.id)
+        await api.customerService.deleteConversation(item.id, pipeline)
         setConversations((prev) => prev.filter((conversation) => String(conversation.id) !== item.id))
       }
       setConversationStates((prev) => {
@@ -576,7 +593,8 @@ export default function CustomerService() {
         <aside className="col-span-12 lg:col-span-3 glass rounded-2xl overflow-hidden flex flex-col">
           <div className="p-4 border-b border-black/5 flex items-center justify-between">
             <div>
-              <h1 className="text-lg font-bold text-apple-text">智能客服</h1>
+              <h1 className="text-lg font-bold text-apple-text">{title}</h1>
+              <p className="mt-1 text-[11px] text-apple-gray-medium">{subtitle}</p>
             </div>
             <button onClick={newConversation} className="text-sm text-blue-500 hover:text-blue-700 shrink-0 whitespace-nowrap ml-2">新会话</button>
           </div>
@@ -937,8 +955,11 @@ function timestampOf(value?: string | null): number {
   return Number.isFinite(parsed) ? parsed : 0
 }
 
-function customerServiceDraftKey(userKey?: string | null): string {
-  return `customer-service:draft:${userKey || 'anonymous'}`
+function customerServiceDraftKey(
+  userKey?: string | null,
+  pipeline: CustomerServicePipeline = 'semantic_rag_v2',
+): string {
+  return `customer-service:draft:${pipeline}:${userKey || 'anonymous'}`
 }
 
 function loadCustomerServiceDraft(key: string): CustomerServiceDraft | null {

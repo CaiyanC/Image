@@ -26,14 +26,21 @@ from . import (
     customer_agent_service,
     customer_enterprise_guardrail_service,
     customer_llm_service,
+    customer_pipeline_service,
     customer_perf_service,
     knowledge_service,
     product_service,
 )
 
 
+# ``\b`` is Unicode-aware in Python.  It therefore does not end an ASCII SKU
+# when the next character is Chinese (for example ``CW-C78里面``), leaving a
+# clearly named product unbound and widening the RAG candidate page.  SKU
+# extraction is identity/provenance binding, not question routing, so use
+# ASCII alphanumeric guards that still allow natural Chinese punctuation and
+# adjacent wording.
 _SKU_RE = re.compile(
-    r"\b[A-Z]{1,6}(?:-[A-Z0-9]{1,8}){1,4}\b",
+    r"(?<![A-Za-z0-9])[A-Z]{1,6}(?:-[A-Z0-9]{1,8}){1,4}(?![A-Za-z0-9])",
     flags=re.IGNORECASE,
 )
 _PLAN_KINDS = frozenset({
@@ -228,10 +235,11 @@ def _load_conversation_context(
     *,
     user_id: str,
     conversation_id: str | None,
+    pipeline: str | None = None,
 ) -> tuple[list[dict[str, Any]], list[dict[str, str]]]:
     if not conversation_id:
         return [], []
-    rows = (
+    query = (
         db.query(CustomerServiceMessage)
         .join(
             CustomerServiceConversation,
@@ -241,6 +249,11 @@ def _load_conversation_context(
             CustomerServiceMessage.conversation_id == conversation_id,
             CustomerServiceConversation.user_id == str(user_id),
         )
+    )
+    if pipeline:
+        query = query.filter(CustomerServiceConversation.pipeline == str(pipeline))
+    rows = (
+        query
         .order_by(CustomerServiceMessage.created_at.desc())
         .limit(max(int(getattr(settings, "CUSTOMER_SERVICE_V2_MAX_HISTORY_MESSAGES", 12)), 2))
         .all()
@@ -618,7 +631,11 @@ def _build_evidence(
             "source_id": str(item.get("source_id") or "").strip() or None,
             "content": item.get("content"),
             "score": item.get("score"),
-            "metadata": item.get("metadata") if isinstance(item.get("metadata"), dict) else {},
+            "metadata": (
+                dict(item.get("metadata"))
+                if isinstance(item.get("metadata"), dict)
+                else {}
+            ),
         })
 
     for row in rows:
@@ -629,7 +646,12 @@ def _build_evidence(
             "source_type": "product_record",
             "source_id": f"product:{sku}:record",
             "content": _compact_product_detail(detail),
-            "metadata": {"authority": "canonical_product_record", "same_sku": True},
+            "metadata": {
+                "authority": "canonical_product_record",
+                "authority_level": "canonical",
+                "fact_authority": True,
+                "same_sku": True,
+            },
         })
     return evidence[:28]
 
@@ -802,6 +824,7 @@ def _public_result(
     answer_metadata: dict[str, Any],
     debug: dict[str, Any],
     results: list[dict[str, Any]],
+    pipeline_version: str = "semantic_rag_v2",
     intent_override: str | None = None,
     anomalies: list[Any] | None = None,
     warnings: list[Any] | None = None,
@@ -836,7 +859,7 @@ def _public_result(
         "warnings": list(warnings or []),
         "evidence": evidence,
         "agent_quality": {
-            "pipeline_version": "semantic_rag_v2",
+            "pipeline_version": pipeline_version,
             "evidence_grounded": bool(evidence),
             "selected_evidence_count": len(selected_evidence_ids),
         },
@@ -850,7 +873,8 @@ def _public_result(
         "steps": steps,
         "result_skus": result_skus,
         "candidate_skus": candidate_skus,
-        "agent_mode": "semantic_rag_v2",
+        "agent_mode": pipeline_version,
+        "pipeline_version": pipeline_version,
     }
 
 
@@ -894,6 +918,7 @@ async def ask_customer_service_semantic_rag_v2(
         db,
         user_id=str(user_id),
         conversation_id=conversation_id,
+        pipeline=customer_pipeline_service.SEMANTIC_RAG_V2_PIPELINE,
     )
     explicit_skus = _explicit_skus(db, original_question)
     plan, plan_metadata = await _semantic_plan(
@@ -1113,6 +1138,7 @@ async def _persist_result(
         question,
         result_skus[0] if len(result_skus) == 1 else None,
         conversation_id,
+        pipeline=customer_pipeline_service.SEMANTIC_RAG_V2_PIPELINE,
     )
     db.add(CustomerServiceMessage(
         conversation_id=conversation.id,

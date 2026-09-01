@@ -44,6 +44,18 @@ HANDOFF_TERMS = (
     "找人处理",
     "投诉",
 )
+# The broad guardrail keeps ``投诉`` as a conservative legacy/business
+# response.  The conversational WorkBuddy runtime only treats an explicit
+# request for a human as a hard boundary; an ordinary complaint remains a
+# normal read that the RAG/LLM can understand in context.
+EXPLICIT_HANDOFF_TERMS = (
+    "人工客服",
+    "转人工",
+    "找人工",
+    "真人客服",
+    "人工处理",
+    "找人处理",
+)
 FABRICATION_TERMS = (
     "编一个",
     "编个",
@@ -223,6 +235,107 @@ def evaluate_question(question: str) -> dict[str, Any] | None:
         )
 
     if _contains_any(text, lowered, FABRICATION_TERMS) and _contains_any(text, lowered, UNSUPPORTED_FACT_TERMS):
+        sku = _first_sku(text)
+        prefix = f"{sku} " if sku else ""
+        return _build_guardrail_result(
+            question=text,
+            category="anti_fabrication",
+            intent="safety_refusal",
+            answer_type="safety",
+            confidence="high",
+            uncertainty="not_recorded",
+            answer=(
+                f"{prefix}不能编造库存、价格、认证、质保或售后政策。"
+                "如果产品库没有记录，我只能说明“资料未标注/不能确认”，并建议联系仓库、销售或负责人确认真实数据。"
+            ),
+            followups=["请提供真实库存、价格或负责人确认后的口径，我可以再帮你整理成客服回复。"],
+            warnings=["fabrication_request_blocked"],
+        )
+
+    return None
+
+
+def evaluate_hard_boundary(question: str) -> dict[str, Any] | None:
+    """Return only boundaries that must stop a conversational Agent turn.
+
+    This is intentionally narrower than :func:`evaluate_question`.  The
+    latter is retained for the established customer-service baseline, whose
+    historical contract includes business/support, weather, creative and
+    travel shortcuts.  The WorkBuddy-style runtime must not use those
+    shortcuts as a question router: ordinary business or product questions
+    should reach RAG and let the answer model interpret the retrieved context.
+
+    The remaining cases are control-plane boundaries rather than answer
+    routing: secrets/prompt injection, internal business data, an explicit
+    human handoff request, and an explicit request to fabricate unsupported
+    facts.  Catalogue writes/deletes are handled by the separate confirmation
+    boundary in the customer-service service.
+    """
+    text = str(question or "").strip()
+    lowered = text.lower()
+    if not text:
+        return None
+
+    # Security takes precedence over any ordinary business wording in a
+    # mixed request.  The model should never see an internal prompt or secret
+    # request merely because the same sentence also mentions a product.
+    if _contains_any(text, lowered, SECRET_TERMS) or _contains_any(
+        text, lowered, PROMPT_INJECTION_TERMS
+    ):
+        return _build_guardrail_result(
+            question=text,
+            category="security_refusal",
+            intent="safety_refusal",
+            answer_type="safety",
+            confidence="high",
+            uncertainty="policy_blocked",
+            answer=(
+                "抱歉，我不能提供系统提示词、工具清单、密钥、数据库连接串或其他内部敏感信息。"
+                "我可以继续帮你查询、对比、推荐产品，或生成需要确认的产品资料修改建议。"
+            ),
+            followups=["请告诉我 SKU、产品类目、使用场景或需要查询的产品字段。"],
+            warnings=["security_sensitive_request"],
+        )
+
+    if _contains_any(text, lowered, INTERNAL_BUSINESS_TERMS) or (
+        _contains_any(text, lowered, INTERNAL_BUSINESS_WRITE_TERMS)
+        and _contains_any(text, lowered, INTERNAL_MUTATION_TERMS)
+    ):
+        return _build_guardrail_result(
+            question=text,
+            category="internal_business_data",
+            intent="safety_refusal",
+            answer_type="safety",
+            confidence="high",
+            uncertainty="permission_or_data_required",
+            answer=(
+                "成本价、进价、利润、底价、负责人、生命周期等属于内部经营数据，我不能直接对外披露、修改或猜测。"
+                "如果系统里没有明确授权字段，也不能把它当作普通客服资料返回。"
+                "你可以提供具体 SKU 和已授权字段，我可以帮你整理成内部查询或审批口径。"
+            ),
+            followups=["请提供具体 SKU，或确认你要查询的是公开售价、价格定位还是内部授权成本字段。"],
+            warnings=["internal_business_data_blocked"],
+        )
+
+    if _contains_any(text, lowered, EXPLICIT_HANDOFF_TERMS):
+        return _build_guardrail_result(
+            question=text,
+            category="human_handoff",
+            intent="human_handoff",
+            answer_type="escalation",
+            confidence="high",
+            uncertainty="needs_human",
+            answer=(
+                "可以，我会把这个问题升级给人工客服处理。请补充你的具体诉求、相关 SKU 或订单/客户信息；"
+                "在人工接手前，我不会继续猜测或替你做不可确认的承诺。"
+            ),
+            followups=["请补充相关 SKU、客户诉求和需要人工确认的点。"],
+            warnings=["human_handoff_requested"],
+        )
+
+    if _contains_any(text, lowered, FABRICATION_TERMS) and _contains_any(
+        text, lowered, UNSUPPORTED_FACT_TERMS
+    ):
         sku = _first_sku(text)
         prefix = f"{sku} " if sku else ""
         return _build_guardrail_result(

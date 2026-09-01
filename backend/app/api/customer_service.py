@@ -13,7 +13,7 @@ from ..core.rate_limit import enforce_rate_limit
 from ..core.security import get_user_permissions, require_permission
 from ..models.knowledge_base import CustomerServiceConversation, CustomerServiceMessage
 from ..models.user import User
-from ..services import agent_action_service, customer_cache_service, customer_llm_service, customer_perf_service, customer_service_service, operation_log_service
+from ..services import agent_action_service, customer_cache_service, customer_llm_service, customer_perf_service, customer_pipeline_service, customer_service_service, operation_log_service
 
 router = APIRouter(prefix="/api/customer-service", tags=["customer-service"])
 logger = logging.getLogger("uvicorn")
@@ -40,6 +40,8 @@ _PARITY_CANONICAL_FIELDS = (
     "candidate_skus",
     "agent_quality",
     "skip_polish",
+    "pipeline_version",
+    "agent_mode",
 )
 
 # A parity snapshot is a public-response cache, not durable conversation
@@ -65,6 +67,8 @@ def _parity_result_snapshot_key(
     user_id: str,
     body: "CustomerServiceAskRequest",
     *,
+    pipeline: str | None = None,
+    server_selected_pipeline: bool = False,
     parity_isolation: bool = False,
     parity_scope: str = "",
 ) -> str | None:
@@ -77,6 +81,10 @@ def _parity_result_snapshot_key(
         "customer_service_parity_result_snapshot",
         _PARITY_RESULT_SNAPSHOT_SCHEMA_VERSION,
         str(parity_scope or "default").strip(),
+        customer_pipeline_service.resolve_customer_service_pipeline(
+            pipeline,
+            server_selected=server_selected_pipeline,
+        ),
         user_id,
         customer_cache_service.normalize_text(body.question),
         str(body.sku or "").strip().upper(),
@@ -88,6 +96,8 @@ def _canonicalize_parity_result(
     body: "CustomerServiceAskRequest",
     result: dict,
     *,
+    pipeline: str | None = None,
+    server_selected_pipeline: bool = False,
     parity_isolation: bool = False,
     parity_scope: str = "",
 ) -> dict:
@@ -96,6 +106,8 @@ def _canonicalize_parity_result(
     key = _parity_result_snapshot_key(
         user_id,
         body,
+        pipeline=pipeline,
+        server_selected_pipeline=server_selected_pipeline,
         parity_isolation=parity_isolation,
         parity_scope=parity_scope,
     )
@@ -138,15 +150,27 @@ def _recommendation_response_cache_key(
     user_id: str,
     body: "CustomerServiceAskRequest",
     *,
+    pipeline: str | None = None,
+    server_selected_pipeline: bool = False,
     parity_isolation: bool = False,
 ) -> str | None:
     if parity_isolation:
         return None
     if body.conversation_id:
         return None
+    # A recommendation response is only reusable inside the pipeline that
+    # produced it.  Without this namespace, a normal semantic-RAG response
+    # can satisfy a later WorkBuddy request (or vice versa), bypassing that
+    # pipeline's retrieval and answer LLM entirely.  Resolve the operational
+    # switch here; this is cache isolation, not question routing.
+    effective_pipeline = customer_pipeline_service.resolve_customer_service_pipeline(
+        pipeline,
+        server_selected=server_selected_pipeline,
+    )
     return customer_cache_service.make_key(
         "customer_service_recommendation_response",
         user_id,
+        effective_pipeline,
         customer_cache_service.normalize_text(body.question),
         str(body.sku or "").strip().upper(),
     )
@@ -156,9 +180,17 @@ def _cached_recommendation_response(
     user_id: str,
     body: "CustomerServiceAskRequest",
     *,
+    pipeline: str | None = None,
+    server_selected_pipeline: bool = False,
     parity_isolation: bool = False,
 ) -> dict | None:
-    key = _recommendation_response_cache_key(user_id, body, parity_isolation=parity_isolation)
+    key = _recommendation_response_cache_key(
+        user_id,
+        body,
+        pipeline=pipeline,
+        server_selected_pipeline=server_selected_pipeline,
+        parity_isolation=parity_isolation,
+    )
     return customer_cache_service.recommendation_response_cache.get(key) if key else None
 
 
@@ -167,9 +199,17 @@ def _cache_recommendation_response(
     body: "CustomerServiceAskRequest",
     result: dict,
     *,
+    pipeline: str | None = None,
+    server_selected_pipeline: bool = False,
     parity_isolation: bool = False,
 ) -> None:
-    key = _recommendation_response_cache_key(user_id, body, parity_isolation=parity_isolation)
+    key = _recommendation_response_cache_key(
+        user_id,
+        body,
+        pipeline=pipeline,
+        server_selected_pipeline=server_selected_pipeline,
+        parity_isolation=parity_isolation,
+    )
     if not key:
         return
     if result.get("answer_type") in {"recommendation", "comparison"} and result.get("result_skus"):
@@ -192,32 +232,56 @@ class CustomerServiceFeedbackRequest(BaseModel):
     comment: str | None = Field(default=None, max_length=1000)
 
 
+_SERVER_PIPELINE_STATE = "customer_service_server_pipeline"
+
+
+def _select_workbuddy_agent_pipeline(request: Request) -> None:
+    """Bind the dedicated Agent endpoint to its runtime on the server side."""
+    setattr(
+        request.state,
+        _SERVER_PIPELINE_STATE,
+        customer_pipeline_service.WORKBUDDY_AGENT_PIPELINE,
+    )
+
+
+def _request_pipeline_context(request: Request) -> tuple[str | None, bool]:
+    server_pipeline = str(
+        getattr(request.state, _SERVER_PIPELINE_STATE, "") or ""
+    ).strip()
+    if server_pipeline:
+        return server_pipeline, True
+    return request.headers.get(customer_pipeline_service.PIPELINE_HEADER), False
+
+
 @router.get("/conversations")
 def list_conversations(
     skip: int = Query(0, ge=0),
     limit: int = Query(30, ge=1, le=100),
+    pipeline: str | None = Query(None, max_length=50),
     current_user: User = Depends(require_permission("ai.customer_service")),
     db: Session = Depends(get_db),
 ):
-    return customer_service_service.list_conversations(db, current_user.id, skip, limit)
+    return customer_service_service.list_conversations(db, current_user.id, skip, limit, pipeline)
 
 
 @router.get("/conversations/{conversation_id}")
 def get_conversation(
     conversation_id: str,
+    pipeline: str | None = Query(None, max_length=50),
     current_user: User = Depends(require_permission("ai.customer_service")),
     db: Session = Depends(get_db),
 ):
-    return customer_service_service.get_conversation(db, conversation_id, current_user.id)
+    return customer_service_service.get_conversation(db, conversation_id, current_user.id, pipeline)
 
 
 @router.delete("/conversations/{conversation_id}")
 def delete_conversation(
     conversation_id: str,
+    pipeline: str | None = Query(None, max_length=50),
     current_user: User = Depends(require_permission("ai.customer_service")),
     db: Session = Depends(get_db),
 ):
-    return customer_service_service.delete_conversation(db, conversation_id, current_user.id)
+    return customer_service_service.delete_conversation(db, conversation_id, current_user.id, pipeline)
 
 
 @router.post("/messages/{message_id}/feedback")
@@ -272,6 +336,10 @@ def cancel_action(
     return agent_action_service.cancel_action(db, action_id, cancelled_by=current_user.id)
 
 
+@router.post(
+    "/agent/ask",
+    dependencies=[Depends(_select_workbuddy_agent_pipeline)],
+)
 @router.post("/ask")
 async def ask(
     body: CustomerServiceAskRequest,
@@ -288,6 +356,7 @@ async def ask(
     service_start = perf_counter()
     parity_isolation = _parity_isolation_enabled(request)
     parity_scope = _parity_isolation_scope(request)
+    pipeline_override, server_selected_pipeline = _request_pipeline_context(request)
     governance_token = customer_llm_service.set_governed_customer_user(current_user)
     try:
         service_kwargs = {
@@ -296,9 +365,10 @@ async def ask(
             "sku": body.sku,
             "conversation_id": body.conversation_id,
         }
-        pipeline_override = request.headers.get("X-Customer-Service-Pipeline")
         if pipeline_override:
             service_kwargs["pipeline"] = pipeline_override
+        if server_selected_pipeline:
+            service_kwargs["server_selected_pipeline"] = True
         result = await customer_service_service.ask_customer_service(db, **service_kwargs)
     finally:
         customer_llm_service.reset_governed_customer_user(governance_token)
@@ -306,6 +376,8 @@ async def ask(
         current_user.id,
         body,
         result,
+        pipeline=pipeline_override,
+        server_selected_pipeline=server_selected_pipeline,
         parity_isolation=parity_isolation,
         parity_scope=parity_scope,
     )
@@ -313,6 +385,8 @@ async def ask(
         current_user.id,
         body,
         result,
+        pipeline=pipeline_override,
+        server_selected_pipeline=server_selected_pipeline,
         parity_isolation=parity_isolation,
     )
     customer_perf_service.log_stage(
@@ -341,6 +415,10 @@ async def ask(
     return result
 
 
+@router.post(
+    "/agent/ask-stream",
+    dependencies=[Depends(_select_workbuddy_agent_pipeline)],
+)
 @router.post("/ask-stream")
 async def ask_stream(
     body: CustomerServiceAskRequest,
@@ -361,6 +439,7 @@ async def ask_stream(
             delta_queue: asyncio.Queue[str] = asyncio.Queue()
             parity_isolation = _parity_isolation_enabled(request)
             parity_scope = _parity_isolation_scope(request)
+            pipeline_override, server_selected_pipeline = _request_pipeline_context(request)
             buffered_answer_deltas: list[str] = []
             first_delta_logged = False
 
@@ -373,6 +452,8 @@ async def ask_stream(
             cached_result = _cached_recommendation_response(
                 current_user.id,
                 body,
+                pipeline=pipeline_override,
+                server_selected_pipeline=server_selected_pipeline,
                 parity_isolation=parity_isolation,
             )
             if cached_result is not None:
@@ -387,14 +468,17 @@ async def ask_stream(
                         "conversation_id": body.conversation_id,
                         "answer_delta_callback": on_answer_delta,
                     }
-                    pipeline_override = request.headers.get("X-Customer-Service-Pipeline")
                     if pipeline_override:
                         service_kwargs["pipeline"] = pipeline_override
+                    if server_selected_pipeline:
+                        service_kwargs["server_selected_pipeline"] = True
                     result = await customer_service_service.ask_customer_service(db, **service_kwargs)
                     _cache_recommendation_response(
                         current_user.id,
                         body,
                         result,
+                        pipeline=pipeline_override,
+                        server_selected_pipeline=server_selected_pipeline,
                         parity_isolation=parity_isolation,
                     )
                     return result
@@ -413,6 +497,8 @@ async def ask_stream(
                 current_user.id,
                 body,
                 result,
+                pipeline=pipeline_override,
+                server_selected_pipeline=server_selected_pipeline,
                 parity_isolation=parity_isolation,
                 parity_scope=parity_scope,
             )
@@ -461,6 +547,8 @@ async def ask_stream(
                 "message_id": result.get("message_id"),
                 "intent": result.get("intent"),
                 "answer_type": result.get("answer_type"),
+                "pipeline_version": result.get("pipeline_version") or (result.get("debug") or {}).get("pipeline_version"),
+                "agent_mode": result.get("agent_mode") or (result.get("debug") or {}).get("agent_mode"),
                 "result_skus": result.get("result_skus") or [],
                 "candidate_skus": result.get("candidate_skus") or [],
                 "confidence": result.get("confidence"),
@@ -479,6 +567,7 @@ async def ask_stream(
                 "actions": result.get("actions") or [],
                 "results": result.get("results") or [],
                 "steps": result.get("steps") or [],
+                "skip_polish": bool(result.get("skip_polish") or (result.get("debug") or {}).get("skip_polish")),
             })
             if result.get("needs_clarification"):
                 yield _sse("clarification", {
@@ -613,6 +702,13 @@ def _build_trace_payload(db: Session, result: dict, question: str, user_id: str)
 
 def _trace_agent_mode(result: dict, stages: list[dict]) -> str:
     raw_mode = str(result.get("agent_mode") or (result.get("debug") or {}).get("agent_mode") or "")
+    # The isolated semantic-RAG runtimes are operational pipelines, not the
+    # generic legacy agent route.  Preserve their explicit mode in the SSE
+    # trace so an audit can distinguish WorkBuddy RAG from the old planner or
+    # formatter chain.  This is observability only; it does not select a
+    # customer-service path.
+    if raw_mode in {"semantic_rag_v2", "workbuddy_rag_v1", "workbuddy_agent_v2"}:
+        return raw_mode
     if _trace_stage_hit(stages, "customer_faq_fast_path") or "faq_fast_path" in raw_mode or "purchase_channel_fast_path" in raw_mode:
         return "faq_fast"
     if _trace_stage_seen(stages, "process_intent_request_fallback"):

@@ -225,6 +225,34 @@ class AssetServiceTest(unittest.TestCase):
         self.assertEqual(updated.quality_status, "invalid")
         self.assertEqual(updated.quality_reason, "开发环境无效素材测试")
 
+    def test_batch_auto_flags_exact_checksum_duplicate_without_rejecting_it(self):
+        original = asset_service.create_asset(
+            self.db,
+            "ASSET-1",
+            {
+                "category_code": "01",
+                "category_name": "产品标准图",
+                "url": "/uploads/assets/ASSET-1/original.png",
+                "checksum_sha256": "a" * 64,
+            },
+        )
+
+        duplicate = asset_service.create_assets_batch(
+            self.db,
+            "ASSET-1",
+            [{
+                "category_code": "01",
+                "category_name": "产品标准图",
+                "url": "/uploads/assets/ASSET-1/duplicate.png",
+                "checksum_sha256": "A" * 64,
+            }],
+        )[0]
+
+        self.assertEqual(duplicate.quality_status, "suspected_duplicate")
+        self.assertEqual(duplicate.duplicate_status, "suspected_duplicate")
+        self.assertEqual(duplicate.duplicate_of_asset_id, original.id)
+        self.assertIn(original.id, duplicate.quality_reason)
+
 
 if __name__ == "__main__":
     unittest.main()

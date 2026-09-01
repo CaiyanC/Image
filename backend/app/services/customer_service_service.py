@@ -30209,11 +30209,19 @@ def _phase1_row_has_explicit_alcohol_stove_support(db: Session, row: dict[str, A
 
 
 
-def list_conversations(db: Session, user_id: str, skip: int = 0, limit: int = 30) -> dict:
+def list_conversations(
+    db: Session,
+    user_id: str,
+    skip: int = 0,
+    limit: int = 30,
+    pipeline: str | None = None,
+) -> dict:
     user_id = str(user_id)
     query = db.query(CustomerServiceConversation).filter(
         CustomerServiceConversation.user_id == user_id
     ).order_by(CustomerServiceConversation.updated_at.desc())
+    if pipeline:
+        query = query.filter(CustomerServiceConversation.pipeline == str(pipeline))
     total = query.count()
     items = query.offset(skip).limit(limit).all()
     previews = _conversation_previews(db, [item.id for item in items])
@@ -30248,6 +30256,7 @@ def _conversation_list_item(item: CustomerServiceConversation, preview: dict) ->
         "id": item.id,
         "title": item.title,
         "sku": item.sku,
+        "pipeline": str(item.pipeline or "legacy"),
         "last_message": preview[:120],
         "last_message_role": preview_message.role if preview_message else None,
         "last_message_at": str(preview_message.created_at) if preview_message and preview_message.created_at else None,
@@ -30256,13 +30265,20 @@ def _conversation_list_item(item: CustomerServiceConversation, preview: dict) ->
     }
 
 
-def get_conversation(db: Session, conversation_id: str, user_id: str) -> dict:
+def get_conversation(
+    db: Session,
+    conversation_id: str,
+    user_id: str,
+    pipeline: str | None = None,
+) -> dict:
     user_id = str(user_id)
     conversation = db.query(CustomerServiceConversation).filter(
         CustomerServiceConversation.id == conversation_id,
         CustomerServiceConversation.user_id == user_id,
     ).first()
     if not conversation:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="客服会话不存在")
+    if pipeline and str(conversation.pipeline or "legacy") != str(pipeline):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="客服会话不存在")
 
     messages = db.query(CustomerServiceMessage).filter(
@@ -30302,19 +30318,27 @@ def get_conversation(db: Session, conversation_id: str, user_id: str) -> dict:
         "id": conversation.id,
         "title": conversation.title,
         "sku": conversation.sku,
+        "pipeline": str(conversation.pipeline or "legacy"),
         "created_at": str(conversation.created_at),
         "updated_at": str(conversation.updated_at),
         "messages": payload,
     }
 
 
-def delete_conversation(db: Session, conversation_id: str, user_id: str) -> dict:
+def delete_conversation(
+    db: Session,
+    conversation_id: str,
+    user_id: str,
+    pipeline: str | None = None,
+) -> dict:
     user_id = str(user_id)
     conversation = db.query(CustomerServiceConversation).filter(
         CustomerServiceConversation.id == conversation_id,
         CustomerServiceConversation.user_id == user_id,
     ).first()
     if not conversation:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="客服会话不存在")
+    if pipeline and str(conversation.pipeline or "legacy") != str(pipeline):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="客服会话不存在")
 
     # Do not rely solely on the database FK's ON DELETE CASCADE here.  Some
@@ -35674,18 +35698,46 @@ async def ask_customer_service(
     conversation_id: str | None = None,
     answer_delta_callback: Callable[[str], Awaitable[None]] | None = None,
     pipeline: str | None = None,
+    server_selected_pipeline: bool = False,
 ) -> dict:
-    """Dispatch the selected runtime without changing the legacy contract.
+    """Dispatch the environment-selected runtime without mixing pipelines.
 
-    The default remains the established implementation. ``semantic_rag_v2``
-    is a separately persisted runtime and never falls through to the legacy
-    route/formatter chain when its own planning or retrieval fails.
+    Development defaults to the established semantic-RAG baseline while the
+    production default remains its separately configured value until release.
+    ``semantic_rag_v2``, ``workbuddy_rag_v1`` and ``workbuddy_agent_v2`` are
+    isolated runtimes: a planning or retrieval failure must not fall through
+    to the legacy route/formatter chain.
     """
-    selected_pipeline = customer_pipeline_service.resolve_customer_service_pipeline(pipeline)
+    selected_pipeline = customer_pipeline_service.resolve_customer_service_pipeline(
+        pipeline,
+        server_selected=server_selected_pipeline,
+    )
     if selected_pipeline == customer_pipeline_service.SEMANTIC_RAG_V2_PIPELINE:
         from . import customer_service_semantic_rag_v2_service
 
         return await customer_service_semantic_rag_v2_service.ask_customer_service_semantic_rag_v2(
+            db,
+            user_id=user_id,
+            question=question,
+            sku=sku,
+            conversation_id=conversation_id,
+            answer_delta_callback=answer_delta_callback,
+        )
+    if selected_pipeline == customer_pipeline_service.WORKBUDDY_RAG_PIPELINE:
+        from . import customer_service_workbuddy_rag_service
+
+        return await customer_service_workbuddy_rag_service.ask_customer_service_workbuddy_rag(
+            db,
+            user_id=user_id,
+            question=question,
+            sku=sku,
+            conversation_id=conversation_id,
+            answer_delta_callback=answer_delta_callback,
+        )
+    if selected_pipeline == customer_pipeline_service.WORKBUDDY_AGENT_PIPELINE:
+        from . import customer_service_workbuddy_agent_service
+
+        return await customer_service_workbuddy_agent_service.ask_customer_service_workbuddy_agent(
             db,
             user_id=user_id,
             question=question,
@@ -39880,6 +39932,7 @@ def _get_or_create_conversation(
     question: str,
     sku: str | None,
     conversation_id: str | None,
+    pipeline: str | None = None,
 ) -> CustomerServiceConversation:
     user_id = str(user_id)
     if conversation_id:
@@ -39888,6 +39941,8 @@ def _get_or_create_conversation(
             CustomerServiceConversation.user_id == user_id,
         ).first()
         if not conversation:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="客服会话不存在")
+        if pipeline and str(conversation.pipeline or "legacy") != str(pipeline):
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="客服会话不存在")
         return conversation
 
@@ -39900,6 +39955,7 @@ def _get_or_create_conversation(
             user_id=user_id,
             title=_make_title(question, sku),
             sku=sku,
+            pipeline=str(pipeline or "legacy"),
         )
         db.add(conversation)
         try:

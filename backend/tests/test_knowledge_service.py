@@ -71,6 +71,46 @@ class KnowledgeServiceTest(unittest.TestCase):
         self.assertIn("煮面", tokens)
         self.assertLessEqual(len(tokens), 32)
 
+    def test_retrieval_revision_changes_when_corpus_or_embedding_state_changes(self):
+        document = KnowledgeDocument(
+            id="doc-revision-1",
+            source_type="product",
+            source_id="product:REV-1:qa:1",
+            sku="REV-1",
+            title="revision",
+            content="revision content",
+        )
+        chunk = KnowledgeChunk(
+            id="chunk-revision-1",
+            document_id=document.id,
+            sku="REV-1",
+            source_type="product",
+            chunk_index=0,
+            content="revision content",
+            embedding_status="pending",
+        )
+        self.db.add_all([document, chunk])
+        self.db.commit()
+
+        pending_revision = knowledge_service._knowledge_retrieval_revision(self.db)
+        chunk.embedding_status = "synced"
+        self.db.commit()
+        synced_revision = knowledge_service._knowledge_retrieval_revision(self.db)
+
+        self.assertNotEqual(pending_revision, synced_revision)
+        self.db.add(KnowledgeChunk(
+            id="chunk-revision-2",
+            document_id=document.id,
+            sku="REV-1",
+            source_type="product",
+            chunk_index=1,
+            content="new revision content",
+            embedding_status="pending",
+        ))
+        self.db.commit()
+        expanded_revision = knowledge_service._knowledge_retrieval_revision(self.db)
+        self.assertNotEqual(synced_revision, expanded_revision)
+
     def test_keyword_retrieve_merges_token_group_pages_before_idf_ranking(self):
         now = datetime.now(timezone.utc)
         documents = []
@@ -128,6 +168,62 @@ class KnowledgeServiceTest(unittest.TestCase):
         )
 
         self.assertEqual(rows[0]["sku"], "DIRECT-1")
+
+    def test_keyword_retrieve_keeps_older_multi_token_match_in_candidate_page(self):
+        now = datetime.now(timezone.utc)
+        documents = []
+        chunks = []
+        for index in range(80):
+            document = KnowledgeDocument(
+                id=f"doc-shared-{index}",
+                source_type="product",
+                source_id=f"product:SHARED-{index}:content",
+                sku=f"SHARED-{index}",
+                title=f"shared {index}",
+                content="sharedterm catalogue text",
+            )
+            documents.append(document)
+            chunks.append(KnowledgeChunk(
+                id=f"chunk-shared-{index}",
+                document_id=document.id,
+                sku=document.sku,
+                source_type="product",
+                chunk_index=0,
+                content=document.content,
+                embedding_status="pending",
+                updated_at=now + timedelta(seconds=index),
+            ))
+
+        direct_document = KnowledgeDocument(
+            id="doc-multi-token-direct",
+            source_type="product",
+            source_id="product:DIRECT-MULTI:content",
+            sku="DIRECT-MULTI",
+            title="multi-token capability",
+            content="sharedterm rareterm exact capability",
+        )
+        documents.append(direct_document)
+        chunks.append(KnowledgeChunk(
+            id="chunk-multi-token-direct",
+            document_id=direct_document.id,
+            sku=direct_document.sku,
+            source_type="product",
+            chunk_index=0,
+            content=direct_document.content,
+            embedding_status="pending",
+            updated_at=now - timedelta(days=365),
+        ))
+        self.db.add_all(documents)
+        self.db.add_all(chunks)
+        self.db.commit()
+
+        rows = knowledge_service.keyword_retrieve(
+            self.db,
+            "sharedterm rareterm",
+            limit=5,
+        )
+
+        assert rows[0]["sku"] == "DIRECT-MULTI"
 
     def test_merge_retrieval_rows_keeps_product_keyword_evidence_when_vectors_exist(self):
         vector_rows = [{
@@ -206,6 +302,50 @@ class KnowledgeServiceTest(unittest.TestCase):
         )
 
         self.assertEqual([row["sku"] for row in rows], ["CW-C73", None])
+
+    def test_merge_generic_retrieval_preserves_distinct_sku_coverage(self):
+        vector_rows = [
+            {
+                "source_type": "product",
+                "sku": "SKU-A",
+                "content": f"SKU-A vector chunk {index}",
+                "metadata": {"source_id": f"product:SKU-A:vector:{index}"},
+            }
+            for index in range(8)
+        ]
+        vector_rows.extend(
+            {
+                "source_type": "product",
+                "sku": "SKU-B",
+                "content": f"SKU-B vector chunk {index}",
+                "metadata": {"source_id": f"product:SKU-B:vector:{index}"},
+            }
+            for index in range(8)
+        )
+        lexical_rows = [
+            {
+                "source_type": "product",
+                "sku": "SKU-NOISE",
+                "content": f"noise lexical chunk {index}",
+                "metadata": {"source_id": f"product:SKU-NOISE:lexical:{index}"},
+            }
+            for index in range(14)
+        ]
+        lexical_rows.append({
+            "source_type": "product",
+            "sku": "SKU-TARGET",
+            "content": "the independently relevant lexical product row",
+            "metadata": {"source_id": "product:SKU-TARGET:lexical"},
+        })
+
+        rows = knowledge_service.merge_retrieval_rows(
+            vector_rows,
+            lexical_rows,
+            limit=16,
+            prefer_product_sources=False,
+        )
+
+        self.assertIn("SKU-TARGET", [row["sku"] for row in rows])
 
     def test_health_report_surfaces_enterprise_readiness(self):
         self.db.add(Product(

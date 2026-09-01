@@ -200,6 +200,56 @@ class AssetApiTest(unittest.TestCase):
         self.assertFalse(original.exists())
         self.assertFalse(thumbnail.exists())
 
+    def test_upload_flags_exact_duplicate_for_manual_review(self):
+        image_data = io.BytesIO()
+        Image.new("RGB", (64, 32), color=(20, 80, 140)).save(image_data, format="PNG")
+        content = image_data.getvalue()
+        payload = {
+            "category_code": "01",
+            "category_name": "产品标准图",
+            "sub_category": "白底图",
+            "material_type": "whiteBackground",
+        }
+
+        first = self.client.post(
+            "/api/products/API-ASSET-1/assets/upload",
+            data=payload,
+            files={"files": ("first.png", content, "image/png")},
+        )
+        self.assertEqual(first.status_code, 200, first.text)
+        first_asset = first.json()["items"][0]
+
+        second = self.client.post(
+            "/api/products/API-ASSET-1/assets/upload",
+            data=payload,
+            files={"files": ("second.png", content, "image/png")},
+        )
+        self.assertEqual(second.status_code, 200, second.text)
+        second_asset = second.json()["items"][0]
+
+        self.assertEqual(first_asset["duplicate_status"], "unique")
+        self.assertEqual(second_asset["quality_status"], "suspected_duplicate")
+        self.assertEqual(second_asset["duplicate_status"], "suspected_duplicate")
+        self.assertEqual(second_asset["duplicate_of_asset_id"], first_asset["id"])
+
+    def test_upload_cannot_mark_asset_approved_without_media_review(self):
+        image_data = io.BytesIO()
+        Image.new("RGB", (16, 16), color=(20, 80, 140)).save(image_data, format="PNG")
+        with patch("app.api.assets.has_permission", return_value=False):
+            response = self.client.post(
+                "/api/products/API-ASSET-1/assets/upload",
+                data={
+                    "category_code": "01",
+                    "category_name": "产品标准图",
+                    "status_tag": "已审核",
+                },
+                files={"files": ("approved-without-review.png", image_data.getvalue(), "image/png")},
+            )
+
+        self.assertEqual(response.status_code, 403, response.text)
+        self.assertIn("media.review", response.text)
+        self.assertEqual(self.client.get("/api/products/API-ASSET-1/assets").json(), [])
+
     def test_upload_removes_saved_files_when_database_batch_fails(self):
         image_data = io.BytesIO()
         Image.new("RGB", (8, 8), color=(1, 2, 3)).save(image_data, format="PNG")

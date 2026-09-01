@@ -361,6 +361,9 @@ export interface AgentStep {
 
 export interface CustomerServiceAskResult {
   conversation_id: string
+  pipeline_version?: string
+  agent_mode?: string
+  skip_polish?: boolean
   message_id?: string | null
   intent?: string | null
   answer_type?: string | null
@@ -385,6 +388,8 @@ export interface CustomerServiceAskResult {
   result_skus?: string[]
   candidate_skus?: string[]
 }
+
+export type CustomerServicePipeline = 'legacy' | 'semantic_rag_v2' | 'workbuddy_rag_v1' | 'workbuddy_agent_v2'
 
 export interface KnowledgeBaseHealth {
   grade: 'healthy' | 'warning' | 'critical' | string
@@ -1211,13 +1216,30 @@ export const api = {
   },
 
   customerService: {
-    ask: (data: { question: string; conversation_id?: string | null }) =>
-      request<CustomerServiceAskResult>('/customer-service/ask', { method: 'POST', body: JSON.stringify(data) }, 150000),
+    ask: (
+      data: { question: string; conversation_id?: string | null },
+      pipeline?: CustomerServicePipeline,
+    ) => {
+      const isDedicatedAgent = pipeline === 'workbuddy_agent_v2'
+      return request<CustomerServiceAskResult>(isDedicatedAgent ? '/customer-service/agent/ask' : '/customer-service/ask', {
+        method: 'POST',
+        body: JSON.stringify(data),
+        ...(!isDedicatedAgent && pipeline ? { headers: { 'X-Customer-Service-Pipeline': pipeline } } : {}),
+      }, 150000)
+    },
     askStream: (
       data: { question: string; conversation_id?: string | null },
       onEvent: (event: CustomerServiceStreamEvent) => void,
       signal?: AbortSignal,
-    ) => streamRequest('/customer-service/ask-stream', { method: 'POST', body: JSON.stringify(data) }, onEvent, 150000, signal),
+      pipeline?: CustomerServicePipeline,
+    ) => {
+      const isDedicatedAgent = pipeline === 'workbuddy_agent_v2'
+      return streamRequest(isDedicatedAgent ? '/customer-service/agent/ask-stream' : '/customer-service/ask-stream', {
+        method: 'POST',
+        body: JSON.stringify(data),
+        ...(!isDedicatedAgent && pipeline ? { headers: { 'X-Customer-Service-Pipeline': pipeline } } : {}),
+      }, onEvent, 150000, signal)
+    },
     feedback: (messageId: string, data: { rating: 'helpful' | 'incorrect' | 'missing_data'; reason?: string; comment?: string }) =>
       request<{ message_id: string; feedback: Record<string, unknown> }>(
         `/customer-service/messages/${messageId}/feedback`,
@@ -1227,17 +1249,22 @@ export const api = {
       request<AgentAction>(`/customer-service/actions/${id}/confirm`, { method: 'POST' }, 150000),
     cancelAction: (id: string) =>
       request<AgentAction>(`/customer-service/actions/${id}/cancel`, { method: 'POST' }),
-    conversations: (skip = 0, limit = 30) =>
+    conversations: (skip = 0, limit = 30, pipeline?: CustomerServicePipeline) =>
       request<{ items: Array<Record<string, unknown>>; total: number }>(
-        `/customer-service/conversations?skip=${skip}&limit=${limit}`
+        `/customer-service/conversations?skip=${skip}&limit=${limit}${pipeline ? `&pipeline=${encodeURIComponent(pipeline)}` : ''}`
       ),
-    conversation: (id: string) => request<Record<string, unknown>>(`/customer-service/conversations/${id}`),
+    conversation: (id: string, pipeline?: CustomerServicePipeline) => request<Record<string, unknown>>(
+      `/customer-service/conversations/${id}${pipeline ? `?pipeline=${encodeURIComponent(pipeline)}` : ''}`,
+    ),
     reviewSamples: (limit = 100) =>
       request<{ items: Array<Record<string, unknown>>; summary: Record<string, unknown> }>(
         `/customer-service/review-samples?limit=${limit}`
       ),
-    deleteConversation: (id: string) =>
-      request<{ deleted: boolean; id: string }>(`/customer-service/conversations/${id}`, { method: 'DELETE' }),
+    deleteConversation: (id: string, pipeline?: CustomerServicePipeline) =>
+      request<{ deleted: boolean; id: string }>(
+        `/customer-service/conversations/${id}${pipeline ? `?pipeline=${encodeURIComponent(pipeline)}` : ''}`,
+        { method: 'DELETE' },
+      ),
   },
 
   knowledgeBase: {

@@ -31,11 +31,13 @@ export default function AssetLibrary() {
   const initialSku = new URLSearchParams(window.location.search).get('sku') || ''
   const [searchSku, setSearchSku] = useState(initialSku)
   const [selectedSku, setSelectedSku] = useState(initialSku)
+  const [selectedProductName, setSelectedProductName] = useState('')
   const [activeCategory, setActiveCategory] = useState('01')
   const [activeSubCategory, setActiveSubCategory] = useState<string | null>(null)
   const [assets, setAssets] = useState<ProductAsset[]>([])
   const [loading, setLoading] = useState(false)
   const [uploading, setUploading] = useState(false)
+  const [uploadError, setUploadError] = useState('')
   const [editingAsset, setEditingAsset] = useState<ProductAsset | null>(null)
   const [editForm, setEditForm] = useState<EditForm>({})
   const [lightboxAsset, setLightboxAsset] = useState<ProductAsset | null>(null)
@@ -53,6 +55,29 @@ export default function AssetLibrary() {
   useEffect(() => {
     api.products.list(0, 100).then(result => setProducts(result.items)).catch(() => setProducts([]))
   }, [])
+
+  useEffect(() => {
+    if (!selectedSku) {
+      setSelectedProductName('')
+      return
+    }
+    const localProduct = products.find(product => product.sku === selectedSku)
+    if (localProduct) {
+      setSelectedProductName(localProduct.product_name_cn || localProduct.product_name_en || '')
+      return
+    }
+    let cancelled = false
+    api.products.getBySku(selectedSku)
+      .then(product => {
+        if (!cancelled) setSelectedProductName(product.product_name_cn || product.product_name_en || '')
+      })
+      .catch(() => {
+        if (!cancelled) setSelectedProductName('')
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [products, selectedSku])
 
   useEffect(() => {
     api.assets.taxonomy().then(data => {
@@ -82,11 +107,17 @@ export default function AssetLibrary() {
   }, [searchSku])
 
   const loadAssets = useCallback(async () => {
-    if (!selectedSku) return
+    if (!selectedSku) {
+      setAssets([])
+      return
+    }
     setLoading(true)
     try {
       const result = await api.assets.list(selectedSku)
       setAssets(result)
+    } catch {
+      // Never leave the previous SKU's assets visible after a failed reload.
+      setAssets([])
     } finally {
       setLoading(false)
     }
@@ -132,7 +163,9 @@ export default function AssetLibrary() {
     setSelectedSku(sku)
     setSearchSku(sku)
     setSearchResults([])
+    setAssets([])
     setSelectedAssetIds(new Set())
+    setUploadError('')
   }
 
   const uploadFiles = async (files: FileList | File[], materialOverride?: string, notesOverride?: string) => {
@@ -140,6 +173,7 @@ export default function AssetLibrary() {
     const fileArray = Array.from(files)
     if (!fileArray.length) return
     setUploading(true)
+    setUploadError('')
     try {
       const subCategory = activeCategory === '06' ? '视频' : activeSubCategory
       const materialType = activeCategory === '06' ? 'video' : materialOverride || activeMaterialType
@@ -153,6 +187,11 @@ export default function AssetLibrary() {
       })
       setAssets(prev => [...prev, ...response.items])
       setPromptText('')
+    } catch (error) {
+      // Upload failures used to become unhandled promise rejections while
+      // the UI only stopped the spinner. Keep the selected SKU/assets intact
+      // and show the server's actionable message to the operator.
+      setUploadError(error instanceof Error ? error.message : '素材上传失败，请稍后重试')
     } finally {
       setUploading(false)
     }
@@ -267,7 +306,7 @@ export default function AssetLibrary() {
 
   return (
     <div className="mx-auto flex w-full max-w-[1500px] flex-col gap-5 px-4 pb-10 sm:px-6">
-      <section className="glass px-5 py-4">
+          <section className="glass px-5 py-4">
         <div className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
           <div>
             <p className="eyebrow">L6 Asset Library</p>
@@ -308,6 +347,28 @@ export default function AssetLibrary() {
             )}
           </div>
         </div>
+        {selectedSku && (
+          <div
+            data-testid="asset-selected-product"
+            className="mt-4 flex flex-wrap items-center gap-2 rounded-xl border border-teal-200 bg-teal-50/80 px-4 py-3 text-sm"
+          >
+            <span className="font-bold text-teal-700">当前素材范围</span>
+            <span className="rounded-full bg-white px-3 py-1 font-black text-teal-900">SKU：{selectedSku}</span>
+            {selectedProductName && <span className="font-bold text-teal-800">{selectedProductName}</span>}
+            <button
+              type="button"
+              className="ml-auto rounded-full bg-white px-3 py-1 text-xs font-bold text-apple-gray-dark hover:bg-teal-100"
+              onClick={() => {
+                setSelectedSku('')
+                setSearchSku('')
+                setAssets([])
+                setSelectedAssetIds(new Set())
+              }}
+            >
+              更换 SKU
+            </button>
+          </div>
+        )}
       </section>
 
       {!selectedSku ? (
@@ -372,6 +433,11 @@ export default function AssetLibrary() {
               setPromptText={setPromptText}
               uploadFiles={uploadFiles}
             />
+            {uploadError && (
+              <div role="alert" className="mb-4 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm font-bold text-red-700">
+                {uploadError}
+              </div>
+            )}
 
             {selectedAssetIds.size > 0 && (
               <BatchToolbar

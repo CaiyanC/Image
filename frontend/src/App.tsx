@@ -16,6 +16,8 @@ const ProductManagement = lazy(() => import('./pages/ProductManagement'))
 const AssetLibrary = lazy(() => import('./pages/AssetLibrary'))
 const AssetSearch = lazy(() => import('./pages/AssetSearch'))
 const CustomerService = lazy(() => import('./pages/CustomerService'))
+const WorkbuddyCustomerService = lazy(() => import('./pages/WorkbuddyCustomerService'))
+const AgentCustomerService = lazy(() => import('./pages/AgentCustomerService'))
 const ProductQaCreate = lazy(() => import('./pages/ProductQaCreate'))
 const KnowledgeBase = lazy(() => import('./pages/KnowledgeBase'))
 const FileKnowledgeBase = lazy(() => import('./pages/FileKnowledgeBase'))
@@ -194,6 +196,28 @@ export default function App() {
             <PermissionRoute permissionKey="ai.customer_service">
               <Layout>
                 <CustomerService />
+              </Layout>
+            </PermissionRoute>
+          }
+        />
+        {import.meta.env.MODE === 'dev' && (
+          <Route
+            path="/customer-service/workbuddy"
+            element={
+              <PermissionRoute permissionKey="ai.customer_service">
+                <Layout>
+                  <WorkbuddyCustomerService />
+                </Layout>
+              </PermissionRoute>
+            }
+          />
+        )}
+        <Route
+          path="/customer-service/agent"
+          element={
+            <PermissionRoute permissionKey="ai.customer_service">
+              <Layout>
+                <AgentCustomerService />
               </Layout>
             </PermissionRoute>
           }

@@ -125,10 +125,14 @@ class Settings:
     SEMANTIC_PREPLAN_TEMPERATURE: float = float(os.getenv("SEMANTIC_PREPLAN_TEMPERATURE", "0"))
     SEMANTIC_PREPLAN_JSON_MODE: bool = os.getenv("SEMANTIC_PREPLAN_JSON_MODE", "true").lower() == "true"
     SEMANTIC_PREPLAN_THINKING_DISABLED: bool = os.getenv("SEMANTIC_PREPLAN_THINKING_DISABLED", "true").lower() == "true"
-    # Customer-service pipeline selection is an operational switch.  Keep the
-    # established path as the default and require an explicit dev-only
-    # request override before a caller can exercise the isolated v2 path.
-    CUSTOMER_SERVICE_PIPELINE: str = os.getenv("CUSTOMER_SERVICE_PIPELINE", "legacy").strip().lower()
+    # Customer-service pipeline selection is an operational switch.  Development
+    # must exercise the established semantic-RAG baseline by default; production
+    # keeps the legacy value until an explicit release changes its configuration.
+    # This is an environment default, not a question router.
+    CUSTOMER_SERVICE_PIPELINE: str = os.getenv(
+        "CUSTOMER_SERVICE_PIPELINE",
+        "semantic_rag_v2" if APP_ENV == "dev" else "legacy",
+    ).strip().lower()
     CUSTOMER_SERVICE_PIPELINE_OVERRIDE_ENABLED: bool = os.getenv(
         "CUSTOMER_SERVICE_PIPELINE_OVERRIDE_ENABLED",
         "true" if APP_ENV == "dev" else "false",
@@ -139,6 +143,18 @@ class Settings:
     CUSTOMER_SERVICE_V2_MAX_RETRIEVAL_ROWS: int = int(
         os.getenv("CUSTOMER_SERVICE_V2_MAX_RETRIEVAL_ROWS", "8")
     )
+    # WorkBuddy keeps a wider candidate recall page than the existing semantic
+    # baseline.  The answer prompt remains bounded separately, so this
+    # improves catalogue recall without adding another model call.
+    CUSTOMER_SERVICE_WORKBUDDY_MAX_RETRIEVAL_ROWS: int = int(
+        os.getenv("CUSTOMER_SERVICE_WORKBUDDY_MAX_RETRIEVAL_ROWS", "16")
+    )
+    CUSTOMER_SERVICE_WORKBUDDY_MAX_ANSWER_TOKENS: int = int(
+        os.getenv("CUSTOMER_SERVICE_WORKBUDDY_MAX_ANSWER_TOKENS", "320")
+    )
+    CUSTOMER_SERVICE_WORKBUDDY_REASONING_EFFORT: str = os.getenv(
+        "CUSTOMER_SERVICE_WORKBUDDY_REASONING_EFFORT", "none"
+    ).strip().lower()
 
     DATABASE_URL: str = os.getenv(
         "DATABASE_URL",
@@ -197,6 +213,42 @@ def database_name_from_url(database_url: str) -> str:
         return ""
 
 
+def redis_database_from_url(redis_url: str) -> int:
+    """Return the Redis logical database, treating an omitted DB as 0.
+
+    Redis is shared by the local deployment, so the logical DB is part of the
+    dev/prod isolation contract just like the PostgreSQL database and Celery
+    queue.  Fail closed for malformed or non-integer database components
+    rather than allowing a process to start against an ambiguous namespace.
+    """
+    try:
+        parsed = make_url(redis_url)
+    except Exception as exc:
+        raise RuntimeError("REDIS_URL is invalid") from exc
+    database = parsed.database
+    if database in (None, ""):
+        return 0
+    try:
+        return int(database)
+    except (TypeError, ValueError) as exc:
+        raise RuntimeError("REDIS_URL database must be an integer") from exc
+
+
+def safe_runtime_url(url: str) -> str:
+    """Render a runtime URL without credentials for logs and diagnostics."""
+    try:
+        parsed = make_url(url)
+        host = parsed.host or ""
+        if ":" in host and not host.startswith("["):
+            host = f"[{host}]"
+        if parsed.port:
+            host = f"{host}:{parsed.port}"
+        database = f"/{parsed.database}" if parsed.database not in (None, "") else ""
+        return f"{parsed.drivername}://{host}{database}"
+    except Exception:
+        return "<invalid>"
+
+
 def _upload_dir_name(upload_dir: str) -> str:
     normalized = os.path.normpath(upload_dir)
     return os.path.basename(normalized).lower()
@@ -209,6 +261,7 @@ def validate_runtime_isolation(current_settings: Settings) -> None:
 
     database_name = database_name_from_url(current_settings.DATABASE_URL)
     upload_name = _upload_dir_name(current_settings.UPLOAD_DIR)
+    redis_database = redis_database_from_url(current_settings.REDIS_URL)
 
     if app_env == "dev" and database_name == "product_knowledge":
         raise RuntimeError("Refusing to start dev environment with production database product_knowledge")
@@ -220,6 +273,13 @@ def validate_runtime_isolation(current_settings: Settings) -> None:
         raise RuntimeError("Refusing to start prod environment with development UPLOAD_DIR=uploads_dev")
     if app_env == "preview" and (database_name in {"product_knowledge", "product_knowledge_dev"} or upload_name in {"uploads", "uploads_dev"}):
         raise RuntimeError("Preview must use an isolated database and upload directory")
+
+    expected_redis_database = {"prod": 0, "dev": 1, "preview": 2}[app_env]
+    if redis_database != expected_redis_database:
+        raise RuntimeError(
+            f"Refusing to start {app_env} environment with Redis database {redis_database}; "
+            f"expected {expected_redis_database}"
+        )
 
     expected_celery_queue = {"prod": "celery_prod", "dev": "celery_dev", "preview": "celery_toolpreview"}[app_env]
     expected_worker_name = {"prod": "worker_prod", "dev": "worker_dev", "preview": "worker_toolpreview"}[app_env]
@@ -279,7 +339,8 @@ def runtime_summary(current_settings: Settings) -> dict:
         "database": database_name_from_url(current_settings.DATABASE_URL),
         "upload_dir": current_settings.UPLOAD_DIR,
         "backend_port": current_settings.BACKEND_PORT,
-        "redis_url": current_settings.REDIS_URL,
+        "redis_url": safe_runtime_url(current_settings.REDIS_URL),
+        "redis_database": redis_database_from_url(current_settings.REDIS_URL),
         "celery_queue": current_settings.CELERY_QUEUE,
         "celery_worker_name": current_settings.CELERY_WORKER_NAME,
         "log_dir": current_settings.LOG_DIR,

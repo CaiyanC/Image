@@ -60,6 +60,7 @@ def init_db():
         _ensure_products_compat_columns()
         _ensure_product_assets_compat()
         _ensure_product_qa_integrity_compat()
+        _ensure_customer_service_conversation_compat()
         _init_vector_storage()
 
         db = SessionLocal()
@@ -293,6 +294,42 @@ def _ensure_product_qa_integrity_compat():
             ))
     except Exception as exc:
         logger.warning("failed to ensure product QA integrity compatibility columns: %s", exc)
+
+
+def _ensure_customer_service_conversation_compat():
+    """Add the runtime discriminator to databases created before isolation."""
+    try:
+        inspector = inspect(engine)
+        if "customer_service_conversations" not in set(inspector.get_table_names()):
+            return
+        columns = {column["name"] for column in inspector.get_columns("customer_service_conversations")}
+        with engine.begin() as conn:
+            if "pipeline" not in columns:
+                conn.execute(text(
+                    "ALTER TABLE customer_service_conversations "
+                    "ADD COLUMN pipeline VARCHAR(50) NOT NULL DEFAULT 'legacy'"
+                ))
+            conn.execute(text(
+                "UPDATE customer_service_conversations SET pipeline = 'legacy' "
+                "WHERE pipeline IS NULL OR pipeline = ''"
+            ))
+            # v2 was introduced before the discriminator. Recover those
+            # conversations from the immutable pipeline provenance persisted
+            # in their assistant source metadata instead of losing context on
+            # the next follow-up.
+            conn.execute(text(
+                "UPDATE customer_service_conversations SET pipeline = 'semantic_rag_v2' "
+                "WHERE pipeline = 'legacy' AND id IN ("
+                "SELECT DISTINCT conversation_id FROM customer_service_messages "
+                "WHERE sources_json LIKE '%semantic_rag_v2%'"
+                ")"
+            ))
+            conn.execute(text(
+                "CREATE INDEX IF NOT EXISTS idx_customer_service_conversations_pipeline "
+                "ON customer_service_conversations (user_id, pipeline, updated_at)"
+            ))
+    except Exception as exc:
+        logger.warning("failed to ensure customer-service pipeline compatibility: %s", exc)
 
 
 def _seed_default_groups(db, *, migrate_legacy: bool = True):

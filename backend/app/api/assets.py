@@ -186,7 +186,18 @@ def upload_assets(
     upload_user: User = Depends(require_permission("media.upload")),
     db: Session = Depends(get_db),
 ):
-    del current_user, upload_user
+    # ``status_tag`` is a review/lifecycle decision, even though it arrives in
+    # the multipart upload form rather than the JSON asset update endpoint.
+    # Keep ordinary uploaders able to create pending assets, but do not let
+    # ``media.upload`` implicitly grant ``media.review`` and publish a file to
+    # the approved/MCP-visible set.
+    if status_tag is not None:
+        _require_review_permission_for_changed_fields(
+            db,
+            current_user,
+            {"status_tag": status_tag},
+        )
+    del upload_user
     asset_service.ensure_product_exists(db, sku)
     maximum = MAX_ASSET_VIDEOS_PER_REQUEST if category_code == "06" else MAX_ASSET_IMAGES_PER_REQUEST
     if not files or len(files) > maximum:

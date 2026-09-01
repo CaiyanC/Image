@@ -38,6 +38,33 @@ def _governance_table_is_missing(exc: OperationalError) -> bool:
     )
 
 
+def _effective_legacy_chat_model_name(
+    db: Session,
+    *,
+    model: str | None,
+    api_model_override: str | None,
+) -> str:
+    """Return the request model used by the compatibility config path.
+
+    The customer-service governance table is optional for older deployments.
+    When it is absent, ``dmxapi_service`` resolves the enabled legacy chat
+    config itself.  The old trace label (``legacy_system_default``) described
+    the resolver branch rather than the model actually sent upstream, which
+    made an otherwise valid Luna request look like an unknown fallback.
+    Keep this lookup descriptive only; it does not select a route or alter the
+    provider request.
+    """
+    if api_model_override:
+        return str(api_model_override)
+    if model:
+        config = dmxapi_service._resolve_model_config(db, model)
+        return str(config.get("api_model") or config.get("id") or model)
+    config = dmxapi_service.get_default_model_by_type(db, "chat")
+    if isinstance(config, dict):
+        return str(config.get("api_model") or config.get("id") or "legacy_system_default")
+    return "legacy_system_default"
+
+
 def _resolve_customer_model_or_legacy(db: Session, user: User):
     """Use legacy system config only until customer-service governance is configured."""
     try:
@@ -97,6 +124,7 @@ async def chat_completion(
     api_model_override: str | None = None,
     response_format: dict[str, Any] | None = None,
     thinking: dict[str, Any] | None = None,
+    reasoning_effort: str | None = None,
     metadata: dict[str, Any] | None = None,
     user: User | None = None,
 ) -> str:
@@ -110,7 +138,11 @@ async def chat_completion(
     # A governed decision is authoritative.  Before governance has any
     # customer-service config, retain the pre-existing system model/API path.
     model_name = str(resolved_model.model.request_model_name) if resolved_model else (
-        str(api_model_override or model or "legacy_system_default")
+        _effective_legacy_chat_model_name(
+            db,
+            model=model,
+            api_model_override=api_model_override,
+        )
     )
     response_metadata: dict[str, Any] = {}
     try:
@@ -123,6 +155,7 @@ async def chat_completion(
             api_model_override=None if resolved_model else api_model_override,
             response_format=response_format,
             thinking=thinking,
+            reasoning_effort=reasoning_effort,
             response_metadata=response_metadata,
             resolved_model=resolved_model,
         )
@@ -146,6 +179,7 @@ async def chat_completion(
                     "max_tokens": max_tokens,
                     "response_format": response_format if isinstance(response_format, dict) and response_format else None,
                     "thinking": thinking if isinstance(thinking, dict) and thinking else None,
+                    "reasoning_effort": reasoning_effort,
                     "usage": response_metadata.get("usage"),
                     "elapsed_ms": llm_record.get("elapsed_ms"),
                     "prompt_chars": prompt_chars,
@@ -183,6 +217,7 @@ async def chat_completion(
                     "max_tokens": max_tokens,
                     "response_format": response_format if isinstance(response_format, dict) and response_format else None,
                     "thinking": thinking if isinstance(thinking, dict) and thinking else None,
+                    "reasoning_effort": reasoning_effort,
                     "usage": response_metadata.get("usage"),
                     "elapsed_ms": llm_record.get("elapsed_ms"),
                     "prompt_chars": prompt_chars,
@@ -217,6 +252,10 @@ async def chat_completion_stream(
     *,
     purpose: str = "chat",
     api_model_override: str | None = None,
+    response_format: dict[str, Any] | None = None,
+    thinking: dict[str, Any] | None = None,
+    reasoning_effort: str | None = None,
+    metadata: dict[str, Any] | None = None,
     user: User | None = None,
 ):
     start_time = perf_counter()
@@ -227,7 +266,11 @@ async def chat_completion_stream(
         raise ValueError("Customer chat requires a governed user context")
     resolved_model = _resolve_customer_model_or_legacy(db, user)
     model_name = str(resolved_model.model.request_model_name) if resolved_model else (
-        str(api_model_override or model or "legacy_system_default")
+        _effective_legacy_chat_model_name(
+            db,
+            model=model,
+            api_model_override=api_model_override,
+        )
     )
     completion_parts: list[str] = []
     try:
@@ -238,30 +281,55 @@ async def chat_completion_stream(
             temperature=temperature,
             max_tokens=max_tokens,
             api_model_override=None if resolved_model else api_model_override,
+            response_format=response_format,
+            thinking=thinking,
+            reasoning_effort=reasoning_effort,
             resolved_model=resolved_model,
         ):
             completion_parts.append(str(chunk))
             yield str(chunk)
         content = "".join(completion_parts)
+        elapsed_ms = customer_perf_service.perf_ms(start_time)
         customer_perf_service.record_llm_call(
             purpose=purpose,
             model=model_name,
-            elapsed_ms=customer_perf_service.perf_ms(start_time),
+            elapsed_ms=elapsed_ms,
             prompt_chars=prompt_chars,
             completion_chars=len(content),
             prompt_tokens_est=prompt_tokens_est,
             completion_tokens_est=max(1, len(content) // 4) if content else 0,
         )
+        if isinstance(metadata, dict):
+            metadata.update(
+                {
+                    "purpose": purpose,
+                    "model": model_name,
+                    "request_model": model_name,
+                    "api_model_override": None if resolved_model else api_model_override,
+                    "temperature": temperature,
+                    "max_tokens": max_tokens,
+                    "response_format": response_format if isinstance(response_format, dict) and response_format else None,
+                    "thinking": thinking if isinstance(thinking, dict) and thinking else None,
+                    "reasoning_effort": reasoning_effort,
+                    "usage": None,
+                    "elapsed_ms": elapsed_ms,
+                    "prompt_chars": prompt_chars,
+                    "prompt_tokens_est": prompt_tokens_est,
+                    "completion_chars": len(content),
+                    "completion_tokens_est": max(1, len(content) // 4) if content else 0,
+                }
+            )
         if resolved_model:
             _write_governance_usage(
                 db, user=user, resolved_model=resolved_model, result="success",
                 latency_ms=round(customer_perf_service.perf_ms(start_time)),
             )
     except Exception as exc:
+        elapsed_ms = customer_perf_service.perf_ms(start_time)
         customer_perf_service.record_llm_call(
             purpose=purpose,
             model=model_name,
-            elapsed_ms=customer_perf_service.perf_ms(start_time),
+            elapsed_ms=elapsed_ms,
             prompt_chars=prompt_chars,
             completion_chars=None,
             prompt_tokens_est=prompt_tokens_est,
@@ -269,6 +337,28 @@ async def chat_completion_stream(
             timeout=isinstance(exc, TimeoutError),
             error=str(exc),
         )
+        if isinstance(metadata, dict):
+            metadata.update(
+                {
+                    "purpose": purpose,
+                    "model": model_name,
+                    "request_model": model_name,
+                    "api_model_override": None if resolved_model else api_model_override,
+                    "temperature": temperature,
+                    "max_tokens": max_tokens,
+                    "response_format": response_format if isinstance(response_format, dict) and response_format else None,
+                    "thinking": thinking if isinstance(thinking, dict) and thinking else None,
+                    "reasoning_effort": reasoning_effort,
+                    "usage": None,
+                    "elapsed_ms": elapsed_ms,
+                    "prompt_chars": prompt_chars,
+                    "prompt_tokens_est": prompt_tokens_est,
+                    "completion_chars": None,
+                    "completion_tokens_est": None,
+                    "timeout": isinstance(exc, TimeoutError),
+                    "error": str(exc),
+                }
+            )
         is_timeout = isinstance(exc, (TimeoutError, dmxapi_service.httpx.TimeoutException))
         if resolved_model:
             _write_governance_usage(

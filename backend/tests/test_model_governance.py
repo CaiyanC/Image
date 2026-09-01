@@ -1146,12 +1146,17 @@ def test_customer_llm_stream_uses_governed_model_and_writes_success_usage(db, en
 
     monkeypatch.setattr(customer_llm_service.dmxapi_service, "chat_completion_stream", fake_stream)
 
+    metadata = {}
+
     async def collect():
         return [chunk async for chunk in customer_llm_service.chat_completion_stream(
-            db, [{"role": "user", "content": "hello"}], user=user,
+            db, [{"role": "user", "content": "hello"}], user=user, metadata=metadata,
         )]
 
     assert asyncio.run(collect()) == ["governed ", "stream"]
+    assert metadata["model"] == "stream-provider-chat-v1"
+    assert metadata["purpose"] == "chat"
+    assert metadata["completion_chars"] == len("governed stream")
     usage = db.query(AIModelUsageLog).one()
     assert (usage.user_id, usage.feature_key, usage.model_id, usage.credential_scope_type, usage.result) == (
         user.id, "customer_service.chat", model.id, "company", "success",

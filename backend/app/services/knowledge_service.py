@@ -3,13 +3,45 @@ import math
 import re
 from typing import Any
 
-from sqlalchemy import distinct, func, or_, text
+from sqlalchemy import case, distinct, func, or_, text
 from sqlalchemy.orm import Session
 
 from ..models.knowledge_base import KnowledgeChunk, KnowledgeDocument
 from ..models.product import Product
 from . import dmxapi_service
 from . import customer_cache_service
+
+
+def _knowledge_retrieval_revision(db: Session) -> str:
+    """Return a cheap data/embedding revision for retrieval-cache keys.
+
+    Retrieval results are derived from ``knowledge_chunks``.  A fixed TTL
+    alone can therefore serve a stale candidate page after a product or QA
+    sync, especially when a long-lived API worker keeps its in-process cache.
+    The revision intentionally uses only database state: chunk count, latest
+    update time, and embedding-status counts.  It is not a question router or
+    a relevance rule; it makes a cached RAG page disappear as soon as the
+    underlying corpus changes, including a pending -> synced embedding update.
+    """
+    try:
+        total, latest, synced, pending, failed = db.query(
+            func.count(KnowledgeChunk.id),
+            func.max(KnowledgeChunk.updated_at),
+            func.sum(case((KnowledgeChunk.embedding_status == "synced", 1), else_=0)),
+            func.sum(case((KnowledgeChunk.embedding_status == "pending", 1), else_=0)),
+            func.sum(case((KnowledgeChunk.embedding_status == "failed", 1), else_=0)),
+        ).one()
+        return "|".join([
+            str(total or 0),
+            str(latest or ""),
+            str(synced or 0),
+            str(pending or 0),
+            str(failed or 0),
+        ])
+    except Exception:
+        # Keep retrieval available for an old/incomplete test database.  The
+        # normal retrieval exception path still handles missing tables.
+        return "unavailable"
 
 
 def vector_status(db: Session) -> dict:
@@ -243,10 +275,20 @@ def keyword_retrieve(
                 KnowledgeChunk.content.ilike(f"%{token}%")
                 for token in tokens[:32]
             ]
+            match_count = sum(
+                (
+                    case(
+                        (KnowledgeChunk.content.ilike(f"%{token}%"), 1),
+                        else_=0,
+                    )
+                    for token in tokens[:32]
+                ),
+                0,
+            )
             chunks = (
                 db_query
                 .filter(or_(*conditions))
-                .order_by(KnowledgeChunk.updated_at.desc())
+                .order_by(match_count.desc(), KnowledgeChunk.updated_at.desc())
                 .limit(max(limit * 8, limit))
                 .all()
             )
@@ -259,10 +301,28 @@ def keyword_retrieve(
                     KnowledgeChunk.content.ilike(f"%{token}%")
                     for token in token_group
                 ]
+                # Candidate generation must preserve rows that match several
+                # parts of the same natural question.  Ordering this bounded
+                # page only by recency lets a large, recently-updated QA set
+                # for a generic term (for example, a field name) evict an
+                # older row that also contains the product phrase.  The
+                # final in-memory IDF score still owns the ranking; this SQL
+                # expression only keeps multi-token lexical evidence visible
+                # long enough for that ranker to evaluate it.
+                match_count = sum(
+                    (
+                        case(
+                            (KnowledgeChunk.content.ilike(f"%{token}%"), 1),
+                            else_=0,
+                        )
+                        for token in token_group
+                    ),
+                    0,
+                )
                 grouped_chunks = (
                     db_query
                     .filter(or_(*conditions))
-                    .order_by(KnowledgeChunk.updated_at.desc())
+                    .order_by(match_count.desc(), KnowledgeChunk.updated_at.desc())
                     .limit(per_group_limit)
                     .all()
                 )
@@ -342,6 +402,32 @@ def merge_retrieval_rows(
     """
     if limit <= 0:
         return []
+
+    def _preserve_sku_diversity(
+        rows: list[tuple[int, int, dict]],
+    ) -> list[tuple[int, int, dict]]:
+        """Keep a first evidence row for each SKU before repeated rows.
+
+        Hybrid retrieval commonly returns several QA chunks for the same
+        product.  If those rows consume the result budget before another
+        product's independently relevant row, the answer model cannot even
+        compare the products the customer named.  This is a source-diversity
+        property of the retrieval page, not a product-name or question rule;
+        unbound knowledge rows remain in their fused order.
+        """
+        diverse_rows: list[tuple[int, int, dict]] = []
+        overflow_rows: list[tuple[int, int, dict]] = []
+        represented_skus: set[str] = set()
+        for item in rows:
+            sku = str(item[2].get("sku") or "").strip().upper()
+            if sku and sku in represented_skus:
+                overflow_rows.append(item)
+                continue
+            if sku:
+                represented_skus.add(sku)
+            diverse_rows.append(item)
+        return [*diverse_rows, *overflow_rows]
+
     combined: list[tuple[int, int, dict]] = []
     seen: set[tuple[str, str, str, str]] = set()
     for origin, rows in enumerate((primary_rows or [], supplemental_rows or [])):
@@ -396,18 +482,7 @@ def merge_retrieval_rows(
         # diversity safeguard; it does not inspect the question, category, or
         # any product phrase, and it leaves the later semantic adjudication in
         # charge of relevance and factual authorization.
-        diverse_rows: list[tuple[int, int, dict]] = []
-        overflow_rows: list[tuple[int, int, dict]] = []
-        represented_skus: set[str] = set()
-        for item in combined:
-            sku = str(item[2].get("sku") or "").strip().upper()
-            if sku and sku in represented_skus:
-                overflow_rows.append(item)
-                continue
-            if sku:
-                represented_skus.add(sku)
-            diverse_rows.append(item)
-        combined = [*diverse_rows, *overflow_rows]
+        combined = _preserve_sku_diversity(combined)
     else:
         # Generic knowledge retrieval still needs both semantic and lexical
         # signals.  Keeping the complete vector page ahead of lexical rows
@@ -468,6 +543,11 @@ def merge_retrieval_rows(
                 item[1],
             )
         )
+        # The unanchored WorkBuddy turn also needs product coverage.  It is
+        # intentionally applied after rank fusion so vector/lexical relevance
+        # still decides which row represents a SKU; diversity only prevents
+        # repeated chunks from hiding independently relevant products.
+        combined = _preserve_sku_diversity(combined)
     return [row for _origin, _index, row in combined[:limit]]
 
 
@@ -494,6 +574,10 @@ async def semantic_retrieve(
         for section in (sections or [])
         if str(section or "").strip()
     ))
+    # Include the live corpus revision so a product/QA sync is immediately
+    # visible to every worker, rather than waiting for the five-minute local
+    # candidate-cache TTL to expire.
+    retrieval_revision = _knowledge_retrieval_revision(db)
     cache_key = customer_cache_service.make_key(
         "semantic_retrieve",
         id(db),
@@ -503,6 +587,7 @@ async def semantic_retrieve(
         prefer_product_sources,
         normalized_skus,
         normalized_sections,
+        retrieval_revision,
     )
     cached = customer_cache_service.recommendation_candidate_cache.get(cache_key)
     if cached is not None:
