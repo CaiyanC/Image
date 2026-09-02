@@ -13,6 +13,7 @@ const AdminSettings = lazy(() => import('./pages/AdminSettings'))
 const AdminGroups = lazy(() => import('./pages/AdminGroups'))
 const AdminLogs = lazy(() => import('./pages/AdminLogs'))
 const ProductManagement = lazy(() => import('./pages/ProductManagement'))
+const ProductAuditOverview = lazy(() => import('./pages/ProductAuditOverview'))
 const AssetLibrary = lazy(() => import('./pages/AssetLibrary'))
 const AssetSearch = lazy(() => import('./pages/AssetSearch'))
 const CustomerService = lazy(() => import('./pages/CustomerService'))
@@ -196,6 +197,16 @@ export default function App() {
             <PermissionRoute permissionKey="ai.customer_service">
               <Layout>
                 <CustomerService />
+              </Layout>
+            </PermissionRoute>
+          }
+        />
+        <Route
+          path="/products/audit"
+          element={
+            <PermissionRoute permissionKey="product.read">
+              <Layout>
+                <ProductAuditOverview />
               </Layout>
             </PermissionRoute>
           }

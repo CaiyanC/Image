@@ -183,6 +183,26 @@ def get_product_filter_options(
     return product_service.get_product_filter_options(db)
 
 
+@router.get("/audit-overview")
+def get_product_audit_overview(
+    skip: int = Query(0, ge=0),
+    limit: int = Query(500, ge=1, le=500),
+    q: str | None = Query(None, max_length=200),
+    issues_only: bool = Query(False),
+    current_user: User = Depends(require_product_permission("read")),
+    db: Session = Depends(get_db),
+):
+    """Return a read-only product/QA/asset/vector reconciliation view."""
+    del current_user
+    return product_service.get_product_audit_overview(
+        db,
+        skip=skip,
+        limit=limit,
+        q=q,
+        issues_only=issues_only,
+    )
+
+
 @router.get("/by-sku/{sku}")
 def get_product_by_sku(
     sku: str,

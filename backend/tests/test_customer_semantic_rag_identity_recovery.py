@@ -126,6 +126,64 @@ def test_identity_recovery_uses_full_customer_turn_and_ignores_predicate_candida
     assert result["semantic_identity_recovery"]["resolved_sku"] == "TW-141"
 
 
+def test_identity_recovery_runs_when_semantic_planner_dropped_subject(monkeypatch):
+    target = _product("TW-204-42", "便携式户外旅行筷", category="餐具")
+    other = _product("TW-301-37", "折叠锅铲", category="餐具")
+    db = _ProductDb([target, other])
+    retrieval_calls = []
+    captured = {}
+
+    monkeypatch.setattr(service.customer_agent_service, "_extract_skus", lambda _question: [])
+    monkeypatch.setattr(service, "_products_named_in_question", lambda _db, _question: [])
+
+    async def fake_retrieve(_db, query, **kwargs):
+        retrieval_calls.append({"query": query, **kwargs})
+        return [
+            {
+                "sku": "TW-204-42",
+                "content": "Q: 便携式户外旅行筷有什么值得注意的？A: 折叠便携、环保卫生、材质安全。",
+                "score": 0.96,
+                "metadata": {"section": "qa", "source_id": "qa:tw-204-42:care"},
+            },
+        ]
+
+    async def fake_chat_completion(_db, messages, **_kwargs):
+        captured["payload"] = json.loads(messages[-1]["content"])
+        return json.dumps({
+            "selected_candidate_index": 0,
+            "confidence": "high",
+            "reasoning_summary": "same product QA establishes the natural product name",
+        })
+
+    monkeypatch.setattr(service.knowledge_service, "semantic_retrieve", fake_retrieve)
+    monkeypatch.setattr(service.customer_llm_service, "chat_completion", fake_chat_completion)
+    monkeypatch.setattr(
+        service.customer_agent_planner_service,
+        "_semantic_preplan_runtime_settings",
+        lambda: {"model": "flash", "max_tokens": 180, "response_format": None, "thinking": None},
+    )
+
+    question = "便携式户外旅行筷有什么值得注意的？"
+    result = asyncio.run(service._semantic_recover_product_identity_from_rag(
+        db,
+        question,
+        {
+            "route_family": "product_bound_qa",
+            "subject_text": "",
+            "entities": [],
+            "context_result_indexes": [],
+            "context_usage": "none",
+        },
+    ))
+
+    assert len(retrieval_calls) == 2
+    assert retrieval_calls[0]["query"] == question
+    assert retrieval_calls[1]["query"] == question
+    assert captured["payload"]["customer_product_subject"] == ""
+    assert result["subject_text"] == "便携式户外旅行筷"
+    assert result["semantic_identity_recovery"]["resolved_sku"] == "TW-204-42"
+
+
 def test_identity_recovery_refines_evidence_inside_recalled_candidate_skus(monkeypatch):
     target = _product("AC-Z13", "拾野·便携调料瓶套装", category="配件")
     other = _product("TX-38", "坐忘泡茶套装", category="茶具")

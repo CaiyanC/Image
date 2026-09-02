@@ -684,6 +684,22 @@ def test_semantic_preplan_prompt_receives_prior_scope_as_discourse_context():
     assert "heat source" in messages[0]["content"]
 
 
+def test_semantic_preplan_prompt_receives_current_catalogue_identity_context():
+    messages = customer_agent_planner_service._semantic_preplan_messages(
+        question="便携式户外旅行筷有什么值得注意的？",
+        deterministic_plan={},
+        context={
+            "has_unique_current_turn_catalog_product_name": True,
+            "unique_current_turn_catalog_product_mention": "便携式户外旅行筷",
+        },
+    )
+
+    payload = json.loads(messages[1]["content"])
+    assert payload["has_unique_current_turn_catalog_product_name"] is True
+    assert payload["unique_current_turn_catalog_product_mention"] == "便携式户外旅行筷"
+    assert "identity context" in messages[0]["content"]
+
+
 def test_semantic_preplan_prompt_separates_requested_product_from_heat_source():
     messages = customer_agent_planner_service._semantic_preplan_messages(
         question="有没有推荐的卡式炉？",

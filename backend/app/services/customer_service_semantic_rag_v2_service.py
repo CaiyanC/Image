@@ -790,7 +790,12 @@ def _validated_answer(
     if uncertainty not in {"confirmed", "partial", "unconfirmed"}:
         uncertainty = "unconfirmed"
     followups = _unique_strings(value.get("suggested_followups"), limit=3, max_length=240)
-    result_skus = selected_skus or ([candidate_skus[0]] if len(candidate_skus) == 1 else candidate_skus[:5])
+    # Candidate retrieval is context for the next semantic decision, not a
+    # customer-visible selection.  In particular, an identity-ambiguous
+    # clarification must not render product cards merely because RAG found
+    # several plausible SKUs.  Only SKUs explicitly selected by the answer
+    # model and present in the bound evidence can become result_skus.
+    result_skus = selected_skus
     return (
         answer,
         answer_type,
@@ -1028,8 +1033,6 @@ async def ask_customer_service_semantic_rag_v2(
         question=original_question,
         identity_ambiguity=identity_ambiguity,
     )
-    if identity_ambiguity:
-        result_skus = candidate_skus
     sources = [
         {
             "type": "rag_evidence",
