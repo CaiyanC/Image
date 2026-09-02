@@ -66,6 +66,88 @@ interface ConversationListItem {
 
 const CUSTOMER_SERVICE_DRAFT_VERSION = 2
 
+interface InFlightCustomerServiceRequest {
+  abortController: AbortController
+  snapshot: CustomerConversationState
+}
+
+// A route change unmounts CustomerService, but it must not cancel a request
+// that the customer already sent.  Keep the active request outside the page
+// component so its stream can continue and the next mount can reattach to the
+// same conversation state.
+const inFlightCustomerServiceRequests = new Map<string, InFlightCustomerServiceRequest>()
+
+function inFlightCustomerServiceRequestKey(cacheKey: string, conversationKey: ConversationKey): string {
+  return `${cacheKey}\u0000${conversationKey}`
+}
+
+function getInFlightCustomerServiceRequest(
+  cacheKey: string,
+  conversationKey: ConversationKey,
+): InFlightCustomerServiceRequest | null {
+  return inFlightCustomerServiceRequests.get(inFlightCustomerServiceRequestKey(cacheKey, conversationKey)) || null
+}
+
+function hasInFlightCustomerServiceRequests(cacheKey: string): boolean {
+  const prefix = `${cacheKey}\u0000`
+  return Array.from(inFlightCustomerServiceRequests.keys()).some((key) => key.startsWith(prefix))
+}
+
+function mergeInFlightCustomerServiceStates(
+  cacheKey: string,
+  states: Record<ConversationKey, CustomerConversationState>,
+): Record<ConversationKey, CustomerConversationState> {
+  const merged = { ...states }
+  const prefix = `${cacheKey}\u0000`
+  for (const [requestKey, request] of inFlightCustomerServiceRequests.entries()) {
+    if (requestKey.startsWith(prefix)) {
+      merged[requestKey.slice(prefix.length)] = request.snapshot
+    }
+  }
+  return merged
+}
+
+function persistInFlightCustomerServiceState(
+  cacheKey: string,
+  conversationKey: ConversationKey,
+  state: CustomerConversationState,
+  activeConversationKey: ConversationKey,
+) {
+  const existing = loadCustomerServiceDraft(cacheKey)
+  const conversationStates = existing?.conversationStates
+    ? { ...existing.conversationStates }
+    : {}
+  conversationStates[conversationKey] = { ...state, abortController: null }
+  saveCustomerServiceDraft(cacheKey, {
+    version: CUSTOMER_SERVICE_DRAFT_VERSION,
+    activeConversationKey: activeConversationKey || existing?.activeConversationKey || conversationKey,
+    conversationStates,
+    savedAt: new Date().toISOString(),
+  })
+}
+
+function registerInFlightCustomerServiceRequest(
+  cacheKey: string,
+  conversationKey: ConversationKey,
+  abortController: AbortController,
+  snapshot: CustomerConversationState,
+  activeConversationKey: ConversationKey,
+) {
+  inFlightCustomerServiceRequests.set(inFlightCustomerServiceRequestKey(cacheKey, conversationKey), {
+    abortController,
+    snapshot,
+  })
+  persistInFlightCustomerServiceState(cacheKey, conversationKey, snapshot, activeConversationKey)
+}
+
+function removeInFlightCustomerServiceRequest(cacheKey: string, conversationKey: ConversationKey) {
+  inFlightCustomerServiceRequests.delete(inFlightCustomerServiceRequestKey(cacheKey, conversationKey))
+}
+
+function abortInFlightCustomerServiceRequest(cacheKey: string, conversationKey: ConversationKey) {
+  getInFlightCustomerServiceRequest(cacheKey, conversationKey)?.abortController.abort()
+}
+
 interface CustomerServiceProps {
   pipeline?: CustomerServicePipeline
   title?: string
@@ -98,7 +180,6 @@ export default function CustomerService({
   const [now, setNow] = useState(() => Date.now())
   const bottomRef = useRef<HTMLDivElement | null>(null)
   const chatContainerRef = useRef<HTMLDivElement | null>(null)
-  const conversationStatesRef = useRef(conversationStates)
   const deletedConversationKeysRef = useRef<Set<ConversationKey>>(new Set())
   const deletedConversationIdsRef = useRef<Set<string>>(new Set())
   // The ref is an immediate mutual-exclusion guard. React state alone is
@@ -120,10 +201,6 @@ export default function CustomerService({
   const error = activeConversation.error
 
   useEffect(() => {
-    conversationStatesRef.current = conversationStates
-  }, [conversationStates])
-
-  useEffect(() => {
     activeConversationKeyRef.current = activeConversationKey
   }, [activeConversationKey])
 
@@ -137,8 +214,9 @@ export default function CustomerService({
     skipNextDraftPersistRef.current = true
     draftHydratedRef.current = false
     const draft = loadCustomerServiceDraft(draftCacheKey)
-    const states = draft?.conversationStates && Object.keys(draft.conversationStates).length
-      ? restoreConversationStates(draft.conversationStates)
+    const savedStates = mergeInFlightCustomerServiceStates(draftCacheKey, draft?.conversationStates || {})
+    const states = Object.keys(savedStates).length
+      ? restoreConversationStates(savedStates, draftCacheKey)
       : { [initialConversationKey]: createConversationState() }
     const draftKey = draft?.activeConversationKey && states[draft.activeConversationKey]
       ? draft.activeConversationKey
@@ -210,6 +288,20 @@ export default function CustomerService({
     key: ConversationKey,
     updater: (state: CustomerConversationState) => CustomerConversationState,
   ) {
+    if (!deletedConversationKeysRef.current.has(key)) {
+      const inFlight = getInFlightCustomerServiceRequest(draftCacheKey, key)
+      if (inFlight) {
+        inFlight.snapshot = updater(inFlight.snapshot)
+        // This write is intentionally independent of React.  It keeps the
+        // latest streamed text/status available after this page unmounts.
+        persistInFlightCustomerServiceState(
+          draftCacheKey,
+          key,
+          inFlight.snapshot,
+          activeConversationKeyRef.current,
+        )
+      }
+    }
     setConversationStates((prev) => {
       if (deletedConversationKeysRef.current.has(key)) return prev
       const current = prev[key] || createConversationState()
@@ -233,7 +325,7 @@ export default function CustomerService({
       // A response that began before a deletion may complete afterward.  Do
       // not let that stale list response resurrect an already deleted row.
       setConversations(conversationResult.items.filter((item) => !deletedConversationIdsRef.current.has(String(item.id))))
-      if (conversationResult.total === 0) {
+      if (conversationResult.total === 0 && !hasInFlightCustomerServiceRequests(draftCacheKey)) {
         // Server-side history may be cleared outside this tab.  A persisted
         // draft with a former conversation_id is no longer a real session and
         // must not be rendered or reused for the next ask request.
@@ -275,9 +367,6 @@ export default function CustomerService({
 
   useEffect(() => {
     void loadSideData()
-    return () => {
-      Object.values(conversationStatesRef.current).forEach((state) => state.abortController?.abort())
-    }
   }, [loadSideData])
 
   async function ask() {
@@ -289,19 +378,28 @@ export default function CustomerService({
     const assistantId = `assistant-${Date.now()}`
     const abortController = new AbortController()
     let streamError = ''
-    updateConversationState(requestKey, (state) => ({
-      ...state,
+    const responseStartedAt = Date.now()
+    const startedState = createConversationState({
+      ...requestState,
       question: '',
       loading: true,
       abortController,
       error: '',
-      title: state.title || userText.slice(0, 20),
+      title: requestState.title || userText.slice(0, 20),
       messages: [
-        ...state.messages,
+        ...requestState.messages,
         { role: 'user', content: userText },
-        { id: assistantId, role: 'assistant', content: '', streaming: true, response_started_at: Date.now() },
+        { id: assistantId, role: 'assistant', content: '', streaming: true, response_started_at: responseStartedAt },
       ],
-    }))
+    })
+    registerInFlightCustomerServiceRequest(
+      draftCacheKey,
+      requestKey,
+      abortController,
+      startedState,
+      activeConversationKeyRef.current,
+    )
+    updateConversationState(requestKey, () => startedState)
 
     try {
       await api.customerService.askStream(
@@ -451,11 +549,13 @@ export default function CustomerService({
         loading: false,
         abortController: state.abortController === abortController ? null : state.abortController,
       }))
+      removeInFlightCustomerServiceRequest(draftCacheKey, requestKey)
     }
   }
 
   function cancelCurrentAnswer() {
     conversationStates[activeConversationKey]?.abortController?.abort()
+    abortInFlightCustomerServiceRequest(draftCacheKey, activeConversationKey)
   }
 
   async function openConversation(id: string, preferredKey?: ConversationKey) {
@@ -486,6 +586,7 @@ export default function CustomerService({
   async function deleteConversation(item: ConversationListItem) {
     if (deletedConversationKeysRef.current.has(item.key) || deletingConversationKeysRef.current.has(item.key)) return
     conversationStates[item.key]?.abortController?.abort()
+    abortInFlightCustomerServiceRequest(draftCacheKey, item.key)
     // Tombstone the local key before awaiting the HTTP request.  A cancelled
     // stream can still deliver a final event briefly; without this guard that
     // event writes the deleted chat back into React state and localStorage.
@@ -895,19 +996,25 @@ function serializeConversationStates(
   return Object.fromEntries(Object.entries(states).map(([key, state]) => [key, {
     ...state,
     abortController: null,
-    messages: compactDraftMessages(state.messages, maxMessages),
+    messages: compactDraftMessages(state.messages, maxMessages, state.loading),
   }]))
 }
 
 function restoreConversationStates(
   states: Record<ConversationKey, CustomerConversationState>,
+  cacheKey?: string,
 ): Record<ConversationKey, CustomerConversationState> {
-  return Object.fromEntries(Object.entries(states).map(([key, state]) => [key, createConversationState({
-    ...state,
-    loading: false,
-    abortController: null,
-    messages: compactDraftMessages(state.messages || []),
-  })]))
+  return Object.fromEntries(Object.entries(states).map(([key, state]) => {
+    const inFlight = cacheKey ? getInFlightCustomerServiceRequest(cacheKey, key) : null
+    const source = inFlight?.snapshot || state
+    const pending = Boolean(inFlight && source.loading)
+    return [key, createConversationState({
+      ...source,
+      loading: pending,
+      abortController: inFlight?.abortController || null,
+      messages: compactDraftMessages(source.messages || [], 80, pending),
+    })]
+  }))
 }
 
 function formatResponseDuration(startedAt: number, endedAt: number): string {
@@ -1007,12 +1114,12 @@ function saveCustomerServiceDraft(key: string, draft: CustomerServiceDraft) {
   }
 }
 
-function compactDraftMessages(messages: ChatMessage[], maxMessages = 80): ChatMessage[] {
+function compactDraftMessages(messages: ChatMessage[], maxMessages = 80, preservePending = false): ChatMessage[] {
   return messages.slice(-maxMessages).map((message) => ({
     ...message,
-    streaming: false,
-    status: message.streaming ? '' : message.status,
-    response_completed_at: message.streaming ? Date.now() : message.response_completed_at,
+    streaming: preservePending ? message.streaming : false,
+    status: preservePending ? message.status : (message.streaming ? '' : message.status),
+    response_completed_at: preservePending ? message.response_completed_at : (message.streaming ? Date.now() : message.response_completed_at),
   }))
 }
 

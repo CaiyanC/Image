@@ -31,16 +31,14 @@ export default function Header() {
     navigate('/login')
   }
 
-  // Keep the two customer-service entry points together.  WorkBuddy is a
-  // development-only extra and must not push the Agent entry out of a narrow
-  // navigation bar, which made the Agent route look as if it had disappeared.
+  // Keep only the two supported customer-service entry points in the menu.
+  // WorkBuddy remains a direct development route for rollback/comparison, but
+  // exposing it beside the normal and Agent paths makes the product look like
+  // it has three competing customer-service modes.
   const customerServiceItems = [
     ...(has('ai.customer_service') ? [{ path: '/customer-service', label: '智能客服' }] : []),
     ...(has('ai.customer_service')
       ? [{ path: '/customer-service/agent', label: '智能客服 · Agent' }]
-      : []),
-    ...(import.meta.env.MODE === 'dev' && has('ai.customer_service')
-      ? [{ path: '/customer-service/workbuddy', label: '智能客服 · WorkBuddy' }]
       : []),
   ]
 
