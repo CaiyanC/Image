@@ -31,15 +31,22 @@ export default function Header() {
     navigate('/login')
   }
 
-  const navItems = [
-    { path: '/tools', label: '工具中心' },
+  // Keep the two customer-service entry points together.  WorkBuddy is a
+  // development-only extra and must not push the Agent entry out of a narrow
+  // navigation bar, which made the Agent route look as if it had disappeared.
+  const customerServiceItems = [
     ...(has('ai.customer_service') ? [{ path: '/customer-service', label: '智能客服' }] : []),
-    ...(import.meta.env.MODE === 'dev' && has('ai.customer_service')
-      ? [{ path: '/customer-service/workbuddy', label: '智能客服 · WorkBuddy' }]
-      : []),
     ...(has('ai.customer_service')
       ? [{ path: '/customer-service/agent', label: '智能客服 · Agent' }]
       : []),
+    ...(import.meta.env.MODE === 'dev' && has('ai.customer_service')
+      ? [{ path: '/customer-service/workbuddy', label: '智能客服 · WorkBuddy' }]
+      : []),
+  ]
+
+  const navItems = [
+    { path: '/tools', label: '工具中心' },
+    ...customerServiceItems,
     ...(isSuperAdmin ? [{ path: '/knowledge-base', label: '知识库运维' }] : []),
     ...(isSuperAdmin ? [{ path: '/file-knowledge', label: '文件知识库' }] : []),
     ...(has('ai.generate') ? [{ path: '/', label: '创作' }] : []),
@@ -66,7 +73,7 @@ export default function Header() {
   return (
     <header className="fixed left-0 right-0 top-0 z-50 h-28 md:h-20">
       <div className="glass-dark mx-3 mt-3 flex h-14 items-center justify-between rounded-[28px] px-4 sm:mx-5 sm:px-5">
-        <div className="flex min-w-0 items-center gap-4 lg:gap-8">
+        <div className="flex min-w-0 flex-1 items-center gap-4 lg:gap-8">
           <Link to={homePath} className="group flex min-w-0 items-center gap-3">
             <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-2xl bg-gradient-accent text-sm font-black text-white shadow-[0_12px_24px_rgba(15,118,110,0.22)]">
               AI
@@ -80,12 +87,12 @@ export default function Header() {
               </span>
             </span>
           </Link>
-          <nav className="hidden items-center gap-1 rounded-full border border-white/50 bg-white/35 p-1 shadow-inner md:flex">
+          <nav className="hidden min-w-0 flex-1 items-center gap-1 overflow-x-auto rounded-full border border-white/50 bg-white/35 p-1 shadow-inner md:flex">
             {navItems.map((item) => (
               <Link
                 key={item.path}
                 to={item.path}
-                className={`rounded-full px-3.5 py-1.5 text-sm font-bold transition-all duration-200 ${
+              className={`shrink-0 whitespace-nowrap rounded-full px-3.5 py-1.5 text-sm font-bold transition-all duration-200 ${
                   location.pathname === item.path ? 'nav-active' : 'nav-idle'
                 }`}
               >
@@ -176,7 +183,7 @@ export default function Header() {
             <Link
               key={item.path}
               to={item.path}
-              className={`shrink-0 rounded-full px-3.5 py-1.5 text-sm font-bold transition-all duration-200 ${
+                className={`shrink-0 whitespace-nowrap rounded-full px-3.5 py-1.5 text-sm font-bold transition-all duration-200 ${
                 location.pathname === item.path ? 'nav-active' : 'nav-idle'
               }`}
             >
