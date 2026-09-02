@@ -470,6 +470,12 @@ class ProductImportSafetyTest(unittest.TestCase):
             patch.object(draft_service, "get_product_by_sku", return_value=self.product),
             patch.object(product_service, "_validate_product_data"),
             patch.object(product_service, "sync_product_m2m"),
+            patch.object(
+                draft_service,
+                "sync_product_to_vector_db",
+                return_value={"sku": self.product.sku, "ready_for_rag": True},
+            ) as sync_product,
+            patch.object(draft_service, "invalidate_product_detail_cache") as invalidate_cache,
             patch.object(draft_service, "get_product_detail", return_value={"sku": self.product.sku}),
             # This test uses an unmapped draft double.  The deletion lifecycle
             # is asserted without asking SQLAlchemy to persist that double;
@@ -479,6 +485,8 @@ class ProductImportSafetyTest(unittest.TestCase):
             draft_service.publish_draft(self.db, draft.id, "tester")
 
         delete_draft.assert_called_once_with(draft)
+        sync_product.assert_called_once_with(self.db, self.product.sku)
+        self.assertEqual(invalidate_cache.call_count, 2)
 
         self.assertEqual(self.product.product_name_cn, "导入后名称")
         self.assertEqual(self.db.query(ProductQa).count(), 1)
