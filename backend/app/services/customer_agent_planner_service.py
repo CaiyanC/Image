@@ -2647,6 +2647,10 @@ def _semantic_preplan_messages(
         "question_type one of safety,count,filter,field,contents_accessories,comparison,recommendation,usage,unknown_field,followup,navigation. "
          "entities are verbatim product mentions from the current turn only. subject_text preserves the requested "
          "physical product, catalogue category, collection, or full versioned identity; it is not a desired outcome or decision role. "
+         "The server may provide has_unique_current_turn_catalog_product_name=true together with "
+         "unique_current_turn_catalog_product_mention, which is a literal current-turn span already matched to one live "
+         "catalogue product. Treat those values as identity context, not as a route instruction, answer, SKU, or product fact; "
+         "when present, do not lose that named-product context while structuring the complete turn. "
          "For an unbound gift request, keep the stated activity/category as product scope; preserve gifting suitability as a preference, not a product form. Context result indexes are opaque one-based "
          "positions supplied by the server; use them only when the current turn refers to those prior results and never "
          "turn them into product identities. When a current turn refers to a product from a prior recommendation and "
@@ -2761,6 +2765,8 @@ def _semantic_preplan_messages(
         "has_recommendation_context": bool(context.get("has_recommendation_context")),
         "active_product_anchor": context.get("active_product_anchor") or {},
         "has_page_product_anchor": bool(context.get("has_page_product_anchor")),
+        "has_unique_current_turn_catalog_product_name": bool(context.get("has_unique_current_turn_catalog_product_name")),
+        "unique_current_turn_catalog_product_mention": str(context.get("unique_current_turn_catalog_product_mention") or ""),
         "database_field_value_hints": context.get("database_field_value_hints") or [],
         "prior_result_context_indexes": context.get("prior_result_context_indexes") or [],
         "prior_result_context_semantics": context.get("prior_result_context_semantics") or {},

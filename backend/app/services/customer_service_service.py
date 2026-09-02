@@ -32629,7 +32629,6 @@ async def _semantic_recover_product_identity_from_rag(
     if (
         db is None
         or str(value.get("route_family") or "").strip() != "product_bound_qa"
-        or str(value.get("subject_text") or "").strip() == ""
         or value.get("context_result_indexes")
         or str(value.get("context_usage") or "").strip()
         in {"entity_anchor", "active_product_anchor", "anchor", "result_context"}
