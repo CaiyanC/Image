@@ -1,7 +1,9 @@
 import json
 from . import product_vector_index_service
+from collections import defaultdict
 import uuid
 from datetime import date
+from pathlib import Path
 import re
 from typing import Optional, List
 
@@ -19,6 +21,7 @@ from ..models.product_asset import ProductAsset
 from ..models.product_prompts import ProductPrompts
 from ..models.product_qa import ProductQa, ProductQaNegative
 from ..models.knowledge_base import KnowledgeChunk
+from ..core.config import settings
 from ..models.product_associations import (
     ListingChannel, ProductListingChannel,
     SalesRegion, ProductSalesRegion,
@@ -497,6 +500,283 @@ def get_products(db: Session, skip: int = 0, limit: int = 20, q: str = None):
             "created_at": str(p.created_at) if p.created_at else None,
         })
     return items, total
+
+
+def _audit_has_value(value) -> bool:
+    """Return whether a product audit field contains usable data."""
+    value = _serialize_json(value)
+    if value is None:
+        return False
+    if isinstance(value, str):
+        return bool(value.strip())
+    if isinstance(value, (list, tuple, set, dict)):
+        return bool(value)
+    return True
+
+
+def _audit_asset_storage_state(url: str | None) -> str:
+    """Check local upload references without touching external URLs."""
+    raw = str(url or "").strip().split("?", 1)[0].replace("\\", "/")
+    if not raw:
+        return "missing_url"
+    if raw.startswith(("http://", "https://")):
+        return "external"
+    if not raw.startswith("/uploads/"):
+        return "unsupported_path"
+    upload_root = Path(settings.UPLOAD_DIR).resolve()
+    candidate = (upload_root / raw.removeprefix("/uploads/").lstrip("/")).resolve()
+    if candidate != upload_root and upload_root not in candidate.parents:
+        return "unsupported_path"
+    return "present" if candidate.is_file() else "missing_file"
+
+
+def get_product_audit_overview(
+    db: Session,
+    *,
+    skip: int = 0,
+    limit: int = 500,
+    q: str | None = None,
+    issues_only: bool = False,
+) -> dict:
+    """Build a read-only, cross-layer product catalogue audit snapshot.
+
+    This is deliberately an observation view, not a publishing gate.  It
+    joins the current product record with QA review states, asset lifecycle
+    states and product-bound vector chunks so operators can inspect gaps
+    before choosing the existing create/edit screens.
+    """
+    skip = max(int(skip or 0), 0)
+    limit = min(max(int(limit or 500), 1), 500)
+    products = db.query(Product).order_by(Product.sku.asc()).all()
+
+    product_ids = [str(item.id) for item in products if item.id]
+    product_skus = [str(item.sku).strip().upper() for item in products if item.sku]
+    product_id_set = set(product_ids)
+    product_sku_set = set(product_skus)
+
+    specs_by_product = {
+        str(item.product_id): item
+        for item in db.query(ProductSpecs).filter(ProductSpecs.product_id.in_(product_ids)).all()
+    } if product_ids else {}
+    content_by_product = {
+        str(item.product_id): item
+        for item in db.query(ProductContent).filter(ProductContent.product_id.in_(product_ids)).all()
+    } if product_ids else {}
+    qa_by_product: dict[str, list[ProductQa]] = defaultdict(list)
+    if product_ids:
+        for item in db.query(ProductQa).filter(ProductQa.product_id.in_(product_ids)).all():
+            qa_by_product[str(item.product_id)].append(item)
+
+    asset_by_sku: dict[str, list[ProductAsset]] = defaultdict(list)
+    asset_table_available = inspect(db.get_bind()).has_table(ProductAsset.__tablename__)
+    if asset_table_available and product_skus:
+        for item in db.query(ProductAsset).filter(ProductAsset.sku.in_(product_skus)).all():
+            asset_by_sku[str(item.sku or "").strip().upper()].append(item)
+
+    vector_by_sku: dict[str, list[KnowledgeChunk]] = defaultdict(list)
+    all_vector_skus: set[str] = set()
+    for item in db.query(KnowledgeChunk).filter(KnowledgeChunk.sku.is_not(None)).all():
+        item_sku = str(item.sku or "").strip().upper()
+        if not item_sku:
+            continue
+        all_vector_skus.add(item_sku)
+        if item_sku in product_sku_set and str(item.source_type or "").strip().lower() == "product":
+            vector_by_sku[item_sku].append(item)
+
+    records: list[dict] = []
+    summary = {
+        "products_total": len(products),
+        "products_ready": 0,
+        "products_with_issues": 0,
+        "qa_total": 0,
+        "qa_approved": 0,
+        "qa_review": 0,
+        "qa_rejected": 0,
+        "asset_total": 0,
+        "asset_approved": 0,
+        "asset_pending": 0,
+        "asset_invalid": 0,
+        "asset_duplicates": 0,
+        "asset_storage_present": 0,
+        "asset_storage_missing": 0,
+        "asset_storage_external": 0,
+        "vector_product_chunks": 0,
+        "vector_synced": 0,
+        "vector_pending": 0,
+        "vector_failed": 0,
+        "products_missing_vectors": 0,
+    }
+
+    for product in products:
+        product_id = str(product.id)
+        sku = str(product.sku or "").strip().upper()
+        specs = specs_by_product.get(product_id)
+        content = content_by_product.get(product_id)
+        qas = qa_by_product.get(product_id, [])
+        assets = asset_by_sku.get(sku, [])
+        vectors = vector_by_sku.get(sku, [])
+
+        missing_fields: list[str] = []
+        for field, label, value in (
+            ("barcode", "条形码", product.barcode),
+            ("product_name_cn", "中文产品名", product.product_name_cn),
+            ("brand", "品牌", product.brand),
+            ("specs.capacity", "容量", specs.capacity if specs else None),
+            ("specs.power", "功率", specs.power if specs else None),
+            ("specs.technical_advantages", "技术优势", specs.technical_advantages if specs else None),
+            ("specs.usage_instruction", "使用说明", specs.usage_instruction if specs else None),
+            ("content.title_cn", "中文标题", content.title_cn if content else None),
+            ("content.long_description_cn", "中文长描述", content.long_description_cn if content else None),
+        ):
+            if not _audit_has_value(value):
+                missing_fields.append(label)
+
+        qa_counts = {"approved": 0, "review": 0, "rejected": 0, "other": 0}
+        for qa in qas:
+            state = str(qa.integrity_status or "").strip().lower()
+            if state in qa_counts:
+                qa_counts[state] += 1
+            else:
+                qa_counts["other"] += 1
+
+        asset_counts = {"approved": 0, "pending": 0, "invalid": 0, "duplicates": 0}
+        storage_counts = {"present": 0, "missing": 0, "external": 0, "other": 0}
+        for asset in assets:
+            review_state = str(asset.review_status or "").strip().lower()
+            if review_state == "approved":
+                asset_counts["approved"] += 1
+            else:
+                asset_counts["pending"] += 1
+            if str(asset.quality_status or "").strip().lower() == "invalid":
+                asset_counts["invalid"] += 1
+            if str(asset.duplicate_status or "").strip().lower() != "unique":
+                asset_counts["duplicates"] += 1
+            for url in (asset.url, asset.thumbnail_url):
+                storage_state = _audit_asset_storage_state(url)
+                if storage_state == "present":
+                    storage_counts["present"] += 1
+                elif storage_state in {"missing_file", "missing_url"}:
+                    storage_counts["missing"] += 1
+                elif storage_state == "external":
+                    storage_counts["external"] += 1
+                else:
+                    storage_counts["other"] += 1
+
+        vector_counts = {"synced": 0, "pending": 0, "failed": 0, "other": 0}
+        for chunk in vectors:
+            state = str(chunk.embedding_status or "").strip().lower()
+            if state in vector_counts:
+                vector_counts[state] += 1
+            else:
+                vector_counts["other"] += 1
+
+        issues: list[str] = []
+        if missing_fields:
+            issues.append("product_fields_missing")
+        if qa_counts["review"] or qa_counts["other"]:
+            issues.append("qa_needs_review")
+        if asset_counts["invalid"] or asset_counts["duplicates"] or asset_counts["pending"]:
+            issues.append("asset_needs_review")
+        if storage_counts["missing"] or storage_counts["other"]:
+            issues.append("asset_storage_unavailable")
+        if not vectors:
+            issues.append("vector_missing")
+        elif vector_counts["pending"] or vector_counts["failed"] or vector_counts["other"]:
+            issues.append("vector_not_ready")
+        if not bool(product.sync_flag):
+            issues.append("product_sync_flag_false")
+
+        ready = not issues
+        summary["products_ready"] += int(ready)
+        summary["products_with_issues"] += int(bool(issues))
+        summary["qa_total"] += len(qas)
+        summary["qa_approved"] += qa_counts["approved"]
+        summary["qa_review"] += qa_counts["review"] + qa_counts["other"]
+        summary["qa_rejected"] += qa_counts["rejected"]
+        summary["asset_total"] += len(assets)
+        summary["asset_approved"] += asset_counts["approved"]
+        summary["asset_pending"] += asset_counts["pending"]
+        summary["asset_invalid"] += asset_counts["invalid"]
+        summary["asset_duplicates"] += asset_counts["duplicates"]
+        summary["asset_storage_present"] += storage_counts["present"]
+        summary["asset_storage_missing"] += storage_counts["missing"] + storage_counts["other"]
+        summary["asset_storage_external"] += storage_counts["external"]
+        summary["vector_product_chunks"] += len(vectors)
+        summary["vector_synced"] += vector_counts["synced"]
+        summary["vector_pending"] += vector_counts["pending"]
+        summary["vector_failed"] += vector_counts["failed"]
+        summary["products_missing_vectors"] += int(not vectors)
+
+        records.append({
+            "id": product.id,
+            "sku": product.sku,
+            "product_name_cn": product.product_name_cn,
+            "product_name_en": product.product_name_en,
+            "brand": product.brand,
+            "series": product.series,
+            "category": product.category,
+            "sub_category": product.sub_category,
+            "active_flag": product.active_flag,
+            "sync_flag": product.sync_flag,
+            "lifecycle_status": product.lifecycle_status,
+            "record": {
+                "missing_fields": missing_fields,
+                "complete": not missing_fields,
+            },
+            "qa": {
+                "total": len(qas),
+                "approved": qa_counts["approved"],
+                "review": qa_counts["review"] + qa_counts["other"],
+                "rejected": qa_counts["rejected"],
+            },
+            "assets": {
+                "total": len(assets),
+                "approved": asset_counts["approved"],
+                "pending": asset_counts["pending"],
+                "invalid": asset_counts["invalid"],
+                "duplicates": asset_counts["duplicates"],
+                "storage_present": storage_counts["present"],
+                "storage_missing": storage_counts["missing"] + storage_counts["other"],
+                "storage_external": storage_counts["external"],
+            },
+            "vector": {
+                "chunks": len(vectors),
+                "synced": vector_counts["synced"],
+                "pending": vector_counts["pending"],
+                "failed": vector_counts["failed"],
+                "ready": bool(vectors) and not (vector_counts["pending"] or vector_counts["failed"] or vector_counts["other"]),
+            },
+            "issues": issues,
+            "ready": ready,
+            "updated_at": str(product.updated_at) if product.updated_at else None,
+        })
+
+    query_text = str(q or "").strip().casefold()
+    filtered = records
+    if query_text:
+        filtered = [
+            item for item in filtered
+            if query_text in " ".join(
+                str(item.get(key) or "")
+                for key in ("sku", "product_name_cn", "product_name_en", "brand", "series", "category", "sub_category")
+            ).casefold()
+        ]
+    if issues_only:
+        filtered = [item for item in filtered if item["issues"]]
+
+    summary["orphan_vector_skus"] = sorted(all_vector_skus - product_sku_set)
+    summary["orphan_vector_sku_count"] = len(summary["orphan_vector_skus"])
+    summary["filtered_products"] = len(filtered)
+    return {
+        "summary": summary,
+        "items": filtered[skip:skip + limit],
+        "pagination": {
+            "skip": skip,
+            "limit": limit,
+            "total": len(filtered),
+            "returned": len(filtered[skip:skip + limit]),
+        },
+    }
 
 
 def get_product_filter_options(db: Session) -> dict[str, list[str]]:

@@ -352,6 +352,85 @@ export interface ProductQaCreateResponse {
   status: 'ready_for_rag' | 'saved_not_ready_for_rag' | string
 }
 
+export interface ProductAuditItem {
+  id: string
+  sku: string
+  product_name_cn?: string | null
+  product_name_en?: string | null
+  brand?: string | null
+  series?: string | null
+  category?: string | null
+  sub_category?: string | null
+  active_flag?: boolean
+  sync_flag?: boolean
+  lifecycle_status?: string | null
+  record: {
+    missing_fields: string[]
+    complete: boolean
+  }
+  qa: {
+    total: number
+    approved: number
+    review: number
+    rejected: number
+  }
+  assets: {
+    total: number
+    approved: number
+    pending: number
+    invalid: number
+    duplicates: number
+    storage_present: number
+    storage_missing: number
+    storage_external: number
+  }
+  vector: {
+    chunks: number
+    synced: number
+    pending: number
+    failed: number
+    ready: boolean
+  }
+  issues: string[]
+  ready: boolean
+  updated_at?: string | null
+}
+
+export interface ProductAuditOverview {
+  summary: {
+    products_total: number
+    products_ready: number
+    products_with_issues: number
+    qa_total: number
+    qa_approved: number
+    qa_review: number
+    qa_rejected: number
+    asset_total: number
+    asset_approved: number
+    asset_pending: number
+    asset_invalid: number
+    asset_duplicates: number
+    asset_storage_present: number
+    asset_storage_missing: number
+    asset_storage_external: number
+    vector_product_chunks: number
+    vector_synced: number
+    vector_pending: number
+    vector_failed: number
+    products_missing_vectors: number
+    orphan_vector_skus: string[]
+    orphan_vector_sku_count: number
+    filtered_products: number
+  }
+  items: ProductAuditItem[]
+  pagination: {
+    skip: number
+    limit: number
+    total: number
+    returned: number
+  }
+}
+
 export interface AgentStep {
   type: string
   label: string
@@ -1027,6 +1106,15 @@ export const api = {
       ),
 
     filterOptions: () => request<Record<string, string[]>>('/products/filter-options'),
+
+    auditOverview: (params: { skip?: number; limit?: number; q?: string; issuesOnly?: boolean } = {}) => {
+      const query = new URLSearchParams()
+      query.set('skip', String(params.skip ?? 0))
+      query.set('limit', String(params.limit ?? 500))
+      if (params.q) query.set('q', params.q)
+      if (params.issuesOnly) query.set('issues_only', 'true')
+      return request<ProductAuditOverview>(`/products/audit-overview?${query.toString()}`)
+    },
 
     get: (sku: string) => request<Product>(`/products/${sku}`),
 
