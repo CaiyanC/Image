@@ -9,7 +9,13 @@ from sqlalchemy.orm import Session
 
 from ..models.product_draft import ProductDraft
 from ..models.product import Product
-from .product_service import create_product, get_product_by_sku, get_product_detail
+from .product_service import (
+    create_product,
+    get_product_by_sku,
+    get_product_detail,
+    invalidate_product_detail_cache,
+    sync_product_to_vector_db,
+)
 
 
 def _parse_date(value):
@@ -152,6 +158,18 @@ def delete_draft(db: Session, draft_id: str, user_id: str = None):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Draft not found")
     db.delete(draft)
     db.commit()
+
+
+def _refresh_published_product(db: Session, sku: str) -> dict:
+    """Make a published product immediately visible to detail and RAG readers."""
+    normalized_sku = str(sku or "").strip().upper()
+    # Invalidate before syncing as well as after it.  This covers both a
+    # successful vector refresh and a provider failure, so readers never keep
+    # serving the pre-publish detail snapshot.
+    invalidate_product_detail_cache(db, normalized_sku)
+    sync_product_to_vector_db(db, normalized_sku)
+    invalidate_product_detail_cache(db, normalized_sku)
+    return get_product_detail(db, normalized_sku)
 
 
 def publish_draft(db: Session, draft_id: str, user_id: str = None) -> dict:
@@ -312,14 +330,14 @@ def publish_draft(db: Session, draft_id: str, user_id: str = None) -> dict:
 
         db.delete(draft)
         db.commit()
-        return get_product_detail(db, sku)
+        return _refresh_published_product(db, sku)
 
     # New product: create from draft data
     draft_data["sku"] = sku
     product = create_product(db, draft_data, creator_id=user_id or draft.created_by)
     db.delete(draft)
     db.commit()
-    return get_product_detail(db, product.sku)
+    return _refresh_published_product(db, product.sku)
 
 
 def check_skus(db: Session, skus: list[str], user_id: str) -> dict:
