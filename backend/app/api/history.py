@@ -3,20 +3,12 @@ from sqlalchemy.orm import Session
 from typing import List
 from datetime import date
 from ..core.database import get_db
-from ..core.permission_constants import FULL_ACCESS_GROUP_NAMES
-from ..core.security import get_current_admin_user, get_user_groups, require_permission
+from ..core.security import get_current_admin_user, is_management_user, require_permission
 from ..models.user import User
 from ..schemas.generation import GenerationResponse, GenerationStats
 from ..services import generation_service
 
 router = APIRouter(prefix="/api/history", tags=["history"])
-
-
-def _is_management(user: User, db: Session) -> bool:
-    for g in get_user_groups(db, user.id):
-        if g["group_name"] in FULL_ACCESS_GROUP_NAMES and g["group_role"] == "admin":
-            return True
-    return False
 
 
 @router.get("", response_model=List[GenerationResponse])
@@ -52,7 +44,7 @@ def get_stats(
     current_user: User = Depends(require_permission("history.view")),
     db: Session = Depends(get_db),
 ):
-    if _is_management(current_user, db):
+    if is_management_user(db, current_user.id):
         return generation_service.get_generation_stats(db)
     return generation_service.get_generation_stats(db, current_user.id)
 
@@ -63,7 +55,7 @@ def get_generation(
     current_user: User = Depends(require_permission("history.view")),
     db: Session = Depends(get_db),
 ):
-    if _is_management(current_user, db):
+    if is_management_user(db, current_user.id):
         return generation_service.get_generation_by_id(db, generation_id)
     return generation_service.get_generation_by_id(db, generation_id, current_user.id)
 

@@ -2,8 +2,7 @@ from fastapi import APIRouter, Depends, Query, HTTPException, Request, status
 from sqlalchemy.orm import Session
 
 from ..core.database import get_db
-from ..core.permission_constants import FULL_ACCESS_GROUP_NAMES
-from ..core.security import get_user_groups, require_product_permission
+from ..core.security import is_management_user, require_product_permission
 from ..models.user import User
 from ..schemas.product import (
     CheckSkusRequest, BatchCreateRequest,
@@ -13,15 +12,8 @@ from ..services import draft_service, operation_log_service
 router = APIRouter(prefix="/api/products/drafts", tags=["product-drafts"])
 
 
-def _is_management(user: User, db: Session) -> bool:
-    for g in get_user_groups(db, user.id):
-        if g["group_name"] in FULL_ACCESS_GROUP_NAMES and g["group_role"] == "admin":
-            return True
-    return False
-
-
 def _draft_owner_scope(user: User, db: Session):
-    return None if _is_management(user, db) else user.id
+    return None if is_management_user(db, user.id) else user.id
 
 
 @router.get("")
@@ -31,7 +23,7 @@ def list_drafts(
     current_user: User = Depends(require_product_permission("read")),
     db: Session = Depends(get_db),
 ):
-    if _is_management(current_user, db):
+    if is_management_user(db, current_user.id):
         items, total = draft_service.get_all_drafts(db, skip, limit)
     else:
         items, total = draft_service.get_user_drafts(db, current_user.id, skip, limit)

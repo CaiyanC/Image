@@ -100,8 +100,21 @@ def get_user_groups(db: Session, user_id: str):
     ]
 
 
+def is_management_user(db: Session, user_id: str) -> bool:
+    """Return whether a user has the platform-wide management authority.
+
+    Keep this policy in one place so resource scoping and endpoint guards do
+    not drift into slightly different department-name checks.
+    """
+    return db.query(UserGroup).join(Group, UserGroup.group_id == Group.id).filter(
+        UserGroup.user_id == user_id,
+        Group.group_name.in_(FULL_ACCESS_GROUP_NAMES),
+        UserGroup.group_role == "admin",
+    ).first() is not None
+
+
 def get_user_permissions(db: Session, user_id: str) -> list[str]:
-    if _is_in_management(db, user_id):
+    if is_management_user(db, user_id):
         return [
             key for (key,) in db.query(Permission.permission_key).order_by(Permission.permission_key).all()
         ]
@@ -122,15 +135,12 @@ def _is_in_group(db: Session, user_id: str, group_name: str) -> bool:
 
 
 def _is_in_management(db: Session, user_id: str) -> bool:
-    return db.query(UserGroup).join(Group, UserGroup.group_id == Group.id).filter(
-        UserGroup.user_id == user_id,
-        Group.group_name.in_(FULL_ACCESS_GROUP_NAMES),
-        UserGroup.group_role == "admin",
-    ).first() is not None
+    # Compatibility alias for older internal callers.
+    return is_management_user(db, user_id)
 
 
 def has_permission(db: Session, user_id: str, permission_key: str) -> bool:
-    if _is_in_management(db, user_id):
+    if is_management_user(db, user_id):
         return True
     return db.query(GroupPermission).join(
         Permission, GroupPermission.permission_id == Permission.id
@@ -177,7 +187,7 @@ def get_current_super_admin(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> User:
-    if not _is_in_management(db, current_user.id):
+    if not is_management_user(db, current_user.id):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Super admin privileges required",

@@ -5,8 +5,8 @@ from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
 
 from ..core.database import get_db
-from ..core.permission_constants import ECOMMERCE_DATA_FILL_PERMISSION, FULL_ACCESS_GROUP_NAMES
-from ..core.security import get_current_user, get_user_groups, get_user_permissions, require_permission
+from ..core.permission_constants import ECOMMERCE_DATA_FILL_PERMISSION
+from ..core.security import get_current_user, get_user_permissions, is_management_user, require_permission
 from ..models.tool import Tool
 from ..models.tool_run import ToolRun
 from ..models.user import User
@@ -28,13 +28,6 @@ def list_available_tools(
     return tool_registry_service.list_visible_tools(db, permissions)
 
 
-def _is_management(db: Session, user_id: str) -> bool:
-    return any(
-        group["group_name"] in FULL_ACCESS_GROUP_NAMES and group["group_role"] == "admin"
-        for group in get_user_groups(db, user_id)
-    )
-
-
 def _get_ecommerce_tool(db: Session) -> Tool:
     tool = db.query(Tool).filter_by(tool_key="ecommerce_data_fill", is_enabled=True).first()
     if not tool:
@@ -44,7 +37,7 @@ def _get_ecommerce_tool(db: Session) -> Tool:
 
 def _ensure_draft_access(db: Session, run_id: str, user_id: str) -> ToolRun:
     run = tool_run_service.get_run(db, run_id)
-    tool_run_service.ensure_run_access(run, user_id=user_id, is_management=_is_management(db, user_id))
+    tool_run_service.ensure_run_access(run, user_id=user_id, is_management=is_management_user(db, user_id))
     if run.tool_key != "ecommerce_data_fill" or run.status != "draft":
         raise HTTPException(status_code=400, detail="Tool draft is not available")
     return run
@@ -212,7 +205,7 @@ def list_ecommerce_data_fill_runs(
     db: Session = Depends(get_db),
 ):
     query = db.query(ToolRun).filter_by(tool_key="ecommerce_data_fill")
-    if not _is_management(db, current_user.id):
+    if not is_management_user(db, current_user.id):
         query = query.filter_by(created_by=current_user.id)
     return query.order_by(ToolRun.created_at.desc()).all()
 
@@ -224,7 +217,7 @@ def get_ecommerce_data_fill_run(
     db: Session = Depends(get_db),
 ):
     run = tool_run_service.get_run(db, run_id)
-    return tool_run_service.ensure_run_access(run, user_id=current_user.id, is_management=_is_management(db, current_user.id))
+    return tool_run_service.ensure_run_access(run, user_id=current_user.id, is_management=is_management_user(db, current_user.id))
 
 
 @router.get("/ecommerce-data-fill/runs/{run_id}/files/{file_index}")
@@ -235,7 +228,7 @@ def download_ecommerce_data_fill_file(
     db: Session = Depends(get_db),
 ):
     run = tool_run_service.get_run(db, run_id)
-    tool_run_service.ensure_run_access(run, user_id=current_user.id, is_management=_is_management(db, current_user.id))
+    tool_run_service.ensure_run_access(run, user_id=current_user.id, is_management=is_management_user(db, current_user.id))
     if file_index < 0 or file_index >= len(run.output_files or []):
         raise HTTPException(status_code=404, detail="Run file not found")
     item = run.output_files[file_index]
