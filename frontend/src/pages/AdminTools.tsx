@@ -59,7 +59,7 @@ export default function AdminTools() {
       })
       setTools((items) => [...items, created].sort((a, b) => a.sort_order - b.sort_order || a.name.localeCompare(b.name)))
       setForm(emptyExternalForm)
-      setMessage(`外部应用“${created.name}”已接入；现在可以到“部门权限”分配 ${created.permission_key}。`)
+      setMessage(`外部应用“${created.name}”已接入；现在可以到“组织与权限”分配 ${created.permission_key}。`)
     } catch (err) {
       setError(err instanceof Error ? err.message : '外部应用接入失败')
     } finally {
@@ -94,7 +94,7 @@ export default function AdminTools() {
           <h2 className="text-lg font-black text-apple-text">接入外部应用</h2>
           <p className="mt-1 text-sm text-apple-gray-medium">例如填写 http://localhost:5280。这里只建立受部门权限控制的入口，不会向外部页面传递主系统登录令牌。</p>
         </div>
-        <a href="/admin/groups" className="rounded-full bg-teal-50 px-4 py-2 text-sm font-bold text-teal-700">管理部门权限</a>
+        <a href="/admin/access-control" className="rounded-full bg-teal-50 px-4 py-2 text-sm font-bold text-teal-700">管理组织与权限</a>
       </div>
       <div className="mt-5 grid gap-4 md:grid-cols-2">
         <label className="text-sm font-bold text-apple-gray-dark">工具标识

@@ -60,8 +60,7 @@ export default function Header() {
   const superAdminItems = [
     { path: '/admin/department-workbench', label: '部门工作台' },
     { path: '/admin/tools', label: '工具管理' },
-    { path: '/admin/users', label: '用户' },
-    { path: '/admin/groups', label: '部门权限' },
+    { path: '/admin/access-control', label: '组织与权限' },
     { path: '/admin/model-governance', label: '模型治理' },
     { path: '/admin/settings', label: '设置' },
     { path: '/admin/logs', label: '日志' },
