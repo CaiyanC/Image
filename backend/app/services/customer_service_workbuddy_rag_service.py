@@ -765,6 +765,8 @@ async def _generate_answer(
         "不能只引用单品卡；从候选资料中判断相关套装变体，事实相同可合并回答并列出对应 SKU，事实不同再澄清。\n"
         "若客户只是明确给出一个或多个完整 SKU，并要求先记住、保留或作为后续比较对象，而不是询问商品事实，"
         "请自然确认记忆，使用 answer_type=faq、needs_clarification=false；不要把这类记忆动作回复成澄清。"
+        "如果同一条消息同时给出了商品标识和商品事实、参数、使用或适配问题，事实问题优先；"
+        "不要因为出现完整 SKU 就把它当成‘请记住这款’，必须依据本轮 evidence 回答该问题。"
         "当 explicit_product_skus 为空、page_anchor 为空、active_context_products 为空，且当前问题本身没有明确指向某一件商品时，"
         "如果客户是在询问通用的安全、使用或清洁做法，请按 general_guidance 处理：subject_scope=general_guidance、"
         "selected_skus=[]、selection_state=not_applicable，不要因为某一条商品说明带有 SKU 就把泛问题绑定到该商品，"
