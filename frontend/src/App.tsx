@@ -8,12 +8,12 @@ const Login = lazy(() => import('./pages/Login'))
 const Register = lazy(() => import('./pages/Register'))
 const Workspace = lazy(() => import('./pages/Workspace'))
 const History = lazy(() => import('./pages/History'))
-const AdminUsers = lazy(() => import('./pages/AdminUsers'))
 const AdminSettings = lazy(() => import('./pages/AdminSettings'))
-const AdminGroups = lazy(() => import('./pages/AdminGroups'))
+const AdminAccessControl = lazy(() => import('./pages/AdminAccessControl'))
 const AdminLogs = lazy(() => import('./pages/AdminLogs'))
 const ProductManagement = lazy(() => import('./pages/ProductManagement'))
 const ProductAuditOverview = lazy(() => import('./pages/ProductAuditOverview'))
+const ProductFullView = lazy(() => import('./pages/ProductFullView'))
 const AssetLibrary = lazy(() => import('./pages/AssetLibrary'))
 const AssetSearch = lazy(() => import('./pages/AssetSearch'))
 const CustomerService = lazy(() => import('./pages/CustomerService'))
@@ -211,6 +211,16 @@ export default function App() {
             </PermissionRoute>
           }
         />
+        <Route
+          path="/products/full-view"
+          element={
+            <PermissionRoute permissionKey="product.read">
+              <Layout>
+                <ProductFullView />
+              </Layout>
+            </PermissionRoute>
+          }
+        />
         {import.meta.env.MODE === 'dev' && (
           <Route
             path="/customer-service/workbuddy"
@@ -324,15 +334,16 @@ export default function App() {
           }
         />
         <Route
-          path="/admin/users"
+          path="/admin/access-control"
           element={
             <SuperAdminRoute>
               <Layout>
-                <AdminUsers />
+                <AdminAccessControl />
               </Layout>
             </SuperAdminRoute>
           }
         />
+        <Route path="/admin/users" element={<Navigate to="/admin/access-control" replace />} />
         <Route
           path="/admin/model-governance"
           element={
@@ -353,16 +364,7 @@ export default function App() {
             </SuperAdminRoute>
           }
         />
-        <Route
-          path="/admin/groups"
-          element={
-            <SuperAdminRoute>
-              <Layout>
-                <AdminGroups />
-              </Layout>
-            </SuperAdminRoute>
-          }
-        />
+        <Route path="/admin/groups" element={<Navigate to="/admin/access-control" replace />} />
         <Route
           path="/admin/logs"
           element={

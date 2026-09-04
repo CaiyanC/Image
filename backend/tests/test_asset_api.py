@@ -293,6 +293,52 @@ class AssetApiTest(unittest.TestCase):
         invalid_limit = self.client.get("/api/assets/search", params={"limit": 101})
         self.assertEqual(invalid_limit.status_code, 422)
 
+    def test_global_search_supports_all_tag_dimensions(self):
+        first = self.client.post(
+            "/api/products/API-ASSET-1/assets",
+            json={
+                "category_code": "01",
+                "category_name": "产品标准图",
+                "url": "/uploads/assets/API-ASSET-1/tagged.jpg",
+                "tags": {
+                    "product_tags": ["套锅"],
+                    "material_type_tags": ["白底图"],
+                    "usage_tags": ["产品页"],
+                    "version_tags": ["当前版本"],
+                    "risk_tags": ["仅内部参考"],
+                    "channel_tags": ["Amazon"],
+                    "language_tags": ["中文"],
+                },
+            },
+        )
+        self.assertEqual(first.status_code, 200, first.text)
+
+        second = self.client.post(
+            "/api/products/API-ASSET-2/assets",
+            json={
+                "category_code": "01",
+                "category_name": "产品标准图",
+                "url": "/uploads/assets/API-ASSET-2/tagged.jpg",
+                "tags": {"product_tags": ["水壶"]},
+            },
+        )
+        self.assertEqual(second.status_code, 200, second.text)
+
+        response = self.client.get(
+            "/api/assets/search",
+            params=[
+                ("product_tags", "套锅"),
+                ("material_type_tags", "白底图"),
+                ("usage_tags", "产品页"),
+                ("version_tags", "当前版本"),
+                ("risk_tags", "仅内部参考"),
+                ("channel_tags", "Amazon"),
+                ("language_tags", "中文"),
+            ],
+        )
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual([item["sku"] for item in response.json()["items"]], ["API-ASSET-1"])
+
     def test_taxonomy_and_lifecycle_filters_are_available(self):
         taxonomy = self.client.get("/api/assets/taxonomy")
         self.assertEqual(taxonomy.status_code, 200, taxonomy.text)

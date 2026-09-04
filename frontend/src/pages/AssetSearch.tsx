@@ -4,7 +4,11 @@ import { api } from '../services/api'
 import type { AssetTags, AssetTaxonomy, ProductAsset } from '../types'
 import { TAG_DIMENSIONS, TAG_PRESETS } from './assetLibraryConfig'
 
-type SearchTags = Pick<AssetTags, 'expression_tags' | 'selling_point_tags' | 'scene_tags' | 'mood_tags'>
+type SearchTags = Pick<AssetTags,
+  'expression_tags' | 'selling_point_tags' | 'scene_tags' | 'mood_tags' |
+  'product_tags' | 'material_type_tags' | 'usage_tags' | 'version_tags' |
+  'risk_tags' | 'channel_tags' | 'language_tags'
+>
 
 export default function AssetSearch() {
   const [tags, setTags] = useState<SearchTags>({})
@@ -51,7 +55,10 @@ export default function AssetSearch() {
     }
   }
 
-  const dimensions = TAG_DIMENSIONS.filter(item => ['expression_tags', 'selling_point_tags', 'scene_tags', 'mood_tags'].includes(item.key))
+  // Search uses the complete asset vocabulary.  The backend taxonomy keeps
+  // the four controlled pilot dimensions authoritative, while the remaining
+  // dimensions are intentionally free-form for existing materials.
+  const dimensions = TAG_DIMENSIONS.filter(item => item.key in tagPresets)
   const qualityStatuses = taxonomy?.quality_statuses || ['usable', 'pending_tagging', 'suspected_duplicate', 'invalid', 'archived']
   const duplicateStatuses = taxonomy?.duplicate_statuses || ['unique', 'cross_sku_reuse', 'suspected_duplicate']
   return <div className="mx-auto w-full max-w-[1500px] px-4 pb-10 sm:px-6">

@@ -159,6 +159,7 @@ def _agent_system_prompt() -> str:
         "客户没有要求的套装件数或附加卖点，不能替代这些需求。若入选商品在主要需求上有已知弱项，而另一个已核对"
         "候选在同一需求上的事实更有利，应改选后者，或在答案里说清仍选择前者的具体理由。资料不足时自然说明缺口"
         "或向客户澄清。\n"
+        "对于适用热源等封闭兼容字段，只能把当前资料明确列出的具体选项视为已支持；‘明火’、‘燃气’等宽泛描述不能自动推出酒精炉等具体燃料或炉具。空值、‘/’、暂无或未知表示主数据未填写，不是通用兼容；若同 SKU 已审核 QA 明确补充了该字段，可以按 QA 列出的范围回答并提示主数据待补充，不要把这种情况误称为直接冲突，也不能扩大 QA 范围。重量、容量、尺寸等测量值也不能单独推出无负担、一定适合或完全满足。若 QA 与同 SKU 非空主数据直接冲突，保留主数据并说明资料差异。\n"
         "面向客户的 answer 只写自然答案，不要暴露工具名、agent-e 等证据 ID、authority_level、"
         "fact_authority、内部字段名、JSON 协议或系统流程；这些归因信息只放在对应结构化字段中。"
         "答复应先给客户可执行的结论，再给必要依据和取舍；同一事实不要在开头、列表和结尾反复重述。"
@@ -874,6 +875,7 @@ async def _read_product(
             "same_sku_qa": "approved supplemental QA bound to this exact SKU",
             "same_sku_knowledge": "supplemental knowledge bound to this exact SKU",
             "fact_authority_false": "retrieval/context only; cannot independently prove a customer-visible fact",
+            "closed_compatibility": "only an explicitly listed option is confirmed; broader terms or placeholders such as / do not prove a specific option",
             "conflict": "when supplemental evidence directly conflicts with canonical data, keep canonical wording and disclose the discrepancy",
         },
         "results": results,
@@ -1429,6 +1431,7 @@ async def _run_agent(
                 "condition_check": "逐个 SKU 独立核对客户提出的每个必要条件。",
                 "missing_fact": "未明确写出的条件视为未确认，不能从近似或同名商品继承。",
                 "authority": "canonical 当前主数据优先于 supplemental QA/知识；candidate_only 不能证明最终商品事实。",
+                "closed_compatibility": "适用热源等封闭字段只认可资料明确列出的具体选项；宽泛词和 /、暂无等占位值不证明具体兼容。",
                 "claims": "若 selected_skus 非空，为每个入选 SKU 返回至少一条由 fact_authority=true 证据直接支持的 claim；单商品用 sku，跨商品比较结论用 skus。",
             },
             "instruction": (

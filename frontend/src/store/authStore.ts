@@ -3,12 +3,7 @@ import { api } from '../services/api'
 import type { User } from '../types'
 
 function isManagement(user: User | null): boolean {
-  if (!user || !user.groups) return false
-  return user.groups.some(
-    (group) =>
-      (group.group_name === '总经办' || group.group_name === 'IT部') &&
-      group.group_role === 'admin',
-  )
+  return !!user?.permissions?.includes('system.admin')
 }
 
 interface AuthState {

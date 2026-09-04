@@ -6,7 +6,7 @@ from ..models.group import Group
 from ..models.generation import Generation
 from ..models.operation_logs import OperationLog
 from ..schemas.user import UserCreate, UserUpdate, UserProfileUpdate
-from ..core.security import get_password_hash, verify_password
+from ..core.security import get_password_hash, is_management_user, verify_password
 from ..core.permission_constants import FULL_ACCESS_GROUP_NAMES
 
 
@@ -26,14 +26,6 @@ def get_users(db: Session, skip: int = 0, limit: int = 100):
     skip = max(int(skip or 0), 0)
     limit = min(max(int(limit or 100), 1), 200)
     return db.query(User).offset(skip).limit(limit).all()
-
-
-def _is_management_user(db: Session, user_id: str) -> bool:
-    return db.query(UserGroup).join(Group, UserGroup.group_id == Group.id).filter(
-        UserGroup.user_id == user_id,
-        Group.group_name.in_(FULL_ACCESS_GROUP_NAMES),
-        UserGroup.group_role == "admin",
-    ).first() is not None
 
 
 def _active_management_count(db: Session) -> int:
@@ -126,7 +118,7 @@ def update_user(db: Session, user_id: str, user_data: UserUpdate):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
 
     update_dict = user_data.model_dump(exclude_unset=True)
-    if update_dict.get("is_active") is False and user.is_active and _is_management_user(db, user_id):
+    if update_dict.get("is_active") is False and user.is_active and is_management_user(db, user_id):
         if _active_management_count(db) <= 1:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
@@ -232,7 +224,7 @@ def delete_user(db: Session, user_id: str, current_user_id: str = None):
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Cannot delete your own account",
         )
-    if user.is_active and _is_management_user(db, user_id) and _active_management_count(db) <= 1:
+    if user.is_active and is_management_user(db, user_id) and _active_management_count(db) <= 1:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Cannot delete the last active management user",

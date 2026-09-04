@@ -16,12 +16,9 @@ from sqlalchemy.orm import Session
 from ..core.config import BACKEND_ROOT, PROJECT_ROOT, settings
 from ..core.database import get_db
 from ..core.rate_limit import enforce_rate_limit
-from ..core.security import get_current_user, has_permission
-from ..core.permission_constants import FULL_ACCESS_GROUP_NAMES
+from ..core.security import get_current_user, has_permission, is_management_user
 from ..models.generation import Generation
 from ..models.user import User
-from ..models.group import Group
-from ..models.user_group import UserGroup
 
 
 router = APIRouter(prefix="/api/files", tags=["files"])
@@ -117,7 +114,7 @@ def _authorize_sign_request(db: Session, user: User, normalized_path: str) -> No
         )
     if normalized_path.startswith("/uploads/reference-images/"):
         owner_id = normalized_path.removeprefix("/uploads/reference-images/").split("/", 1)[0]
-        if owner_id == str(user.id) or _is_in_management_group(db, user.id):
+        if owner_id == str(user.id) or is_management_user(db, user.id):
             return
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Reference image access denied")
     if normalized_path.startswith(("/uploads/images/", "/uploads/videos/", "/uploads/assets/")):
@@ -151,13 +148,13 @@ def _authorize_sign_batch(db: Session, user: User, normalized_paths: list[str]) 
             if owner_id == str(user.id):
                 continue
             if management_allowed is None:
-                management_allowed = _is_in_management_group(db, user.id)
+                management_allowed = is_management_user(db, user.id)
             if management_allowed:
                 continue
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Reference image access denied")
         if normalized_path.startswith("/uploads/generated/"):
             if management_allowed is None:
-                management_allowed = _is_in_management_group(db, user.id)
+                management_allowed = is_management_user(db, user.id)
             if management_allowed or _is_generation_owner(db, user, normalized_path):
                 continue
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Generated file access denied")
@@ -165,7 +162,7 @@ def _authorize_sign_batch(db: Session, user: User, normalized_paths: list[str]) 
 
 
 def _is_generation_owner_or_manager(db: Session, user: User, normalized_path: str) -> bool:
-    if _is_in_management_group(db, user.id):
+    if is_management_user(db, user.id):
         return True
     return _is_generation_owner(db, user, normalized_path)
 
@@ -181,17 +178,6 @@ def _is_generation_owner(db: Session, user: User, normalized_path: str) -> bool:
         .first()
     )
     return bool(row and str(row.user_id) == str(user.id))
-
-
-def _is_in_management_group(db: Session, user_id: str) -> bool:
-    return (
-        db.query(UserGroup)
-        .join(Group, UserGroup.group_id == Group.id)
-        .filter(UserGroup.user_id == user_id, Group.group_name.in_(FULL_ACCESS_GROUP_NAMES))
-        .filter(UserGroup.group_role == "admin")
-        .first()
-        is not None
-    )
 
 
 def _create_file_token(normalized_path: str) -> str:

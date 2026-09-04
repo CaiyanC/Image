@@ -57,6 +57,9 @@ export default function ProductAuditOverview() {
           </p>
         </div>
         <div className="flex flex-wrap gap-2">
+          <button onClick={() => navigate('/products/full-view')} className="rounded-xl border border-teal-200 bg-teal-50 px-4 py-2 text-sm font-semibold text-teal-800 hover:bg-teal-100">
+            全字段长视图
+          </button>
           {can('product.create') && (
             <button onClick={() => navigate('/products/create')} className="btn-primary px-4 py-2 text-sm">
               新增产品

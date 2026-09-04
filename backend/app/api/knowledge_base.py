@@ -22,6 +22,7 @@ from ..services import knowledge_job_service, knowledge_service, product_service
 from ..services.file_ingestion_service import (
     ingest_file,
     list_stuck_processing_documents,
+    reconcile_parse_task_states,
     recover_stuck_processing_documents,
 )
 from ..services.upload_validation_service import validate_knowledge_file_content
@@ -41,6 +42,17 @@ ALLOWED_KNOWLEDGE_FILE_MIME_TYPES = {
 MAX_KNOWLEDGE_FILE_BYTES = 20 * 1024 * 1024
 MAX_KNOWLEDGE_FILES_PER_REQUEST = 20
 KNOWLEDGE_FILE_DIR = settings.KNOWLEDGE_FILE_DIR
+
+
+def _knowledge_file_roots() -> tuple[Path, ...]:
+    """Return the current bounded roots used for knowledge-file access.
+
+    Keep this dynamic because tests and isolated deployments may replace the
+    primary directory after module import.  The allowlist remains limited to
+    the configured primary root plus explicit compatibility roots.
+    """
+    roots = (KNOWLEDGE_FILE_DIR, *getattr(settings, "KNOWLEDGE_FILE_LEGACY_DIRS", []))
+    return tuple(dict.fromkeys(Path(root).resolve(strict=False) for root in roots if root))
 
 
 class KnowledgeDocumentCreate(BaseModel):
@@ -211,6 +223,7 @@ def get_parse_task(
     current_user: User = Depends(get_current_super_admin),
     db: Session = Depends(get_db),
 ):
+    reconcile_parse_task_states(db, task_id=task_id)
     task = db.query(KnowledgeParseTask).filter(KnowledgeParseTask.id == task_id).first()
     if not task:
         raise HTTPException(status_code=404, detail="Task not found")
@@ -223,6 +236,10 @@ def list_knowledge_files(
     current_user: User = Depends(get_current_super_admin),
     db: Session = Depends(get_db),
 ):
+    # A parser can commit the document and be interrupted before it commits
+    # the task row.  Reconcile the display state before returning the list so
+    # the UI does not report a completed file as still processing.
+    reconcile_parse_task_states(db)
     documents = (
         db.query(KnowledgeDocument)
         .filter(KnowledgeDocument.source_type == "file")
@@ -803,8 +820,17 @@ def _remove_file_safely(path: str) -> None:
 
 
 def _resolve_knowledge_file_path(path: str) -> Path:
-    root = Path(KNOWLEDGE_FILE_DIR).resolve()
-    candidate = Path(path).resolve()
-    if candidate != root and root not in candidate.parents:
+    raw_path = str(path or "").strip()
+    if not raw_path:
+        raise HTTPException(status_code=400, detail="Invalid file path")
+    try:
+        candidate_path = Path(raw_path)
+        if not candidate_path.is_absolute():
+            candidate_path = Path(KNOWLEDGE_FILE_DIR) / candidate_path
+        candidate = candidate_path.resolve(strict=False)
+        roots = _knowledge_file_roots()
+    except (OSError, RuntimeError, ValueError) as exc:
+        raise HTTPException(status_code=400, detail="Invalid file path") from exc
+    if not any(candidate == root or root in candidate.parents for root in roots):
         raise HTTPException(status_code=400, detail="Invalid file path")
     return candidate

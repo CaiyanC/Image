@@ -258,6 +258,8 @@ def index_product_recommendation(db: Session, sku: str) -> dict[str, int]:
             sku=sku,
             title=item["title"],
             content=item["content"],
+            parse_status="done",
+            parse_error=None,
             metadata_json=json.dumps(item["metadata"], ensure_ascii=False),
         )
         db.add(doc)
@@ -265,6 +267,8 @@ def index_product_recommendation(db: Session, sku: str) -> dict[str, int]:
     else:
         doc.title = item["title"]
         doc.content = item["content"]
+        doc.parse_status = "done"
+        doc.parse_error = None
         doc.metadata_json = json.dumps(item["metadata"], ensure_ascii=False)
         db.query(KnowledgeChunk).filter(
             KnowledgeChunk.document_id == doc.id
@@ -318,6 +322,8 @@ def index_product(db: Session, sku: str) -> dict[str, int]:
                 sku=sku,
                 title=item["title"],
                 content=item["content"],
+                parse_status="done",
+                parse_error=None,
                 metadata_json=json.dumps(item["metadata"], ensure_ascii=False),
             )
             db.add(doc)
@@ -325,6 +331,8 @@ def index_product(db: Session, sku: str) -> dict[str, int]:
         else:
             doc.title = item["title"]
             doc.content = item["content"]
+            doc.parse_status = "done"
+            doc.parse_error = None
             doc.metadata_json = json.dumps(item["metadata"], ensure_ascii=False)
             db.query(KnowledgeChunk).filter(KnowledgeChunk.document_id == doc.id).delete()
 
