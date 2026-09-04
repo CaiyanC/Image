@@ -25,6 +25,7 @@ from ..models.knowledge_base import CustomerServiceConversation, CustomerService
 from ..models.product import Product
 from . import (
     customer_enterprise_guardrail_service,
+    customer_experience_rag_service,
     customer_llm_service,
     customer_perf_service,
     customer_pipeline_service,
@@ -585,6 +586,7 @@ def _answer_prompt(
     candidates: list[dict[str, Any]],
     previous_context_products: list[dict[str, Any]],
     evidence: list[dict[str, Any]],
+    experience_guidance: list[dict[str, Any]],
 ) -> dict[str, Any]:
     prompt_candidates = [
         item for item in candidates[:_MAX_PROMPT_CANDIDATE_PRODUCTS]
@@ -624,6 +626,7 @@ def _answer_prompt(
         "previous_context_products": compact_previous_products,
         "candidate_products": compact_candidates,
         "evidence": compact_evidence,
+        "experience_guidance": experience_guidance,
     }
 
 
@@ -635,6 +638,7 @@ async def _generate_answer(
 ) -> tuple[dict[str, Any] | None, dict[str, Any]]:
     system_prompt = (
         "你是自然、连贯、像真人同事一样工作的中文客服。先理解当前问题、conversation_history 和 previous_turn_memory，再依据本轮 evidence 与 candidate_products 回答；不要向客户暴露内部字段、检索、模型或流程。"
+        "experience_guidance 是人工审核提炼的非事实沟通经验，只能帮助你更自然地承接顾虑、组织取舍和给出下一步；不能证明商品事实、不能替代 evidence、不能选择 SKU，也不能向客户提及。简单事实问题或不相关建议应直接忽略，不要强行推销或增加篇幅。完整回答当前问题的前提下优先三到六句短答，复杂比较确有必要时再用少量条目。"
         "历史和记忆只用于理解代词、承接上下文和替换意图，不是新的商品事实；商品事实只能来自本轮 evidence，并保留它所属的 SKU。canonical_product_record 是结构化主数据，product_qa 是同 SKU 补充；出现直接冲突时如实说明资料差异。"
         "canonical_product_record 对同一 SKU 的非空结构化字段拥有最高事实权威；同 SKU QA/知识只能补充主数据未填写的事实，不能静默改写主数据。适用热源等封闭兼容字段只认可资料明确列出的具体选项，‘明火’或‘燃气’等宽泛词不能推出具体的酒精炉等选项；空值、‘/’、暂无或未知表示主数据未填写，不是通用兼容。若同 SKU 已审核 QA 明确补充了该字段，可以按 QA 列出的范围回答并提示主数据待补充；不要把这种情况误称为直接冲突，也不能扩大 QA 的范围。"
         "回答内容优先。若多个候选对客户当前询问的同一事实都有明确且一致的资料，可以直接回答共同事实，并列出实际支持该回答的 SKU；不要因为召回多个 SKU 就机械澄清。只有商品身份、必要条件或事实确实存在歧义/缺失时才澄清；资料不足时说明边界，不要编造。重量、容量、尺寸不能自行升级成‘无负担、一定适合、完全满足’等更强结论。"
@@ -1102,6 +1106,17 @@ async def ask_customer_service_workbuddy_rag(
         for item in context_skus
         if item in product_details and item not in set(candidate_skus)
     ]
+    experience_start = perf_counter()
+    experience_guidance = await customer_experience_rag_service.retrieve_experience_guidance(
+        db,
+        question=queries[0] if queries else original_question,
+        skus=known_skus or candidate_skus[:3] or context_skus[:3],
+    )
+    customer_perf_service.log_stage(
+        "customer_service_workbuddy.experience_retrieve",
+        experience_start,
+        rows=len(experience_guidance),
+    )
     payload = _answer_prompt(
         question=original_question,
         history=history,
@@ -1113,6 +1128,7 @@ async def ask_customer_service_workbuddy_rag(
         candidates=candidates,
         previous_context_products=previous_context_products,
         evidence=evidence,
+        experience_guidance=experience_guidance,
     )
     answer_raw, answer_metadata = await _generate_answer(
         db,
@@ -1398,6 +1414,8 @@ async def ask_customer_service_workbuddy_rag(
         "answer_llm_elapsed_ms": answer_metadata.get("elapsed_ms"),
         "working_memory_update": working_memory_update,
         "plan_available": False,
+        "experience_guidance_count": len(experience_guidance),
+        "experience_guidance_ids": customer_experience_rag_service.guidance_ids(experience_guidance),
         **answer_metadata,
     }
     plan = _pipeline_plan(
@@ -1432,6 +1450,8 @@ async def ask_customer_service_workbuddy_rag(
         "model_selected_skus": sorted(raw_selected_skus),
         "model_selected_evidence_ids": list(raw_selected_evidence_ids)[:12],
         "model_evidence_skus": evidence_skus_selected_by_llm,
+        "experience_guidance_count": len(experience_guidance),
+        "experience_guidance_ids": customer_experience_rag_service.guidance_ids(experience_guidance),
         "llm_call_count": len(state.get("llm_calls") or []),
         "elapsed_before_persist_ms": round(customer_perf_service.perf_ms(request_start), 2),
     }

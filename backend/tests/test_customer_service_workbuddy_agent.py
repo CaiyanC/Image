@@ -187,13 +187,22 @@ def test_workbuddy_agent_model_selects_wide_semantic_catalog_tool(
         ))
 
     assert len(llm_calls) == 3
-    assert len(retrieval_calls) == 4
-    assert retrieval_calls[0]["sections"] == ["profile"]
-    assert retrieval_calls[0]["limit"] == 48
-    assert retrieval_calls[1]["sections"] == ["profile"]
-    assert retrieval_calls[1]["limit"] == 96
-    assert retrieval_calls[2]["sections"] == ["qa"]
-    assert retrieval_calls[2]["sku"] == "CW-S10-A"
+    experience_calls = [
+        item for item in retrieval_calls
+        if item.get("source_types") == ["customer_experience"]
+    ]
+    fact_calls = [
+        item for item in retrieval_calls
+        if item.get("source_types") != ["customer_experience"]
+    ]
+    assert len(experience_calls) == 1
+    assert len(fact_calls) == 4
+    assert fact_calls[0]["sections"] == ["profile"]
+    assert fact_calls[0]["limit"] == 48
+    assert fact_calls[1]["sections"] == ["profile"]
+    assert fact_calls[1]["limit"] == 96
+    assert fact_calls[2]["sections"] == ["qa"]
+    assert fact_calls[2]["sku"] == "CW-S10-A"
     assert result["pipeline_version"] == "workbuddy_agent_v2"
     assert result["debug"]["no_legacy_route"] is True
     assert result["answer_metadata"]["retrieval_mode"] == "model_selected_semantic_tools"

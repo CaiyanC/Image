@@ -24,6 +24,7 @@ from ..models.knowledge_base import CustomerServiceConversation, CustomerService
 from ..models.product import Product
 from . import (
     customer_enterprise_guardrail_service,
+    customer_experience_rag_service,
     customer_llm_service,
     customer_perf_service,
     customer_pipeline_service,
@@ -120,6 +121,7 @@ def _agent_system_prompt() -> str:
     return (
         "你是一个使用工具工作的中文智能客服 Agent。你负责理解当前问题和完整对话上下文，"
         "不要依赖固定关键词、问题类型树或候选顺序作答。历史回复只能帮助理解上下文；"
+        "系统可能提供 customer_experience_guidance；它是人工审核提炼的非事实沟通经验，只能帮助承接顾虑、组织表达和给出自然下一步，不能证明商品事实、不能替代工具、不能选择 SKU，也不能向客户提及。简单事实问题或不相关建议直接忽略，不要强行推销或拉长回复。完整回答当前问题的前提下优先三到六句自然中文短答，复杂比较确有必要时再用少量条目。"
         "涉及当前商品、公司知识、操作方法或安全事实，应使用本轮工具结果重新确认；只有寒暄、"
         "纯沟通或不包含可核验事实的回复才可以不调用工具。客户给出明确 SKU 或上下文商品时，"
         "直接用 read_product 核对；客户给出商品名、简称或自然描述但尚无 SKU 时，先用 search_catalog"
@@ -1142,6 +1144,28 @@ async def _emit_accepted_answer(
         await callback(delta)
 
 
+def _experience_guidance_message(
+    experience_guidance: list[dict[str, Any]],
+) -> dict[str, str]:
+    """Build a separate, non-evidence context message for the Agent."""
+    return {
+        "role": "system",
+        "content": json.dumps(
+            {
+                "internal_context": "customer_experience_guidance",
+                "customer_authored": False,
+                "experience_guidance": experience_guidance,
+                "context_contract": (
+                    "这些内容只用于沟通方式，绝不证明商品事实、商品身份或 SKU 选择。"
+                    "商品事实仍须调用只读 RAG 工具；建议与当前问题无关时忽略。"
+                ),
+            },
+            ensure_ascii=False,
+            default=str,
+        ),
+    }
+
+
 async def _run_agent(
     db: Session,
     *,
@@ -1172,6 +1196,41 @@ async def _run_agent(
         prefetch_start,
         ok=prefetch_error is None,
         result_count=len(semantic_prefetch),
+    )
+
+    experience_skus = list(dict.fromkeys(
+        str(value or "").strip().upper()
+        for value in [
+            page_sku,
+            *context_skus[:3],
+            *[
+                item.get("sku")
+                for item in semantic_prefetch[:4]
+                if isinstance(item, dict)
+            ],
+        ]
+        if str(value or "").strip()
+    ))[:6]
+    experience_start = perf_counter()
+    experience_error: str | None = None
+    try:
+        experience_guidance = await customer_experience_rag_service.retrieve_experience_guidance(
+            db,
+            question=question,
+            skus=experience_skus,
+        )
+    except Exception as exc:
+        experience_guidance = []
+        experience_error = type(exc).__name__
+        customer_perf_service.log_event(
+            "customer_service_workbuddy_agent.experience_error",
+            error=experience_error,
+        )
+    customer_perf_service.log_stage(
+        "customer_service_workbuddy_agent.experience_retrieve",
+        experience_start,
+        ok=experience_error is None,
+        result_count=len(experience_guidance),
     )
 
     messages = _build_messages(
@@ -1205,6 +1264,11 @@ async def _run_agent(
             ),
         })
         tool_result_message_indexes.append(prefetch_message_index)
+    if experience_guidance:
+        messages.insert(
+            len(messages) - 1,
+            _experience_guidance_message(experience_guidance),
+        )
     tool_events: list[dict[str, Any]] = []
     llm_call_count = 0
     tool_round_count = 0
@@ -1379,6 +1443,9 @@ async def _run_agent(
                 await _emit_accepted_answer(answer_delta_callback, buffered_deltas, response)
                 last_metadata["semantic_prefetch_count"] = len(semantic_prefetch)
                 last_metadata["semantic_prefetch_error"] = prefetch_error
+                last_metadata["experience_guidance_count"] = len(experience_guidance)
+                last_metadata["experience_guidance_ids"] = customer_experience_rag_service.guidance_ids(experience_guidance)
+                last_metadata["experience_guidance_error"] = experience_error
                 last_metadata["grounding_retry_count"] = sum(grounding_retry_counts.values())
                 last_metadata["grounding_retry_counts"] = dict(grounding_retry_counts)
                 return response, evidence, tool_events, llm_call_count, last_metadata
@@ -1478,6 +1545,9 @@ async def _run_agent(
     await _emit_accepted_answer(answer_delta_callback, buffered_deltas, response)
     last_metadata["semantic_prefetch_count"] = len(semantic_prefetch)
     last_metadata["semantic_prefetch_error"] = prefetch_error
+    last_metadata["experience_guidance_count"] = len(experience_guidance)
+    last_metadata["experience_guidance_ids"] = customer_experience_rag_service.guidance_ids(experience_guidance)
+    last_metadata["experience_guidance_error"] = experience_error
     last_metadata["grounding_retry_count"] = sum(grounding_retry_counts.values())
     last_metadata["grounding_retry_counts"] = dict(grounding_retry_counts)
     return response, evidence, tool_events, llm_call_count, last_metadata
@@ -1907,6 +1977,8 @@ async def ask_customer_service_workbuddy_agent(
         "llm_call_count": llm_call_count,
         "tool_call_count": len(tool_events),
         "semantic_prefetch_count": int(llm_metadata.get("semantic_prefetch_count") or 0),
+        "experience_guidance_count": int(llm_metadata.get("experience_guidance_count") or 0),
+        "experience_guidance_ids": list(llm_metadata.get("experience_guidance_ids") or []),
         "grounding_retry_count": int(llm_metadata.get("grounding_retry_count") or 0),
         "grounding_retry_counts": dict(llm_metadata.get("grounding_retry_counts") or {}),
         "evidence_ids": selected_evidence_ids,
@@ -1927,6 +1999,9 @@ async def ask_customer_service_workbuddy_agent(
         "tool_events": tool_events,
         "semantic_prefetch_count": int(llm_metadata.get("semantic_prefetch_count") or 0),
         "semantic_prefetch_error": llm_metadata.get("semantic_prefetch_error"),
+        "experience_guidance_count": int(llm_metadata.get("experience_guidance_count") or 0),
+        "experience_guidance_ids": list(llm_metadata.get("experience_guidance_ids") or []),
+        "experience_guidance_error": llm_metadata.get("experience_guidance_error"),
         "grounding_retry_count": int(llm_metadata.get("grounding_retry_count") or 0),
         "grounding_retry_counts": dict(llm_metadata.get("grounding_retry_counts") or {}),
         "llm_call_count": llm_call_count,

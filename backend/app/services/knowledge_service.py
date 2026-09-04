@@ -12,6 +12,10 @@ from . import dmxapi_service
 from . import customer_cache_service
 
 
+CUSTOMER_EXPERIENCE_SOURCE_TYPE = "customer_experience"
+_NON_FACT_GUIDANCE_SOURCE_TYPES = (CUSTOMER_EXPERIENCE_SOURCE_TYPE,)
+
+
 def _knowledge_retrieval_revision(db: Session) -> str:
     """Return a cheap data/embedding revision for retrieval-cache keys.
 
@@ -220,6 +224,7 @@ def keyword_retrieve(
     *,
     skus: list[str] | None = None,
     sections: list[str] | None = None,
+    source_types: list[str] | None = None,
 ) -> list[dict]:
     query_text = query.strip()
     if not query_text:
@@ -231,6 +236,21 @@ def keyword_retrieve(
         for section in (sections or [])
         if str(section or "").strip()
     ))
+    normalized_source_types = tuple(dict.fromkeys(
+        str(source_type or "").strip()
+        for source_type in (source_types or [])
+        if str(source_type or "").strip()
+    ))
+    if source_types is not None and not normalized_source_types:
+        return []
+    if normalized_source_types:
+        db_query = db_query.filter(KnowledgeChunk.source_type.in_(normalized_source_types))
+    else:
+        # Non-factual guidance is retrieved through its dedicated service and
+        # must never enter a product/QA evidence page by accident.
+        db_query = db_query.filter(
+            KnowledgeChunk.source_type.notin_(_NON_FACT_GUIDANCE_SOURCE_TYPES)
+        )
     section_filters = []
     for section in normalized_sections:
         if section.casefold() == "qa":
@@ -560,6 +580,7 @@ async def semantic_retrieve(
     prefer_product_sources: bool = False,
     skus: list[str] | None = None,
     sections: list[str] | None = None,
+    source_types: list[str] | None = None,
 ) -> list[dict]:
     if not query.strip():
         return []
@@ -574,6 +595,13 @@ async def semantic_retrieve(
         for section in (sections or [])
         if str(section or "").strip()
     ))
+    normalized_source_types = tuple(dict.fromkeys(
+        str(source_type or "").strip()
+        for source_type in (source_types or [])
+        if str(source_type or "").strip()
+    ))
+    if source_types is not None and not normalized_source_types:
+        return []
     # Include the live corpus revision so a product/QA sync is immediately
     # visible to every worker, rather than waiting for the five-minute local
     # candidate-cache TTL to expire.
@@ -587,6 +615,8 @@ async def semantic_retrieve(
         prefer_product_sources,
         normalized_skus,
         normalized_sections,
+        normalized_source_types,
+        source_types is not None,
         retrieval_revision,
     )
     cached = customer_cache_service.recommendation_candidate_cache.get(cache_key)
@@ -602,6 +632,7 @@ async def semantic_retrieve(
                 limit=limit,
                 skus=list(normalized_skus),
                 sections=list(normalized_sections),
+                source_types=list(normalized_source_types) if source_types is not None else None,
             )
             customer_cache_service.recommendation_candidate_cache.set(cache_key, rows)
             return rows
@@ -612,6 +643,20 @@ async def semantic_retrieve(
             customer_cache_service.embedding_cache.set(embedding_key, embedding)
         where = "c.embedding_status = 'synced' AND c.embedding IS NOT NULL"
         params = {"embedding": _vector_literal(embedding), "limit": limit}
+        if normalized_source_types:
+            source_type_placeholders = []
+            for index, source_type in enumerate(normalized_source_types):
+                key = f"source_type_{index}"
+                source_type_placeholders.append(f":{key}")
+                params[key] = source_type
+            where += f" AND c.source_type IN ({', '.join(source_type_placeholders)})"
+        else:
+            non_fact_placeholders = []
+            for index, source_type in enumerate(_NON_FACT_GUIDANCE_SOURCE_TYPES):
+                key = f"excluded_source_type_{index}"
+                non_fact_placeholders.append(f":{key}")
+                params[key] = source_type
+            where += f" AND c.source_type NOT IN ({', '.join(non_fact_placeholders)})"
         if sku:
             where += (
                 " AND (c.sku = :sku "
@@ -660,6 +705,7 @@ async def semantic_retrieve(
                 limit=limit,
                 skus=list(normalized_skus),
                 sections=list(normalized_sections),
+                source_types=list(normalized_source_types) if source_types is not None else None,
             )
             customer_cache_service.recommendation_candidate_cache.set(cache_key, rows)
             return rows
@@ -686,6 +732,7 @@ async def semantic_retrieve(
             limit=max(limit * 3, limit),
             skus=list(normalized_skus),
             sections=list(normalized_sections),
+            source_types=list(normalized_source_types) if source_types is not None else None,
         )
         result = merge_retrieval_rows(
             vector_result,
@@ -708,6 +755,7 @@ async def semantic_retrieve(
                 limit=limit,
                 skus=list(normalized_skus),
                 sections=list(normalized_sections),
+                source_types=list(normalized_source_types) if source_types is not None else None,
             )
         except Exception:
             rows = []

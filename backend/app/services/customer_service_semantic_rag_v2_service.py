@@ -25,6 +25,7 @@ from ..models.product import Product
 from . import (
     customer_agent_service,
     customer_enterprise_guardrail_service,
+    customer_experience_rag_service,
     customer_llm_service,
     customer_pipeline_service,
     customer_perf_service,
@@ -737,6 +738,7 @@ def _answer_prompt_payload(
     context_candidates: list[dict[str, str]],
     candidates: list[dict[str, Any]],
     evidence: list[dict[str, Any]],
+    experience_guidance: list[dict[str, Any]],
     identity_ambiguity: bool,
 ) -> dict[str, Any]:
     return {
@@ -752,6 +754,7 @@ def _answer_prompt_payload(
             if isinstance(item, dict)
         ],
         "evidence": evidence,
+        "experience_guidance": experience_guidance,
     }
 
 
@@ -761,7 +764,10 @@ async def _generate_answer(
     payload: dict[str, Any],
 ) -> tuple[dict[str, Any] | None, dict[str, Any]]:
     system_prompt = (
-        "你是面向客户的自然中文客服。必须基于 evidence 回答，evidence 之外的内容一律不能当作商品事实。"
+        "你是面向客户的自然中文客服。商品事实必须基于 evidence 回答，evidence 之外的内容一律不能当作商品事实。"
+        "experience_guidance 是从历史客服经验中人工审核提炼的非事实沟通建议，只能帮助组织表达、承接顾虑和给出自然下一步；"
+        "它不能证明任何商品事实、不能替代 evidence、不能决定 SKU，也不能向客户提及。若当前只是简单事实问题或建议不相关，直接忽略；不要强行推销或拉长回复。"
+        "在完整回答当前问题的前提下优先短答，通常三到六句；只有复杂比较确有必要时才用少量条目展开。"
         "product_record 是当前商品主数据，knowledge/product QA 是 RAG 证据；不同 SKU 的证据绝不能混用。"
         "canonical_product_record 对同一 SKU 的非空结构化字段拥有最高事实权威；同 SKU product QA/知识只能补充主数据未填写的内容，不能静默覆盖主数据。"
         "对于适用热源等封闭兼容字段，只能把资料中明确列出的具体选项视为已支持；‘明火’、‘燃气’等宽泛词不能自动推出酒精炉等具体选项。空值、‘/’、暂无或未知都表示主数据未填写，不表示通用兼容。若同 SKU 已审核 QA 明确补充了该字段，可以按 QA 明确列出的范围回答，并提示主数据待补充；这种情况不要误称为直接冲突，也不能把 QA 范围继续扩大。"
@@ -1104,6 +1110,18 @@ async def ask_customer_service_semantic_rag_v2(
         allowed_skus=allowed_skus,
         allow_unbound=allow_unbound,
     )
+    experience_query = str((plan.get("search_queries") or [original_question])[0] or original_question)
+    experience_start = perf_counter()
+    experience_guidance = await customer_experience_rag_service.retrieve_experience_guidance(
+        db,
+        question=experience_query,
+        skus=target_skus or candidate_skus,
+    )
+    customer_perf_service.log_stage(
+        "customer_service_v2.experience_retrieve",
+        experience_start,
+        rows=len(experience_guidance),
+    )
     candidates = [product_details[item] for item in candidate_skus if item in product_details]
     payload = _answer_prompt_payload(
         question=original_question,
@@ -1113,6 +1131,7 @@ async def ask_customer_service_semantic_rag_v2(
         context_candidates=context_candidates,
         candidates=candidates,
         evidence=evidence,
+        experience_guidance=experience_guidance,
         identity_ambiguity=identity_ambiguity,
     )
     answer_raw, answer_metadata = await _generate_answer(db, payload=payload)
@@ -1165,6 +1184,8 @@ async def ask_customer_service_semantic_rag_v2(
         "retrieval_mode": "semantic_rag_with_keyword_fallback",
         "llm_call_count": len(state.get("llm_calls") or []),
         "plan_available": bool(plan.get("plan_available")),
+        "experience_guidance_count": len(experience_guidance),
+        "experience_guidance_ids": customer_experience_rag_service.guidance_ids(experience_guidance),
         **answer_metadata,
     }
     debug = {
@@ -1179,6 +1200,8 @@ async def ask_customer_service_semantic_rag_v2(
         "evidence_ids": [item.get("evidence_id") for item in evidence],
         "selected_evidence_ids": selected_evidence_ids,
         "identity_ambiguity": identity_ambiguity,
+        "experience_guidance_count": len(experience_guidance),
+        "experience_guidance_ids": customer_experience_rag_service.guidance_ids(experience_guidance),
         "llm_call_count": len(state.get("llm_calls") or []),
         "elapsed_before_persist_ms": round(customer_perf_service.perf_ms(request_start), 2),
     }

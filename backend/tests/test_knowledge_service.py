@@ -111,6 +111,67 @@ class KnowledgeServiceTest(unittest.TestCase):
         expanded_revision = knowledge_service._knowledge_retrieval_revision(self.db)
         self.assertNotEqual(synced_revision, expanded_revision)
 
+    def test_non_fact_experience_source_is_excluded_unless_explicitly_requested(self):
+        product_document = KnowledgeDocument(
+            id="doc-fact-source",
+            source_type="product",
+            source_id="product:PILOT-1:qa:1",
+            sku="PILOT-1",
+            title="fact",
+            content="价格顾虑的商品事实",
+        )
+        experience_document = KnowledgeDocument(
+            id="doc-experience-source",
+            source_type=knowledge_service.CUSTOMER_EXPERIENCE_SOURCE_TYPE,
+            source_id="customer_experience:pilot:PILOT-1:value",
+            sku="PILOT-1",
+            title="experience",
+            content="价格顾虑的沟通策略",
+        )
+        self.db.add_all([
+            product_document,
+            experience_document,
+            KnowledgeChunk(
+                id="chunk-fact-source",
+                document_id=product_document.id,
+                sku="PILOT-1",
+                source_type="product",
+                chunk_index=0,
+                content=product_document.content,
+                embedding_status="pending",
+            ),
+            KnowledgeChunk(
+                id="chunk-experience-source",
+                document_id=experience_document.id,
+                sku="PILOT-1",
+                source_type=knowledge_service.CUSTOMER_EXPERIENCE_SOURCE_TYPE,
+                chunk_index=0,
+                content=experience_document.content,
+                embedding_status="pending",
+            ),
+        ])
+        self.db.commit()
+
+        normal_rows = knowledge_service.keyword_retrieve(
+            self.db,
+            "价格顾虑",
+            sku="PILOT-1",
+            limit=5,
+        )
+        experience_rows = knowledge_service.keyword_retrieve(
+            self.db,
+            "价格顾虑",
+            sku="PILOT-1",
+            limit=5,
+            source_types=[knowledge_service.CUSTOMER_EXPERIENCE_SOURCE_TYPE],
+        )
+
+        self.assertEqual([row["source_type"] for row in normal_rows], ["product"])
+        self.assertEqual(
+            [row["source_type"] for row in experience_rows],
+            [knowledge_service.CUSTOMER_EXPERIENCE_SOURCE_TYPE],
+        )
+
     def test_keyword_retrieve_merges_token_group_pages_before_idf_ranking(self):
         now = datetime.now(timezone.utc)
         documents = []

@@ -176,6 +176,18 @@ class Settings:
     CUSTOMER_SERVICE_WORKBUDDY_REASONING_EFFORT: str = os.getenv(
         "CUSTOMER_SERVICE_WORKBUDDY_REASONING_EFFORT", "none"
     ).strip().lower()
+    # Optional non-factual RAG guidance for conversational strategy. Product
+    # facts remain exclusively in the existing evidence packet, and the
+    # feature can be disabled without changing any of the three pipelines.
+    CUSTOMER_SERVICE_EXPERIENCE_RAG_ENABLED: bool = os.getenv(
+        "CUSTOMER_SERVICE_EXPERIENCE_RAG_ENABLED", "false"
+    ).lower() == "true"
+    CUSTOMER_SERVICE_EXPERIENCE_RAG_MAX_CARDS: int = int(
+        os.getenv("CUSTOMER_SERVICE_EXPERIENCE_RAG_MAX_CARDS", "2")
+    )
+    CUSTOMER_SERVICE_EXPERIENCE_RAG_MAX_CHARS: int = int(
+        os.getenv("CUSTOMER_SERVICE_EXPERIENCE_RAG_MAX_CHARS", "1200")
+    )
 
     DATABASE_URL: str = os.getenv(
         "DATABASE_URL",
