@@ -1,5 +1,6 @@
 from app.services.customer_service_semantic_rag_v2_service import (
     _answer_resolved_identity,
+    _preserve_comparison_participants,
     _recover_selected_skus_from_evidence,
     _validated_answer,
 )
@@ -175,3 +176,26 @@ def test_selected_evidence_sku_remains_customer_visible_result():
     )
 
     assert answer[5] == ["CW-C78"]
+
+
+def test_comparison_result_keeps_all_bound_semantic_participants():
+    assert _preserve_comparison_participants(
+        ["CW-C69-1"],
+        target_skus=["CW-C69-1", "CW-C06PRO"],
+        evidence=[
+            {"sku": "CW-C69-1", "evidence_id": "v2-e1"},
+            {"sku": "CW-C06PRO", "evidence_id": "v2-e2"},
+        ],
+        answer_type="comparison",
+        needs_clarification=False,
+    ) == ["CW-C69-1", "CW-C06PRO"]
+
+
+def test_comparison_participant_recovery_does_not_fill_missing_evidence():
+    assert _preserve_comparison_participants(
+        ["CW-C69-1"],
+        target_skus=["CW-C69-1", "CW-C06PRO"],
+        evidence=[{"sku": "CW-C69-1", "evidence_id": "v2-e1"}],
+        answer_type="comparison",
+        needs_clarification=False,
+    ) == ["CW-C69-1"]

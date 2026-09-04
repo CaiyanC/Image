@@ -34,6 +34,7 @@ from . import (
 from .customer_service_semantic_rag_v2_service import (
     _clip_text,
     _compact_product_detail,
+    _explicit_skus,
     _normalize_skus,
     _public_result,
     _unique_strings,
@@ -270,13 +271,43 @@ def _build_messages(
     history: list[dict[str, str]],
     page_sku: str | None,
     context_skus: list[str],
+    explicit_skus: list[str] | None = None,
 ) -> list[dict[str, str]]:
     messages: list[dict[str, str]] = [
         {"role": "system", "content": _agent_system_prompt()},
     ]
+    explicit_skus = list(dict.fromkeys(
+        str(sku or "").strip().upper()
+        for sku in (explicit_skus or [])
+        if str(sku or "").strip()
+    ))
     context_skus = list(dict.fromkeys(
         sku for sku in (page_sku, *context_skus) if sku
     ))
+    identity_skus = list(dict.fromkeys([*explicit_skus, *context_skus]))
+    messages.append({
+        "role": "system",
+        "content": json.dumps(
+            {
+                "internal_context": "identity_resolution_context",
+                "customer_authored": False,
+                "identity_resolution_context": {
+                    "unanchored_candidate_set": not bool(identity_skus),
+                    "customer_identity_bound": bool(identity_skus),
+                    "explicit_product_skus": explicit_skus,
+                    "page_anchor_sku": page_sku,
+                    "conversation_context_skus": context_skus,
+                    "candidate_skus_are_not_customer_selection": True,
+                },
+                "context_contract": (
+                    "没有明确 SKU、页面商品或已确认对话商品时，本轮是无锚点候选集合；"
+                    "候选 SKU 只能作为证据来源，不能默认为客户所指商品。"
+                    "有明确身份锚点时仍须用本轮工具读取事实；对话候选也不等于本轮已选择。"
+                ),
+            },
+            ensure_ascii=False,
+        ),
+    })
     if context_skus:
         messages.append({
             "role": "system",
@@ -1235,6 +1266,7 @@ async def _run_agent(
     history: list[dict[str, str]],
     page_sku: str | None,
     context_skus: list[str],
+    explicit_skus: list[str] | None = None,
     answer_delta_callback: Callable[[str], Awaitable[None]] | None = None,
 ) -> tuple[dict[str, Any], list[dict[str, Any]], list[dict[str, Any]], int, dict[str, Any]]:
     evidence: list[dict[str, Any]] = []
@@ -1300,6 +1332,7 @@ async def _run_agent(
         history=history,
         page_sku=page_sku,
         context_skus=context_skus,
+        explicit_skus=explicit_skus,
     )
     tool_result_message_indexes: list[int] = []
     if semantic_prefetch:
@@ -1903,6 +1936,7 @@ async def ask_customer_service_workbuddy_agent(
         user_id=str(user_id),
         conversation_id=conversation_id,
     )
+    explicit_skus = _explicit_skus(db, original_question)
 
     warnings: list[str] = []
     try:
@@ -1912,6 +1946,7 @@ async def ask_customer_service_workbuddy_agent(
             history=history,
             page_sku=page_sku,
             context_skus=context_skus,
+            explicit_skus=explicit_skus,
             answer_delta_callback=answer_delta_callback,
         )
     except Exception as exc:
@@ -2078,6 +2113,7 @@ async def ask_customer_service_workbuddy_agent(
         "grounding_retry_counts": dict(llm_metadata.get("grounding_retry_counts") or {}),
         "llm_call_count": llm_call_count,
         "page_sku": page_sku,
+        "explicit_skus": explicit_skus,
         "active_context_sku": context_skus[0] if len(context_skus) == 1 else None,
         "active_context_skus": context_skus,
         "candidate_skus": candidate_skus,

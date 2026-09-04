@@ -906,6 +906,40 @@ def _recover_selected_skus_from_evidence(
     return {**raw, "selected_skus": selected_skus[:5]}
 
 
+def _preserve_comparison_participants(
+    result_skus: list[str],
+    *,
+    target_skus: list[str],
+    evidence: list[dict[str, Any]],
+    answer_type: str,
+    needs_clarification: bool,
+) -> list[str]:
+    """Keep every semantically sealed participant in a comparison result.
+
+    The answer model may put only the winning SKU in ``selected_skus`` even
+    though it cites evidence for both products.  ``result_skus`` is also the
+    persisted result/context ledger, so returning only the winner would make
+    the other comparison participant disappear from cards and later turns.
+    The participant set comes from the already validated semantic targets and
+    is retained only when every participant has bound evidence.  No customer
+    wording or field token is inspected here.
+    """
+    if answer_type != "comparison" or needs_clarification:
+        return result_skus
+    evidence_skus = {
+        str(item.get("sku") or "").strip().upper()
+        for item in evidence
+        if str(item.get("sku") or "").strip()
+    }
+    participants = [
+        str(sku or "").strip().upper()
+        for sku in target_skus
+        if str(sku or "").strip().upper() in evidence_skus
+    ]
+    participants = list(dict.fromkeys(participants))[:5]
+    return participants if len(participants) >= 2 else result_skus
+
+
 def _source_id(row: dict[str, Any]) -> str:
     metadata = row.get("metadata") if isinstance(row.get("metadata"), dict) else {}
     return str(metadata.get("source_id") or "").strip()
@@ -1507,6 +1541,13 @@ async def ask_customer_service_semantic_rag_v2(
         question=original_question,
         identity_ambiguity=identity_ambiguity,
         request_kind=kind,
+    )
+    result_skus = _preserve_comparison_participants(
+        result_skus,
+        target_skus=target_skus,
+        evidence=evidence,
+        answer_type=answer_type,
+        needs_clarification=needs_clarification,
     )
     sources = [
         {

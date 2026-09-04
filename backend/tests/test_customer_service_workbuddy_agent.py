@@ -732,6 +732,46 @@ def test_workbuddy_agent_semantic_prefetch_is_internal_system_context(
     assert payload["customer_authored"] is False
 
 
+def test_workbuddy_agent_exposes_identity_resolution_context_to_model():
+    unanchored = customer_service_workbuddy_agent_service._build_messages(
+        question="木柄可以取下吗？",
+        history=[],
+        page_sku=None,
+        context_skus=[],
+    )
+    identity_message = next(
+        item for item in unanchored
+        if item["role"] == "system"
+        and item["content"].lstrip().startswith("{")
+        and '"internal_context": "identity_resolution_context"' in item["content"]
+    )
+    identity_payload = json.loads(identity_message["content"])
+    context = identity_payload["identity_resolution_context"]
+    assert context["unanchored_candidate_set"] is True
+    assert context["customer_identity_bound"] is False
+    assert context["candidate_skus_are_not_customer_selection"] is True
+
+    anchored = customer_service_workbuddy_agent_service._build_messages(
+        question="CW-C78整套多重？",
+        history=[],
+        page_sku=None,
+        context_skus=[],
+        explicit_skus=["CW-C78"],
+    )
+    anchored_message = next(
+        item for item in anchored
+        if item["role"] == "system"
+        and item["content"].lstrip().startswith("{")
+        and '"internal_context": "identity_resolution_context"' in item["content"]
+    )
+    anchored_context = json.loads(anchored_message["content"])[
+        "identity_resolution_context"
+    ]
+    assert anchored_context["unanchored_candidate_set"] is False
+    assert anchored_context["customer_identity_bound"] is True
+    assert anchored_context["explicit_product_skus"] == ["CW-C78"]
+
+
 def test_workbuddy_agent_read_product_deduplicates_and_bounds_same_sku_packet(
     monkeypatch,
 ):
