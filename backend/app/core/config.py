@@ -188,6 +188,12 @@ class Settings:
     CUSTOMER_SERVICE_EXPERIENCE_RAG_MAX_CHARS: int = int(
         os.getenv("CUSTOMER_SERVICE_EXPERIENCE_RAG_MAX_CHARS", "1200")
     )
+    # Experience guidance is optional conversational context, not product
+    # evidence. Require a real vector-retrieval score before it can enter a
+    # prompt so lexical fallback rows cannot bypass the relevance boundary.
+    CUSTOMER_SERVICE_EXPERIENCE_RAG_MIN_SCORE: float = float(
+        os.getenv("CUSTOMER_SERVICE_EXPERIENCE_RAG_MIN_SCORE", "0.50")
+    )
 
     DATABASE_URL: str = os.getenv(
         "DATABASE_URL",

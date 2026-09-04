@@ -119,6 +119,10 @@ _RESPONSE_MODES = {"grounded", "conversational"}
 
 def _agent_system_prompt() -> str:
     return (
+        "如果客户明确说要记住、先记住或保留一个或多个已经写出的完整 SKU，且当前只是建立后续比较/追问上下文而不是询问商品事实，"
+        "可以直接自然确认记忆，不必为了重复客户已经给出的 SKU 调用工具；此时使用 response_mode=conversational、answer_type=faq、"
+        "needs_clarification=false、identity_status=confirmed，并把这些 SKU 放入 candidate_skus，不能把它们写入 selected_skus，"
+        "也不要在这一步补充容量、重量等未读取的商品事实。\n"
         "你是一个使用工具工作的中文智能客服 Agent。你负责理解当前问题和完整对话上下文，"
         "不要依赖固定关键词、问题类型树或候选顺序作答。历史回复只能帮助理解上下文；"
         "系统可能提供 customer_experience_guidance；它是人工审核提炼的非事实沟通经验，只能帮助承接顾虑、组织表达和给出自然下一步，不能证明商品事实、不能替代工具、不能选择 SKU，也不能向客户提及。简单事实问题或不相关建议直接忽略，不要强行推销或拉长回复。完整回答当前问题的前提下优先三到六句自然中文短答，复杂比较确有必要时再用少量条目。"
@@ -147,6 +151,11 @@ def _agent_system_prompt() -> str:
         "将它们标为 identity_status=confirmed 并写入 selected_skus；这不是把检索首位当结论，而是你的语义决策。"
         "只有客户在询问某个具体商品、且当前问题、页面引用或正常对话上下文仍不能唯一确认对象时，才使用"
         "‘如果你指的是……’的条件式说明并自然追问；推荐/比较本身不应因为存在多个候选而机械澄清。"
+        "当客户没有明确商品或已确认的上下文商品，而是在询问通用安全、使用或清洁做法时，"
+        "按 general guidance 回答：优先使用 search_knowledge 的共同资料，response_mode=grounded、answer_type=faq、"
+        "identity_status=not_applicable 或 unresolved、selected_skus=[]；不要因为某个候选商品的说明被召回，"
+        "就把泛问题绑定到该 SKU、生成商品卡或附加‘某商品已确认’的结论。只有客户明确指定商品，或不同商品的证据确实会改变答案时，"
+        "才调用 read_product 并逐 SKU 归属。"
         "对象仍不明确且不是推荐/比较时，必须先用‘如果你指的是……’明确候选身份，再提供条件式信息并自然追问；"
         "不得先给无条件结论，也不要把候选写成已确认商品。"
         "商品事实必须保留其 SKU 归属，不能把一个 SKU 的容量、重量、材质、适用热源或 QA"
@@ -990,11 +999,15 @@ def _response_needs_current_fact_evidence(response: dict[str, Any]) -> bool:
     if not _clip_text(response.get("answer"), _PUBLIC_ANSWER_LIMIT):
         return False
     response_mode = str(response.get("response_mode") or "").strip().lower()
+    answer_type = str(response.get("answer_type") or "").strip().lower()
     if response_mode == "grounded":
         return True
     if response_mode == "conversational":
-        return False
-    answer_type = str(response.get("answer_type") or "").strip().lower()
+        # A model can accidentally label a product recommendation/comparison
+        # as conversational while it is still making a factual decision.  The
+        # answer type owns that semantic distinction; only genuinely
+        # conversational non-product turns may bypass a current RAG read.
+        return answer_type in {"product_detail", "recommendation", "comparison"}
     identity_status = str(
         response.get("identity_status")
         or response.get("identity_resolution")
@@ -1117,6 +1130,22 @@ def _declared_fact_skus(
         declared_values.extend(_normalize_skus(claim.get("skus"), limit=_READ_PRODUCT_LIMIT))
         declared_values.append(claim.get("sku"))
     declared = _normalize_skus(declared_values, limit=_READ_PRODUCT_LIMIT)
+    answer_type = str(response.get("answer_type") or "").strip().lower()
+    if (
+        answer_type in {"recommendation", "comparison"}
+        and declared
+        and context_skus
+        and set(declared).intersection(
+            str(sku or "").strip().upper()
+            for sku in context_skus
+            if str(sku or "").strip()
+        )
+    ):
+        # The model has already declared a comparison/recommendation and one
+        # of its candidates belongs to the confirmed discourse context.
+        # Re-read the whole bounded context so the model cannot compare one
+        # SKU against an ungrounded memory of the other.
+        declared = list(dict.fromkeys([*declared, *context_skus]))[:_READ_PRODUCT_LIMIT]
     known_skus: set[str] = set()
     if declared:
         known_skus = {
@@ -1125,6 +1154,37 @@ def _declared_fact_skus(
             if str(row[0] or "").strip()
         }
     return [sku for sku in declared if sku in available_skus or sku in known_skus]
+
+
+def _declared_context_skus(
+    db: Session,
+    response: dict[str, Any],
+) -> list[str]:
+    """Validate model-declared conversational references for later turns.
+
+    A pure "remember these SKUs" turn does not need a product fact read, so
+    those references are not present in the evidence packet.  They may still
+    be retained as candidate context when the model explicitly marks the
+    response conversational and the referenced SKUs exist in the live
+    catalogue.  This never creates a result card or a product fact.
+    """
+    if str(response.get("response_mode") or "").strip().lower() != "conversational":
+        return []
+    if str(response.get("identity_status") or "").strip().lower() != "confirmed":
+        return []
+    if str(response.get("answer_type") or "").strip().lower() not in {"faq", "clarification"}:
+        return []
+    if response.get("needs_clarification") or response.get("claims") or response.get("evidence_ids"):
+        return []
+    declared = _normalize_skus(response.get("candidate_skus"), limit=_READ_PRODUCT_LIMIT)
+    if not declared:
+        return []
+    existing = {
+        str(row[0] or "").strip().upper()
+        for row in db.query(Product.sku).filter(Product.sku.in_(declared)).all()
+        if str(row[0] or "").strip()
+    }
+    return [sku for sku in declared if sku in existing]
 
 
 async def _emit_accepted_answer(
@@ -1357,7 +1417,14 @@ async def _run_agent(
             # Agent ownership of identity and avoids a keyword/product router.
             if (
                 not calls
-                and response_mode == "grounded"
+                and fact_response
+                and (
+                    response_mode == "grounded"
+                    or (
+                        response_mode == "conversational"
+                        and answer_type in {"product_detail", "recommendation", "comparison"}
+                    )
+                )
                 and declared_fact_skus
                 and tool_round_count < _MAX_TOOL_ROUNDS
             ):
@@ -1890,6 +1957,7 @@ async def ask_customer_service_workbuddy_agent(
         answer_raw.get("claims"),
         evidence=public_evidence,
     )
+    context_reference_skus = _declared_context_skus(db, answer_raw)
     claim_skus = {
         sku
         for item in claims
@@ -1922,6 +1990,7 @@ async def ask_customer_service_workbuddy_agent(
         *selected_skus,
         *model_selected_skus,
         *model_candidate_skus,
+        *context_reference_skus,
     ]))[:20]
     if rejected_claims:
         warnings.append("claim_provenance_rejected")
@@ -1982,6 +2051,7 @@ async def ask_customer_service_workbuddy_agent(
         "grounding_retry_count": int(llm_metadata.get("grounding_retry_count") or 0),
         "grounding_retry_counts": dict(llm_metadata.get("grounding_retry_counts") or {}),
         "evidence_ids": selected_evidence_ids,
+        "context_reference_skus": context_reference_skus,
         "identity_status": identity_status,
         "claims": claims,
         "model": llm_metadata.get("model"),
@@ -2012,6 +2082,7 @@ async def ask_customer_service_workbuddy_agent(
         "selected_skus": selected_skus,
         "model_selected_skus": model_selected_skus,
         "model_candidate_skus": model_candidate_skus,
+        "context_reference_skus": context_reference_skus,
         "identity_status": identity_status,
         "claims": claims,
         "rejected_claims": rejected_claims,

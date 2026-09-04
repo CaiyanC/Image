@@ -7,6 +7,7 @@ never prove a product fact, select a SKU, or replace a normal RAG lookup.
 
 from __future__ import annotations
 
+import math
 from typing import Any
 
 from sqlalchemy.orm import Session
@@ -46,6 +47,19 @@ def _approved_guidance_row(row: dict[str, Any]) -> bool:
     )
 
 
+def _vector_score(row: dict[str, Any]) -> float | None:
+    """Return a usable semantic score, rejecting lexical/fallback rows."""
+    if str(row.get("_retrieval_signal") or "").strip().lower() != "vector":
+        return None
+    try:
+        score = float(row.get("score"))
+    except (TypeError, ValueError):
+        return None
+    if not math.isfinite(score):
+        return None
+    return score
+
+
 async def retrieve_experience_guidance(
     db: Session,
     *,
@@ -69,6 +83,15 @@ async def retrieve_experience_guidance(
         min(int(getattr(settings, "CUSTOMER_SERVICE_EXPERIENCE_RAG_MAX_CHARS", 1200)), 1800),
     )
     try:
+        min_score = float(
+            getattr(settings, "CUSTOMER_SERVICE_EXPERIENCE_RAG_MIN_SCORE", 0.50)
+        )
+    except (TypeError, ValueError):
+        min_score = 0.50
+    if not math.isfinite(min_score):
+        min_score = 0.50
+    min_score = max(-1.0, min(1.0, min_score))
+    try:
         rows = await knowledge_service.semantic_retrieve(
             db,
             query,
@@ -76,6 +99,7 @@ async def retrieve_experience_guidance(
             skus=normalized_skus if len(normalized_skus) > 1 else None,
             limit=max(max_cards * 4, 6),
             source_types=[knowledge_service.CUSTOMER_EXPERIENCE_SOURCE_TYPE],
+            _include_retrieval_signal=True,
         )
     except Exception:
         # Experience is optional. Failure must leave the existing RAG path
@@ -85,7 +109,22 @@ async def retrieve_experience_guidance(
     result: list[dict[str, Any]] = []
     seen: set[str] = set()
     remaining_chars = max_chars
-    for row in rows or []:
+    ranked_rows: list[tuple[float, int, dict[str, Any]]] = []
+    for index, row in enumerate(rows or []):
+        if not isinstance(row, dict):
+            continue
+        score = _vector_score(row)
+        if score is None or score < min_score:
+            continue
+        ranked_rows.append((score, index, row))
+
+    # ``semantic_retrieve`` is a hybrid page: its final order deliberately
+    # fuses vector and lexical ranks for general knowledge retrieval. This
+    # optional channel needs the vector score itself, so rank only the rows
+    # proven to be semantic and keep lexical fallback out of the packet.
+    ranked_rows.sort(key=lambda item: (-item[0], item[1]))
+
+    for _score, _index, row in ranked_rows:
         if not isinstance(row, dict) or not _approved_guidance_row(row):
             continue
         metadata = row.get("metadata") if isinstance(row.get("metadata"), dict) else {}

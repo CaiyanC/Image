@@ -32,6 +32,7 @@ from . import (
     knowledge_service,
     product_service,
 )
+from . import customer_entity_resolution_contract
 
 
 # ``\b`` is Unicode-aware in Python.  It therefore does not end an ASCII SKU
@@ -69,6 +70,15 @@ _ANSWER_TYPES = frozenset({
     "faq",
     "clarification",
 })
+
+# Keep a little more retrieval context for unanchored semantic turns.  The
+# answer model still decides which SKU is relevant and the provenance
+# validator still decides which SKU may become customer-visible; this window
+# only prevents a later LLM-generated query from being discarded before the
+# model can see its evidence.
+_MAX_SEMANTIC_CANDIDATE_SKUS = 8
+_MAX_SEMANTIC_RECOMMENDATION_SKUS = 12
+_MAX_SEMANTIC_PROFILE_RETRIEVAL_ROWS = 48
 
 
 def _clip_text(value: Any, limit: int = 1600) -> str:
@@ -290,13 +300,62 @@ def _load_conversation_context(
 
 
 def _explicit_skus(db: Session, question: str) -> list[str]:
+    """Resolve explicit SKU-like tokens against the live product catalogue.
+
+    Customers often use the meaningful suffix of a catalogue SKU (``C78``
+    for ``CW-C78`` or ``S10`` for ``CW-S10-1``/``CW-S10-A``).  Treating those
+    tokens as a match is safe only after checking the current catalogue.  A
+    unique suffix becomes a bound SKU; a suffix shared by variants remains a
+    bounded multi-candidate identity.  Nothing is inferred from the token
+    when the catalogue has no owner.
+    """
     result: list[str] = []
+    products: list[Product] | None = None
+
+    def catalogue_candidates(token: str) -> list[str]:
+        nonlocal products
+        normalized_token = str(token or "").strip().upper().replace("_", "-")
+        if not normalized_token:
+            return []
+
+        exact = (
+            db.query(Product)
+            .filter(Product.sku == normalized_token)
+            .all()
+        )
+        exact_skus = [
+            str(product.sku or "").strip().upper()
+            for product in exact
+            if str(product.sku or "").strip()
+        ]
+        if exact_skus:
+            return list(dict.fromkeys(exact_skus))
+
+        if products is None:
+            products = db.query(Product).all()
+        token_parts = [part for part in normalized_token.split("-") if part]
+        matches: list[str] = []
+        for product in products:
+            candidate = str(product.sku or "").strip().upper().replace("_", "-")
+            if not candidate:
+                continue
+            candidate_parts = [part for part in candidate.split("-") if part]
+            # A short token may identify one complete SKU segment (C78) or a
+            # complete trailing segment sequence (SOURCE-CW-C78).  Both are
+            # catalogue ownership checks, not fuzzy text matching.
+            segment_match = normalized_token in candidate_parts
+            suffix_match = bool(token_parts) and candidate_parts[-len(token_parts):] == token_parts
+            if segment_match or suffix_match:
+                canonical = str(product.sku or "").strip().upper()
+                if canonical and canonical not in matches:
+                    matches.append(canonical)
+        return matches
+
     for match in _SKU_RE.findall(str(question or "")):
-        sku = str(match or "").strip().upper()
-        if sku in result:
-            continue
-        if db.query(Product).filter(Product.sku == sku).first() is not None:
-            result.append(sku)
+        token = str(match or "").strip().upper()
+        for sku in catalogue_candidates(token):
+            if sku not in result:
+                result.append(sku)
     return result[:8]
 
 
@@ -315,6 +374,11 @@ def _normalize_plan(raw: dict[str, Any] | None, question: str) -> dict[str, Any]
         "request_kind": kind,
         "subject_scope": scope,
         "subject_text": _clip_text(value.get("subject_text"), 300),
+        "product_subjects": _unique_strings(
+            value.get("product_subjects"),
+            limit=6,
+            max_length=220,
+        ),
         "search_queries": queries[:3],
         "requested_dimensions": _unique_strings(value.get("requested_dimensions"), limit=8, max_length=120),
         "context_result_indexes": [
@@ -445,10 +509,13 @@ async def _semantic_plan(
         "如果是推荐或比较，即使客户没有先给出 SKU，也要把它视为目录选择任务，保留客户的全部条件，不要自行补充偏好；"
         "多个语义候选本身不是澄清理由，不能因为候选不止一个就把推荐/比较标成 unknown。"
         "如果问题只是在问某个品类、材料或通用做法而没有指向具体商品，归为 general_knowledge，不要把候选商品名当成答案。"
+        "如果问题明确提到一个或多个商品、系列或简称，请把每个独立商品主体分别放入 product_subjects；"
+        "不要把‘容量是多少’、‘怎么清洗’等问题尾部放进商品主体，也不要为了凑字段猜测商品名。"
         "只输出 JSON："
         '{"request_kind":"product_fact|product_qa|recommendation|comparison|general_knowledge|clarification",'
         '"subject_scope":"page_product|named_product|catalogue|previous_turn|general|unknown",'
         '"subject_text":"问题中提到的商品或品类，无法确定时为空",'
+        '"product_subjects":["问题中明确提到的独立商品/系列主体，按语义拆分，最多6个"],'
         '"search_queries":["最多3个保持完整语义的检索查询"],'
         '"requested_dimensions":["客户明确关心的维度"],'
         '"context_result_indexes":[1],'
@@ -497,10 +564,14 @@ async def _retrieve(
     queries: list[str],
     sku: str | None = None,
     limit: int = 8,
+    sections: list[str] | None = None,
+    query_index_namespace: str | None = None,
+    max_query_limit: int = 12,
 ) -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
     seen: set[tuple[str, str, str]] = set()
-    for query in queries[:3]:
+    retrieval_limit = max(min(int(limit), max(int(max_query_limit), 1)), 1)
+    for query_index, query in enumerate(queries[:3]):
         if not str(query or "").strip():
             continue
         start = perf_counter()
@@ -509,8 +580,9 @@ async def _retrieve(
                 db,
                 str(query),
                 sku=sku,
-                limit=max(min(int(limit), 12), 1),
-                prefer_product_sources=bool(sku),
+                limit=retrieval_limit,
+                prefer_product_sources=bool(sku or sections),
+                sections=sections,
             )
         except Exception as exc:
             customer_perf_service.log_event(
@@ -523,6 +595,7 @@ async def _retrieve(
             start,
             query=_clip_text(query, 160),
             sku=sku,
+            sections=sections or [],
             rows=len(batch or []),
         )
         for rank, raw in enumerate(batch or []):
@@ -537,6 +610,9 @@ async def _retrieve(
             if identity in seen:
                 continue
             seen.add(identity)
+            retrieval_query_index: object = query_index
+            if query_index_namespace:
+                retrieval_query_index = f"{query_index_namespace}:{query_index}"
             rows.append({
                 "source_type": str(raw.get("source_type") or "knowledge").strip(),
                 "sku": str(raw.get("sku") or "").strip().upper() or None,
@@ -544,8 +620,82 @@ async def _retrieve(
                 "metadata": _json_value(metadata),
                 "score": raw.get("score"),
                 "retrieval_rank": rank,
+                "retrieval_query_index": retrieval_query_index,
             })
-    return rows[: max(int(limit) * 3, int(limit))]
+    return rows[: max(retrieval_limit * 3, retrieval_limit)]
+
+
+def _candidate_limit_for_kind(request_kind: str | None) -> int:
+    kind = str(request_kind or "").strip().lower()
+    if kind == "recommendation":
+        return _MAX_SEMANTIC_RECOMMENDATION_SKUS
+    if kind == "comparison":
+        return 5
+    return _MAX_SEMANTIC_CANDIDATE_SKUS
+
+
+def _rank_retrieved_skus(
+    rows: list[dict[str, Any]],
+    *,
+    limit: int = _MAX_SEMANTIC_CANDIDATE_SKUS,
+) -> list[str]:
+    """Fuse SKU candidates across the planner's independent query passes.
+
+    Each query generated by the semantic planner is an independent RAG view
+    of the same request.  Concatenating those pages lets the first query fill
+    the candidate window and silently hides a product recalled by a later
+    paraphrase.  Reciprocal-rank fusion is query-agnostic: it rewards a SKU
+    that is consistently near the top while retaining deterministic
+    first-seen/SKU tie breaks.  It does not inspect product names, fields, or
+    customer wording, and it never selects a customer-facing answer.
+    """
+    if limit <= 0:
+        return []
+
+    # Keep only the best row for a SKU in each query pass.  Repeated QA chunks
+    # for one SKU must not outweigh an independently recalled SKU merely by
+    # repetition.
+    best_rank_by_query: dict[tuple[object, str], int] = {}
+    first_seen: dict[str, int] = {}
+    for row_index, row in enumerate(rows or []):
+        if not isinstance(row, dict):
+            continue
+        sku = str(row.get("sku") or "").strip().upper()
+        if not sku:
+            continue
+        first_seen.setdefault(sku, row_index)
+        query_index: object = row.get("retrieval_query_index")
+        if query_index is None:
+            # Unit-test/fallback callers may not annotate query boundaries.
+            # Treat the complete page as one pass while preserving its
+            # supplied retrieval rank when available.
+            query_index = "single"
+        raw_rank = row.get("retrieval_rank")
+        try:
+            rank = max(int(raw_rank), 0)
+        except (TypeError, ValueError):
+            rank = row_index
+        key = (query_index, sku)
+        if key not in best_rank_by_query or rank < best_rank_by_query[key]:
+            best_rank_by_query[key] = rank
+
+    fused: dict[str, float] = {}
+    coverage: dict[str, int] = {}
+    for (query_index, sku), rank in best_rank_by_query.items():
+        del query_index
+        fused[sku] = fused.get(sku, 0.0) + 1.0 / (60.0 + rank)
+        coverage[sku] = coverage.get(sku, 0) + 1
+
+    ordered = sorted(
+        fused,
+        key=lambda sku: (
+            -fused[sku],
+            -coverage.get(sku, 0),
+            first_seen.get(sku, len(rows or [])),
+            sku,
+        ),
+    )
+    return ordered[:limit]
 
 
 async def _resolve_subject_skus(
@@ -562,6 +712,69 @@ async def _resolve_subject_skus(
         return explicit_skus, []
     if page_sku:
         return [page_sku], []
+
+    # The planner owns semantic subject extraction; this catalogue pass only
+    # verifies those subjects against the current product master.  It is not a
+    # question route and it never invents a SKU.  Weak family matches stay as
+    # bounded candidates, while exact canonical/alias matches may scope a
+    # single-product factual retrieval.
+    subject_scope = str(plan.get("subject_scope") or "").strip().lower()
+    product_subjects = list(plan.get("product_subjects") or [])
+    if not product_subjects and subject_scope in {"named_product", "previous_turn", "unknown"}:
+        subject_text = str(plan.get("subject_text") or "").strip()
+        if subject_text:
+            product_subjects = [subject_text]
+    if product_subjects:
+        products = db.query(Product).all()
+        resolved_skus: list[str] = []
+        catalogue_candidates: list[str] = []
+        for subject in product_subjects:
+            contract = customer_entity_resolution_contract.build_entity_resolution_contract(
+                str(subject),
+                products,
+                entity_text_override=str(subject),
+            )
+            if contract.status == "resolved" and contract.resolved_sku:
+                resolved_skus.append(str(contract.resolved_sku).strip().upper())
+                continue
+            # Diagnostic family candidates are useful to scope comparison /
+            # recommendation evidence, but never become a confirmed single
+            # product on their own.
+            catalogue_candidates.extend(
+                contract.resolver_candidate_skus
+                or contract.candidate_skus
+                or contract.diagnostic_candidate_skus
+            )
+        resolved_skus = list(dict.fromkeys(item for item in resolved_skus if item))
+        catalogue_candidates = list(dict.fromkeys(
+            item for item in (
+                str(sku or "").strip().upper()
+                for sku in catalogue_candidates
+            )
+            if item
+        ))
+        kind = str(plan.get("request_kind") or "").strip()
+        candidate_limit = _candidate_limit_for_kind(kind)
+        # A name resolver is an identity hint, not a final answer selection.
+        # Even a high-confidence alias can describe a family or a package
+        # variant whose current question asks for a different configuration.
+        # Let the current RAG page and the live profile page be visible to the
+        # answer model, then keep a single candidate as a bound scope only
+        # when no competing SKU was recalled.
+        retrieved_skus = _rank_retrieved_skus(
+            retrieved_rows,
+            limit=candidate_limit,
+        )
+        merged_candidates = list(dict.fromkeys([
+            *resolved_skus,
+            *catalogue_candidates,
+            *retrieved_skus,
+        ]))
+        if len(merged_candidates) == 1:
+            return merged_candidates, []
+        if merged_candidates:
+            return [], merged_candidates[:candidate_limit]
+
     context_by_index = {
         int(item["index"]): str(item["sku"]).strip().upper()
         for item in context_candidates
@@ -576,7 +789,7 @@ async def _resolve_subject_skus(
         return list(dict.fromkeys(context_skus)), []
 
     subject_text = str(plan.get("subject_text") or "").strip()
-    if subject_text:
+    if subject_text and subject_scope in {"named_product", "previous_turn", "unknown"}:
         exact = (
             db.query(Product)
             .filter(or_(Product.product_name_cn == subject_text, Product.product_name_en == subject_text))
@@ -586,21 +799,111 @@ async def _resolve_subject_skus(
         if len(exact_skus) == 1:
             return exact_skus, []
 
-    retrieved_skus = list(dict.fromkeys(
-        str(row.get("sku") or "").strip().upper()
-        for row in retrieved_rows
-        if str(row.get("sku") or "").strip()
-    ))
+    candidate_limit = _candidate_limit_for_kind(plan.get("request_kind"))
+    retrieved_skus = _rank_retrieved_skus(
+        retrieved_rows,
+        limit=candidate_limit,
+    )
     kind = str(plan.get("request_kind") or "").strip()
     if kind == "recommendation":
-        return [], retrieved_skus[:5]
+        return [], retrieved_skus[:candidate_limit]
     if kind == "comparison":
         return retrieved_skus[:5], []
     if len(retrieved_skus) == 1:
         return retrieved_skus, []
     # Multiple product hits are retained as candidates for a natural
     # clarification; no top-1 lexical promotion is allowed in v2.
-    return [], retrieved_skus[:5]
+    return [], retrieved_skus[:candidate_limit]
+
+
+def _answer_resolved_identity(
+    raw: dict[str, Any] | None,
+    *,
+    evidence: list[dict[str, Any]],
+    identity_ambiguity: bool,
+    request_kind: str | None = None,
+) -> bool:
+    """Accept an answer-model identity choice backed by this turn's evidence.
+
+    Retrieval ambiguity is an input to the answer model, not a mandatory
+    customer-facing clarification.  Once the model explicitly selects one
+    or more SKUs and cites evidence belonging to that same set, a direct
+    answer may proceed.  This keeps the RAG boundary while removing the old
+    ``multiple hits => ask again`` behavior.
+    """
+    if not identity_ambiguity or not isinstance(raw, dict):
+        return False
+    answer_type = str(raw.get("answer_type") or "").strip().lower()
+    if answer_type == "clarification" or bool(raw.get("needs_clarification")):
+        return False
+    selected_skus = set(_normalize_skus(raw.get("selected_skus"), limit=5))
+    allowed_skus = {
+        str(item.get("sku") or "").strip().upper()
+        for item in evidence
+        if str(item.get("sku") or "").strip()
+    }
+    if not selected_skus or not selected_skus.issubset(allowed_skus):
+        return False
+    selected_ids = set(_unique_strings(raw.get("evidence_ids"), limit=12, max_length=120))
+    if selected_ids:
+        evidence_skus = {
+            str(item.get("sku") or "").strip().upper()
+            for item in evidence
+            if str(item.get("evidence_id") or "").strip() in selected_ids
+            and str(item.get("sku") or "").strip()
+        }
+        kind = str(request_kind or "").strip().lower()
+        if kind in {"recommendation", "comparison"}:
+            if not selected_skus.issubset(evidence_skus):
+                return False
+        elif evidence_skus != selected_skus:
+            return False
+    return True
+
+
+def _recover_selected_skus_from_evidence(
+    raw: dict[str, Any] | None,
+    *,
+    evidence: list[dict[str, Any]],
+    request_kind: str | None,
+) -> dict[str, Any] | None:
+    """Recover an omitted selection mirror from the model's cited evidence.
+
+    The answer model sometimes cites the exact evidence it used but omits the
+    redundant ``selected_skus`` field.  For a recommendation with one cited
+    SKU, or a comparison whose cited evidence spans the compared SKUs, that
+    evidence is already the model-owned semantic selection.  Recovering the
+    mirror is a provenance operation; it does not parse customer wording or
+    promote a retrieval candidate.
+    """
+    if not isinstance(raw, dict):
+        return raw
+    if _normalize_skus(raw.get("selected_skus"), limit=5):
+        return raw
+    answer_type = str(raw.get("answer_type") or "").strip().lower()
+    kind = str(request_kind or "").strip().lower()
+    if answer_type not in {"recommendation", "comparison"} and kind not in {
+        "recommendation",
+        "comparison",
+    }:
+        return raw
+    selected_ids = set(_unique_strings(raw.get("evidence_ids"), limit=12, max_length=120))
+    if not selected_ids:
+        return raw
+    selected_skus: list[str] = []
+    for item in evidence:
+        evidence_id = str(item.get("evidence_id") or "").strip()
+        sku = str(item.get("sku") or "").strip().upper()
+        if evidence_id in selected_ids and sku and sku not in selected_skus:
+            selected_skus.append(sku)
+    # A recommendation must still have one unambiguous chosen SKU.  A
+    # comparison is allowed to cite each compared SKU, including evidence
+    # used to explain the trade-off.
+    if not selected_skus or (
+        kind == "recommendation" and len(selected_skus) != 1
+    ):
+        return raw
+    return {**raw, "selected_skus": selected_skus[:5]}
 
 
 def _source_id(row: dict[str, Any]) -> str:
@@ -711,8 +1014,6 @@ def _build_evidence(
             "metadata": metadata,
         })
 
-    for row in rows:
-        add(row)
     for sku, detail in product_details.items():
         add({
             "sku": sku,
@@ -726,6 +1027,12 @@ def _build_evidence(
                 "same_sku": True,
             },
         })
+    # Canonical product records are the highest-authority facts. Add them
+    # before retrieved QA/knowledge rows so the bounded evidence packet cannot
+    # spend all of its slots on repeated supplemental chunks and then omit the
+    # live structured fields the answer model needs for a same-SKU decision.
+    for row in rows:
+        add(row)
     return evidence[:28]
 
 
@@ -764,6 +1071,8 @@ async def _generate_answer(
     payload: dict[str, Any],
 ) -> tuple[dict[str, Any] | None, dict[str, Any]]:
     system_prompt = (
+        "开放式推荐如果没有额外偏好，只要 candidate_products 或 evidence 中存在可核对的当前商品资料，就请按完整需求语义选出一个最合适的候选并说明依据；不要因为缺少预算、人数或容量等非必要偏好而直接说没有依据，也不要按召回顺序机械推荐。\n"
+        "问题中的版本、代际、变体或组件限定只有在当前 evidence 明确覆盖同一限定时才能套用；如果资料只覆盖基础型号，就明确说明覆盖范围，不要把基础型号的事实升级为未被资料确认的版本结论。\n"
         "你是面向客户的自然中文客服。商品事实必须基于 evidence 回答，evidence 之外的内容一律不能当作商品事实。"
         "experience_guidance 是从历史客服经验中人工审核提炼的非事实沟通建议，只能帮助组织表达、承接顾虑和给出自然下一步；"
         "它不能证明任何商品事实、不能替代 evidence、不能决定 SKU，也不能向客户提及。若当前只是简单事实问题或建议不相关，直接忽略；不要强行推销或拉长回复。"
@@ -1046,6 +1355,31 @@ async def ask_customer_service_semantic_rag_v2(
         sku=page_sku or (explicit_skus[0] if len(explicit_skus) == 1 else None),
         limit=int(getattr(settings, "CUSTOMER_SERVICE_V2_MAX_RETRIEVAL_ROWS", 8)),
     )
+    kind = str(plan.get("request_kind") or "").strip()
+    candidate_limit = _candidate_limit_for_kind(kind)
+    # Catalogue recommendations/comparisons and named-product turns without
+    # an exact live SKU need a profile-level recall pool in addition to the
+    # question-level QA/knowledge page.  A single profile pass keeps the
+    # latency bounded while exposing each product's complete current record to
+    # the later semantic decision; it does not select a product or inspect
+    # customer wording.
+    needs_profile_recall = (
+        kind in {"recommendation", "comparison"}
+        or bool(plan.get("product_subjects"))
+    ) and not page_sku and not explicit_skus
+    if needs_profile_recall:
+        profile_query = str(
+            (plan.get("search_queries") or [original_question])[0]
+            or original_question
+        )
+        initial_rows.extend(await _retrieve(
+            db,
+            queries=[profile_query],
+            limit=_MAX_SEMANTIC_PROFILE_RETRIEVAL_ROWS,
+            sections=["profile"],
+            query_index_namespace="catalogue_profile",
+            max_query_limit=_MAX_SEMANTIC_PROFILE_RETRIEVAL_ROWS,
+        ))
     target_skus, candidate_skus = await _resolve_subject_skus(
         db,
         question=original_question,
@@ -1056,7 +1390,7 @@ async def ask_customer_service_semantic_rag_v2(
         retrieved_rows=initial_rows,
     )
     target_skus = list(dict.fromkeys(target_skus))[:5]
-    candidate_skus = list(dict.fromkeys(candidate_skus))[:5]
+    candidate_skus = list(dict.fromkeys(candidate_skus))[:candidate_limit]
 
     retrieval_rows = list(initial_rows)
     if target_skus:
@@ -1090,15 +1424,17 @@ async def ask_customer_service_semantic_rag_v2(
 
     product_details: dict[str, dict[str, Any]] = {}
     detail_skus = target_skus or candidate_skus
-    for product_sku in detail_skus[:5]:
+    # Keep the product-detail context aligned with the retrieval candidate
+    # window.  Otherwise a relevant SKU can be retrieved and surfaced as a
+    # candidate, but disappear before the LLM gets the structured facts.
+    for product_sku in detail_skus[:candidate_limit]:
         try:
             product_details[product_sku] = product_service.get_product_detail(db, product_sku)
         except Exception:
             continue
 
     allowed_skus = set(target_skus or candidate_skus)
-    kind = str(plan.get("request_kind") or "").strip()
-    identity_ambiguity = (
+    retrieval_identity_ambiguity = (
         not target_skus
         and kind in {"product_fact", "product_qa", "comparison"}
         and len(candidate_skus) > 1
@@ -1132,9 +1468,25 @@ async def ask_customer_service_semantic_rag_v2(
         candidates=candidates,
         evidence=evidence,
         experience_guidance=experience_guidance,
-        identity_ambiguity=identity_ambiguity,
+        identity_ambiguity=retrieval_identity_ambiguity,
     )
     answer_raw, answer_metadata = await _generate_answer(db, payload=payload)
+    answer_raw = _recover_selected_skus_from_evidence(
+        answer_raw,
+        evidence=evidence,
+        request_kind=kind,
+    )
+    answer_resolved_identity = _answer_resolved_identity(
+        answer_raw,
+        evidence=evidence,
+        identity_ambiguity=retrieval_identity_ambiguity,
+        request_kind=kind,
+    )
+    # Retrieval ambiguity is not itself a reason to discard a usable answer.
+    # The answer model may resolve one/more candidates using the evidence it
+    # explicitly selected; only an unresolved or ungrounded choice remains a
+    # clarification.
+    identity_ambiguity = retrieval_identity_ambiguity and not answer_resolved_identity
     (
         answer,
         answer_type,
@@ -1181,9 +1533,11 @@ async def ask_customer_service_semantic_rag_v2(
             for item in evidence
             if str(item.get("sku") or "").strip()
         }),
-        "retrieval_mode": "semantic_rag_with_keyword_fallback",
+        "retrieval_mode": "semantic_rag_with_candidate_fusion",
         "llm_call_count": len(state.get("llm_calls") or []),
         "plan_available": bool(plan.get("plan_available")),
+        "retrieval_identity_ambiguity": retrieval_identity_ambiguity,
+        "answer_resolved_identity": answer_resolved_identity,
         "experience_guidance_count": len(experience_guidance),
         "experience_guidance_ids": customer_experience_rag_service.guidance_ids(experience_guidance),
         **answer_metadata,
@@ -1197,6 +1551,8 @@ async def ask_customer_service_semantic_rag_v2(
         "plan_metadata": plan_metadata,
         "target_skus": target_skus,
         "candidate_skus": candidate_skus,
+        "retrieval_identity_ambiguity": retrieval_identity_ambiguity,
+        "answer_resolved_identity": answer_resolved_identity,
         "evidence_ids": [item.get("evidence_id") for item in evidence],
         "selected_evidence_ids": selected_evidence_ids,
         "identity_ambiguity": identity_ambiguity,

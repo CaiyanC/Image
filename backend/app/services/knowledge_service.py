@@ -571,6 +571,28 @@ def merge_retrieval_rows(
     return [row for _origin, _index, row in combined[:limit]]
 
 
+def _annotate_retrieval_signal(
+    rows: list[dict] | None,
+    signal: str,
+    *,
+    enabled: bool,
+) -> list[dict]:
+    """Add an internal signal marker only for callers that need provenance.
+
+    Normal customer-service retrieval keeps its historical row contract. The
+    experience-guidance channel opts in so it can distinguish a vector result
+    from a lexical fallback without exposing implementation metadata to the
+    other answer prompts.
+    """
+    if not enabled:
+        return list(rows or [])
+    return [
+        {**row, "_retrieval_signal": signal}
+        for row in (rows or [])
+        if isinstance(row, dict)
+    ]
+
+
 async def semantic_retrieve(
     db: Session,
     query: str,
@@ -581,6 +603,7 @@ async def semantic_retrieve(
     skus: list[str] | None = None,
     sections: list[str] | None = None,
     source_types: list[str] | None = None,
+    _include_retrieval_signal: bool = False,
 ) -> list[dict]:
     if not query.strip():
         return []
@@ -617,6 +640,7 @@ async def semantic_retrieve(
         normalized_sections,
         normalized_source_types,
         source_types is not None,
+        _include_retrieval_signal,
         retrieval_revision,
     )
     cached = customer_cache_service.recommendation_candidate_cache.get(cache_key)
@@ -633,6 +657,11 @@ async def semantic_retrieve(
                 skus=list(normalized_skus),
                 sections=list(normalized_sections),
                 source_types=list(normalized_source_types) if source_types is not None else None,
+            )
+            rows = _annotate_retrieval_signal(
+                rows,
+                "lexical",
+                enabled=_include_retrieval_signal,
             )
             customer_cache_service.recommendation_candidate_cache.set(cache_key, rows)
             return rows
@@ -719,6 +748,11 @@ async def semantic_retrieve(
                     row["document_source_id"],
                 ),
                 "score": 1 - float(row["distance"] or 0),
+                **(
+                    {"_retrieval_signal": "vector"}
+                    if _include_retrieval_signal
+                    else {}
+                ),
             }
             for row in rows
         ]
@@ -733,6 +767,11 @@ async def semantic_retrieve(
             skus=list(normalized_skus),
             sections=list(normalized_sections),
             source_types=list(normalized_source_types) if source_types is not None else None,
+        )
+        keyword_rows = _annotate_retrieval_signal(
+            keyword_rows,
+            "lexical",
+            enabled=_include_retrieval_signal,
         )
         result = merge_retrieval_rows(
             vector_result,
@@ -756,6 +795,11 @@ async def semantic_retrieve(
                 skus=list(normalized_skus),
                 sections=list(normalized_sections),
                 source_types=list(normalized_source_types) if source_types is not None else None,
+            )
+            rows = _annotate_retrieval_signal(
+                rows,
+                "lexical",
+                enabled=_include_retrieval_signal,
             )
         except Exception:
             rows = []

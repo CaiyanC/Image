@@ -24,6 +24,7 @@ from ..core.config import settings
 from ..models.knowledge_base import CustomerServiceConversation, CustomerServiceMessage
 from ..models.product import Product
 from . import (
+    customer_agent_service,
     customer_enterprise_guardrail_service,
     customer_experience_rag_service,
     customer_llm_service,
@@ -42,6 +43,7 @@ from .customer_service_semantic_rag_v2_service import (
     _normalize_skus,
     _product_identity,
     _public_result,
+    _rank_retrieved_skus,
 )
 
 
@@ -54,8 +56,9 @@ _MAX_RETRIEVAL_ROWS = max(
     min(int(getattr(settings, "CUSTOMER_SERVICE_WORKBUDDY_MAX_RETRIEVAL_ROWS", 16)), 16),
     8,
 )
+_MAX_PROFILE_RETRIEVAL_ROWS = 48
 _MAX_PROMPT_HISTORY_MESSAGES = 4
-_MAX_PROMPT_CANDIDATE_PRODUCTS = 6
+_MAX_PROMPT_CANDIDATE_PRODUCTS = 8
 _MAX_PROMPT_EVIDENCE_ROWS = 10
 _MAX_PROMPT_EVIDENCE_CONTENT = 420
 _MAX_CANDIDATE_SKUS = 8
@@ -456,6 +459,39 @@ def _context_skus(context_candidates: list[dict[str, str]]) -> list[str]:
     ))[:5]
 
 
+def _catalogue_subject_skus(db: Session, question: str) -> list[str]:
+    """Recall product identities named in the current turn from the master.
+
+    This is an identity/evidence pre-pass, not a customer-intent route.  The
+    existing catalogue resolver compares the complete customer wording with
+    the live product names and their normalized display aliases; the answer
+    model still decides whether the candidates actually answer the question.
+    Keeping this pass separate from ``retrieved_skus`` prevents a related QA
+    (for example, another lightweight item) from replacing a named product
+    before the RAG packet reaches the model.
+    """
+    text = str(question or "").strip()
+    if not text:
+        return []
+    try:
+        products = db.query(Product).all()
+        candidates = customer_agent_service.resolve_named_product_candidates(
+            text,
+            products,
+        )
+    except Exception as exc:
+        customer_perf_service.log_event(
+            "customer_service_workbuddy.catalogue_subject_error",
+            error=type(exc).__name__,
+        )
+        return []
+    return list(dict.fromkeys(
+        str(product.sku or "").strip().upper()
+        for product in candidates
+        if str(product.sku or "").strip()
+    ))[:_MAX_CANDIDATE_SKUS]
+
+
 def _normalize_retrieved_rows(rows: list[dict[str, Any]] | None) -> list[dict[str, Any]]:
     result: list[dict[str, Any]] = []
     seen: set[tuple[str, str, str]] = set()
@@ -493,6 +529,8 @@ async def _retrieve_once(
     query: str,
     sku: str | None = None,
     skus: list[str] | None = None,
+    sections: list[str] | None = None,
+    limit: int | None = None,
 ) -> list[dict[str, Any]]:
     start = perf_counter()
     try:
@@ -501,8 +539,9 @@ async def _retrieve_once(
             query,
             sku=sku,
             skus=skus,
-            limit=_MAX_RETRIEVAL_ROWS,
-            prefer_product_sources=bool(sku or skus),
+            limit=max(int(limit or _MAX_RETRIEVAL_ROWS), 1),
+            prefer_product_sources=bool(sku or skus or sections),
+            sections=sections,
         )
     except Exception as exc:
         customer_perf_service.log_event(
@@ -517,9 +556,35 @@ async def _retrieve_once(
         query=_clip_text(query, 180),
         sku=sku,
         skus=skus or [],
+        sections=sections or [],
         rows=len(normalized),
     )
     return normalized
+
+
+def _fused_retrieved_skus(
+    sources: list[list[dict[str, Any]]],
+    *,
+    limit: int = _MAX_CANDIDATE_SKUS,
+) -> list[str]:
+    """Fuse independent RAG pages at SKU level without semantic routing.
+
+    The question page contains narrow QA hits while the profile page contains
+    complete live product records.  Keeping each page as an independent rank
+    signal prevents repeated chunks from one product from hiding a relevant
+    SKU recalled by the other page; the LLM still owns the final choice.
+    """
+    annotated: list[dict[str, Any]] = []
+    for source_index, rows in enumerate(sources):
+        for rank, row in enumerate(rows or []):
+            if not isinstance(row, dict):
+                continue
+            annotated.append({
+                **row,
+                "retrieval_query_index": f"workbuddy_source:{source_index}",
+                "retrieval_rank": rank,
+            })
+    return _rank_retrieved_skus(annotated, limit=limit)
 
 
 def _retrieved_skus(
@@ -581,12 +646,14 @@ def _answer_prompt(
     previous_turn_memory: dict[str, Any],
     context_candidates: list[dict[str, str]],
     explicit_product_skus: list[str],
+    catalogue_subject_skus: list[str] | None = None,
     anchor_skus: list[str],
     page_anchor: dict[str, str] | None,
     candidates: list[dict[str, Any]],
     previous_context_products: list[dict[str, Any]],
     evidence: list[dict[str, Any]],
     experience_guidance: list[dict[str, Any]],
+    active_context_products: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     prompt_candidates = [
         item for item in candidates[:_MAX_PROMPT_CANDIDATE_PRODUCTS]
@@ -599,6 +666,11 @@ def _answer_prompt(
     compact_previous_products = [
         _compact_product_for_prompt(item)
         for item in previous_context_products
+        if isinstance(item, dict)
+    ]
+    compact_active_context_products = [
+        _compact_product_for_prompt(item)
+        for item in (active_context_products or [])
         if isinstance(item, dict)
     ]
     visible_product_skus = {
@@ -614,6 +686,33 @@ def _answer_prompt(
         "current_question": question,
         "page_anchor": page_anchor or {},
         "explicit_product_skus": explicit_product_skus,
+        "catalogue_subject_skus": list(catalogue_subject_skus or []),
+        "catalogue_identity_context": {
+            "role": "retrieval_identity_hint_only",
+            "skus": list(catalogue_subject_skus or []),
+            "not_customer_confirmed": True,
+            "guidance": (
+                "这是目录身份召回提示，不是客户已确认的商品，也不是最终选择；"
+                "candidate_products 和 evidence 才是本轮可核对的资料。"
+            ),
+        },
+        "identity_resolution_context": {
+            "selection_owner": "answer_llm",
+            "unanchored_candidate_set": not bool(
+                explicit_product_skus or anchor_skus or page_anchor
+            ),
+            "catalogue_hint_skus": list(catalogue_subject_skus or []),
+            "candidate_skus": [
+                str(item.get("sku") or "").strip().upper()
+                for item in prompt_candidates
+                if isinstance(item, dict) and str(item.get("sku") or "").strip()
+            ],
+            "guidance": (
+                "候选集合用于语义判断，不按顺序或单一提示自动确认。"
+                "如果多个同名、同系列或变体都能支持当前问题的共同事实，可以合并回答并列出对应 SKU；"
+                "如果身份或配置会改变答案，再简短澄清。"
+            ),
+        },
         "context_product_skus": anchor_skus,
         "conversation_history": _compact_history_for_prompt(history),
         "previous_turn_memory": _compact_prompt_value(
@@ -624,8 +723,32 @@ def _answer_prompt(
         ),
         "previous_result_candidates": context_candidates,
         "previous_context_products": compact_previous_products,
+        "active_context_products": compact_active_context_products,
+        "active_context_contract": (
+            "本轮问题中的代词或‘刚才两款/上一轮’默认指向这些已确认的上下文商品。"
+            "只有客户明确要求换一款、寻找其他商品或扩大推荐范围时，才把其他候选作为新的选择空间；"
+            "否则不要用新召回候选替换上下文参与者。"
+            if compact_active_context_products
+            else ""
+        ),
         "candidate_products": compact_candidates,
         "evidence": compact_evidence,
+        "turn_identity_contract": {
+            "customer_identity_bound": bool(
+                explicit_product_skus
+                or page_anchor
+                or catalogue_subject_skus
+                or active_context_products
+            ),
+            "explicit_product_skus": list(explicit_product_skus),
+            "catalogue_subject_skus_are_hints_only": True,
+            "candidate_skus_are_not_customer_selection": True,
+            "unbound_turn_guidance": (
+                "如果 customer_identity_bound=false，且当前问题是通用安全、使用或清洁做法，"
+                "按 general_guidance 回答，subject_scope=general_guidance、selected_skus=[]、"
+                "selection_state=not_applicable；可使用证据回答共同原则，但不能因为证据行带 SKU 就把客户绑定到该商品。"
+            ),
+        },
         "experience_guidance": experience_guidance,
     }
 
@@ -637,7 +760,28 @@ async def _generate_answer(
     answer_delta_callback: Callable[[str], Awaitable[None]] | None = None,
 ) -> tuple[dict[str, Any] | None, dict[str, Any]]:
     system_prompt = (
+        "当 identity_resolution_context.unanchored_candidate_set=true 时，本轮没有已确认的商品身份，"
+        "candidate_products 只是候选集合，最终选择必须由你结合当前问题语义完成。若客户问的是一组或套装，"
+        "不能只引用单品卡；从候选资料中判断相关套装变体，事实相同可合并回答并列出对应 SKU，事实不同再澄清。\n"
+        "若客户只是明确给出一个或多个完整 SKU，并要求先记住、保留或作为后续比较对象，而不是询问商品事实，"
+        "请自然确认记忆，使用 answer_type=faq、needs_clarification=false；不要把这类记忆动作回复成澄清。"
+        "当 explicit_product_skus 为空、page_anchor 为空、active_context_products 为空，且当前问题本身没有明确指向某一件商品时，"
+        "如果客户是在询问通用的安全、使用或清洁做法，请按 general_guidance 处理：subject_scope=general_guidance、"
+        "selected_skus=[]、selection_state=not_applicable，不要因为某一条商品说明带有 SKU 就把泛问题绑定到该商品，"
+        "也不要在通用答案后追加‘某 SKU 已确认’的条件式商品结论。可以综合多条一致的资料回答共同原则；只有客户明确给出商品、"
+        "已有上下文商品会改变结论，或答案必须区分具体商品时，才在证据支持下列出 SKU。"
+        "若当前问法带有版本、代际、变体或组件限定，而 evidence 没有明确覆盖同一限定，答案必须直接说明只能确认未带该限定的基础资料，"
+        "不能先说‘可以按该版本回答’再用附带说明弱化，也不能把基础款事实升级成具体版本结论。\n"
+        "catalogue_subject_skus 只是目录身份召回提示，不是客户已确认的商品，也不是最终选择；"
+        "不要因为提示列表第一项或检索分数最高就默默选中一个 SKU。若 candidate_products 中有多个同名、同系列或变体，"
+        "请结合当前问题和各自 evidence 语义判断：共同事实可以合并回答并列出对应 SKU，身份或配置会改变答案时简短澄清。"
+        "问题中的版本、代际、变体或组件限定只有在 evidence 明确覆盖同一限定时才能套用；"
+        "若资料只覆盖基础型号，就说明资料覆盖范围，不要把基础型号事实升级成未确认版本的结论。"
+        "开放式推荐若没有额外偏好，只要有可核对的候选，就按完整需求语义选出合适候选并说明依据；"
+        "不要因为缺少非必要偏好直接说没有依据，也不要按召回顺序机械推荐。\n"
         "你是自然、连贯、像真人同事一样工作的中文客服。先理解当前问题、conversation_history 和 previous_turn_memory，再依据本轮 evidence 与 candidate_products 回答；不要向客户暴露内部字段、检索、模型或流程。"
+        "请同时遵守 payload.turn_identity_contract：它是本轮客户身份与候选证据的语义边界；customer_identity_bound=false 时，候选 SKU 只能作为证据来源，不能当作客户已选商品。"
+        "若 payload 提供 active_context_products，‘它/这款/刚才两款/上一轮’等上下文指代优先在这些商品内理解；只有客户明确要求换一款、其他选择或扩大推荐时，才引入其他候选。不要让新召回候选静默替换上一轮比较参与者。"
         "experience_guidance 是人工审核提炼的非事实沟通经验，只能帮助你更自然地承接顾虑、组织取舍和给出下一步；不能证明商品事实、不能替代 evidence、不能选择 SKU，也不能向客户提及。简单事实问题或不相关建议应直接忽略，不要强行推销或增加篇幅。完整回答当前问题的前提下优先三到六句短答，复杂比较确有必要时再用少量条目。"
         "历史和记忆只用于理解代词、承接上下文和替换意图，不是新的商品事实；商品事实只能来自本轮 evidence，并保留它所属的 SKU。canonical_product_record 是结构化主数据，product_qa 是同 SKU 补充；出现直接冲突时如实说明资料差异。"
         "canonical_product_record 对同一 SKU 的非空结构化字段拥有最高事实权威；同 SKU QA/知识只能补充主数据未填写的事实，不能静默改写主数据。适用热源等封闭兼容字段只认可资料明确列出的具体选项，‘明火’或‘燃气’等宽泛词不能推出具体的酒精炉等选项；空值、‘/’、暂无或未知表示主数据未填写，不是通用兼容。若同 SKU 已审核 QA 明确补充了该字段，可以按 QA 列出的范围回答并提示主数据待补充；不要把这种情况误称为直接冲突，也不能扩大 QA 的范围。"
@@ -1046,6 +1190,11 @@ async def ask_customer_service_workbuddy_rag(
     )
     explicit_skus = _explicit_skus(db, original_question)
     known_skus = explicit_skus or ([page_sku] if page_sku else [])
+    catalogue_subject_skus = (
+        []
+        if known_skus
+        else _catalogue_subject_skus(db, original_question)
+    )
     # Only a previously confirmed reference is an anchor.  Recalled
     # candidates remain visible to the answer model, but they must not scope
     # the next retrieval pass or turn a requested replacement into a made-up
@@ -1057,26 +1206,49 @@ async def ask_customer_service_workbuddy_rag(
     )
     queries = _unique_queries(original_question, history)
 
-    # One retrieval pass is enough for a WorkBuddy-style turn.  An explicit
-    # page/SKU identity scopes factual retrieval; conversational memory is
-    # supplied to the model but does not create a catalogue filter.  This lets
-    # a natural "换一款" turn discover alternatives instead of being trapped
-    # inside the previous SKU.
-    scoped_skus = list(dict.fromkeys(known_skus))
-    retrieval_rows = await _retrieve_once(
+    # An explicit page/SKU identity scopes factual retrieval; conversational
+    # memory and catalogue-name candidates do not create a hard catalogue
+    # filter.  This lets a natural question recover the live product whose
+    # profile/QA is most relevant instead of being trapped by a weak fuzzy
+    # name candidate.
+    retrieval_scope_skus = list(dict.fromkeys(known_skus))
+    scoped_skus = retrieval_scope_skus
+    question_rows = await _retrieve_once(
         db,
         query=queries[0] if queries else original_question,
-        sku=known_skus[0] if len(known_skus) == 1 else None,
+        sku=retrieval_scope_skus[0] if len(retrieval_scope_skus) == 1 else None,
         skus=scoped_skus if len(scoped_skus) > 1 else None,
     )
-    retrieved_skus = _retrieved_skus(retrieval_rows)
+    retrieval_rows = list(question_rows)
+    profile_rows: list[dict[str, Any]] = []
+    if not known_skus:
+        # A single live-profile pass complements the narrow question page.
+        # It is catalogue recall only: the answer model still has to select a
+        # SKU and bind every factual claim to same-SKU evidence.
+        profile_rows = await _retrieve_once(
+            db,
+            query=queries[0] if queries else original_question,
+            sections=["profile"],
+            limit=_MAX_PROFILE_RETRIEVAL_ROWS,
+        )
+        retrieval_rows.extend(profile_rows)
+    retrieved_skus = _fused_retrieved_skus([question_rows, profile_rows])
     # A previous single-product/candidate context is the first discourse
     # reference for a follow-up.  Keep it in the candidate packet even when
     # the scoped RAG page returns a slightly different order.
     candidate_skus = list(dict.fromkeys(
-        [*known_skus, *anchor_skus, *retrieved_skus]
+        # Catalogue identity hints stay visible beside the fused RAG page so a
+        # named family/variant cannot disappear merely because unrelated
+        # question chunks occupied the first slots.  They remain candidates,
+        # not a retrieval filter or a confirmed customer selection.
+        [*known_skus, *anchor_skus, *catalogue_subject_skus, *retrieved_skus]
     ))[:_MAX_CANDIDATE_SKUS]
     context_skus = _context_skus(context_candidates)
+    active_context_skus = (
+        []
+        if known_skus
+        else list(dict.fromkeys([*anchor_skus, *context_skus]))[:_MAX_CANDIDATE_SKUS]
+    )
     detail_skus = list(dict.fromkeys(
         known_skus + candidate_skus + context_skus
     ))[:10]
@@ -1087,6 +1259,10 @@ async def ask_customer_service_workbuddy_rag(
     for known_sku in known_skus:
         _append_same_sku_context(db, retrieval_rows, known_sku)
 
+    # Once the current wording names a catalogue subject, unrelated semantic
+    # neighbours must not enter the fact packet.  The model can still see the
+    # full candidate card set for semantic choice, while only these subject
+    # SKUs can contribute customer-visible facts this turn.
     allowed_skus = set(known_skus or [*candidate_skus, *context_skus])
     evidence = _build_evidence(
         retrieval_rows,
@@ -1106,6 +1282,11 @@ async def ask_customer_service_workbuddy_rag(
         for item in context_skus
         if item in product_details and item not in set(candidate_skus)
     ]
+    active_context_products = [
+        product_details[item]
+        for item in active_context_skus
+        if item in product_details
+    ]
     experience_start = perf_counter()
     experience_guidance = await customer_experience_rag_service.retrieve_experience_guidance(
         db,
@@ -1123,12 +1304,14 @@ async def ask_customer_service_workbuddy_rag(
         previous_turn_memory=previous_turn_memory,
         context_candidates=context_candidates,
         explicit_product_skus=known_skus,
+        catalogue_subject_skus=catalogue_subject_skus,
         anchor_skus=anchor_skus,
         page_anchor=page_anchor,
         candidates=candidates,
         previous_context_products=previous_context_products,
         evidence=evidence,
         experience_guidance=experience_guidance,
+        active_context_products=active_context_products,
     )
     answer_raw, answer_metadata = await _generate_answer(
         db,
@@ -1433,7 +1616,10 @@ async def ask_customer_service_workbuddy_rag(
         "plan": plan,
         "plan_metadata": {"mode": "single_answer_llm", "raw_valid": bool(answer_raw)},
         "target_skus": known_skus,
+        "catalogue_subject_skus": catalogue_subject_skus,
+        "retrieval_scope_skus": retrieval_scope_skus,
         "anchor_skus": anchor_skus,
+        "active_context_skus": active_context_skus,
         "candidate_skus": candidate_skus_for_output,
         "retrieved_candidate_skus": candidate_skus,
         "semantic_candidate_skus": semantic_candidate_skus,

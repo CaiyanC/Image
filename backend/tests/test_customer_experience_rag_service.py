@@ -44,6 +44,7 @@ class CustomerExperienceRagServiceTest(unittest.IsolatedAsyncioTestCase):
                 "content": "先承接价格顾虑，再用本轮事实解释取舍。",
                 "metadata": approved_metadata,
                 "score": 0.9,
+                "_retrieval_signal": "vector",
             },
             {
                 "source_type": knowledge_service.CUSTOMER_EXPERIENCE_SOURCE_TYPE,
@@ -51,6 +52,7 @@ class CustomerExperienceRagServiceTest(unittest.IsolatedAsyncioTestCase):
                 "content": "未审核卡不能进入运行时。",
                 "metadata": {**approved_metadata, "review_status": "needs_review"},
                 "score": 0.8,
+                "_retrieval_signal": "vector",
             },
             {
                 "source_type": "product",
@@ -58,6 +60,7 @@ class CustomerExperienceRagServiceTest(unittest.IsolatedAsyncioTestCase):
                 "content": "商品事实不能伪装成经验卡。",
                 "metadata": approved_metadata,
                 "score": 0.7,
+                "_retrieval_signal": "vector",
             },
         ])
         with (
@@ -81,6 +84,64 @@ class CustomerExperienceRagServiceTest(unittest.IsolatedAsyncioTestCase):
             kwargs["source_types"],
             [knowledge_service.CUSTOMER_EXPERIENCE_SOURCE_TYPE],
         )
+        self.assertTrue(kwargs["_include_retrieval_signal"])
+
+    async def test_experience_guidance_uses_only_relevant_vector_rows(self):
+        metadata = {
+            "source_id": "customer_experience:pilot:CF-PG19:value",
+            "review_status": "approved_pilot",
+            "production_use": "experience_guidance_only",
+            "authority_level": "candidate_only",
+            "fact_authority": False,
+            "intent": "价格顾虑与选购",
+        }
+        retrieve = AsyncMock(return_value=[
+            {
+                "source_type": knowledge_service.CUSTOMER_EXPERIENCE_SOURCE_TYPE,
+                "sku": "CF-PG19",
+                "content": "低相关向量卡，不应进入回答。",
+                "metadata": metadata,
+                "score": 0.49,
+                "_retrieval_signal": "vector",
+            },
+            {
+                "source_type": knowledge_service.CUSTOMER_EXPERIENCE_SOURCE_TYPE,
+                "sku": "CF-PG19",
+                "content": "高相关向量卡，先承接顾虑再解释取舍。",
+                "metadata": metadata,
+                "score": 0.82,
+                "_retrieval_signal": "vector",
+            },
+            {
+                "source_type": knowledge_service.CUSTOMER_EXPERIENCE_SOURCE_TYPE,
+                "sku": "CF-PG19",
+                "content": "关键词 fallback 即使分数高也不能绕过语义门槛。",
+                "metadata": metadata,
+                "score": 99,
+                "_retrieval_signal": "lexical",
+            },
+            {
+                "source_type": knowledge_service.CUSTOMER_EXPERIENCE_SOURCE_TYPE,
+                "sku": "CF-PG19",
+                "content": "缺少检索信号的旧格式也不能默认为向量结果。",
+                "metadata": metadata,
+                "score": 0.95,
+            },
+        ])
+        with (
+            patch.object(settings, "CUSTOMER_SERVICE_EXPERIENCE_RAG_ENABLED", True),
+            patch.object(settings, "CUSTOMER_SERVICE_EXPERIENCE_RAG_MIN_SCORE", 0.50),
+            patch.object(settings, "CUSTOMER_SERVICE_EXPERIENCE_RAG_MAX_CARDS", 2),
+            patch.object(knowledge_service, "semantic_retrieve", retrieve),
+        ):
+            rows = await customer_experience_rag_service.retrieve_experience_guidance(
+                object(),
+                question="这个有点贵，值在哪里",
+                skus=["CF-PG19"],
+            )
+
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["guidance"], "高相关向量卡，先承接顾虑再解释取舍。")
 
     def test_three_pipelines_keep_guidance_separate_from_fact_evidence(self):
         guidance = [{
