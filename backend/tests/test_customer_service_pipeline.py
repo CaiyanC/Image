@@ -119,6 +119,27 @@ def test_explicit_sku_binding_handles_sku_adjacent_to_chinese(route_client_and_d
         ) == ["CW-C78"]
 
 
+def test_explicit_sku_binding_accepts_plain_sku_adjacent_to_chinese(route_client_and_db):
+    _client, _headers, Session = route_client_and_db
+    with Session() as db:
+        db.add(
+            Product(
+                id="plain-sku-adjacent-product-id",
+                sku="CB254",
+                barcode="plain-sku-adjacent-barcode",
+                product_name_cn="\u6fc0\u6d41\u6c34\u58f6",
+                brand="\u6d4b\u8bd5\u54c1\u724c",
+                category="\u6c34\u58f6",
+            )
+        )
+        db.commit()
+
+        assert customer_service_semantic_rag_v2_service._explicit_skus(
+            db,
+            "CB254\u53ef\u4ee5\u7528\u4ec0\u4e48\u7089\u5177\u52a0\u70ed\uff1f",
+        ) == ["CB254"]
+
+
 def test_legacy_chat_trace_reports_configured_request_model(monkeypatch):
     monkeypatch.setattr(
         customer_llm_service.dmxapi_service,

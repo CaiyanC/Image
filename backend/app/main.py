@@ -228,6 +228,7 @@ def startup():
     _log_version_check()
     init_db()
     from .services import dmxapi_service
+    from .services import file_ingestion_service
     from .services import knowledge_job_service
     from .services import model_governance_service
     db = SessionLocal()
@@ -245,6 +246,11 @@ def startup():
         if recovered_jobs:
             logging.getLogger("app").warning(
                 "Marked %s stale knowledge job(s) as interrupted", recovered_jobs
+            )
+        reconciled_tasks = file_ingestion_service.reconcile_parse_task_states(db)
+        if sum(reconciled_tasks.values()):
+            logging.getLogger("app").info(
+                "Reconciled knowledge parse tasks: %s", reconciled_tasks
             )
     finally:
         db.close()

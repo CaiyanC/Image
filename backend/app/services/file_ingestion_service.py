@@ -7,7 +7,7 @@ from typing import Any
 
 from sqlalchemy.orm import Session
 
-from ..models.knowledge_base import KnowledgeChunk, KnowledgeDocument
+from ..models.knowledge_base import KnowledgeChunk, KnowledgeDocument, KnowledgeParseTask
 
 
 CHUNK_SIZE = 500
@@ -205,6 +205,50 @@ def recover_stuck_processing_documents(db: Session, timeout_minutes: int = 30) -
         "recovered_count": len(rows),
         "documents": recovered,
     }
+
+
+def reconcile_parse_task_states(
+    db: Session,
+    *,
+    task_id: str | None = None,
+    document_id: str | None = None,
+) -> dict[str, int]:
+    """Reconcile task rows with the durable document parse result.
+
+    File ingestion persists the document content and parse status before a
+    worker can be interrupted.  In that case the task row may remain
+    ``pending``/``processing`` even though the document is already complete.
+    The document is the durable source of truth for the UI; this function only
+    closes that stale bookkeeping gap and never turns an uncertain task into a
+    successful parse.
+    """
+    query = (
+        db.query(KnowledgeParseTask, KnowledgeDocument)
+        .join(KnowledgeDocument, KnowledgeDocument.id == KnowledgeParseTask.document_id)
+        .filter(KnowledgeParseTask.status.in_(("pending", "processing")))
+    )
+    if task_id:
+        query = query.filter(KnowledgeParseTask.id == task_id)
+    if document_id:
+        query = query.filter(KnowledgeParseTask.document_id == document_id)
+
+    now = datetime.now(timezone.utc)
+    reconciled = {"done": 0, "error": 0}
+    for task, document in query.all():
+        document_status = str(document.parse_status or "").strip().lower()
+        if document_status == "done":
+            task.status = "done"
+            task.error_message = None
+            task.finished_at = document.updated_at or now
+            reconciled["done"] += 1
+        elif document_status == "error":
+            task.status = "error"
+            task.error_message = document.parse_error or "document parse failed"
+            task.finished_at = document.updated_at or now
+            reconciled["error"] += 1
+    if sum(reconciled.values()):
+        db.commit()
+    return reconciled
 
 
 def _serialize_recovery_document(document: KnowledgeDocument) -> dict[str, Any]:

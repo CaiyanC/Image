@@ -51,6 +51,7 @@ export default function Header() {
     ...(has('history.view') ? [{ path: '/history', label: '历史' }] : []),
     ...(has('product.read') ? [{ path: '/products', label: '产品' }] : []),
     ...(has('product.read') ? [{ path: '/products/audit', label: '产品核对' }] : []),
+    ...(has('product.read') ? [{ path: '/products/full-view', label: '全字段视图' }] : []),
     ...(has('product.qa.manage') || has('product.edit') ? [{ path: '/products/qa/new', label: 'QA录入' }] : []),
     ...(has('product.read') ? [{ path: '/assets', label: '素材库' }] : []),
     ...(has('product.read') ? [{ path: '/assets/search', label: '素材检索' }] : []),

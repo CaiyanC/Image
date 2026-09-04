@@ -1216,6 +1216,13 @@ export const api = {
       selling_point_tags?: string[]
       scene_tags?: string[]
       mood_tags?: string[]
+      product_tags?: string[]
+      material_type_tags?: string[]
+      usage_tags?: string[]
+      version_tags?: string[]
+      risk_tags?: string[]
+      channel_tags?: string[]
+      language_tags?: string[]
     } = {}) => {
       const query = new URLSearchParams()
       for (const [key, value] of Object.entries(params)) {

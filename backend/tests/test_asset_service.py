@@ -177,6 +177,76 @@ class AssetServiceTest(unittest.TestCase):
         self.assertFalse(asset.is_public)
         self.assertFalse(asset.ai_customer_usable)
 
+    def test_incomplete_asset_lifecycle_cannot_be_marked_usable(self):
+        asset = asset_service.create_asset(
+            self.db,
+            "ASSET-1",
+            {
+                "category_code": "01",
+                "category_name": "产品标准图",
+                "url": "/uploads/assets/ASSET-1/internal.png",
+                "review_status": "approved",
+                "authorization_status": "internal_test",
+                "is_public": True,
+                "ai_customer_usable": True,
+                "ai_marketing_usable": True,
+                "ai_reference_usable": True,
+            },
+        )
+
+        self.assertFalse(asset.is_public)
+        self.assertFalse(asset.ai_customer_usable)
+        self.assertFalse(asset.ai_marketing_usable)
+        self.assertFalse(asset.ai_reference_usable)
+
+        usable = asset_service.create_asset(
+            self.db,
+            "ASSET-1",
+            {
+                "category_code": "01",
+                "category_name": "产品标准图",
+                "url": "/uploads/assets/ASSET-1/approved.png",
+                "review_status": "approved",
+                "authorization_status": "approved",
+                "is_public": True,
+                "ai_customer_usable": True,
+                "ai_marketing_usable": True,
+                "ai_reference_usable": True,
+            },
+        )
+        self.assertTrue(usable.is_public)
+        self.assertTrue(usable.ai_customer_usable)
+        self.assertTrue(usable.ai_marketing_usable)
+        self.assertTrue(usable.ai_reference_usable)
+
+    def test_update_cannot_reenable_internal_test_asset(self):
+        asset = asset_service.create_asset(
+            self.db,
+            "ASSET-1",
+            {
+                "category_code": "01",
+                "category_name": "产品标准图",
+                "url": "/uploads/assets/ASSET-1/reviewed.png",
+                "review_status": "approved",
+                "authorization_status": "approved",
+                "is_public": True,
+                "ai_customer_usable": True,
+            },
+        )
+
+        updated = asset_service.update_asset(
+            self.db,
+            "ASSET-1",
+            asset.id,
+            {
+                "authorization_status": "internal_test",
+                "is_public": True,
+                "ai_customer_usable": True,
+            },
+        )
+        self.assertFalse(updated.is_public)
+        self.assertFalse(updated.ai_customer_usable)
+
     def test_visual_expression_tags_require_their_supporting_tag(self):
         with self.assertRaises(HTTPException) as ctx:
             asset_service.validate_asset_tags({"expression_tags": ["卖点图"]})

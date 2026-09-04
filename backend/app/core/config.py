@@ -25,6 +25,14 @@ def resolve_backend_path(path: str) -> str:
 def _resolve_env_path(path: str) -> str:
     if os.path.isabs(path):
         return path
+    # CLI tools are commonly launched from ``backend`` with a short value
+    # such as ``.env.dev``.  Prefer an explicitly existing path relative to
+    # the caller's working directory, then fall back to the project root for
+    # launchers that run from the repository root.  This keeps environment
+    # selection deterministic without silently loading a default config.
+    cwd_candidate = os.path.abspath(path)
+    if os.path.exists(cwd_candidate):
+        return cwd_candidate
     return os.path.abspath(os.path.join(PROJECT_ROOT, path))
 
 
@@ -65,6 +73,19 @@ LOADED_ENV_FILE = _load_runtime_env()
 
 def _csv_setting(name: str, default: str) -> list[str]:
     return [item.strip().rstrip("/") for item in os.getenv(name, default).split(",") if item.strip()]
+
+
+_RUNTIME_APP_ENV = os.getenv("APP_ENV", "").strip().lower()
+_DEFAULT_LEGACY_KNOWLEDGE_FILE_DIR = (
+    os.path.join(
+        os.path.dirname(PROJECT_ROOT),
+        "data",
+        f"caiyan-{_RUNTIME_APP_ENV}",
+        "knowledge-files",
+    )
+    if _RUNTIME_APP_ENV in {"dev", "prod"}
+    else ""
+)
 
 
 def _cors_origins(default: str) -> list[str]:
@@ -168,10 +189,21 @@ class Settings:
     GENERATED_DIR: str = os.path.join(UPLOAD_DIR, "generated")
     # Keep knowledge-base source files outside disposable app/worktree folders.
     # Deployments can override this independently from image/video uploads.
-    KNOWLEDGE_FILE_DIR: str = os.getenv(
+    KNOWLEDGE_FILE_DIR: str = resolve_backend_path(os.getenv(
         "KNOWLEDGE_FILE_DIR",
         os.path.join(UPLOAD_DIR, "knowledge-files"),
-    )
+    ))
+    # Knowledge files may have been uploaded by an older runtime into the
+    # per-environment data directory.  Keep the compatibility roots explicit
+    # and bounded; never allow an arbitrary filesystem path from the database
+    # to become downloadable.
+    KNOWLEDGE_FILE_LEGACY_DIRS: list[str] = [
+        resolve_backend_path(item)
+        for item in _csv_setting(
+            "KNOWLEDGE_FILE_LEGACY_DIRS",
+            _DEFAULT_LEGACY_KNOWLEDGE_FILE_DIR,
+        )
+    ]
 
     DMXAPI_BASE_URL: str = os.getenv("DMXAPI_BASE_URL", "https://www.dmxapi.cn")
     DMXAPI_API_KEY: str = os.getenv("DMXAPI_API_KEY", "")

@@ -16,6 +16,7 @@ from .asset_taxonomy import (
     CONTROLLED_TAG_DICTIONARY,
     DUPLICATE_STATUS_VALUES,
     EXPRESSION_REQUIREMENTS,
+    LEGACY_TAG_KEYS,
     QUALITY_STATUS_VALUES,
 )
 
@@ -28,6 +29,21 @@ DEFAULT_STATUS = "待审核"
 AI_GENERATED_CATEGORY_CODE = "07"
 ARCHIVE_CATEGORY_CODE = "08"
 ARCHIVE_CATEGORY_NAME = "参考归档禁用图"
+
+PUBLICATION_FLAG_FIELDS = (
+    "is_public",
+    "ai_customer_usable",
+    "ai_marketing_usable",
+    "ai_reference_usable",
+)
+BLOCKED_AUTHORIZATION_STATUSES = {
+    "",
+    "unknown",
+    "internal_test",
+    "pending",
+    "rejected",
+    "unapproved",
+}
 
 logger = logging.getLogger(__name__)
 
@@ -225,18 +241,33 @@ def search_assets(
     selling_point_tags: list[str] | None = None,
     scene_tags: list[str] | None = None,
     mood_tags: list[str] | None = None,
+    product_tags: list[str] | None = None,
+    material_type_tags: list[str] | None = None,
+    usage_tags: list[str] | None = None,
+    version_tags: list[str] | None = None,
+    risk_tags: list[str] | None = None,
+    channel_tags: list[str] | None = None,
+    language_tags: list[str] | None = None,
     limit: int = 100,
 ) -> list[ProductAsset]:
-    validate_asset_lifecycle_values({
-        "quality_status": quality_status,
-        "duplicate_status": duplicate_status,
-    })
-    validate_asset_tags({
+    tag_inputs = {
         "expression_tags": expression_tags or [],
         "selling_point_tags": selling_point_tags or [],
         "scene_tags": scene_tags or [],
         "mood_tags": mood_tags or [],
-    }, enforce_expression_requirements=False)
+        "product_tags": product_tags or [],
+        "material_type_tags": material_type_tags or [],
+        "usage_tags": usage_tags or [],
+        "version_tags": version_tags or [],
+        "risk_tags": risk_tags or [],
+        "channel_tags": channel_tags or [],
+        "language_tags": language_tags or [],
+    }
+    validate_asset_lifecycle_values({
+        "quality_status": quality_status,
+        "duplicate_status": duplicate_status,
+    })
+    validate_asset_tags(tag_inputs, enforce_expression_requirements=False)
     query = db.query(ProductAsset)
     for column, value in (
         (ProductAsset.sku, sku),
@@ -251,10 +282,9 @@ def search_assets(
             query = query.filter(column == value)
 
     requested_tags = {
-        "expression_tags": set(expression_tags or []),
-        "selling_point_tags": set(selling_point_tags or []),
-        "scene_tags": set(scene_tags or []),
-        "mood_tags": set(mood_tags or []),
+        key: {str(value).strip() for value in values if str(value).strip()}
+        for key, values in tag_inputs.items()
+        if key in CONTROLLED_TAG_DICTIONARY or key in LEGACY_TAG_KEYS
     }
     candidates = query.order_by(
         ProductAsset.sku.asc(),
@@ -339,6 +369,47 @@ def apply_category_invariants(
     return data
 
 
+def apply_publication_invariants(
+    data: dict[str, Any],
+    *,
+    current: ProductAsset | None = None,
+) -> dict[str, Any]:
+    """Prevent lifecycle-incomplete assets from entering usable collections.
+
+    This is a data-integrity boundary for the asset library, not a customer
+    service routing rule.  A pending, internally tested, invalid, archived or
+    duplicate asset can remain stored for review, but it must not be exposed
+    as public or selected for an AI-facing use until its lifecycle is complete.
+    Partial updates are evaluated against the existing row so changing an
+    unrelated field cannot accidentally loosen an earlier restriction.
+    """
+    defaults = {
+        "review_status": "pending",
+        "authorization_status": "unknown",
+        "quality_status": "usable",
+        "duplicate_status": "unique",
+    }
+    effective = {
+        field: getattr(current, field, defaults[field]) if current is not None else defaults[field]
+        for field in defaults
+    }
+    effective.update({key: value for key, value in data.items() if key in effective})
+    review_status = str(effective.get("review_status") or "").strip().lower()
+    authorization_status = str(effective.get("authorization_status") or "").strip().lower()
+    quality_status = str(effective.get("quality_status") or "").strip().lower()
+    duplicate_status = str(effective.get("duplicate_status") or "").strip().lower()
+    lifecycle_complete = (
+        review_status == "approved"
+        and authorization_status not in BLOCKED_AUTHORIZATION_STATUSES
+        and quality_status == "usable"
+        and duplicate_status == "unique"
+    )
+    if not lifecycle_complete:
+        for field in PUBLICATION_FLAG_FIELDS:
+            data[field] = False
+    return data
+
+
 def create_asset(
     db: Session,
     sku: str,
@@ -347,7 +418,9 @@ def create_asset(
     commit: bool = True,
 ) -> ProductAsset:
     ensure_product_exists(db, sku)
-    payload = apply_category_invariants(apply_status_movement(dict(data)))
+    payload = apply_publication_invariants(
+        apply_category_invariants(apply_status_movement(dict(data)))
+    )
     validate_asset_lifecycle_values(payload)
     category_code = str(payload.get("category_code") or "").strip()
     category_name = str(payload.get("category_name") or "").strip()
@@ -497,6 +570,7 @@ def update_asset(db: Session, sku: str, asset_id: str, data: dict[str, Any]) -> 
         apply_status_movement(dict(data)),
         current_category_code=asset.category_code,
     )
+    payload = apply_publication_invariants(payload, current=asset)
     validate_asset_lifecycle_values(payload)
     validated_tags = None
     if "tags" in payload:
