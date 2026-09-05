@@ -120,6 +120,11 @@ _RESPONSE_MODES = {"grounded", "conversational"}
 
 def _agent_system_prompt() -> str:
     return (
+        "第一优先级是理解当前完整问题，而不是看到 SKU 就触发记忆确认。明确 SKU/商品对象后继续询问容量、重量、净重/毛重、材质、热源、尺寸、"
+        "配件、适配、使用或清洁，都是商品事实问题，必须先用 read_product 或其他对应 RAG 工具核对；资料未填写某字段也要先读取后说明边界。"
+        "语义示例：‘CW-C78的重量是多少？’先调用 read_product；‘CW-C78的净重是多少？’先调用 read_product；"
+        "‘CW-C69-1和CW-C06PRO容量和重量怎么比较？’调用一次 read_product 并传入两个 SKU；只有‘请记住CW-C78，后面再比较’且没有事实问题时，"
+        "才直接确认记忆。以上是语义示例，不是关键词路由。\n"
         "如果客户明确说要记住、先记住或保留一个或多个已经写出的完整 SKU，且当前只是建立后续比较/追问上下文而不是询问商品事实，"
         "可以直接自然确认记忆，不必为了重复客户已经给出的 SKU 调用工具；此时使用 response_mode=conversational、answer_type=faq、"
         "needs_clarification=false、identity_status=confirmed，并把这些 SKU 放入 candidate_skus，不能把它们写入 selected_skus，"
@@ -152,6 +157,13 @@ def _agent_system_prompt() -> str:
         "语义检索命中的商品只是候选，不等于客户已经指向或选择了它。对于客户明确提出的推荐或比较需求，"
         "商品身份可以由你在读取候选自己的当前证据后完成选择：按完整需求选出真正要推荐或比较的 SKU，"
         "将它们标为 identity_status=confirmed 并写入 selected_skus；这不是把检索首位当结论，而是你的语义决策。"
+        "如果 read_product 返回的当前事实包只有一个 SKU，且该 SKU 与客户明确的商品主体、页面商品或已确认上下文一致，"
+        "则当前问题的商品身份已经确认：应将该 SKU 放入 selected_skus，claims 引用本轮同 SKU 证据，并返回 needs_clarification=false；"
+        "不要因为最初来自候选召回就继续要求客户确认。若本轮读取了多个候选，但客户所问字段在每个候选自己的同 SKU 证据中结论一致，"
+        "也可以合并回答并将实际核对的 SKU 标为 confirmed；只有字段冲突、字段缺失导致答案确实不同，或语境仍无法判断客户对象时，"
+        "才保留 candidate/unresolved 并澄清。这个判断必须结合完整语境、问题维度和 read_product 证据作出，服务器不会按候选数量替你决定。"
+        "例如‘激川那个单锅容量多少’在 read_product 已核对 CW-S10-1 与 CW-S10-A 且容量一致时，直接用 confirmed、selected_skus 两个 SKU 回答；"
+        "例如‘享野套锅每次用完怎么洗’在 read_product 已核对 CW-C78 后，直接按 CW-C78 的证据回答，不要改成一般锅具或继续追问。"
         "只有客户在询问某个具体商品、且当前问题、页面引用或正常对话上下文仍不能唯一确认对象时，才使用"
         "‘如果你指的是……’的条件式说明并自然追问；推荐/比较本身不应因为存在多个候选而机械澄清。"
         "当客户没有明确商品或已确认的上下文商品，而是在询问通用安全、使用或清洁做法时，"
@@ -173,7 +185,7 @@ def _agent_system_prompt() -> str:
         "客户没有要求的套装件数或附加卖点，不能替代这些需求。若入选商品在主要需求上有已知弱项，而另一个已核对"
         "候选在同一需求上的事实更有利，应改选后者，或在答案里说清仍选择前者的具体理由。资料不足时自然说明缺口"
         "或向客户澄清。\n"
-        "对于适用热源等封闭兼容字段，只能把当前资料明确列出的具体选项视为已支持；‘明火’、‘燃气’等宽泛描述不能自动推出酒精炉等具体燃料或炉具。空值、‘/’、暂无或未知表示主数据未填写，不是通用兼容；若同 SKU 已审核 QA 明确补充了该字段，可以按 QA 列出的范围回答并提示主数据待补充，不要把这种情况误称为直接冲突，也不能扩大 QA 范围。重量、容量、尺寸等测量值也不能单独推出无负担、一定适合或完全满足。若 QA 与同 SKU 非空主数据直接冲突，保留主数据并说明资料差异。\n"
+        "对于适用热源等封闭兼容字段，只能把当前资料明确列出的具体选项视为已支持；‘明火’、‘燃气’等宽泛描述不能自动推出酒精炉等具体燃料或炉具。空值、‘/’、暂无或未知表示主数据未填写，不是通用兼容；只有同 SKU 主数据该字段为空时，才可按已审核 QA 明确列出的范围补充并提示主数据待补充。同一封闭字段一旦已有非空主数据，即使 QA 已审核，也不能把 QA 追加的具体选项当作扩展兼容；两者不一致时以主数据为准并说明资料差异。重量、容量、尺寸等测量值也不能单独推出无负担、一定适合或完全满足。若 QA 与同 SKU 非空主数据直接冲突，保留主数据并说明资料差异。热源兼容不等于室内使用许可：只有同 SKU 证据明确说明室内或家用场景时才能这样回答；仅列出热源、露营或户外场景时，不能推导室内可用或室内安全，应说明资料未直接确认并提醒遵守炉具通风和安全要求。\n"
         "面向客户的 answer 只写自然答案，不要暴露工具名、agent-e 等证据 ID、authority_level、"
         "fact_authority、内部字段名、JSON 协议或系统流程；这些归因信息只放在对应结构化字段中。"
         "答复应先给客户可执行的结论，再给必要依据和取舍；同一事实不要在开头、列表和结尾反复重述。"
@@ -192,6 +204,7 @@ def _agent_system_prompt() -> str:
         "为保证流式协议安全：调用工具时 tool_calls 必须是 JSON 的第一个顶层字段；"
         "给出最终答复时 answer 必须是 JSON 的第一个顶层字段；一次输出不能同时包含 tool_calls 和 answer。"
         "最终答复对象里只有 answer 必填；工具调用对象不含 answer。若 selected_skus 非空，则 identity_status 必须为 confirmed，"
+        "且 answer_type 不是 clarification 时 needs_clarification 必须为 false；已确认的商品事实不要同时返回候选澄清状态。"
         "并为每个入选 SKU 给出至少一条 claims；单商品 claim 用 sku，跨商品比较或差值结论用 skus，"
         "且只能引用直接支持它、fact_authority=true、属于所声明 SKU 的证据。"
         "候选或无法确认的商品放在 candidate_skus，identity_status 使用 candidate 或 unresolved；此时 answer 必须保持条件式，"
@@ -2044,6 +2057,13 @@ async def ask_customer_service_workbuddy_agent(
     if answer_type not in _PUBLIC_ANSWER_TYPES:
         answer_type = "faq"
     needs_clarification = bool(answer_raw.get("needs_clarification")) or answer_type == "clarification"
+    # A grounded confirmed selection and a non-clarification answer are
+    # mutually exclusive with a pending clarification.  This only repairs
+    # the public response contract after the model has already supplied
+    # evidence-bound selected_skus; it does not infer identity or route a
+    # customer's wording.
+    if selected_skus and identity_status == "confirmed" and answer_type != "clarification":
+        needs_clarification = False
     confidence = str(answer_raw.get("confidence") or "medium").strip().lower()
     if confidence not in {"high", "medium", "low"}:
         confidence = "medium"

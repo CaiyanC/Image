@@ -1,5 +1,6 @@
 from app.services.customer_service_semantic_rag_v2_service import (
     _answer_resolved_identity,
+    _preserve_bound_product_skus,
     _preserve_comparison_participants,
     _recover_selected_skus_from_evidence,
     _validated_answer,
@@ -8,6 +9,7 @@ from app.services.customer_service_workbuddy_agent_service import (
     _declared_context_skus,
     _declared_fact_skus,
     _response_needs_current_fact_evidence,
+    _agent_system_prompt,
 )
 from app.services.customer_service_workbuddy_rag_service import _answer_prompt
 
@@ -112,6 +114,10 @@ def test_product_comparison_cannot_bypass_rag_as_conversational():
     }) is False
 
 
+def test_agent_prompt_keeps_heat_source_separate_from_indoor_permission():
+    assert "热源兼容不等于室内使用许可" in _agent_system_prompt()
+
+
 def test_comparison_protocol_recovery_reads_the_bounded_context():
     class Query:
         def filter(self, *_args):
@@ -176,6 +182,50 @@ def test_selected_evidence_sku_remains_customer_visible_result():
     )
 
     assert answer[5] == ["CW-C78"]
+
+
+def test_bound_product_survives_missing_field_clarification():
+    answer = _validated_answer(
+        {
+            "answer": "当前资料只确认毛重，未单独标注净重。",
+            "answer_type": "product_detail",
+            "needs_clarification": True,
+            "selected_skus": [],
+        },
+        evidence=[
+            {"sku": "CW-C78", "evidence_id": "v2-e1"},
+        ],
+        candidate_skus=[],
+        question="CW-C78 的净重是多少？",
+        identity_ambiguity=False,
+        request_kind="product_fact",
+    )
+
+    assert answer[5] == []
+    assert _preserve_bound_product_skus(
+        answer[5],
+        target_skus=["CW-C78"],
+        evidence=[{"sku": "CW-C78", "evidence_id": "v2-e1"}],
+        answer_type=answer[1],
+        request_kind="product_fact",
+        identity_ambiguity=False,
+        needs_clarification=answer[2],
+    ) == ["CW-C78"]
+
+
+def test_bound_product_preservation_does_not_promote_ambiguous_candidates():
+    assert _preserve_bound_product_skus(
+        [],
+        target_skus=[],
+        evidence=[
+            {"sku": "CW-C78", "evidence_id": "v2-e1"},
+            {"sku": "CW-C93", "evidence_id": "v2-e2"},
+        ],
+        answer_type="product_detail",
+        request_kind="product_fact",
+        identity_ambiguity=True,
+        needs_clarification=True,
+    ) == []
 
 
 def test_comparison_result_keeps_all_bound_semantic_participants():

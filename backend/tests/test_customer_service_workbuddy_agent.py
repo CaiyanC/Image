@@ -596,6 +596,8 @@ def test_workbuddy_agent_prompt_requires_conditional_candidate_identity():
     assert "必须先用‘如果你指的是……’明确候选身份" in prompt
     assert "identity_status 使用 candidate 或 unresolved；此时 answer 必须保持条件式" in prompt
     assert "needs_clarification=true" in prompt
+    assert "read_product 返回的当前事实包只有一个 SKU" in prompt
+    assert "服务器不会按候选数量替你决定" in prompt
 
 
 def test_workbuddy_agent_candidate_identity_protocol_uses_model_metadata_only():
