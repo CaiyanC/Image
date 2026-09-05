@@ -195,7 +195,7 @@ def test_workbuddy_agent_model_selects_wide_semantic_catalog_tool(
         item for item in retrieval_calls
         if item.get("source_types") != ["customer_experience"]
     ]
-    assert len(experience_calls) == 1
+    assert len(experience_calls) == 2
     assert len(fact_calls) == 4
     assert fact_calls[0]["sections"] == ["profile"]
     assert fact_calls[0]["limit"] == 48

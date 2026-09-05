@@ -747,6 +747,8 @@ def _answer_prompt(
                 "如果 customer_identity_bound=false，且当前问题是通用安全、使用或清洁做法，"
                 "按 general_guidance 回答，subject_scope=general_guidance、selected_skus=[]、"
                 "selection_state=not_applicable；可使用证据回答共同原则，但不能因为证据行带 SKU 就把客户绑定到该商品。"
+                "如果问题是收货后少件、破损、功能异常或售后处理，且商品身份仍未确认，"
+                "只能先承接问题并请求商品名/SKU、订单信息和具体现象；不要从候选商品中挑选或并列引用某个商品的售后政策。"
             ),
         },
         "experience_guidance": experience_guidance,

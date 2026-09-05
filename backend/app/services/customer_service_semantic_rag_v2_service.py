@@ -515,6 +515,8 @@ async def _semantic_plan(
         "如果是推荐或比较，即使客户没有先给出 SKU，也要把它视为目录选择任务，保留客户的全部条件，不要自行补充偏好；"
         "多个语义候选本身不是澄清理由，不能因为候选不止一个就把推荐/比较标成 unknown。"
         "如果问题只是在问某个品类、材料或通用做法而没有指向具体商品，归为 general_knowledge，不要把候选商品名当成答案。"
+        "如果客户只说收到货后发现问题、少件、破损、功能异常或想申请售后，但没有明确商品主体，也归为 general_knowledge；"
+        "此时 product_subjects 必须为空，先承接问题并收集商品身份、订单和具体现象，不能把召回候选商品的售后政策当成当前商品答案。"
         "如果问题明确提到一个或多个商品、系列或简称，请把每个独立商品主体分别放入 product_subjects；"
         "不要把‘容量是多少’、‘怎么清洗’等问题尾部放进商品主体，也不要为了凑字段猜测商品名。"
         "如果同一句中同时出现明确商品名、系列或型号和‘这口锅’、‘那套’、‘它’等代词，product_subjects 必须保留前面的明确商品主体，"
@@ -815,6 +817,15 @@ async def _resolve_subject_skus(
         if merged_candidates:
             return [], merged_candidates[:candidate_limit]
 
+    # A general-knowledge plan deliberately has no customer-confirmed
+    # product subject.  Product rows may still be present in the broad RAG
+    # page as recall noise, but promoting them into candidates would let an
+    # unanchored after-sales or safety question cite an unrelated SKU.  Keep
+    # the answer model on the unbound evidence channel until the customer
+    # supplies a product identity or the next turn resolves one semantically.
+    if str(plan.get("request_kind") or "").strip().lower() == "general_knowledge":
+        return [], []
+
     context_by_index = {
         int(item["index"]): str(item["sku"]).strip().upper()
         for item in context_candidates
@@ -1090,6 +1101,12 @@ def _build_evidence(
 
     def add(item: dict[str, Any]) -> None:
         sku = str(item.get("sku") or "").strip().upper()
+        # ``allow_unbound`` means the current turn has no confirmed product
+        # identity.  SKU-bearing rows are still useful for recall diagnostics,
+        # but they are not answer evidence for a general turn; exposing them
+        # here lets the answer model accidentally quote an unrelated product.
+        if sku and not allowed_skus and allow_unbound:
+            return
         if sku and allowed_skus and sku not in allowed_skus:
             return
         if not sku and not allow_unbound:
@@ -1189,6 +1206,8 @@ async def _generate_answer(
         "当 identity_ambiguity=true 且客户是在询问具体商品事实或适配性时，先比较候选商品在当前问题所需字段上的资料："
         "如果候选在该字段上结论不同、某个候选缺失，或商品身份会改变答案，不要默默选中一个 SKU；"
         "应分别说明已确认的差异并自然请求 SKU、链接或版本信息。若相关事实对候选都一致，可以合并回答并列出实际支持的 SKU。"
+        "如果 identity_ambiguity=true 且问题是收货后少件、破损、功能异常或售后处理，不能从候选商品中挑选或并列引用某个商品的售后政策；"
+        "先承接问题并请求商品名或 SKU、订单信息和具体现象，经验卡只能帮助组织接待话术，不能把候选商品资料当成当前商品事实。"
         "开放式推荐或比较仍由你根据完整需求进行语义选择，不因候选多就机械澄清，但必须让选择依据来自 evidence。\n"
         "你是面向客户的自然中文客服。商品事实必须基于 evidence 回答，evidence 之外的内容一律不能当作商品事实。"
         "experience_guidance 是从历史客服经验中人工审核提炼的非事实沟通建议，只能帮助组织表达、承接顾虑和给出自然下一步；"
@@ -1515,6 +1534,18 @@ async def ask_customer_service_semantic_rag_v2(
     # Use the repaired kind for evidence binding and answer validation too.
     kind = str(plan.get("request_kind") or "").strip()
     candidate_limit = _candidate_limit_for_kind(kind)
+    if (
+        kind == "general_knowledge"
+        and not plan.get("product_subjects")
+        and not explicit_skus
+        and not page_sku
+    ):
+        # The semantic planner has declared this an unanchored general turn.
+        # Do not carry product candidates from broad recall into the answer
+        # packet; a later turn can resolve a product after the customer names
+        # it.  This is a semantic-plan contract, not a wording route.
+        target_skus = []
+        candidate_skus = []
     target_skus = list(dict.fromkeys(target_skus))[:5]
     candidate_skus = list(dict.fromkeys(candidate_skus))[:candidate_limit]
 
@@ -1572,7 +1603,24 @@ async def ask_customer_service_semantic_rag_v2(
         allowed_skus=allowed_skus,
         allow_unbound=allow_unbound,
     )
-    experience_query = str((plan.get("search_queries") or [original_question])[0] or original_question)
+    experience_query = str(
+        (plan.get("search_queries") or [original_question])[0] or original_question
+    )
+    # Reuse the semantic planner's already-understood dimensions to improve
+    # the optional experience-card embedding query. This does not decide a
+    # route or a product; it gives the vector retriever the same meaning the
+    # planner extracted (for example, 热源/适配 or 清洁/保养) while the
+    # original customer wording remains part of the query.
+    requested_dimensions = [
+        str(item or "").strip()
+        for item in (plan.get("requested_dimensions") or [])
+        if str(item or "").strip()
+    ]
+    if requested_dimensions and kind != "general_knowledge":
+        experience_query = (
+            f"{experience_query}\n"
+            f"客户明确关心的语义维度：{'、'.join(requested_dimensions[:8])}"
+        )
     experience_start = perf_counter()
     experience_guidance = await customer_experience_rag_service.retrieve_experience_guidance(
         db,

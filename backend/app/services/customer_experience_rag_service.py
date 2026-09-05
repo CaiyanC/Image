@@ -92,15 +92,56 @@ async def retrieve_experience_guidance(
         min_score = 0.50
     min_score = max(-1.0, min(1.0, min_score))
     try:
-        rows = await knowledge_service.semantic_retrieve(
-            db,
-            query,
-            sku=normalized_skus[0] if len(normalized_skus) == 1 else None,
-            skus=normalized_skus if len(normalized_skus) > 1 else None,
-            limit=max(max_cards * 4, 6),
-            source_types=[knowledge_service.CUSTOMER_EXPERIENCE_SOURCE_TYPE],
-            _include_retrieval_signal=True,
+        min_margin = float(
+            getattr(settings, "CUSTOMER_SERVICE_EXPERIENCE_RAG_MIN_MARGIN", 0.02)
         )
+    except (TypeError, ValueError):
+        min_margin = 0.02
+    if not math.isfinite(min_margin):
+        min_margin = 0.03
+    min_margin = max(0.0, min(1.0, min_margin))
+    try:
+        retrieval_limit = max(max_cards * 4, 6)
+        if normalized_skus:
+            # Product-bound turns need both layers of experience guidance:
+            # guidance written for the same SKU, when available, and global
+            # communication guidance distilled from cross-product good/bad
+            # cases.  The latter is deliberately limited to rows without a
+            # SKU so an unrelated product's experience card cannot leak into
+            # the turn.  This is retrieval scope, not a phrase or intent
+            # router; product facts remain in the separate evidence packet.
+            bound_rows = await knowledge_service.semantic_retrieve(
+                db,
+                query,
+                sku=normalized_skus[0] if len(normalized_skus) == 1 else None,
+                skus=normalized_skus if len(normalized_skus) > 1 else None,
+                limit=retrieval_limit,
+                source_types=[knowledge_service.CUSTOMER_EXPERIENCE_SOURCE_TYPE],
+                _include_retrieval_signal=True,
+            )
+            global_rows = await knowledge_service.semantic_retrieve(
+                db,
+                query,
+                limit=max(retrieval_limit * 4, 24),
+                source_types=[knowledge_service.CUSTOMER_EXPERIENCE_SOURCE_TYPE],
+                _include_retrieval_signal=True,
+            )
+            rows = [
+                *bound_rows,
+                *[
+                    row for row in (global_rows or [])
+                    if isinstance(row, dict)
+                    and not str(row.get("sku") or "").strip()
+                ],
+            ]
+        else:
+            rows = await knowledge_service.semantic_retrieve(
+                db,
+                query,
+                limit=retrieval_limit,
+                source_types=[knowledge_service.CUSTOMER_EXPERIENCE_SOURCE_TYPE],
+                _include_retrieval_signal=True,
+            )
     except Exception:
         # Experience is optional. Failure must leave the existing RAG path
         # untouched instead of replacing a factual answer with a fallback.
@@ -123,6 +164,21 @@ async def retrieve_experience_guidance(
     # optional channel needs the vector score itself, so rank only the rows
     # proven to be semantic and keep lexical fallback out of the packet.
     ranked_rows.sort(key=lambda item: (-item[0], item[1]))
+
+    # Experience is a soft communication aid. If two approved cards are
+    # semantically tied, omitting the aid is safer than injecting a weakly
+    # differentiated topic (for example, cleaning guidance into a heat-source
+    # question). This is a score-calibration boundary, not a phrase router;
+    # the factual RAG path and the answer model remain unchanged.
+    approved_ranked_rows = [
+        item for item in ranked_rows
+        if _approved_guidance_row(item[2])
+    ]
+    if (
+        len(approved_ranked_rows) >= 2
+        and approved_ranked_rows[0][0] - approved_ranked_rows[1][0] < min_margin
+    ):
+        return []
 
     for _score, _index, row in ranked_rows:
         if not isinstance(row, dict) or not _approved_guidance_row(row):
