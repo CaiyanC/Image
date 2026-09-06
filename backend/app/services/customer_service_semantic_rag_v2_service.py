@@ -748,6 +748,8 @@ async def _resolve_subject_skus(
         if subject_text and plan.get("requested_dimensions"):
             product_subjects = [subject_text]
     if product_subjects:
+        kind = str(plan.get("request_kind") or "").strip()
+        candidate_limit = _candidate_limit_for_kind(kind)
         products = db.query(Product).all()
         resolved_skus: list[str] = []
         catalogue_candidates: list[str] = []
@@ -795,8 +797,6 @@ async def _resolve_subject_skus(
             and len(resolved_skus) == len(product_subjects)
         ):
             return resolved_skus, []
-        kind = str(plan.get("request_kind") or "").strip()
-        candidate_limit = _candidate_limit_for_kind(kind)
         # A name resolver is an identity hint, not a final answer selection.
         # Even a high-confidence alias can describe a family or a package
         # variant whose current question asks for a different configuration.
@@ -1011,11 +1011,25 @@ def _preserve_bound_product_skus(
     when the current evidence contains the same SKU.  It never promotes a
     retrieval candidate and never inspects customer wording.
     """
-    if result_skus or identity_ambiguity or not needs_clarification:
+    if result_skus or identity_ambiguity:
         return result_skus
-    if str(request_kind or "").strip().lower() not in {"product_fact", "product_qa"}:
+    normalized_kind = str(request_kind or "").strip().lower()
+    normalized_answer_type = str(answer_type or "").strip().lower()
+    if normalized_kind == "recommendation" and normalized_answer_type == "recommendation":
+        # An explicitly named product is already customer-bound.  Keeping its
+        # card here is identity propagation, not an automatic recommendation;
+        # the answer model still owns the wording and evidence selection.
+        preserve_recommendation_identity = True
+    else:
+        preserve_recommendation_identity = False
+    if not needs_clarification and not preserve_recommendation_identity:
         return result_skus
-    if str(answer_type or "").strip().lower() not in {"product_detail", "faq"}:
+    if normalized_kind not in {"product_fact", "product_qa"} and not preserve_recommendation_identity:
+        return result_skus
+    if (
+        not preserve_recommendation_identity
+        and normalized_answer_type not in {"product_detail", "faq"}
+    ):
         return result_skus
     evidence_skus = {
         str(item.get("sku") or "").strip().upper()
@@ -1177,10 +1191,15 @@ def _answer_prompt_payload(
     evidence: list[dict[str, Any]],
     experience_guidance: list[dict[str, Any]],
     identity_ambiguity: bool,
+    explicit_product_skus: list[str] | None = None,
+    bound_product_skus: list[str] | None = None,
+    answer_repair_request: str | None = None,
 ) -> dict[str, Any]:
     return {
         "current_question": question,
         "page_anchor": page_anchor or {},
+        "explicit_product_skus": list(explicit_product_skus or []),
+        "bound_product_skus": list(bound_product_skus or []),
         "conversation_history": history,
         "previous_result_candidates": context_candidates,
         "semantic_plan": plan,
@@ -1192,7 +1211,70 @@ def _answer_prompt_payload(
         ],
         "evidence": evidence,
         "experience_guidance": experience_guidance,
+        "answer_repair_request": answer_repair_request or "",
     }
+
+
+_EXPLICIT_PRODUCT_CLARIFICATION_MARKERS = (
+    "补充具体商品名称或 SKU",
+    "补充商品名称或 SKU",
+    "没有找到能直接确认这个问题的依据",
+    "还不能确认你指的是哪一款",
+)
+_MEASUREMENT_TOKEN_SUFFIX_RE = re.compile(
+    r"(?:mm|cm|m|kg|g|ml|l|t|w|v)$",
+    flags=re.IGNORECASE,
+)
+_TECHNICAL_SPEC_PREFIXES = ("PU", "UPF", "SPF", "IPX")
+
+
+def _is_plausible_unknown_sku_token(token: str) -> bool:
+    """Keep provenance checks from treating inline specs as product IDs."""
+    normalized = str(token or "").strip()
+    if "-" in normalized:
+        return True
+    # Plain catalogue IDs are uppercase alphanumeric tokens such as CB253 or
+    # DV01.  Mixed-case measurement values such as PU2000mm are evidence
+    # content, not an unknown product identity and must remain answerable.
+    if normalized != normalized.upper():
+        return False
+    if normalized.startswith(_TECHNICAL_SPEC_PREFIXES) and any(
+        char.isdigit() for char in normalized
+    ):
+        return False
+    return not bool(_MEASUREMENT_TOKEN_SUFFIX_RE.search(normalized))
+
+
+def _needs_explicit_product_answer_repair(
+    raw: dict[str, Any] | None,
+    *,
+    bound_product_skus: list[str],
+    evidence: list[dict[str, Any]],
+) -> bool:
+    """Detect the narrow generic-clarification regression for a bound SKU.
+
+    A named product can legitimately have a missing field, so this must not
+    turn every clarification into a retry.  It only retries the known bad
+    response shape: the server has a bound SKU and same-SKU evidence, while
+    the answer asks the customer to identify the product again (or is empty).
+    """
+    normalized_bound = {
+        str(sku or "").strip().upper()
+        for sku in bound_product_skus
+        if str(sku or "").strip()
+    }
+    evidence_skus = {
+        str(item.get("sku") or "").strip().upper()
+        for item in evidence
+        if isinstance(item, dict) and str(item.get("sku") or "").strip()
+    }
+    if not normalized_bound or not (normalized_bound & evidence_skus):
+        return False
+    value = raw if isinstance(raw, dict) else {}
+    answer = str(value.get("answer") or "").strip()
+    if not answer:
+        return True
+    return any(marker in answer for marker in _EXPLICIT_PRODUCT_CLARIFICATION_MARKERS)
 
 
 async def _generate_answer(
@@ -1210,7 +1292,8 @@ async def _generate_answer(
         "先承接问题并请求商品名或 SKU、订单信息和具体现象，经验卡只能帮助组织接待话术，不能把候选商品资料当成当前商品事实。"
         "开放式推荐或比较仍由你根据完整需求进行语义选择，不因候选多就机械澄清，但必须让选择依据来自 evidence。\n"
         "你是面向客户的自然中文客服。商品事实必须基于 evidence 回答，evidence 之外的内容一律不能当作商品事实。"
-        "experience_guidance 是从历史客服经验中人工审核提炼的非事实沟通建议，只能帮助组织表达、承接顾虑和给出自然下一步；"
+        "experience_guidance 是从历史客服经验中人工审核或经过边界校验的自动汇总非事实沟通建议，只能帮助组织表达、承接顾虑和给出自然下一步；"
+        "如果当前问题已经明确表达购买犹豫、价格价值、适用选择或顾虑，且有同 SKU evidence，必须先直接承接顾虑，再用 evidence 回答已知事实，给出有条件的判断和一个具体下一步；不能只反问客户想了解哪方面。明确的参数、兼容、使用或安全事实问题直接按 evidence 回答，不要让 experience_guidance 改写事实答案。\n"
         "它不能证明任何商品事实、不能替代 evidence、不能决定 SKU，也不能向客户提及。若当前只是简单事实问题或建议不相关，直接忽略；不要强行推销或拉长回复。"
         "在完整回答当前问题的前提下优先短答，通常三到六句；只有复杂比较确有必要时才用少量条目展开。"
         "product_record 是当前商品主数据，knowledge/product QA 是 RAG 证据；不同 SKU 的证据绝不能混用。"
@@ -1237,6 +1320,19 @@ async def _generate_answer(
         '"evidence_ids":["实际使用的evidence_id"],'
         '"suggested_followups":["可选的自然追问"]}'
     )
+    system_prompt += (
+        "\u5982\u679c current_question \u5df2\u660e\u786e\u5305\u542b SKU \u6216\u7cbe\u786e\u5546\u54c1\u4e3b\u4f53\uff0c\u4e14 evidence \u4e2d\u5b58\u5728\u540c\u4e00 SKU\uff0c\u7981\u6b62\u8f93\u51fa\u8981\u6c42\u5ba2\u6237\u8865\u5145\u5546\u54c1\u540d\u79f0\u6216 SKU \u7684\u6a21\u677f\u5316 clarification\u3002"
+        "\u5373\u4f7f\u95ee\u9898\u5305\u542b\u5c1a\u672a\u767b\u8bb0\u7684\u7ef4\u5ea6\uff0c\u4e5f\u5fc5\u987b\u5148\u56de\u7b54 evidence \u80fd\u786e\u8ba4\u7684\u4e8b\u5b9e\uff0c\u518d\u8bf4\u660e\u7f3a\u5931\u7ef4\u5ea6\uff0c\u53ea\u8ffd\u95ee\u90a3\u4e00\u9879\u4fe1\u606f\uff1b\u4e0d\u8981\u628a\u201c\u7f3a\u5c11\u4e00\u4e2a\u5b57\u6bb5\u201d\u6269\u5927\u6210\u201c\u6ca1\u6709\u627e\u5230\u672c\u95ee\u9898\u4f9d\u636e\u201d\u3002\n"
+    )
+    answer_repair_request = str(payload.get("answer_repair_request") or "").strip()
+    if answer_repair_request:
+        system_prompt += (
+            "本轮是答案质量复核。上一版错误地把已经由 bound_product_skus 确认的商品身份当成缺失；"
+            "请只修复这一点：结合 current_question、bound_product_skus 和同 SKU evidence，先回答能够确认的事实，"
+            "对未登记的具体维度说明资料边界；禁止要求客户再次提供商品名称或 SKU，禁止输出泛化的‘没有找到依据’模板。"
+            "仍须遵守所有事实权威、兼容性和证据归属规则，并只输出约定 JSON。"
+            f"复核说明：{answer_repair_request}\n"
+        )
     start = perf_counter()
     try:
         raw = await customer_llm_service.chat_completion(
@@ -1245,7 +1341,7 @@ async def _generate_answer(
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": json.dumps(payload, ensure_ascii=False)},
             ],
-            temperature=0.2,
+            temperature=0 if answer_repair_request else 0.2,
             max_tokens=900,
             purpose="customer_service_v2_answer",
             response_format={"type": "json_object"},
@@ -1309,7 +1405,11 @@ def _validated_answer(
         for match in _SKU_RE.findall(answer)
         if "-" in match or len(match) >= 4
     }
-    unknown_skus = mentioned_skus - allowed_skus
+    unknown_skus = {
+        token
+        for token in mentioned_skus - allowed_skus
+        if _is_plausible_unknown_sku_token(token)
+    }
     if unknown_skus:
         answer = ""
     answer_type = str(value.get("answer_type") or "").strip().lower()
@@ -1622,11 +1722,15 @@ async def ask_customer_service_semantic_rag_v2(
             f"客户明确关心的语义维度：{'、'.join(requested_dimensions[:8])}"
         )
     experience_start = perf_counter()
-    experience_guidance = await customer_experience_rag_service.retrieve_experience_guidance(
-        db,
-        question=experience_query,
-        skus=target_skus or candidate_skus,
-    )
+    experience_guidance = []
+    if customer_experience_rag_service.should_retrieve_experience_guidance(
+        original_question
+    ):
+        experience_guidance = await customer_experience_rag_service.retrieve_experience_guidance(
+            db,
+            question=experience_query,
+            skus=target_skus or candidate_skus,
+        )
     customer_perf_service.log_stage(
         "customer_service_v2.experience_retrieve",
         experience_start,
@@ -1643,8 +1747,43 @@ async def ask_customer_service_semantic_rag_v2(
         evidence=evidence,
         experience_guidance=experience_guidance,
         identity_ambiguity=retrieval_identity_ambiguity,
+        explicit_product_skus=explicit_skus,
+        bound_product_skus=target_skus,
     )
     answer_raw, answer_metadata = await _generate_answer(db, payload=payload)
+    if _needs_explicit_product_answer_repair(
+        answer_raw,
+        bound_product_skus=target_skus,
+        evidence=evidence,
+    ):
+        repair_payload = dict(payload)
+        repair_payload["answer_repair_request"] = (
+            "请保留当前明确商品身份，围绕客户的搭建、防风和购买判断完成回答；"
+            "缺少抗风等级时只说明这一项未登记，并回答已有的搭建、尺寸、场景或配置资料。"
+        )
+        repaired_raw, repair_metadata = await _generate_answer(
+            db,
+            payload=repair_payload,
+        )
+        if not _needs_explicit_product_answer_repair(
+            repaired_raw,
+            bound_product_skus=target_skus,
+            evidence=evidence,
+        ):
+            answer_raw = repaired_raw
+            answer_metadata = {
+                **(answer_metadata or {}),
+                "repair_attempted": True,
+                "repair_applied": True,
+                "repair_elapsed_ms": repair_metadata.get("elapsed_ms"),
+            }
+        else:
+            answer_metadata = {
+                **(answer_metadata or {}),
+                "repair_attempted": True,
+                "repair_applied": False,
+                "repair_elapsed_ms": repair_metadata.get("elapsed_ms"),
+            }
     answer_raw = _recover_selected_skus_from_evidence(
         answer_raw,
         evidence=evidence,

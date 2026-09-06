@@ -16,8 +16,24 @@ from ..core.config import settings
 from . import knowledge_service
 
 
-_APPROVED_REVIEW_STATUS = "approved_pilot"
+_APPROVED_REVIEW_STATUSES = {"approved_pilot", "auto_generated_pilot"}
 _AUTHORITY_LEVEL = "candidate_only"
+_STRATEGY_QUERY_MARKERS = (
+    "犹豫", "纠结", "值得买", "值不值得", "性价比", "价格高", "太贵", "贵不贵",
+    "推荐", "怎么选", "选哪", "帮我选", "帮我挑", "适合我", "购买前", "为什么买",
+    "卖点", "亮点", "怎么介绍", "客服", "如何承接", "顾虑", "担心", "不满意",
+    "差评", "退换", "下单", "想买", "买这款", "怎么样",
+)
+_FACT_QUERY_MARKERS = (
+    "容量", "重量", "尺寸", "材质", "热源", "炉具", "燃料", "兼容", "适配",
+    "配件", "包含", "承重", "清洁", "清洗", "怎么用", "使用方法", "保修", "发货", "物流",
+)
+_DIRECT_FACT_QUERY_MARKERS = (
+    "\u5ba4\u5185", "\u5361\u5f0f\u7089", "\u71c3\u6c14\u7089", "\u660e\u706b", "\u9152\u7cbe\u7089",
+    "\u662f\u4ec0\u4e48", "\u662f\u591a\u5c11", "\u80fd\u5426", "\u80fd\u4e0d\u80fd", "\u53ef\u4ee5\u5417",
+    "\u53ef\u4e0d\u53ef\u4ee5", "\u4f7f\u7528\u5417", "\u80fd\u7528\u5417", "\u53ef\u7528\u5417", "\u662f\u5426",
+    "\u5982\u4f55\u4f7f\u7528", "\u600e\u6837\u4f7f\u7528", "\u5b89\u5168\u4f7f\u7528", "\u4f7f\u7528\u6ce8\u610f", "\u6ce8\u610f\u4e8b\u9879", "\u6ce8\u610f\u4ec0\u4e48",
+)
 
 
 def _clip_text(value: Any, limit: int) -> str:
@@ -35,6 +51,19 @@ def _normalized_skus(values: list[str] | None) -> list[str]:
     ))[:12]
 
 
+def should_retrieve_experience_guidance(question: str) -> bool:
+    """Keep soft experience guidance on strategy questions, not direct facts."""
+    query = " ".join(str(question or "").strip().split())
+    if not query:
+        return False
+    if any(marker in query for marker in _STRATEGY_QUERY_MARKERS):
+        return True
+    return not any(
+        marker in query
+        for marker in (*_FACT_QUERY_MARKERS, *_DIRECT_FACT_QUERY_MARKERS)
+    )
+
+
 def _approved_guidance_row(row: dict[str, Any]) -> bool:
     if str(row.get("source_type") or "").strip() != knowledge_service.CUSTOMER_EXPERIENCE_SOURCE_TYPE:
         return False
@@ -42,7 +71,7 @@ def _approved_guidance_row(row: dict[str, Any]) -> bool:
     return (
         metadata.get("fact_authority") is False
         and str(metadata.get("authority_level") or "").strip() == _AUTHORITY_LEVEL
-        and str(metadata.get("review_status") or "").strip() == _APPROVED_REVIEW_STATUS
+        and str(metadata.get("review_status") or "").strip() in _APPROVED_REVIEW_STATUSES
         and str(metadata.get("production_use") or "").strip() == "experience_guidance_only"
     )
 
@@ -175,12 +204,28 @@ async def retrieve_experience_guidance(
         if _approved_guidance_row(item[2])
     ]
     if (
-        len(approved_ranked_rows) >= 2
+        not normalized_skus
+        and len(approved_ranked_rows) >= 2
         and approved_ranked_rows[0][0] - approved_ranked_rows[1][0] < min_margin
     ):
         return []
 
-    for _score, _index, row in ranked_rows:
+    output_ranked_rows = approved_ranked_rows
+    if normalized_skus:
+        bound_ranked_rows = [
+            item for item in approved_ranked_rows
+            if str(item[2].get("sku") or "").strip().upper() in normalized_skus
+        ]
+        global_ranked_rows = [
+            item for item in approved_ranked_rows
+            if not str(item[2].get("sku") or "").strip()
+        ]
+        # An explicit SKU is a stronger scope signal than a small score
+        # difference against a generic global card. Put the best same-SKU
+        # guidance first, then use remaining slots for global strategy.
+        output_ranked_rows = [*bound_ranked_rows, *global_ranked_rows]
+
+    for _score, _index, row in output_ranked_rows:
         if not isinstance(row, dict) or not _approved_guidance_row(row):
             continue
         metadata = row.get("metadata") if isinstance(row.get("metadata"), dict) else {}

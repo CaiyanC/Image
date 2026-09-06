@@ -410,6 +410,111 @@ def test_v2_provider_failure_returns_v2_safe_answer_without_legacy_fallback(
     assert "没有找到" in result["answer"] or "补充" in result["answer"]
 
 
+def test_v2_repairs_generic_clarification_for_bound_product(
+    route_client_and_db,
+    monkeypatch,
+):
+    _client, _headers, Session = route_client_and_db
+    monkeypatch.setattr(settings, "APP_ENV", "dev")
+    monkeypatch.setattr(settings, "CUSTOMER_SERVICE_PIPELINE_OVERRIDE_ENABLED", True)
+
+    with Session() as db:
+        db.add(
+            Product(
+                id="v2-repair-product-id",
+                sku="SKU-REPAIR",
+                barcode="v2-repair-barcode",
+                product_name_cn="质量复核测试天幕",
+                brand="测试品牌",
+                category="天幕",
+            )
+        )
+        db.commit()
+
+    answer_calls: list[dict] = []
+
+    async def fake_chat(_db, messages, **kwargs):
+        purpose = kwargs.get("purpose")
+        if purpose == "customer_service_v2_semantic_plan":
+            return json.dumps(
+                {
+                    "request_kind": "recommendation",
+                    "subject_scope": "page_product",
+                    "product_subjects": ["SKU-REPAIR"],
+                    "search_queries": ["SKU-REPAIR搭建和防风值不值得买"],
+                    "requested_dimensions": ["搭建", "防风", "购买判断"],
+                    "response_focus": "回答购买判断并说明证据边界",
+                },
+                ensure_ascii=False,
+            )
+        assert purpose == "customer_service_v2_answer"
+        payload = json.loads(messages[-1]["content"])
+        answer_calls.append({"payload": payload, "temperature": kwargs.get("temperature")})
+        if len(answer_calls) == 1:
+            return json.dumps(
+                {
+                    "answer": "我查看了当前商品资料，但没有找到能直接确认这个问题的依据。你可以补充具体商品名称或 SKU，我再继续核对。",
+                    "answer_type": "clarification",
+                    "needs_clarification": True,
+                },
+                ensure_ascii=False,
+            )
+        return json.dumps(
+            {
+                "answer": "这款资料明确标注搭建简单，但没有登记抗风等级，因此常规露营可以考虑，强风场景不建议仅凭现有资料下单。",
+                "answer_type": "recommendation",
+                "request_kind": "recommendation",
+                "needs_clarification": False,
+                "confidence": "medium",
+                "uncertainty": "partial",
+                "selected_skus": ["SKU-REPAIR"],
+            },
+            ensure_ascii=False,
+        )
+
+    async def fake_retrieve(_db, _query, *, sku=None, **_kwargs):
+        return [
+            {
+                "source_type": "product_qa",
+                "sku": sku or "SKU-REPAIR",
+                "content": "问：搭建和防风怎么样？答：搭建简单；资料未登记抗风等级。",
+                "metadata": {"source_id": "product:SKU-REPAIR:qa:setup-wind"},
+                "score": 0.99,
+            }
+        ]
+
+    monkeypatch.setattr(
+        customer_service_semantic_rag_v2_service.customer_llm_service,
+        "chat_completion",
+        fake_chat,
+    )
+    monkeypatch.setattr(
+        customer_service_semantic_rag_v2_service.knowledge_service,
+        "semantic_retrieve",
+        fake_retrieve,
+    )
+
+    with Session() as db:
+        result = asyncio.run(
+            customer_service_service.ask_customer_service(
+                db,
+                user_id="v2-repair-user",
+                question="SKU-REPAIR搭建和防风值不值得买？",
+                pipeline="semantic_rag_v2",
+            )
+        )
+
+    assert result["answer"].startswith("这款资料明确标注搭建简单")
+    assert result["answer_type"] == "recommendation"
+    assert result["result_skus"] == ["SKU-REPAIR"]
+    assert len(answer_calls) == 2
+    assert answer_calls[0]["payload"]["bound_product_skus"] == ["SKU-REPAIR"]
+    assert answer_calls[1]["payload"]["answer_repair_request"]
+    assert answer_calls[1]["temperature"] == 0
+    assert result["answer_metadata"]["repair_attempted"] is True
+    assert result["answer_metadata"]["repair_applied"] is True
+
+
 def test_workbuddy_path_uses_one_answer_llm_and_keeps_legacy_isolated(
     route_client_and_db,
     monkeypatch,

@@ -1,5 +1,6 @@
 from app.services.customer_service_semantic_rag_v2_service import (
     _answer_resolved_identity,
+    _is_plausible_unknown_sku_token,
     _preserve_bound_product_skus,
     _preserve_comparison_participants,
     _recover_selected_skus_from_evidence,
@@ -184,6 +185,30 @@ def test_selected_evidence_sku_remains_customer_visible_result():
     assert answer[5] == ["CW-C78"]
 
 
+def test_inline_measurement_does_not_invalidate_a_grounded_answer():
+    answer = _validated_answer(
+        {
+            "answer": "OT-188LY 面料为210T涤纶布，防水指数为PU2000mm+。",
+            "answer_type": "product_detail",
+            "needs_clarification": False,
+            "selected_skus": ["OT-188LY"],
+        },
+        evidence=[
+            {"sku": "OT-188LY", "evidence_id": "v2-e1"},
+        ],
+        candidate_skus=[],
+        question="OT-188LY 面料和防水怎么样？",
+        identity_ambiguity=False,
+    )
+
+    assert answer[0].startswith("OT-188LY 面料")
+    assert answer[1] == "product_detail"
+    assert answer[5] == ["OT-188LY"]
+    assert _is_plausible_unknown_sku_token("PU2000mm") is False
+    assert _is_plausible_unknown_sku_token("UPF50") is False
+    assert _is_plausible_unknown_sku_token("OTHER-999") is True
+
+
 def test_bound_product_survives_missing_field_clarification():
     answer = _validated_answer(
         {
@@ -211,6 +236,18 @@ def test_bound_product_survives_missing_field_clarification():
         identity_ambiguity=False,
         needs_clarification=answer[2],
     ) == ["CW-C78"]
+
+
+def test_explicit_product_recommendation_keeps_its_bound_card_when_model_omits_selection():
+    assert _preserve_bound_product_skus(
+        [],
+        target_skus=["CB253"],
+        evidence=[{"sku": "CB253", "evidence_id": "v2-e1"}],
+        answer_type="recommendation",
+        request_kind="recommendation",
+        identity_ambiguity=False,
+        needs_clarification=False,
+    ) == ["CB253"]
 
 
 def test_bound_product_preservation_does_not_promote_ambiguous_candidates():

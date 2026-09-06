@@ -1,5 +1,6 @@
 import json
 import unittest
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
 from app.core.config import settings
@@ -89,6 +90,19 @@ class CustomerExperienceRagServiceTest(unittest.IsolatedAsyncioTestCase):
             and call.kwargs["_include_retrieval_signal"]
             for call in retrieve.await_args_list
         ))
+
+    def test_auto_generated_pilot_card_is_eligible_only_as_non_fact_guidance(self):
+        row = {
+            "source_type": knowledge_service.CUSTOMER_EXPERIENCE_SOURCE_TYPE,
+            "metadata": {
+                "review_status": "auto_generated_pilot",
+                "production_use": "experience_guidance_only",
+                "authority_level": "candidate_only",
+                "fact_authority": False,
+            },
+        }
+
+        self.assertTrue(customer_experience_rag_service._approved_guidance_row(row))
 
     async def test_experience_guidance_uses_only_relevant_vector_rows(self):
         metadata = {
@@ -203,10 +217,10 @@ class CustomerExperienceRagServiceTest(unittest.IsolatedAsyncioTestCase):
             )
 
         self.assertEqual([row["guidance"] for row in rows], [
-            "global guidance",
             "same sku guidance",
+            "global guidance",
         ])
-        self.assertEqual([row["sku"] for row in rows], [None, "CF-PG19"])
+        self.assertEqual([row["sku"] for row in rows], ["CF-PG19", None])
         self.assertEqual(len(retrieve.await_args_list), 2)
         self.assertIsNone(retrieve.await_args_list[1].kwargs.get("sku"))
         self.assertIsNone(retrieve.await_args_list[1].kwargs.get("skus"))
@@ -254,6 +268,92 @@ class CustomerExperienceRagServiceTest(unittest.IsolatedAsyncioTestCase):
             )
 
         self.assertEqual(rows, [])
+
+    async def test_product_bound_card_survives_tied_global_guidance(self):
+        metadata = {
+            "review_status": "auto_generated_pilot",
+            "production_use": "experience_guidance_only",
+            "authority_level": "candidate_only",
+            "fact_authority": False,
+        }
+        retrieve = AsyncMock(side_effect=[
+            [{
+                "source_type": knowledge_service.CUSTOMER_EXPERIENCE_SOURCE_TYPE,
+                "sku": "CB253",
+                "content": "same sku inferred guidance",
+                "metadata": {**metadata, "source_id": "customer_experience:catalog:CB253"},
+                "score": 0.61,
+                "_retrieval_signal": "vector",
+            }],
+            [
+                {
+                    "source_type": knowledge_service.CUSTOMER_EXPERIENCE_SOURCE_TYPE,
+                    "sku": None,
+                    "content": "global guidance one",
+                    "metadata": {**metadata, "source_id": "customer_experience:global:one"},
+                    "score": 0.65,
+                    "_retrieval_signal": "vector",
+                },
+                {
+                    "source_type": knowledge_service.CUSTOMER_EXPERIENCE_SOURCE_TYPE,
+                    "sku": None,
+                    "content": "global guidance two",
+                    "metadata": {**metadata, "source_id": "customer_experience:global:two"},
+                    "score": 0.64,
+                    "_retrieval_signal": "vector",
+                },
+            ],
+        ])
+        with (
+            patch.object(settings, "CUSTOMER_SERVICE_EXPERIENCE_RAG_ENABLED", True),
+            patch.object(settings, "CUSTOMER_SERVICE_EXPERIENCE_RAG_MIN_SCORE", 0.50),
+            patch.object(settings, "CUSTOMER_SERVICE_EXPERIENCE_RAG_MIN_MARGIN", 0.03),
+            patch.object(settings, "CUSTOMER_SERVICE_EXPERIENCE_RAG_MAX_CARDS", 2),
+            patch.object(knowledge_service, "semantic_retrieve", retrieve),
+        ):
+            rows = await customer_experience_rag_service.retrieve_experience_guidance(
+                object(),
+                question="这个产品怎么选",
+                skus=["cb253"],
+            )
+
+        self.assertEqual(len(rows), 2)
+        self.assertIn("CB253", [row["sku"] for row in rows])
+
+    def test_strategy_gate_skips_direct_facts(self):
+        self.assertTrue(
+            customer_experience_rag_service.should_retrieve_experience_guidance(
+                "价格有点高，我还在犹豫值不值得买？"
+            )
+        )
+        self.assertTrue(
+            customer_experience_rag_service.should_retrieve_experience_guidance(
+                "客户担心安全，客服怎么承接？"
+            )
+        )
+        self.assertFalse(
+            customer_experience_rag_service.should_retrieve_experience_guidance(
+                "这个水壶的容量、材质和适用热源是什么？"
+            )
+        )
+        self.assertFalse(
+            customer_experience_rag_service.should_retrieve_experience_guidance(
+                "这个折叠箱的尺寸、容量和承重怎么确认？"
+            )
+        )
+
+    def test_direct_fact_forms_do_not_retrieve_experience_guidance(self):
+        for question in (
+            "CS-B14 \u80fd\u5728\u5ba4\u5185\u4f7f\u7528\u5417\uff1f",
+            "CB254 \u80fd\u7528\u5361\u5f0f\u7089\u5417\uff1f",
+            "CW-C83 \u6709\u6ca1\u6709\u4fdd\u4fee\uff1f",
+            "\u6237\u5916\u9152\u7cbe\u7089\u5982\u4f55\u5b89\u5168\u4f7f\u7528\uff1f",
+        ):
+            self.assertFalse(
+                customer_experience_rag_service.should_retrieve_experience_guidance(
+                    question
+                )
+            )
 
     def test_three_pipelines_keep_guidance_separate_from_fact_evidence(self):
         guidance = [{
@@ -348,6 +448,43 @@ class CustomerExperienceRagServiceTest(unittest.IsolatedAsyncioTestCase):
         )
 
         self.assertEqual(target_skus, [])
+        self.assertEqual(candidate_skus, [])
+
+    async def test_semantic_named_product_resolution_has_candidate_limit(self):
+        class EmptyProductDb:
+            def query(self, *_args):
+                return self
+
+            def all(self):
+                return []
+
+        resolved = SimpleNamespace(
+            status="resolved",
+            resolved_sku="OT-188LY",
+            resolver_candidate_skus=[],
+            candidate_skus=[],
+            diagnostic_candidate_skus=[],
+        )
+        with patch.object(
+            customer_service_semantic_rag_v2_service.customer_entity_resolution_contract,
+            "build_entity_resolution_contract",
+            return_value=resolved,
+        ):
+            target_skus, candidate_skus = await customer_service_semantic_rag_v2_service._resolve_subject_skus(
+                EmptyProductDb(),
+                question="OT-188LY \u9002\u5408\u9732\u8425\u5417\uff1f",
+                plan={
+                    "request_kind": "recommendation",
+                    "subject_scope": "named_product",
+                    "product_subjects": ["\u75af\u72c2\u6e38\u4e50\u56ed\u5929\u5e55"],
+                },
+                page_sku=None,
+                explicit_skus=[],
+                context_candidates=[],
+                retrieved_rows=[],
+            )
+
+        self.assertEqual(target_skus, ["OT-188LY"])
         self.assertEqual(candidate_skus, [])
 
     def test_unbound_semantic_evidence_excludes_sku_rows(self):
