@@ -734,6 +734,66 @@ def test_workbuddy_agent_semantic_prefetch_is_internal_system_context(
     assert payload["customer_authored"] is False
 
 
+def test_workbuddy_agent_removes_internal_vocabulary_from_public_answer():
+    answer = customer_service_workbuddy_agent_service._sanitize_public_answer(
+        "检索结果中的其他 SKU 不能替代 evidence；请调用 RAG 工具。"
+    )
+
+    assert "检索" not in answer
+    assert "evidence" not in answer
+    assert "RAG" not in answer
+    assert "工具" not in answer
+    assert "其他商品信息" in answer
+
+
+def test_workbuddy_agent_skips_experience_guidance_for_direct_fact(
+    monkeypatch,
+):
+    async def fake_prefetch(*_args, **_kwargs):
+        return []
+
+    async def fail_experience_retrieve(*_args, **_kwargs):
+        raise AssertionError("direct fact must not retrieve experience guidance")
+
+    async def fake_chat(_db, **_kwargs):
+        return json.dumps({
+            "answer": "CB253 \u7684\u5bb9\u91cf\u662f 1.4L\u3002",
+            "response_mode": "conversational",
+            "identity_status": "confirmed",
+            "answer_type": "faq",
+            "needs_clarification": False,
+        }, ensure_ascii=False)
+
+    monkeypatch.setattr(
+        customer_service_workbuddy_agent_service,
+        "_prefetch_semantic_catalog",
+        fake_prefetch,
+    )
+    monkeypatch.setattr(
+        customer_service_workbuddy_agent_service.customer_experience_rag_service,
+        "retrieve_experience_guidance",
+        fail_experience_retrieve,
+    )
+    monkeypatch.setattr(
+        customer_service_workbuddy_agent_service.customer_llm_service,
+        "chat_completion",
+        fake_chat,
+    )
+
+    response, _evidence, _events, _calls, metadata = asyncio.run(
+        customer_service_workbuddy_agent_service._run_agent(
+            None,
+            question="CB253 \u5bb9\u91cf\u662f\u591a\u5c11\uff1f",
+            history=[],
+            page_sku=None,
+            context_skus=[],
+        )
+    )
+
+    assert response["answer_type"] == "faq"
+    assert metadata["experience_guidance_count"] == 0
+
+
 def test_workbuddy_agent_exposes_identity_resolution_context_to_model():
     unanchored = customer_service_workbuddy_agent_service._build_messages(
         question="木柄可以取下吗？",

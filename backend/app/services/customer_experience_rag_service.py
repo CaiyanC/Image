@@ -19,6 +19,7 @@ from . import knowledge_service
 _APPROVED_REVIEW_STATUSES = {"approved_pilot", "auto_generated_pilot"}
 _AUTHORITY_LEVEL = "candidate_only"
 _STRATEGY_QUERY_MARKERS = (
+    "\u54ea\u6b3e\u5408\u9002", "\u54ea\u4e2a\u5408\u9002", "\u4ec0\u4e48\u5408\u9002",
     "犹豫", "纠结", "值得买", "值不值得", "性价比", "价格高", "太贵", "贵不贵",
     "推荐", "怎么选", "选哪", "帮我选", "帮我挑", "适合我", "购买前", "为什么买",
     "卖点", "亮点", "怎么介绍", "客服", "如何承接", "顾虑", "担心", "不满意",

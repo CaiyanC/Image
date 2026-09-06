@@ -1233,6 +1233,22 @@ def _declared_context_skus(
     return [sku for sku in declared if sku in existing]
 
 
+def _sanitize_public_answer(value: Any) -> str:
+    """Remove implementation vocabulary before an Agent answer is exposed."""
+    answer = _clip_text(value, _PUBLIC_ANSWER_LIMIT)
+    for internal, customer_facing in (
+        ("检索结果", "其他商品信息"),
+        ("检索", "查询"),
+        ("RAG", "资料"),
+        ("evidence", "资料"),
+        ("证据包", "资料"),
+        ("工具", "功能"),
+        ("路由", "处理流程"),
+    ):
+        answer = answer.replace(internal, customer_facing)
+    return _clip_text(answer, _PUBLIC_ANSWER_LIMIT)
+
+
 async def _emit_accepted_answer(
     callback: Callable[[str], Awaitable[None]] | None,
     buffered_deltas: list[str],
@@ -1240,7 +1256,7 @@ async def _emit_accepted_answer(
 ) -> None:
     if callback is None:
         return
-    answer = _clip_text(response.get("answer"), _PUBLIC_ANSWER_LIMIT)
+    answer = _sanitize_public_answer(response.get("answer"))
     if not answer:
         return
     deltas = [str(item or "") for item in buffered_deltas if str(item or "")]
@@ -1320,19 +1336,21 @@ async def _run_agent(
     ))[:6]
     experience_start = perf_counter()
     experience_error: str | None = None
-    try:
-        experience_guidance = await customer_experience_rag_service.retrieve_experience_guidance(
-            db,
-            question=question,
-            skus=experience_skus,
-        )
-    except Exception as exc:
-        experience_guidance = []
-        experience_error = type(exc).__name__
-        customer_perf_service.log_event(
-            "customer_service_workbuddy_agent.experience_error",
-            error=experience_error,
-        )
+    experience_guidance = []
+    if customer_experience_rag_service.should_retrieve_experience_guidance(question):
+        try:
+            experience_guidance = await customer_experience_rag_service.retrieve_experience_guidance(
+                db,
+                question=question,
+                skus=experience_skus,
+            )
+        except Exception as exc:
+            experience_guidance = []
+            experience_error = type(exc).__name__
+            customer_perf_service.log_event(
+                "customer_service_workbuddy_agent.experience_error",
+                error=experience_error,
+            )
     customer_perf_service.log_stage(
         "customer_service_workbuddy_agent.experience_retrieve",
         experience_start,
@@ -2048,7 +2066,7 @@ async def ask_customer_service_workbuddy_agent(
         warnings.append("selected_identity_not_confirmed")
     if set(model_selected_skus) - set(selected_skus):
         warnings.append("selected_sku_missing_canonical_grounded_claim")
-    answer = _clip_text(answer_raw.get("answer"), _PUBLIC_ANSWER_LIMIT)
+    answer = _sanitize_public_answer(answer_raw.get("answer"))
     if not answer:
         answer = "我已经查看了本轮资料，但这次没有生成完整回复，请再试一次。"
         warnings.append("empty_agent_answer")

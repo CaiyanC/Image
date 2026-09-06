@@ -166,6 +166,29 @@ def test_identity_ambiguous_candidates_are_not_customer_visible_results():
     assert answer[5] == []
 
 
+def test_unknown_explicit_sku_gets_unknown_sku_clarification():
+    answer = _validated_answer(
+        {
+            "answer": "",
+            "answer_type": "clarification",
+            "needs_clarification": True,
+            "selected_skus": [],
+        },
+        evidence=[
+            {"sku": "CB253", "evidence_id": "v2-e1"},
+            {"sku": "CB254", "evidence_id": "v2-e2"},
+        ],
+        candidate_skus=["CB253", "CB254"],
+        question="OTHER-999 \u7684\u5bb9\u91cf\u548c\u6750\u8d28\u662f\u4ec0\u4e48\uff1f",
+        identity_ambiguity=True,
+        unresolved_explicit_skus=["OTHER-999"],
+    )
+
+    assert "OTHER-999" in answer[0]
+    assert "多个可能" not in answer[0]
+    assert answer[5] == []
+
+
 def test_selected_evidence_sku_remains_customer_visible_result():
     answer = _validated_answer(
         {

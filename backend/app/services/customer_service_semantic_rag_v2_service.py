@@ -1362,7 +1362,23 @@ async def _generate_answer(
         }
 
 
-def _safe_missing_answer(*, question: str, has_identity_ambiguity: bool) -> str:
+def _safe_missing_answer(
+    *,
+    question: str,
+    has_identity_ambiguity: bool,
+    unresolved_explicit_skus: list[str] | None = None,
+) -> str:
+    unresolved = list(dict.fromkeys(
+        str(sku or "").strip().upper()
+        for sku in (unresolved_explicit_skus or [])
+        if str(sku or "").strip()
+    ))[:4]
+    if unresolved:
+        labels = "、".join(unresolved)
+        return (
+            f"未找到 SKU“{labels}”对应的商品资料，暂时无法确认该商品信息。"
+            "请核对 SKU 是否正确，或提供商品名称、链接或包装信息，我再帮您查询。"
+        )
     if has_identity_ambiguity:
         return "我查到多个可能对应的商品，但还不能确认你指的是哪一款。请补充商品名称或 SKU，我再按对应商品核对。"
     return "我查看了当前商品资料，但没有找到能直接确认这个问题的依据。你可以补充具体商品名称或 SKU，我再继续核对。"
@@ -1376,6 +1392,7 @@ def _validated_answer(
     question: str,
     identity_ambiguity: bool,
     request_kind: str | None = None,
+    unresolved_explicit_skus: list[str] | None = None,
 ) -> tuple[str, str, bool, str, str, list[str], list[str], list[str]]:
     allowed_skus = {
         str(item.get("sku") or "").strip().upper()
@@ -1422,6 +1439,7 @@ def _validated_answer(
         answer = _safe_missing_answer(
             question=question,
             has_identity_ambiguity=identity_ambiguity,
+            unresolved_explicit_skus=unresolved_explicit_skus,
         )
         answer_type = "clarification"
         needs_clarification = True
@@ -1579,6 +1597,19 @@ async def ask_customer_service_semantic_rag_v2(
         pipeline=customer_pipeline_service.SEMANTIC_RAG_V2_PIPELINE,
     )
     explicit_skus = _explicit_skus(db, original_question)
+    resolved_explicit_skus = set(explicit_skus)
+    unresolved_explicit_skus = list(dict.fromkeys(
+        str(token or "").strip().upper()
+        for token in _SKU_RE.findall(original_question)
+        if (
+            _is_plausible_unknown_sku_token(str(token or "").strip())
+            and (
+                not resolved_explicit_skus
+                or "-" in str(token or "")
+            )
+            and str(token or "").strip().upper() not in resolved_explicit_skus
+        )
+    ))[:4]
     plan, plan_metadata = await _semantic_plan(
         db,
         question=original_question,
@@ -1816,6 +1847,7 @@ async def ask_customer_service_semantic_rag_v2(
         question=original_question,
         identity_ambiguity=identity_ambiguity,
         request_kind=kind,
+        unresolved_explicit_skus=unresolved_explicit_skus,
     )
     result_skus = _preserve_bound_product_skus(
         result_skus,
