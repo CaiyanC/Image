@@ -11,6 +11,16 @@ from app.core.database import Base, _seed_default_permissions, get_db
 from app.core.permission_constants import DERIVED_PERMISSION_SOURCES, PERMISSION_DEFS
 from app.core.security import get_current_user, require_product_permission
 from app.models import Group, GroupPermission, Permission, PermissionRoute, Route, User, UserGroup
+from app.models.product_specs import ProductSpecs
+from app.models.product import Product
+from app.services.product_service import _audit_source_requires_confirmation
+
+
+def test_quarantined_source_is_not_reported_as_ready():
+    assert _audit_source_requires_confirmation(ProductSpecs(usage_instruction='使用说明待产品负责人核实，暂不提供操作步骤，请以该型号正式说明书为准。'))
+    assert not _audit_source_requires_confirmation(ProductSpecs(usage_instruction='按正式说明操作。'))
+    assert not _audit_source_requires_confirmation(None)
+    assert _audit_source_requires_confirmation(None, Product(quality_note='收纳尺寸单位混用，待产品负责人核实。'))
 
 
 @pytest.fixture
