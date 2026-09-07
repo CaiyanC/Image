@@ -11,6 +11,9 @@ import { canUsePermission, showNoPermissionToast } from '../services/permissionF
 export default function ProductManagement() {
   const navigate = useNavigate()
   const { user, isManagement } = useAuthStore()
+  const canReadDetails = isManagement || !!user?.permissions?.some((key) =>
+    key === 'product.full.view' || key === 'product.edit',
+  )
   const [searchParams, setSearchParams] = useSearchParams()
   const [products, setProducts] = useState<Product[]>([])
   const [totalProducts, setTotalProducts] = useState(0)
@@ -71,8 +74,21 @@ export default function ProductManagement() {
 
   useEffect(() => {
     api.categories.list().then(setCategoryOptions).catch(() => {})
-    api.products.filterOptions().then(setAdvancedOptions).catch(() => {})
   }, [])
+
+  useEffect(() => {
+    if (!canReadDetails) {
+      setSelected(null)
+      setAdvancedOpen(false)
+      setAdvancedOptions({})
+      return
+    }
+    let cancelled = false
+    api.products.filterOptions().then((options) => {
+      if (!cancelled) setAdvancedOptions(options)
+    }).catch(() => {})
+    return () => { cancelled = true }
+  }, [canReadDetails])
 
   async function loadProducts(nextPage = page) {
     setLoading(true)
@@ -94,6 +110,7 @@ export default function ProductManagement() {
   }
 
   async function selectProductBySku(sku: string, currentProducts = products) {
+    if (!canReadDetails) return
     const normalized = sku.trim()
     if (!normalized) return
     const existing = currentProducts.find((p) => p.sku.toLowerCase() === normalized.toLowerCase())
@@ -102,6 +119,9 @@ export default function ProductManagement() {
     }
     try {
       const detail = await api.products.get(normalized)
+      const auth = useAuthStore.getState()
+      if (!auth.isManagement && !auth.user?.permissions?.some((key) =>
+        key === 'product.full.view' || key === 'product.edit')) return
       setSelected(detail)
       setProducts((prev) => {
         if (prev.some((p) => p.sku === detail.sku)) {
@@ -115,6 +135,10 @@ export default function ProductManagement() {
   }
 
   function handleSelectProduct(product: Product) {
+    if (!canReadDetails) {
+      showNoPermissionToast()
+      return
+    }
     setSelected(product)
     const next = new URLSearchParams(searchParams)
     next.set('sku', product.sku)
@@ -324,14 +348,14 @@ export default function ProductManagement() {
           搜索
         </button>
         <button
-          onClick={() => setAdvancedOpen(!advancedOpen)}
+          onClick={() => canReadDetails ? setAdvancedOpen(!advancedOpen) : showNoPermissionToast()}
           className="px-4 py-2 bg-gray-100 text-gray-700 rounded-lg text-sm font-medium hover:bg-gray-200 transition-colors"
         >
           数据库查询
         </button>
       </div>
 
-      {advancedOpen && (
+      {canReadDetails && advancedOpen && (
         <div className="glass rounded-xl p-4 mb-4">
           <div className="grid grid-cols-2 md:grid-cols-4 xl:grid-cols-6 gap-3">
             <FilterSelect label="品牌" value={advancedFilters.brand} options={advancedOptions.brand} onChange={(v) => updateAdvancedFilter('brand', v)} />
@@ -472,7 +496,11 @@ export default function ProductManagement() {
             </div>
           </div>
 
-          {selected ? (
+          {!canReadDetails ? (
+            <div className="glass rounded-xl p-6 text-sm text-apple-gray-medium">
+              当前仅可查看基础产品列表。查看完整详情和高级筛选需要“全字段查看”或“产品编辑”权限。
+            </div>
+          ) : selected ? (
             <div className="glass rounded-xl flex flex-col min-h-0 h-[calc(100vh-10rem)]">
               {/* Sticky header with edit/delete */}
               <div className="flex items-center justify-between p-5 pb-3 border-b border-gray-100 shrink-0">

@@ -285,7 +285,8 @@ export interface EcommercePrecheck {
   missing_required_roles: string[]
   missing_optional_roles: string[]
   recognized_roles: string[]
-  slots: Array<{ role: string; label: string; required: boolean; recognized: boolean }>
+  parameters?: Record<string, string>
+  slots: Array<{ role: string; label: string; required: boolean; recognized: boolean; file?: { display_name: string; relative_path: string } | null }>
 }
 
 export interface AgentAction {
@@ -833,7 +834,7 @@ export const api = {
         if (role) formData.append('role', role)
         return request<ToolRun>(`/tools/ecommerce-data-fill/drafts/${encodeURIComponent(draftId)}/files`, { method: 'POST', body: formData })
       },
-      precheckDraft: (draftId: string) => request<EcommercePrecheck>(`/tools/ecommerce-data-fill/drafts/${encodeURIComponent(draftId)}/precheck`),
+      precheckDraft: (draftId: string, parameters: Record<string, string> = {}) => request<EcommercePrecheck>(`/tools/ecommerce-data-fill/drafts/${encodeURIComponent(draftId)}/precheck`, { method: 'POST', body: JSON.stringify({ parameters }) }),
       confirmDraft: (draftId: string, parameters: Record<string, unknown>) => request<ToolRun>(
         `/tools/ecommerce-data-fill/drafts/${encodeURIComponent(draftId)}/confirm`,
         { method: 'POST', body: JSON.stringify({ parameters }) },

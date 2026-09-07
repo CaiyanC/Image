@@ -25,6 +25,7 @@ from ..models.knowledge_base import CustomerServiceConversation, CustomerService
 from ..models.product import Product
 from .customer_facing_answer_contract import CUSTOMER_FACING_ANSWER_CONTRACT, render_customer_answer
 from .customer_answer_consistency_contract import answer_consistency_issues, consistency_repair_instruction
+from . import customer_followup_context_contract as followup_context
 from . import (
     customer_agent_service,
     customer_enterprise_guardrail_service,
@@ -440,7 +441,15 @@ def _load_previous_turn_memory(
     memory.update({
         "last_question": _clip_text(answer_metadata.get("user_question"), 500),
         "answer_excerpt": _clip_text(row.content, 720),
+        # Server-produced purchase constraints survive a no-match turn; they
+        # are not inferred from recalled candidates or a model's failed choice.
     })
+    if "purchase_context" in answer_metadata:
+        memory["purchase_context"] = followup_context.normalize_purchase_context(answer_metadata["purchase_context"])
+    if not result_skus and answer_metadata.get("replacement_turn"):
+        preserved_anchor = (memory.get("purchase_context") or {}).get("anchor_sku")
+        if preserved_anchor:
+            memory["active_product_skus"] = [preserved_anchor]
     return memory
 
 
@@ -831,6 +840,16 @@ async def _generate_answer(
         "\u5373\u4f7f\u95ee\u9898\u5305\u542b\u5c1a\u672a\u767b\u8bb0\u7684\u7ef4\u5ea6\uff0c\u4e5f\u5fc5\u987b\u5148\u56de\u7b54 evidence \u80fd\u786e\u8ba4\u7684\u4e8b\u5b9e\uff0c\u518d\u8bf4\u660e\u7f3a\u5931\u7ef4\u5ea6\uff0c\u53ea\u8ffd\u95ee\u90a3\u4e00\u9879\u4fe1\u606f\uff1b\u4e0d\u8981\u628a\u201c\u7f3a\u5c11\u4e00\u4e2a\u5b57\u6bb5\u201d\u6269\u5927\u6210\u201c\u6ca1\u6709\u627e\u5230\u672c\u95ee\u9898\u4f9d\u636e\u201d\u3002\n"
     )
     system_prompt += "\n" + CUSTOMER_FACING_ANSWER_CONTRACT
+    system_prompt += (
+        "\n若有 replacement_context，这是仍有效的购买需求，换SKU不等于撤销用途、容量对象或供货条件。"
+        "只能推荐 replacement_eligible_skus 中的商品；其余商品可说明不适合，不能先推荐再承认不符合。"
+        "用户只要一款时，仅给最合适的一款，正文和selected_skus一致，不扩展未请求的备选。"
+        "轻重、大小比较必须与同口径数值一致：先统一单位，毛重只与毛重比较，"
+        "同一容量对象才能比较大小；毛重数值更大不能称更轻，口径不明不作比较结论。"
+        "炉芯燃料容量、杯容量不能代替烧水壶容量。没有满足项时selected_skus=[]、selection_state=no_match，"
+        "保留原需求未解决，不把失败候选记作已确认商品。"
+        "生命周期常规品不证明实时库存或正常供货承诺；没有库存证据时只说常规品，实际库存及发货需确认。"
+    )
     if _consistency_retry:
         system_prompt += "\n" + str(payload.get("answer_consistency_repair") or "")
     start = perf_counter()
@@ -1246,14 +1265,32 @@ async def ask_customer_service_workbuddy_rag(
         if not known_skus
         else []
     )
+    seed_skus = known_skus[:1] or anchor_skus[:1]
+    seed_details = _product_details(db, seed_skus, limit=1) if seed_skus else {}
+    last_user_question = next((str(item.get("content") or "") for item in reversed(history)
+                               if item.get("role") == "user"), "")
+    purchase_context, replacement_turn, reset_purchase_identity = followup_context.prepare_followup_context(
+        original_question,
+        previous=previous_turn_memory.get("purchase_context"),
+        anchor_product=seed_details.get(anchor_skus[0]) if anchor_skus else None,
+        last_user_question=last_user_question,
+        current_product=seed_details.get(known_skus[0]) if len(known_skus) == 1 else None,
+        has_current_subject=bool(known_skus or catalogue_subject_skus),
+    )
+    if reset_purchase_identity:
+        anchor_skus = []
+        context_candidates = []
+        previous_turn_memory = {}
     queries = _unique_queries(original_question, history)
+    if replacement_turn:
+        queries = [followup_context.retrieval_query(original_question, purchase_context)]
 
     # An explicit page/SKU identity scopes factual retrieval; conversational
     # memory and catalogue-name candidates do not create a hard catalogue
     # filter.  This lets a natural question recover the live product whose
     # profile/QA is most relevant instead of being trapped by a weak fuzzy
     # name candidate.
-    retrieval_scope_skus = list(dict.fromkeys(known_skus))
+    retrieval_scope_skus = [] if replacement_turn else list(dict.fromkeys(known_skus))
     scoped_skus = retrieval_scope_skus
     question_rows = await _retrieve_once(
         db,
@@ -1263,7 +1300,7 @@ async def ask_customer_service_workbuddy_rag(
     )
     retrieval_rows = list(question_rows)
     profile_rows: list[dict[str, Any]] = []
-    if not known_skus:
+    if not known_skus or replacement_turn:
         # A single live-profile pass complements the narrow question page.
         # It is catalogue recall only: the answer model still has to select a
         # SKU and bind every factual claim to same-SKU evidence.
@@ -1275,6 +1312,25 @@ async def ask_customer_service_workbuddy_rag(
         )
         retrieval_rows.extend(profile_rows)
     retrieved_skus = _fused_retrieved_skus([question_rows, profile_rows])
+    replacement_eligible_skus: list[str] = []
+    replacement_verifications: dict[str, list[str]] = {}
+    if replacement_turn:
+        # Check the bounded recall pages before the eight-card truncation.
+        # These are current same-SKU records, not category-string filters or
+        # permissions inferred from a vector score. No extra model invocation.
+        recall_pool = list(dict.fromkeys([
+            *retrieved_skus,
+            *_retrieved_skus(profile_rows, limit=48),
+            *_retrieved_skus(question_rows, limit=16),
+        ]))[:64]
+        recall_details = _product_details(db, recall_pool, limit=64)
+        replacement_verifications = {
+            item: followup_context.candidate_issues(detail, purchase_context)
+            for item, detail in recall_details.items()
+        }
+        replacement_eligible_skus = [item for item in recall_pool
+                                     if item in replacement_verifications and not replacement_verifications[item]]
+        retrieved_skus = list(dict.fromkeys([*replacement_eligible_skus, *retrieved_skus]))
     # A previous single-product/candidate context is the first discourse
     # reference for a follow-up.  Keep it in the candidate packet even when
     # the scoped RAG page returns a slightly different order.
@@ -1305,7 +1361,7 @@ async def ask_customer_service_workbuddy_rag(
     # neighbours must not enter the fact packet.  The model can still see the
     # full candidate card set for semantic choice, while only these subject
     # SKUs can contribute customer-visible facts this turn.
-    allowed_skus = set(known_skus or [*candidate_skus, *context_skus])
+    allowed_skus = set(known_skus if known_skus and not replacement_turn else [*candidate_skus, *context_skus])
     evidence = _build_evidence(
         retrieval_rows,
         product_details,
@@ -1359,6 +1415,14 @@ async def ask_customer_service_workbuddy_rag(
         experience_guidance=experience_guidance,
         active_context_products=active_context_products,
     )
+    if replacement_turn:
+        payload["replacement_context"] = purchase_context
+        payload["replacement_eligible_skus"] = [item for item in replacement_eligible_skus
+                                                if item in candidate_skus]
+        payload["replacement_verifications"] = {
+            item: replacement_verifications.get(item, ["not_verified"])
+            for item in candidate_skus
+        }
     async def buffer_until_validated(_delta: str) -> None:
         # Raw deltas may contain attribution or fail the identity contract.
         # Publish only the validated final answer through _persist_result.
@@ -1586,6 +1650,28 @@ async def ask_customer_service_workbuddy_rag(
         candidate_skus=candidate_skus,
         identity_ambiguity=identity_ambiguity,
     )
+    replacement_rejections: dict[str, list[str]] = {}
+    if replacement_turn:
+        # Check textual SKU references as well as optional selection metadata:
+        # a minimal answer must not bypass the gate by omitting selected_skus.
+        mentioned_skus = followup_context.mentioned_choices(answer, product_details)
+        chosen = list(dict.fromkeys([*result_skus, *mentioned_skus]))
+        checked = chosen
+        replacement_rejections = {
+            item: followup_context.candidate_issues(product_details.get(item, {}), purchase_context)
+            for item in checked
+        }
+        replacement_rejections = {item: issues for item, issues in replacement_rejections.items() if issues}
+        if followup_context.unsupported_stock_claim(answer):
+            replacement_rejections["inventory"] = ["live_inventory_unverified"]
+        if not checked and (raw_selection_state == "selected" or semantic_selection_answer):
+            replacement_rejections["selection"] = ["no_verified_selection"]
+        if replacement_rejections:
+            answer = followup_context.blocked_answer(purchase_context)
+            answer_type, needs_clarification = "clarification", True
+            result_skus, selected_evidence_ids, followups = [], [], []
+            raw_selection_state = "no_match"
+            confidence, uncertainty = "low", "unconfirmed"
     # The model's state is useful for diagnosis, but the public state must
     # describe the normalized result.  A model can say ``selected`` while
     # returning a clarification; in that case the selected SKU has already
@@ -1613,6 +1699,17 @@ async def ask_customer_service_workbuddy_rag(
     effective_identity_resolution = raw_identity_resolution
     if inferred_identity_resolution:
         effective_identity_resolution = "resolved"
+    # Only a validated, single actual result may establish a new reference.
+    # In particular a SKU-less first request must not persist an empty task
+    # after the answer has successfully confirmed one product. Recall pages,
+    # failed recommendations and explicit topic clears never seed this slot.
+    if len(result_skus) == 1 and answer_type != "clarification":
+        confirmed_product = product_details.get(result_skus[0])
+        if confirmed_product:
+            if purchase_context:
+                purchase_context = {**purchase_context, "anchor_sku": result_skus[0]}
+            else:
+                purchase_context = followup_context.seed_purchase_context(original_question, confirmed_product)
     working_memory_update = _normalize_working_memory_update(
         (answer_raw or {}).get("working_memory_update")
         if isinstance(answer_raw, dict)
@@ -1620,6 +1717,11 @@ async def ask_customer_service_workbuddy_rag(
         result_skus=result_skus,
         candidate_skus=candidate_skus_for_output,
     )
+    if replacement_turn and not result_skus:
+        # Keep the last confirmed reference, not the failed replacement. The
+        # loader obtains this separately from the model's result-bound memory.
+        working_memory_update["active_product_skus"] = []
+        working_memory_update["note"] = "替代需求尚未解决，候选不是已确认替代商品。"
     # Candidate recall is not a semantic product selection.  In particular,
     # a product QA question with several possible matches must remain a pure
     # clarification: exposing the whole recall page as result_skus makes the
@@ -1648,6 +1750,10 @@ async def ask_customer_service_workbuddy_rag(
         "llm_call_count": len(state.get("llm_calls") or []),
         "answer_llm_elapsed_ms": answer_metadata.get("elapsed_ms"),
         "working_memory_update": working_memory_update,
+        "purchase_context": purchase_context,
+        "replacement_turn": replacement_turn,
+        "replacement_rejections": replacement_rejections,
+        "purchase_identity_reset": reset_purchase_identity,
         "plan_available": False,
         "experience_guidance_count": len(experience_guidance),
         "experience_guidance_ids": customer_experience_rag_service.guidance_ids(experience_guidance),
@@ -1685,6 +1791,9 @@ async def ask_customer_service_workbuddy_rag(
         "selection_state": effective_selection_state,
         "model_selection_state": raw_selection_state,
         "selection_provenance_conflict": selection_provenance_conflict,
+        "replacement_turn": replacement_turn,
+        "replacement_eligible_skus": replacement_eligible_skus,
+        "replacement_rejections": replacement_rejections,
         "model_selected_skus": sorted(raw_selected_skus),
         "model_selected_evidence_ids": list(raw_selected_evidence_ids)[:12],
         "model_evidence_skus": evidence_skus_selected_by_llm,
@@ -1790,6 +1899,8 @@ async def _persist_result(
         conversation_id,
         pipeline=PIPELINE_VERSION,
     )
+    if (agent_result.get("answer_metadata") or {}).get("purchase_identity_reset") and not result_skus:
+        conversation.sku = None
     db.add(CustomerServiceMessage(
         conversation_id=conversation.id,
         role="user",

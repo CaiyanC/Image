@@ -13,7 +13,7 @@ from ..models.user import User
 from ..schemas.tool import ToolResponse, ToolRunConfirmRequest, ToolRunResponse
 from ..services import ecommerce_precheck_service, operation_log_service, tool_registry_service, tool_run_service
 from ..tasks.tool_runs import run_ecommerce_data_fill_tool_run
-from ..tool_runtimes.ecommerce_data_fill.runner import ToolRuntimeError, recognize_ecommerce_input_files
+from ..tool_runtimes.ecommerce_data_fill.runner import ToolRuntimeError, resolve_input_bindings, validate_parameters
 
 
 router = APIRouter(prefix="/api/tools", tags=["tools"])
@@ -43,19 +43,24 @@ def _ensure_draft_access(db: Session, run_id: str, user_id: str) -> ToolRun:
     return run
 
 
-def _precheck_draft(run: ToolRun) -> dict:
+def _precheck_draft(run: ToolRun, parameters: dict | None = None) -> dict:
     mode = str((run.parameters or {}).get("mode", ""))
     try:
-        roles = recognize_ecommerce_input_files(tool_run_service.input_directory(run))
+        normalized = validate_parameters(mode, parameters if parameters is not None else {
+            key: value for key, value in (run.parameters or {}).items() if key != "mode"
+        })
+        bindings = resolve_input_bindings(tool_run_service.input_directory(run), run.input_files or [])
     except ToolRuntimeError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-    roles.update(
-        str(item.get("manual_role"))
-        for item in (run.input_files or [])
-        if item.get("manual_role") in ecommerce_precheck_service.WORKFLOW_ROLE_ORDER[mode]
-    )
+    roles = set(bindings)
     result = ecommerce_precheck_service.build_precheck(mode, roles)
     result["recognized_roles"] = sorted(roles)
+    result["parameters"] = normalized
+    files_by_name = {item.get("storage_name"): item for item in (run.input_files or [])}
+    for slot in result["slots"]:
+        detected = bindings.get(slot["role"])
+        selected = files_by_name.get(detected.path.name) if detected is not None else None
+        slot["file"] = {key: selected[key] for key in ("display_name", "relative_path") if key in selected} if selected else None
     return result
 
 
@@ -111,6 +116,16 @@ def precheck_ecommerce_data_fill_draft(
     return _precheck_draft(_ensure_draft_access(db, draft_id, current_user.id))
 
 
+@router.post("/ecommerce-data-fill/drafts/{draft_id}/precheck")
+def precheck_ecommerce_data_fill_parameters(
+    draft_id: str,
+    payload: ToolRunConfirmRequest,
+    current_user: User = Depends(require_permission(ECOMMERCE_DATA_FILL_PERMISSION)),
+    db: Session = Depends(get_db),
+):
+    return _precheck_draft(_ensure_draft_access(db, draft_id, current_user.id), payload.parameters)
+
+
 @router.post("/ecommerce-data-fill/drafts/{draft_id}/confirm", response_model=ToolRunResponse)
 def confirm_ecommerce_data_fill_draft(
     draft_id: str,
@@ -120,10 +135,10 @@ def confirm_ecommerce_data_fill_draft(
     db: Session = Depends(get_db),
 ):
     draft = _ensure_draft_access(db, draft_id, current_user.id)
-    precheck = _precheck_draft(draft)
+    precheck = _precheck_draft(draft, payload.parameters)
     if not precheck["can_run"]:
         raise HTTPException(status_code=400, detail="Precheck has missing required files")
-    draft.parameters = {**payload.parameters, "mode": precheck["mode"]}
+    draft.parameters = {**precheck["parameters"], "mode": precheck["mode"]}
     draft.status = "queued"
     db.commit()
     db.refresh(draft)
@@ -155,6 +170,10 @@ def create_ecommerce_data_fill_run(
         raise HTTPException(status_code=400, detail="Invalid tool parameters") from exc
     if not isinstance(parameters, dict):
         raise HTTPException(status_code=400, detail="Invalid tool parameters")
+    try:
+        parameters = validate_parameters(mode, parameters)
+    except ToolRuntimeError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     tool = _get_ecommerce_tool(db)
     run = tool_run_service.create_run(
         db,
