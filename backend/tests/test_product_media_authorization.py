@@ -844,7 +844,7 @@ class ProductMediaAuthorizationTest(unittest.TestCase):
         self.permissions("product.create")
         self.assertEqual(self.client.get("/api/products/A").status_code, 403)
         self.permissions("product.read")
-        self.assertEqual(self.client.get("/api/products/A").status_code, 200)
+        self.assertEqual(self.client.get("/api/products/A").status_code, 403)
 
     def test_edit_only_can_load_create_read_update_and_publish_existing_product_draft(self):
         self.media(review_status="approved")

@@ -50,12 +50,12 @@ from src.workbook_copier import copy_workbook
 EXPECTED_ROLES = ["w27_target", "kepule_target", *PRIMARY_SOURCE_ROLES, "jd_amazon_inventory", "domestic_sales_ranking"]
 
 
-def run_amazon_inventory_fill(input_dir: str, output_dir: str) -> int:
+def run_amazon_inventory_fill(input_dir: str, output_dir: str, *, _detections=None) -> int:
     """Run the standalone three-file Amazon inventory workflow."""
     source_dir = Path(input_dir)
     destination = Path(output_dir)
     destination.mkdir(parents=True, exist_ok=True)
-    detections = _detect_files([entry.path for entry in scan_excel_files(source_dir, destination, recursive=True).input_files])
+    detections = _detections if _detections is not None else _detect_files([entry.path for entry in scan_excel_files(source_dir, destination, recursive=True).input_files])
     role_files = {role: detection.path for role, detection in detections.items() if detection.path}
     required = ("amazon_inventory_target", "amazon_inventory_weekly", "fba_inventory")
     missing = [role_display_name(role) for role in required if role not in role_files]
@@ -85,11 +85,11 @@ def _workflow_config(input_dir: str, output_dir: str, values: dict[str, str | No
     return runtime, resolve_fill_config(cli_values=values, rule_values=rules, inferred_values={})
 
 
-def run_ecommerce_fill(input_dir: str, output_dir: str, **values: str | None) -> int:
+def run_ecommerce_fill(input_dir: str, output_dir: str, *, _detections=None, **values: str | None) -> int:
     """Fill only the e-commerce analysis workbook and its two business sheets."""
     runtime, fill_config = _workflow_config(input_dir, output_dir, values)
     runtime.output_dir.mkdir(parents=True, exist_ok=True)
-    detections = _detect_files([entry.path for entry in scan_excel_files(runtime.input_dir, runtime.output_dir).input_files])
+    detections = _detections if _detections is not None else _detect_files([entry.path for entry in scan_excel_files(runtime.input_dir, runtime.output_dir).input_files])
     if "w27_target" not in detections:
         raise ValueError("电商数据表填写缺少：W27周电商数据分析表目标模板")
     issues: list[Issue] = []
@@ -120,11 +120,11 @@ def run_ecommerce_fill(input_dir: str, output_dir: str, **values: str | None) ->
     return 0
 
 
-def run_kepule_fill(input_dir: str, output_dir: str, **values: str | None) -> int:
+def run_kepule_fill(input_dir: str, output_dir: str, *, _detections=None, **values: str | None) -> int:
     """Fill only the Kepule week/month workbook and its source sheets."""
     runtime, fill_config = _workflow_config(input_dir, output_dir, values)
     runtime.output_dir.mkdir(parents=True, exist_ok=True)
-    detections = _detect_files([entry.path for entry in scan_excel_files(runtime.input_dir, runtime.output_dir).input_files])
+    detections = _detections if _detections is not None else _detect_files([entry.path for entry in scan_excel_files(runtime.input_dir, runtime.output_dir).input_files])
     if "kepule_target" not in detections:
         raise ValueError("周月报填写缺少：开普乐周月报统一数据源目标模板")
     issues: list[Issue] = []

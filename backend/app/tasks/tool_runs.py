@@ -16,7 +16,7 @@ def run_ecommerce_data_fill_tool_run(run_id: str) -> dict:
         root = tool_run_service.run_directory(run.id)
         parameters = dict(run.parameters or {})
         mode = str(parameters.pop("mode", ""))
-        outputs = run_ecommerce_data_fill(mode, root / "input", root / "output", parameters)
+        outputs = run_ecommerce_data_fill(mode, root / "input", root / "output", parameters, input_files=run.input_files or [])
         output_files = [
             {
                 "display_name": path.name,

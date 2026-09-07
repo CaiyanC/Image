@@ -183,7 +183,7 @@ def search_products(
 @router.post("/advanced-search")
 def advanced_search_products(
     body: ProductAdvancedSearchRequest,
-    current_user: User = Depends(require_product_permission("read")),
+    current_user: User = Depends(require_any_permission("product.full.view", "product.edit")),
     db: Session = Depends(get_db),
 ):
     items, total = product_service.advanced_search_products(db, body.model_dump())
@@ -192,7 +192,7 @@ def advanced_search_products(
 
 @router.get("/filter-options")
 def get_product_filter_options(
-    current_user: User = Depends(require_product_permission("read")),
+    current_user: User = Depends(require_any_permission("product.full.view", "product.edit")),
     db: Session = Depends(get_db),
 ):
     return product_service.get_product_filter_options(db)
@@ -256,7 +256,7 @@ def get_product_full_view(
 @router.get("/by-sku/{sku}")
 def get_product_by_sku(
     sku: str,
-    current_user: User = Depends(require_any_permission("product.read", "product.edit")),
+    current_user: User = Depends(require_any_permission("product.full.view", "product.edit")),
     db: Session = Depends(get_db),
 ):
     return product_service.get_product_detail(db, sku)
@@ -265,7 +265,7 @@ def get_product_by_sku(
 @router.get("/{sku}")
 def get_product(
     sku: str,
-    current_user: User = Depends(require_any_permission("product.read", "product.edit")),
+    current_user: User = Depends(require_any_permission("product.full.view", "product.edit")),
     db: Session = Depends(get_db),
 ):
     return product_service.get_product_detail(db, sku)
