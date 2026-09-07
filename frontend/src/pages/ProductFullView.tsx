@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
-import { api, type ProductAuditItem } from '../services/api'
+import { api } from '../services/api'
 import type { Product } from '../types'
 import { useAuthStore } from '../store/authStore'
 
@@ -176,15 +176,16 @@ function CollectionSection({ title, items, fields, emptyText }: { title: string;
 export default function ProductFullView() {
   const navigate = useNavigate()
   const [searchParams, setSearchParams] = useSearchParams()
-  const { user, isManagement } = useAuthStore()
-  const [catalog, setCatalog] = useState<ProductAuditItem[]>([])
+  const { user } = useAuthStore()
+  const [catalog, setCatalog] = useState<Array<Pick<Product, 'sku' | 'product_name_cn' | 'product_name_en' | 'brand'>>>([])
   const [query, setQuery] = useState('')
   const [product, setProduct] = useState<Product | null>(null)
   const [loadingCatalog, setLoadingCatalog] = useState(true)
   const [loadingProduct, setLoadingProduct] = useState(false)
   const [error, setError] = useState('')
 
-  const canEdit = isManagement || !!user?.permissions?.includes('product.edit')
+  const canEdit = !!user?.permissions?.includes('product.edit')
+  const canAudit = !!user?.permissions?.includes('product.audit.view')
   const selectedSku = searchParams.get('sku') || ''
   const filteredCatalog = useMemo(() => {
     const text = query.trim().toLowerCase()
@@ -195,25 +196,27 @@ export default function ProductFullView() {
   useEffect(() => {
     let active = true
     setLoadingCatalog(true)
-    api.products.auditOverview({ limit: 500 }).then((data) => {
+    const timer = window.setTimeout(() => api.products.candidates('full', query, 100).then((data) => {
       if (active) setCatalog(data.items)
     }).catch((err) => {
       if (active) setError(err instanceof Error ? err.message : '加载产品目录失败')
     }).finally(() => {
       if (active) setLoadingCatalog(false)
-    })
-    return () => { active = false }
-  }, [])
+    }), 250)
+    return () => { active = false; window.clearTimeout(timer) }
+  }, [query])
 
   useEffect(() => {
     if (!selectedSku) {
       setProduct(null)
+      setLoadingProduct(false)
       return
     }
     let active = true
+    setProduct(null)
     setLoadingProduct(true)
     setError('')
-    api.products.get(selectedSku).then((data) => {
+    api.products.fullView(selectedSku).then((data) => {
       if (active) setProduct(data)
     }).catch((err) => {
       if (active) setError(err instanceof Error ? err.message : '加载产品详情失败')
@@ -239,7 +242,7 @@ export default function ProductFullView() {
           <p className="mt-2 max-w-3xl text-sm leading-6 text-apple-gray-medium">面向产品核对的业务视图：保留完整业务字段，隐藏系统 ID、时间戳、排序和文件技术元数据，让内容更容易阅读和核对。</p>
         </div>
         <div className="flex flex-wrap gap-2">
-          <button onClick={() => navigate('/products/audit')} className="rounded-xl border border-black/10 bg-white/70 px-4 py-2 text-sm font-semibold text-apple-text">返回产品核对</button>
+          {canAudit && <button onClick={() => navigate('/products/audit')} className="rounded-xl border border-black/10 bg-white/70 px-4 py-2 text-sm font-semibold text-apple-text">返回产品核对</button>}
           {product && canEdit && <button onClick={() => navigate(`/products/edit/${encodeURIComponent(product.sku)}`)} className="btn-primary px-4 py-2 text-sm">编辑此产品</button>}
         </div>
       </div>
@@ -247,18 +250,19 @@ export default function ProductFullView() {
       <section className="mt-6 rounded-3xl border border-black/5 bg-white/70 p-4 shadow-sm sm:p-5">
         <div className="flex flex-col gap-3 lg:flex-row lg:items-center">
           <div className="min-w-0 flex-1">
-            <div className="text-xs font-bold text-apple-gray-medium">选择产品（全部 {catalog.length || '…'} 个）</div>
+            <div className="text-xs font-bold text-apple-gray-medium">选择产品（当前 {catalog.length} 个，最多显示 100 个，可搜索更多）</div>
             <div className="mt-2 flex flex-col gap-2 sm:flex-row">
               <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="搜索 SKU、产品名或品牌" className="w-full rounded-xl border border-black/10 bg-white px-3 py-2 text-sm outline-none ring-teal-500 focus:ring-2 sm:max-w-sm" />
               <select value={selectedSku} onChange={(event) => chooseProduct(event.target.value)} className="w-full rounded-xl border border-black/10 bg-white px-3 py-2 text-sm outline-none sm:flex-1">
                 <option value="">请选择一个产品</option>
+                {selectedSku && !filteredCatalog.some((item) => item.sku === selectedSku) && <option value={selectedSku}>{selectedSku} · 当前选择</option>}
                 {filteredCatalog.map((item) => <option key={item.sku} value={item.sku}>{item.sku} · {item.product_name_cn || item.product_name_en || '未命名'}{item.brand ? ` · ${item.brand}` : ''}</option>)}
               </select>
             </div>
           </div>
           {selectedSku && <div className="rounded-2xl bg-teal-50 px-4 py-3 text-sm font-bold text-teal-800">当前：{selectedSku}</div>}
         </div>
-        {loadingCatalog && <div className="mt-3 text-xs text-apple-gray-medium">正在加载全部产品目录…</div>}
+        {loadingCatalog && <div className="mt-3 text-xs text-apple-gray-medium">正在加载产品目录…</div>}
       </section>
 
       {error && <div className="mt-5 rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">{error}</div>}

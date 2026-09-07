@@ -15,14 +15,14 @@ const ISSUE_LABELS: Record<string, string> = {
 
 export default function ProductAuditOverview() {
   const navigate = useNavigate()
-  const { user, isManagement } = useAuthStore()
+  const { user } = useAuthStore()
   const [data, setData] = useState<ProductAuditOverview | null>(null)
   const [query, setQuery] = useState('')
   const [issuesOnly, setIssuesOnly] = useState(false)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
 
-  const can = (permission: string) => isManagement || !!user?.permissions?.includes(permission)
+  const can = (permission: string) => !!user?.permissions?.includes(permission)
 
   async function load(nextIssuesOnly = issuesOnly) {
     setLoading(true)
@@ -57,9 +57,9 @@ export default function ProductAuditOverview() {
           </p>
         </div>
         <div className="flex flex-wrap gap-2">
-          <button onClick={() => navigate('/products/full-view')} className="rounded-xl border border-teal-200 bg-teal-50 px-4 py-2 text-sm font-semibold text-teal-800 hover:bg-teal-100">
+          {can('product.full.view') && <button onClick={() => navigate('/products/full-view')} className="rounded-xl border border-teal-200 bg-teal-50 px-4 py-2 text-sm font-semibold text-teal-800 hover:bg-teal-100">
             全字段长视图
-          </button>
+          </button>}
           {can('product.create') && (
             <button onClick={() => navigate('/products/create')} className="btn-primary px-4 py-2 text-sm">
               新增产品
@@ -93,7 +93,7 @@ export default function ProductAuditOverview() {
             <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
               <div>
                 <h2 className="text-lg font-black text-apple-text">全部产品</h2>
-                <p className="mt-1 text-xs text-apple-gray-medium">当前显示 {data.pagination.total} 条；点击 SKU 可进入原有产品详情核对。</p>
+                <p className="mt-1 text-xs text-apple-gray-medium">当前显示 {data.pagination.returned} 条，共 {data.pagination.total} 条；操作入口按各项权限显示。</p>
               </div>
               <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
                 <input
@@ -125,7 +125,7 @@ export default function ProductAuditOverview() {
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-black/5 bg-white/60">
-                  {data.items.map((item) => <AuditRow key={item.id} item={item} canEdit={can('product.edit')} onOpen={openProduct} onEdit={(sku) => navigate(`/products/edit/${encodeURIComponent(sku)}`)} onAssets={(sku) => navigate(`/assets?sku=${encodeURIComponent(sku)}`)} onQa={(sku) => navigate(`/products/qa/new?sku=${encodeURIComponent(sku)}`)} />)}
+                  {data.items.map((item) => <AuditRow key={item.id} item={item} canEdit={can('product.edit')} canRead={can('product.read')} canAssets={can('media.read')} canQa={can('product.qa.manage') || can('product.edit')} onOpen={openProduct} onEdit={(sku) => navigate(`/products/edit/${encodeURIComponent(sku)}`)} onAssets={(sku) => navigate(`/assets?sku=${encodeURIComponent(sku)}`)} onQa={(sku) => navigate(`/products/qa/new?sku=${encodeURIComponent(sku)}`)} />)}
                 </tbody>
               </table>
               {!data.items.length && <div className="px-4 py-10 text-center text-sm text-apple-gray-medium">没有符合条件的产品。</div>}
@@ -148,15 +148,15 @@ function StatusCard({ title, items }: { title: string; items: Array<[string, num
   return <div className="rounded-2xl border border-black/5 bg-white/60 p-4"><div className="text-sm font-black text-apple-text">{title}</div><div className="mt-3 grid grid-cols-3 gap-2">{items.map(([label, value, color]) => <div key={label}><div className="text-xs text-apple-gray-medium">{label}</div><div className={`mt-1 text-lg font-black ${color}`}>{value.toLocaleString()}</div></div>)}</div></div>
 }
 
-function AuditRow({ item, canEdit, onOpen, onEdit, onAssets, onQa }: { item: ProductAuditItem; canEdit: boolean; onOpen: (sku: string) => void; onEdit: (sku: string) => void; onAssets: (sku: string) => void; onQa: (sku: string) => void }) {
+function AuditRow({ item, canEdit, canRead, canAssets, canQa, onOpen, onEdit, onAssets, onQa }: { item: ProductAuditItem; canEdit: boolean; canRead: boolean; canAssets: boolean; canQa: boolean; onOpen: (sku: string) => void; onEdit: (sku: string) => void; onAssets: (sku: string) => void; onQa: (sku: string) => void }) {
   return <tr className="align-top hover:bg-teal-50/40">
-    <td className="px-3 py-3"><button onClick={() => onOpen(item.sku)} className="text-left"><div className="font-mono text-xs font-black text-teal-800">{item.sku}</div><div className="mt-1 max-w-[210px] font-semibold text-apple-text">{item.product_name_cn || item.product_name_en || '未命名'}</div><div className="mt-1 text-xs text-apple-gray-medium">{item.category || '未分类'}{item.sub_category ? ` · ${item.sub_category}` : ''}</div></button></td>
+    <td className="px-3 py-3"><button disabled={!canRead} onClick={() => onOpen(item.sku)} className="text-left disabled:cursor-default"><div className="font-mono text-xs font-black text-teal-800">{item.sku}</div><div className="mt-1 max-w-[210px] font-semibold text-apple-text">{item.product_name_cn || item.product_name_en || '未命名'}</div><div className="mt-1 text-xs text-apple-gray-medium">{item.category || '未分类'}{item.sub_category ? ` · ${item.sub_category}` : ''}</div></button></td>
     <td className="px-3 py-3"><StatusPill ok={item.record.complete} text={item.record.complete ? '完整' : `缺 ${item.record.missing_fields.length} 项`} /><div className="mt-2 max-w-[180px] text-xs leading-5 text-apple-gray-medium">{item.record.missing_fields.join('、') || '必填字段齐全'}</div></td>
     <td className="px-3 py-3"><div className="font-bold text-apple-text">{item.qa.total} 条</div><div className="mt-1 text-xs leading-5 text-apple-gray-medium">已审 {item.qa.approved} · 待审 {item.qa.review}</div></td>
     <td className="px-3 py-3"><div className="font-bold text-apple-text">{item.assets.total} 张/个</div><div className="mt-1 text-xs leading-5 text-apple-gray-medium">已审 {item.assets.approved} · 待审 {item.assets.pending}</div><div className="text-xs leading-5 text-apple-gray-medium">无效 {item.assets.invalid} · 重复 {item.assets.duplicates}</div></td>
     <td className="px-3 py-3"><StatusPill ok={item.vector.ready} text={item.vector.ready ? '已就绪' : item.vector.chunks ? '需处理' : '缺失'} /><div className="mt-2 text-xs leading-5 text-apple-gray-medium">{item.vector.chunks} chunks · 同步 {item.vector.synced}</div></td>
     <td className="px-3 py-3"><div className="flex max-w-[180px] flex-wrap gap-1">{item.issues.length ? item.issues.map((issue) => <span key={issue} className="rounded-full bg-amber-50 px-2 py-1 text-[11px] font-semibold text-amber-800">{ISSUE_LABELS[issue] || issue}</span>) : <span className="rounded-full bg-emerald-50 px-2 py-1 text-[11px] font-semibold text-emerald-800">未发现阻塞</span>}</div></td>
-    <td className="px-3 py-3"><div className="flex min-w-[190px] flex-wrap justify-end gap-1.5"><button onClick={() => onOpen(item.sku)} className="rounded-lg px-2 py-1 text-xs font-semibold text-teal-700 hover:bg-teal-50">查看</button>{canEdit && <button onClick={() => onEdit(item.sku)} className="rounded-lg px-2 py-1 text-xs font-semibold text-blue-700 hover:bg-blue-50">编辑</button>}<button onClick={() => onAssets(item.sku)} className="rounded-lg px-2 py-1 text-xs font-semibold text-slate-700 hover:bg-slate-100">素材</button>{canEdit && <button onClick={() => onQa(item.sku)} className="rounded-lg px-2 py-1 text-xs font-semibold text-slate-700 hover:bg-slate-100">加 QA</button>}</div></td>
+    <td className="px-3 py-3"><div className="flex min-w-[190px] flex-wrap justify-end gap-1.5">{canRead && <button onClick={() => onOpen(item.sku)} className="rounded-lg px-2 py-1 text-xs font-semibold text-teal-700 hover:bg-teal-50">查看</button>}{canEdit && <button onClick={() => onEdit(item.sku)} className="rounded-lg px-2 py-1 text-xs font-semibold text-blue-700 hover:bg-blue-50">编辑</button>}{canAssets && <button onClick={() => onAssets(item.sku)} className="rounded-lg px-2 py-1 text-xs font-semibold text-slate-700 hover:bg-slate-100">素材</button>}{canQa && <button onClick={() => onQa(item.sku)} className="rounded-lg px-2 py-1 text-xs font-semibold text-slate-700 hover:bg-slate-100">加 QA</button>}</div></td>
   </tr>
 }
 

@@ -32,6 +32,17 @@ type Selection =
   | null
 
 const PERMISSION_LABELS: Record<string, string> = {
+  'tools.view': '查看工具中心',
+  'tool.manage': '管理工具目录',
+  'finance.ecommerce_data_fill': '电商数据自动填表',
+  'system.admin': '组织与系统管理',
+  'product.audit.view': '查看产品核对',
+  'product.full.view': '查看产品全字段',
+  'media.read': '查看素材库',
+  'media.search': '检索素材',
+  'knowledge.manage': '知识库运维',
+  'knowledge.files.manage': '管理文件知识库',
+  'knowledge.sync': '同步知识库',
   'history.view': '查看历史记录',
   'profile.view': '查看个人资料',
   'category.read': '查看产品品类',
@@ -54,6 +65,46 @@ const PERMISSION_LABELS: Record<string, string> = {
   'export.approved': '导出审批',
 }
 
+const PERMISSION_PURPOSES: Record<string, string> = {
+  'tools.view': '进入工具中心；其中每个工具仍需各自的业务权限。',
+  'tool.manage': '预留权限：尚无独立执行链，不生效且暂不可配置。工具后台仅限平台管理员。',
+  'finance.ecommerce_data_fill': '使用电商数据自动填表；可独立进入，无需工具中心权限。',
+  'system.admin': '平台管理员身份标识，不能靠部门勾选授予。后台仅限总经办或 IT部的组管理员；其他部门管理员无此权限。',
+  'product.read': '查看产品列表和基础详情；不含产品核对、全字段视图或素材库入口。',
+  'product.audit.view': '只读查看全部产品的字段完整性、QA、素材和向量状态。',
+  'product.full.view': '只读查看所选产品的完整业务字段；不授予编辑权限。',
+  'media.read': '浏览 SKU 素材库和预览；下载原文件另需 media.download。',
+  'media.search': '按 SKU、渠道、标签等条件跨产品检索素材；素材库入口另需 media.read。',
+  'knowledge.manage': '进入产品知识库运维，查看知识分片、状态和任务；同步操作另需 knowledge.sync。',
+  'knowledge.files.manage': '进入文件知识库并管理知识文件；不自动获得产品知识库运维权限。',
+  'knowledge.sync': '执行知识同步、向量化等操作；相关页面仍需对应知识库页面权限。',
+  'product.qa.manage': '选择产品并录入 QA，提交审核与同步；不授予其他产品字段的编辑权限。',
+  'product.create': '进入新增产品流程，创建产品资料。',
+  'product.edit': '编辑已有产品资料，也可录入 QA；素材写入仍需对应素材权限。',
+  'product.delete': '删除产品资料；产品列表入口仍需 product.read。',
+  'product.review': '预留权限：尚无独立产品审核执行链，不生效且暂不可配置。',
+  'media.upload': '上传和维护素材，须同时具备 product.edit；不自动获得审核、标签或下载权限。',
+  'media.review': '更改素材审核、授权和风险状态；仍需素材写入权限。',
+  'media.download': '通过下载入口获取产品素材原文件；不限制浏览器保存已经可见的预览。',
+  'tag.edit': '修改素材标签；仍需素材写入权限。',
+  'ai.generate': '进入创作工作区生成图片或视频；模型和额度还受模型治理配置控制。',
+  'ai.customer_service': '使用智能客服及 Agent 对话、历史和反馈；不授予知识库运维权限。',
+  'ai.call': '调用 AI 基础能力；业务入口和模型授权仍单独控制。',
+  'ai.authorize': '预留权限：尚无独立 AI 授权执行链，不生效且暂不可配置。',
+  'history.view': '进入生成历史记录页面，查看当前账号可见的任务记录。',
+  'profile.view': '进入个人资料页；没有此权限仍可登录并使用其他已授权功能。',
+  'category.read': '读取产品品类候选数据；不授予产品编辑权限。',
+  'competitor.view': '预留权限：尚无独立竞品查看执行链，不生效且暂不可配置。',
+  'new_product.view': '预留权限：尚无独立新品查看执行链，不生效且暂不可配置。',
+  'export.approved': '预留权限：尚无独立导出审批执行链，不生效且暂不可配置。',
+}
+
+const RESERVED_PERMISSIONS = new Set(['system.admin', 'product.review', 'competitor.view', 'new_product.view', 'export.approved', 'ai.authorize', 'tool.manage'])
+
+function purposeForPermission(permission: Permission) {
+  return PERMISSION_PURPOSES[permission.permission_key] || permission.description || `授予“${labelForPermission(permission)}”能力；具体操作以服务端权限校验为准。`
+}
+
 const TYPE_LABELS: Record<string, string> = {
   api: 'AI 与接口能力',
   page: '页面访问',
@@ -61,11 +112,15 @@ const TYPE_LABELS: Record<string, string> = {
 }
 
 function labelForPermission(permission: Permission) {
-  return PERMISSION_LABELS[permission.permission_key] || permission.permission_name || permission.permission_key
+  if (permission.permission_key === 'system.admin') return '组织与系统管理（平台身份决定）'
+  const label = PERMISSION_LABELS[permission.permission_key] || permission.permission_name || permission.permission_key
+  return RESERVED_PERMISSIONS.has(permission.permission_key) ? `${label}（预留）` : label
 }
 
 function permissionLabelByKey(permissionKey: string) {
-  return PERMISSION_LABELS[permissionKey] || permissionKey
+  if (permissionKey === 'system.admin') return '组织与系统管理（平台身份决定）'
+  const label = PERMISSION_LABELS[permissionKey] || permissionKey
+  return RESERVED_PERMISSIONS.has(permissionKey) ? `${label}（预留，不生效）` : label
 }
 
 export default function AdminAccessControl() {
@@ -433,6 +488,7 @@ export default function AdminAccessControl() {
   }
 
   function togglePermission(permissionKey: string) {
+    if (RESERVED_PERMISSIONS.has(permissionKey)) return
     setSelectedPermissions((current) => current.includes(permissionKey)
       ? current.filter((item) => item !== permissionKey)
       : [...current, permissionKey])
@@ -445,7 +501,8 @@ export default function AdminAccessControl() {
     try {
       await api.groups.updatePermissions(selectedGroup.id, selectedPermissions)
       await Promise.all([refreshGroupDetails(selectedGroup.id), reloadUsers()])
-      setMessage(`${selectedGroup.group_name} 的权限已更新，成员登录后立即按新权限生效`)
+      await useAuthStore.getState().refreshAuth(true)
+      setMessage(`${selectedGroup.group_name} 的权限已更新。服务端立即校验；在线页面切换、恢复窗口或最多约一分钟内会刷新菜单。`)
     } catch (err) {
       setError(err instanceof Error ? err.message : '保存部门权限失败')
     } finally {
@@ -476,6 +533,7 @@ export default function AdminAccessControl() {
           <p className="text-sm font-bold uppercase tracking-[0.16em] text-teal-700">Administration / Access</p>
           <h1 className="mt-2 text-3xl font-black tracking-tight text-apple-text">组织与权限</h1>
           <p className="mt-2 max-w-2xl text-sm leading-6 text-apple-gray-medium">用户归属、部门成员、部门权限和账号操作集中在这里设置。先选左侧的用户或部门，右侧直接完成配置。</p>
+          <p className="mt-2 max-w-3xl text-xs leading-5 text-amber-800">有效权限合并用户所在的所有部门，取消一个部门的勾选不会移除其他部门的授权。平台管理员例外：总经办或 IT部的组管理员由服务端授予全部权限，不受部门勾选限制；普通成员及其他部门的组管理员不享有此例外。</p>
         </div>
         <div className="flex flex-wrap gap-2">
           <button onClick={openCreateUser} className="btn-primary px-4 py-2 text-sm">+ 新增用户</button>
@@ -566,7 +624,7 @@ export default function AdminAccessControl() {
               <div className="grid gap-5 lg:grid-cols-[minmax(280px,0.85fr)_minmax(0,1.15fr)]">
                         <section className="glass rounded-3xl p-6"><div className="flex items-start justify-between gap-3"><div><h3 className="text-lg font-black text-apple-text">部门成员</h3><p className="mt-1 text-xs leading-5 text-apple-gray-medium">成员和权限在同一个部门面板里处理。</p></div><span className="rounded-full bg-teal-50 px-3 py-1 text-xs font-bold text-teal-700">{groupDetailsLoading ? '加载中' : `${members.length} 人`}</span></div><form onSubmit={handleAddMember} className="mt-5 space-y-2"><select value={addMemberForm.user_id} onChange={(event) => setAddMemberForm({ ...addMemberForm, user_id: event.target.value })} disabled={groupDetailsLoading || !availableMembers.length} className="glass-input w-full px-3 py-2 text-sm"><option value="">{groupDetailsLoading ? '正在加载成员...' : availableMembers.length ? '添加现有用户...' : '没有可添加的用户'}</option>{availableMembers.map((user) => <option key={user.id} value={user.id}>{user.display_name || user.username}</option>)}</select><div className="flex gap-2"><select value={addMemberForm.group_role} onChange={(event) => setAddMemberForm({ ...addMemberForm, group_role: event.target.value })} disabled={groupDetailsLoading} className="glass-input flex-1 px-3 py-2 text-sm"><option value="member">普通成员</option><option value="admin">组管理员</option></select><button type="submit" disabled={groupDetailsLoading || !addMemberForm.user_id} className="rounded-xl bg-teal-700 px-4 py-2 text-sm font-bold text-white disabled:opacity-40">添加成员</button></div></form><div className="mt-5 space-y-2">{groupDetailsLoading && <p className="rounded-2xl bg-white/60 px-3 py-4 text-xs text-apple-gray-medium">正在加载部门成员...</p>}{!groupDetailsLoading && members.map((member) => { const user = users.find((item) => item.id === member.user_id); return <div key={member.user_id} className="rounded-2xl border border-black/5 bg-white/60 p-3"><div className="flex items-center justify-between gap-2"><button type="button" onClick={() => setSelection({ kind: 'user', id: member.user_id })} className="min-w-0 text-left"><p className="truncate text-sm font-bold text-apple-text">{member.username}</p><p className="mt-0.5 truncate text-xs text-apple-gray-medium">{member.email || '未填写邮箱'}</p></button><span className={`shrink-0 text-[11px] font-bold ${user?.is_active ? 'text-emerald-600' : 'text-red-500'}`}>{user?.is_active ? '启用' : '禁用'}</span></div><div className="mt-3 flex items-center justify-between gap-2"><select value={member.group_role} onChange={(event) => void handleChangeRole(member.user_id, event.target.value)} className="glass-input px-2 py-1 text-xs"><option value="member">普通成员</option><option value="admin">组管理员</option></select><button type="button" onClick={() => void handleRemoveMember(member.user_id)} className="text-xs font-bold text-red-500 hover:underline">移出部门</button></div></div>})}{!groupDetailsLoading && !members.length && <p className="rounded-2xl bg-amber-50 px-3 py-4 text-xs leading-5 text-amber-800">暂无成员。可以先在上方添加用户，或从左侧选用户后添加部门。</p>}</div></section>
 
-                        <section className="glass rounded-3xl p-6"><div className="flex flex-wrap items-start justify-between gap-3"><div><h3 className="text-lg font-black text-apple-text">部门权限</h3><p className="mt-1 text-xs leading-5 text-apple-gray-medium">勾选后，该部门下所有成员都会继承这些能力。</p></div><button onClick={handleSavePermissions} disabled={saving || groupDetailsLoading} className="btn-primary px-4 py-2 text-sm disabled:opacity-50">{groupDetailsLoading ? '加载中...' : saving ? '保存中...' : '保存权限'}</button></div><div className="mt-5 space-y-5">{groupDetailsLoading ? <p className="rounded-2xl bg-white/60 px-3 py-4 text-xs text-apple-gray-medium">正在加载部门权限...</p> : Object.entries(groupedPermissions).map(([type, items]) => <div key={type}><h4 className="mb-2 text-xs font-black text-apple-gray-dark">{TYPE_LABELS[type] || '其他权限'}</h4><div className="grid gap-2 md:grid-cols-2">{items.map((permission) => <label key={permission.permission_key} className="flex cursor-pointer items-start gap-3 rounded-2xl border border-black/5 bg-white/60 p-3 transition hover:bg-white"><input type="checkbox" checked={selectedPermissions.includes(permission.permission_key)} onChange={() => togglePermission(permission.permission_key)} className="mt-1" /><span><span className="block text-sm font-bold text-apple-text">{labelForPermission(permission)}</span>{permission.description && <span className="mt-0.5 block text-[11px] leading-4 text-apple-gray-medium">{permission.description}</span>}</span></label>)}</div></div>)}</div></section>
+                        <section className="glass rounded-3xl p-6"><div className="flex flex-wrap items-start justify-between gap-3"><div><h3 className="text-lg font-black text-apple-text">部门权限</h3><p className="mt-1 text-xs leading-5 text-apple-gray-medium">勾选后，该部门下所有成员都会继承这些能力。</p></div><button onClick={handleSavePermissions} disabled={saving || groupDetailsLoading} className="btn-primary px-4 py-2 text-sm disabled:opacity-50">{groupDetailsLoading ? '加载中...' : saving ? '保存中...' : '保存权限'}</button></div><div className="mt-5 space-y-5">{groupDetailsLoading ? <p className="rounded-2xl bg-white/60 px-3 py-4 text-xs text-apple-gray-medium">正在加载部门权限...</p> : Object.entries(groupedPermissions).map(([type, items]) => <div key={type}><h4 className="mb-2 text-xs font-black text-apple-gray-dark">{TYPE_LABELS[type] || '其他权限'}</h4><div className="grid gap-2 md:grid-cols-2">{items.map((permission) => <label key={permission.permission_key} className="flex cursor-pointer items-start gap-3 rounded-2xl border border-black/5 bg-white/60 p-3 transition hover:bg-white"><input type="checkbox" disabled={RESERVED_PERMISSIONS.has(permission.permission_key)} checked={selectedPermissions.includes(permission.permission_key)} onChange={() => togglePermission(permission.permission_key)} className="mt-1" /><span><span className="block text-sm font-bold text-apple-text">{labelForPermission(permission)}</span><span className="mt-0.5 block text-[11px] leading-4 text-apple-gray-medium">{purposeForPermission(permission)}</span><code className="mt-1 block break-all text-[10px] text-apple-gray-medium">{permission.permission_key}</code></span></label>)}</div></div>)}</div></section>
               </div>
             </div>
           )}

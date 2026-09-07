@@ -1,7 +1,8 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { Link, useSearchParams } from 'react-router-dom'
 import { api } from '../services/api'
 import type { ProductQaCreateResponse } from '../services/api'
+import { getLandingPath, hasPermission, useAuthStore } from '../store/authStore'
 
 export default function ProductQaCreate() {
   const [searchParams] = useSearchParams()
@@ -11,6 +12,29 @@ export default function ProductQaCreate() {
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
   const [result, setResult] = useState<ProductQaCreateResponse | null>(null)
+  const user = useAuthStore((state) => state.user)
+  const returnPath = hasPermission(user, 'ai.customer_service') ? '/customer-service' : getLandingPath(user)
+  const [candidates, setCandidates] = useState<Awaited<ReturnType<typeof api.products.candidates>>['items']>([])
+  const [candidateQuery, setCandidateQuery] = useState('')
+  const [candidatesLoading, setCandidatesLoading] = useState(true)
+  const [candidatesError, setCandidatesError] = useState('')
+
+  useEffect(() => {
+    let active = true
+    setCandidatesLoading(true)
+    setCandidatesError('')
+    const timer = window.setTimeout(() => {
+      api.products.candidates('qa', candidateQuery).then(({ items }) => {
+        if (active) setCandidates(items)
+      }).catch((err: unknown) => {
+        if (active) {
+          setCandidates([])
+          setCandidatesError(err instanceof Error ? err.message : '加载产品候选失败')
+        }
+      }).finally(() => { if (active) setCandidatesLoading(false) })
+    }, 250)
+    return () => { active = false; window.clearTimeout(timer) }
+  }, [candidateQuery])
 
   async function handleSubmit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault()
@@ -59,16 +83,23 @@ export default function ProductQaCreate() {
             问题来自客服现场，答案保存后会先做同 SKU 语义审核，再同步到 RAG。
           </p>
         </div>
-        <Link
-          to="/customer-service"
+        {returnPath !== '/products/qa/new' && <Link
+          to={returnPath}
           className="rounded-xl border border-black/10 bg-white/70 px-4 py-2 text-sm font-semibold text-apple-gray-dark hover:bg-white"
         >
-          返回智能客服
-        </Link>
+          {returnPath === '/customer-service' ? '返回智能客服' : '返回工作台'}
+        </Link>}
       </div>
 
       <form onSubmit={handleSubmit} className="glass rounded-2xl p-5 space-y-5">
         <div>
+          <label htmlFor="qa-product-search" className="mb-1.5 block text-sm font-semibold text-apple-text">查找产品</label>
+          <input id="qa-product-search" value={candidateQuery} onChange={(event) => setCandidateQuery(event.target.value)} placeholder="按 SKU、产品名搜索" className="glass-input mb-2 w-full px-3 py-2.5 text-sm" />
+          <select aria-label="选择 QA 所属产品" value={candidates.some((item) => item.sku === sku) ? sku : ''} onChange={(event) => { if (event.target.value) setSku(event.target.value) }} disabled={candidatesLoading} className="glass-input mb-3 w-full px-3 py-2.5 text-sm">
+            <option value="">{candidatesLoading ? '正在加载产品…' : candidates.length ? '选择产品，自动填写下方 SKU' : '没有匹配产品，可直接填写已知 SKU'}</option>
+            {candidates.map((item) => <option key={item.sku} value={item.sku}>{item.sku} · {item.product_name_cn || item.product_name_en || '未命名'}</option>)}
+          </select>
+          {candidatesError && <p role="alert" className="mb-3 text-xs text-red-600">{candidatesError}；可直接填写已知 SKU。</p>}
           <label htmlFor="qa-sku" className="mb-1.5 block text-sm font-semibold text-apple-text">
             产品 SKU <span className="text-red-500">*</span>
           </label>
@@ -147,9 +178,9 @@ export default function ProductQaCreate() {
         )}
 
         <div className="flex flex-wrap items-center justify-end gap-3 border-t border-black/5 pt-4">
-          <Link to="/customer-service" className="px-4 py-2 text-sm font-semibold text-apple-gray-dark hover:text-apple-text">
+          {returnPath !== '/products/qa/new' && <Link to={returnPath} className="px-4 py-2 text-sm font-semibold text-apple-gray-dark hover:text-apple-text">
             取消
-          </Link>
+          </Link>}
           <button
             type="submit"
             disabled={saving}

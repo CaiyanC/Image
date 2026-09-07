@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { api } from '../services/api'
+import { useAuthStore } from '../store/authStore'
 
 type SignedCacheEntry = { url: string; expiresAt: number }
 type DeferredSignedUrl = {
@@ -12,6 +13,17 @@ const signedUrlCache = new Map<string, SignedCacheEntry>()
 const pendingSignedUrls = new Map<string, DeferredSignedUrl>()
 const queuedSignedPaths = new Set<string>()
 let batchScheduled = false
+let cacheRevision = 0
+
+// File capabilities belong to the account that requested them.
+useAuthStore.subscribe((state, previous) => {
+  if (state.user === previous.user) return
+  cacheRevision += 1
+  signedUrlCache.clear()
+  pendingSignedUrls.forEach((pending) => pending.reject(new Error('登录状态已变化，请重试')))
+  pendingSignedUrls.clear()
+  queuedSignedPaths.clear()
+})
 
 function signingPathKey(url: string) {
   const uploadIndex = url.indexOf('/uploads/')
@@ -41,6 +53,7 @@ function requestSignedUrl(path: string): Promise<string> {
 }
 
 async function flushSignedUrlBatch() {
+  const revision = cacheRevision
   batchScheduled = false
   const paths = Array.from(queuedSignedPaths).slice(0, 100)
   paths.forEach((path) => queuedSignedPaths.delete(path))
@@ -51,6 +64,7 @@ async function flushSignedUrlBatch() {
   if (paths.length === 0) return
   try {
     const items = await api.files.signBatch(paths)
+    if (revision !== cacheRevision) return
     const byPath = new Map(items.map((item) => [item.path, item]))
     for (const path of paths) {
       const pending = pendingSignedUrls.get(path)
@@ -67,9 +81,9 @@ async function flushSignedUrlBatch() {
       pending.resolve(item.url)
     }
   } catch (error) {
-    paths.forEach((path) => pendingSignedUrls.get(path)?.reject(error))
+    if (revision === cacheRevision) paths.forEach((path) => pendingSignedUrls.get(path)?.reject(error))
   } finally {
-    paths.forEach((path) => pendingSignedUrls.delete(path))
+    if (revision === cacheRevision) paths.forEach((path) => pendingSignedUrls.delete(path))
   }
 }
 
@@ -79,6 +93,7 @@ function shouldSignUrl(url: string | null | undefined) {
 }
 
 export function useSignedFileUrl(url: string | null | undefined) {
+  const user = useAuthStore((state) => state.user)
   const [resolvedUrl, setResolvedUrl] = useState(() => {
     if (!url || shouldSignUrl(url)) return ''
     return url
@@ -119,7 +134,7 @@ export function useSignedFileUrl(url: string | null | undefined) {
     return () => {
       cancelled = true
     }
-  }, [url, retryKey])
+  }, [url, retryKey, user])
 
   return {
     url: resolvedUrl,
@@ -130,6 +145,46 @@ export function useSignedFileUrl(url: string | null | undefined) {
       setRetryKey((value) => value + 1)
     },
   }
+}
+
+export function useFileDownload(url: string | null | undefined) {
+  const user = useAuthStore((state) => state.user)
+  const [downloading, setDownloading] = useState(false)
+  const [downloadError, setDownloadError] = useState('')
+  // SecureImage callbacks may pass an already resolved preview URL.
+  const path = Array.from(signedUrlCache).find(([, entry]) => entry.url === url)?.[0]
+    || signingPathKey(url || '')
+  const productMedia = /^\/uploads\/(images|videos|assets)\//.test(path)
+  const ownerMedia = /^\/uploads\/(generated|reference-images)\//.test(path)
+  const canPreviewMedia = ['media.read', 'media.search', 'product.read', 'product.full.view', 'product.edit']
+    .some((permission) => user?.permissions?.includes(permission))
+  const canDownload = !!user && (ownerMedia || (productMedia
+    && canPreviewMedia && !!user.permissions?.includes('media.download')))
+
+  useEffect(() => setDownloadError(''), [url, user])
+
+  const download = async () => {
+    if (!canDownload || downloading) return
+    setDownloading(true)
+    setDownloadError('')
+    try {
+      // Never reuse a preview capability or fall back to the raw upload URL.
+      const signed = await api.files.sign(path, 'download')
+      if (useAuthStore.getState().user !== user) return
+      const anchor = document.createElement('a')
+      anchor.href = signed.url
+      anchor.download = ''
+      document.body.appendChild(anchor)
+      anchor.click()
+      anchor.remove()
+    } catch (error) {
+      setDownloadError(error instanceof Error ? error.message : '下载失败，请重试')
+    } finally {
+      setDownloading(false)
+    }
+  }
+
+  return { canDownload, download, downloading, downloadError }
 }
 
 export function SecureImage({
@@ -186,6 +241,7 @@ export function SecureVideo({
   className?: string
 }) {
   const signed = useSignedFileUrl(src)
+  const { canDownload, download, downloading, downloadError } = useFileDownload(src)
   const [loadError, setLoadError] = useState(false)
   useEffect(() => setLoadError(false), [signed.url])
   if (signed.loading) {
@@ -194,5 +250,12 @@ export function SecureVideo({
   if (!signed.url || signed.error || loadError) {
     return <div className={className} onClick={signed.retry}>视频加载失败，点击重试</div>
   }
-  return <video src={signed.url} controls={controls} className={className} onError={() => setLoadError(true)} />
+  return <>
+    <video src={signed.url} controls={controls} controlsList="nodownload" className={className} onError={() => setLoadError(true)} />
+    {controls && canDownload && <button type="button" disabled={downloading} onClick={(event) => {
+      event.stopPropagation()
+      void download()
+    }}>{downloading ? '下载中…' : '下载原视频'}</button>}
+    {downloadError && <span role="alert">{downloadError}</span>}
+  </>
 }

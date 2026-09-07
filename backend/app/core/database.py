@@ -5,6 +5,7 @@ from sqlalchemy.orm import sessionmaker, DeclarativeBase, Session
 from .config import settings
 from .permission_constants import (
     COMMON_PERMISSION_KEYS,
+    DERIVED_PERMISSION_SOURCES,
     DEPRECATED_EMPTY_GROUP_NAMES,
     DEFAULT_GROUPS,
     GROUP_PERMISSION_KEYS,
@@ -452,6 +453,7 @@ def _seed_default_permissions(db):
     from ..models.routes import Route, PermissionRoute
 
     permissions = {p.permission_key: p for p in db.query(Permission).all()}
+    had_permission_catalog = bool(permissions)
     changed = False
     newly_created_permission_keys: set[str] = set()
     for key, name, permission_type in PERMISSION_DEFS:
@@ -502,14 +504,13 @@ def _seed_default_permissions(db):
         (str(gp.group_id), str(gp.permission_id))
         for gp in db.query(GroupPermission).all()
     }
-    has_any_group_permissions = bool(existing_pairs)
     changed = False
     for group_name, permission_keys in group_permission_map.items():
         group = groups.get(group_name)
         if not group:
             continue
         should_initialize = (
-            not has_any_group_permissions
+            not had_permission_catalog
             or bool(getattr(group, "_seed_permissions_pending", False))
         )
         if not should_initialize:
@@ -530,11 +531,29 @@ def _seed_default_permissions(db):
     # deliberately removes it: only permission rows created in this seed pass
     # receive the one-time default assignment.
     if newly_created_permission_keys:
+        # Preserve actual historical grants, including custom groups. These
+        # new page permissions must not restore a deliberately revoked right.
+        for group in groups.values():
+            for permission_key in newly_created_permission_keys & DERIVED_PERMISSION_SOURCES.keys():
+                sources = DERIVED_PERMISSION_SOURCES[permission_key]
+                if not any(
+                    source in permissions and (str(group.id), str(permissions[source].id)) in existing_pairs
+                    for source in sources
+                ):
+                    continue
+                permission = permissions[permission_key]
+                pair = (str(group.id), str(permission.id))
+                if pair not in existing_pairs:
+                    db.add(GroupPermission(group_id=group.id, permission_id=permission.id))
+                    existing_pairs.add(pair)
+                    changed = True
         for group_name, permission_keys in group_permission_map.items():
             group = groups.get(group_name)
             if not group:
                 continue
             for permission_key in newly_created_permission_keys:
+                if permission_key in DERIVED_PERMISSION_SOURCES:
+                    continue
                 if permission_key not in permission_keys:
                     continue
                 permission = permissions.get(permission_key)
@@ -554,6 +573,18 @@ def _seed_default_permissions(db):
         for pr in db.query(PermissionRoute).all()
     }
     changed = False
+    managed_permission_ids = {str(permissions[key].id) for key, _, _ in PERMISSION_DEFS}
+    managed_route_ids = {str(routes[path].id) for path, _, _ in ROUTE_DEFS}
+    desired_pairs = {
+        (str(permissions[key].id), str(routes[path].id))
+        for key, paths in PERMISSION_ROUTE_MAP.items() for path in paths
+    }
+    for relation in db.query(PermissionRoute).all():
+        pair = (str(relation.permission_id), str(relation.route_id))
+        if pair[0] in managed_permission_ids and pair[1] in managed_route_ids and pair not in desired_pairs:
+            db.delete(relation)
+            existing_pairs.discard(pair)
+            changed = True
     for permission_key, route_paths in PERMISSION_ROUTE_MAP.items():
         permission = permissions.get(permission_key)
         if not permission:

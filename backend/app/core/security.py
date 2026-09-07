@@ -225,15 +225,6 @@ def require_product_permission(action: str):
                 detail="You are not in any team",
             )
 
-        if action == "delete":
-            for ug in user_groups:
-                if ug["group_name"] == PRODUCT_TEAM_GROUP_NAME and ug["group_role"] == "admin":
-                    return current_user
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="Delete requires Product Team admin role",
-            )
-
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail=f"Permission required: {permission_key}",

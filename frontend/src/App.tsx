@@ -1,6 +1,7 @@
 import { Suspense, lazy, useEffect } from 'react'
-import { Routes, Route, Navigate } from 'react-router-dom'
-import { useAuthStore } from './store/authStore'
+import { Routes, Route, Navigate, Link, useLocation } from 'react-router-dom'
+import { getLandingPath, hasPermission, useAuthStore } from './store/authStore'
+import { NO_PERMISSION_EVENT } from './services/permissionFeedback'
 import Layout from './components/layout/Layout'
 import PermissionToast from './components/PermissionToast'
 
@@ -44,15 +45,6 @@ function SuperAdminRoute({ children }: { children: React.ReactNode }) {
   return <>{children}</>
 }
 
-function hasPermission(
-  user: ReturnType<typeof useAuthStore.getState>['user'],
-  isManagement: boolean,
-  permissionKey: string,
-) {
-  if (isManagement) return true
-  return !!user?.permissions?.includes(permissionKey)
-}
-
 function PermissionRoute({
   permissionKey,
   fallback = '/no-access',
@@ -62,9 +54,9 @@ function PermissionRoute({
   fallback?: string
   children: React.ReactNode
 }) {
-  const { authenticated, isManagement, user } = useAuthStore()
+  const { authenticated, user } = useAuthStore()
   if (!authenticated) return <Navigate to="/login" replace />
-  if (!hasPermission(user, isManagement, permissionKey)) return <Navigate to={fallback} replace />
+  if (!hasPermission(user, permissionKey)) return <Navigate to={fallback} replace />
   return <>{children}</>
 }
 
@@ -77,20 +69,44 @@ function AnyPermissionRoute({
   fallback?: string
   children: React.ReactNode
 }) {
-  const { authenticated, isManagement, user } = useAuthStore()
+  const { authenticated, user } = useAuthStore()
   if (!authenticated) return <Navigate to="/login" replace />
-  if (!isManagement && !permissionKeys.some((key) => hasPermission(user, isManagement, key))) {
+  if (!permissionKeys.some((key) => hasPermission(user, key))) {
     return <Navigate to={fallback} replace />
   }
   return <>{children}</>
 }
 
 export default function App() {
-  const { bootstrap, initialized } = useAuthStore()
+  const { bootstrap, initialized, authenticated, refreshAuth, clearAuth, user } = useAuthStore()
+  const location = useLocation()
 
   useEffect(() => {
     void bootstrap()
   }, [bootstrap])
+
+  useEffect(() => {
+    if (initialized && authenticated) void refreshAuth()
+  }, [initialized, authenticated, location.pathname, refreshAuth])
+
+  useEffect(() => {
+    const check = () => {
+      if (document.visibilityState === 'visible') void refreshAuth()
+    }
+    const denied = () => { void refreshAuth(true) }
+    window.addEventListener('auth:unauthorized', clearAuth)
+    window.addEventListener(NO_PERMISSION_EVENT, denied)
+    window.addEventListener('focus', check)
+    document.addEventListener('visibilitychange', check)
+    const timer = window.setInterval(check, 60000)
+    return () => {
+      window.removeEventListener('auth:unauthorized', clearAuth)
+      window.removeEventListener(NO_PERMISSION_EVENT, denied)
+      window.removeEventListener('focus', check)
+      document.removeEventListener('visibilitychange', check)
+      window.clearInterval(timer)
+    }
+  }, [refreshAuth, clearAuth])
 
   if (!initialized) return <RouteFallback />
 
@@ -114,11 +130,11 @@ export default function App() {
         <Route
           path="/tools"
           element={
-            <ProtectedRoute>
+            <PermissionRoute permissionKey="tools.view">
               <Layout>
                 <ToolCenter />
               </Layout>
-            </ProtectedRoute>
+            </PermissionRoute>
           }
         />
         <Route
@@ -174,7 +190,7 @@ export default function App() {
         <Route
           path="/assets"
           element={
-            <PermissionRoute permissionKey="product.read">
+            <PermissionRoute permissionKey="media.read">
               <Layout>
                 <AssetLibrary />
               </Layout>
@@ -184,7 +200,7 @@ export default function App() {
         <Route
           path="/assets/search"
           element={
-            <PermissionRoute permissionKey="product.read">
+            <PermissionRoute permissionKey="media.search">
               <Layout>
                 <AssetSearch />
               </Layout>
@@ -204,7 +220,7 @@ export default function App() {
         <Route
           path="/products/audit"
           element={
-            <PermissionRoute permissionKey="product.read">
+            <PermissionRoute permissionKey="product.audit.view">
               <Layout>
                 <ProductAuditOverview />
               </Layout>
@@ -214,7 +230,7 @@ export default function App() {
         <Route
           path="/products/full-view"
           element={
-            <PermissionRoute permissionKey="product.read">
+            <PermissionRoute permissionKey="product.full.view">
               <Layout>
                 <ProductFullView />
               </Layout>
@@ -246,21 +262,21 @@ export default function App() {
         <Route
           path="/knowledge-base"
           element={
-            <SuperAdminRoute>
+            <PermissionRoute permissionKey="knowledge.manage">
               <Layout>
                 <KnowledgeBase />
               </Layout>
-            </SuperAdminRoute>
+            </PermissionRoute>
           }
         />
         <Route
           path="/file-knowledge"
           element={
-            <SuperAdminRoute>
+            <PermissionRoute permissionKey="knowledge.files.manage">
               <Layout>
                 <FileKnowledgeBase />
               </Layout>
-            </SuperAdminRoute>
+            </PermissionRoute>
           }
         />
         <Route
@@ -276,11 +292,11 @@ export default function App() {
         <Route
           path="/products/create/:draftId"
           element={
-            <PermissionRoute permissionKey="product.create" fallback="/products">
+            <AnyPermissionRoute permissionKeys={['product.create', 'product.edit']}>
               <Layout>
                 <ProductCreate />
               </Layout>
-            </PermissionRoute>
+            </AnyPermissionRoute>
           }
         />
         <Route
@@ -306,11 +322,11 @@ export default function App() {
         <Route
           path="/products/drafts"
           element={
-            <PermissionRoute permissionKey="product.read">
+            <AnyPermissionRoute permissionKeys={['product.read', 'product.create', 'product.edit']}>
               <Layout>
                 <DraftBox />
               </Layout>
-            </PermissionRoute>
+            </AnyPermissionRoute>
           }
         />
         <Route
@@ -375,7 +391,7 @@ export default function App() {
             </SuperAdminRoute>
           }
         />
-        <Route path="*" element={<Navigate to="/" replace />} />
+        <Route path="*" element={<Navigate to={authenticated ? getLandingPath(user) : '/login'} replace />} />
         </Routes>
       </Suspense>
     </>
@@ -393,6 +409,8 @@ function RouteFallback() {
 }
 
 function NoAccess() {
+  const { user, refreshAuth } = useAuthStore()
+  const landingPath = getLandingPath(user)
   return (
     <div className="flex min-h-[calc(100vh-7rem)] items-center justify-center px-4 md:min-h-[calc(100vh-5rem)]">
       <div className="auth-card glass p-8 max-w-md w-full text-center">
@@ -404,6 +422,10 @@ function NoAccess() {
           <p className="text-sm text-apple-gray-medium mt-2">
             当前账号没有访问该页面的权限，请联系总经办或 IT 部管理员调整所在部门权限。
           </p>
+          <div className="mt-5 flex justify-center gap-4 text-sm font-bold text-teal-700">
+            <button onClick={() => void refreshAuth(true)}>刷新权限</button>
+            {landingPath !== '/no-access' && <Link to={landingPath}>前往可用页面</Link>}
+          </div>
         </div>
       </div>
     </div>

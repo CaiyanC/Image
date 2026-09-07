@@ -44,7 +44,7 @@ export default function AdminModelGovernance() {
   const [saving, setSaving] = useState(false)
   const [message, setMessage] = useState('')
   const [error, setError] = useState('')
-  const [credentialForm, setCredentialForm] = useState({ provider_name: '', api_base_url: '', api_key: '', scope_type: 'company' as 'company' | 'group' | 'user', scope_id: '', is_enabled: true })
+  const [credentialForm, setCredentialForm] = useState({ provider_name: '', api_base_url: '', api_key: '', scope_type: 'user' as 'company' | 'group' | 'user', scope_id: '', is_enabled: true })
   const [replacementKeys, setReplacementKeys] = useState<Record<string, string>>({})
   const [modelForm, setModelForm] = useState<ManagedModel>(emptyModel)
   const [featureKey, setFeatureKey] = useState('generation.image')
@@ -97,7 +97,7 @@ export default function AdminModelGovernance() {
     }
     await perform(async () => {
       await api.modelGovernance.createCredential({ ...credentialForm, scope_id: credentialForm.scope_type === 'company' ? null : credentialForm.scope_id })
-      setCredentialForm({ provider_name: '', api_base_url: '', api_key: '', scope_type: 'company', scope_id: '', is_enabled: true })
+      setCredentialForm({ provider_name: '', api_base_url: '', api_key: '', scope_type: 'user', scope_id: '', is_enabled: true })
       setCredentials(await api.modelGovernance.credentials())
     }, '凭据已加密保存；页面只会显示脱敏值。')
   }
@@ -176,7 +176,7 @@ export default function AdminModelGovernance() {
     {authorizationOverview && editingCell && <AuthorizationOverviewDrawer overview={authorizationOverview} editingCell={editingCell} saving={savingSelection} onChange={setEditingCell} onClose={() => setEditingCell(null)} onSave={() => void saveSelection()} />}
 
     {panel === 'credential' && <GovernanceDialog title="管理 API 凭据" onClose={() => setPanel(null)}>
-      <p className="text-sm text-apple-gray-medium">新建或替换 Key；已保存的 Key 永不回显。</p>
+      <p className="text-sm text-apple-gray-medium">默认按个人独立配置：选择员工后填写其 Key；员工也可在个人资料中自助配置。已保存的 Key 永不回显。仅在确需共享额度时选择公司或部门范围。</p>
       <div className="mt-4 grid gap-3 md:grid-cols-3"><TextInput label="供应商" value={credentialForm.provider_name} onChange={(value) => setCredentialForm({ ...credentialForm, provider_name: value })} placeholder="例如 dmXAPI" /><TextInput label="API Base URL" value={credentialForm.api_base_url} onChange={(value) => setCredentialForm({ ...credentialForm, api_base_url: value })} placeholder="https://api.example.com" /><TextInput label="API Key（仅本次输入）" type="password" value={credentialForm.api_key} onChange={(value) => setCredentialForm({ ...credentialForm, api_key: value })} /></div>
       <div className="mt-3 grid gap-3 md:grid-cols-3"><SelectInput label="范围" value={credentialForm.scope_type} onChange={(value) => setCredentialForm({ ...credentialForm, scope_type: value as typeof credentialForm.scope_type, scope_id: value === 'company' ? '' : credentialForm.scope_id })} options={[["company", "公司"], ["group", "部门"], ["user", "个人"]]} />{credentialForm.scope_type !== 'company' && <SelectInput label={credentialForm.scope_type === 'group' ? '部门' : '用户'} value={credentialForm.scope_id} onChange={(value) => setCredentialForm({ ...credentialForm, scope_id: value })} options={subjectsFor(credentialForm.scope_type, groups, users)} />}</div>
       <button disabled={saving} onClick={() => void createCredential()} className="btn-primary mt-4 text-sm disabled:opacity-50">新建加密凭据</button>

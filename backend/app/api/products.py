@@ -1,15 +1,17 @@
 ﻿import uuid
 import os
 from io import BytesIO
-from typing import List
+from typing import List, Literal
 
 from fastapi import APIRouter, Depends, Query, Request, UploadFile, File, HTTPException
 from sqlalchemy.orm import Session
+from sqlalchemy import or_
 
 from ..core.config import settings
 from ..core.database import get_db
 from ..core.rate_limit import enforce_rate_limit
-from ..core.security import require_any_permission, require_permission, require_product_permission, require_product_qa_permission
+from ..core.security import get_current_user, has_permission, require_any_permission, require_permission, require_product_permission, require_product_qa_permission
+from ..models.product import Product
 from ..models.user import User
 from ..schemas.product import (
     ProductCreate, ProductUpdate,
@@ -24,6 +26,7 @@ from ..services import (
     product_recovery_service,
     product_service,
     product_vector_index_service,
+    product_write_authorization,
 )
 from ..services.upload_validation_service import validate_image_content, validate_video_content
 
@@ -38,12 +41,15 @@ ALLOWED_PRODUCT_VIDEO_SUFFIXES = {".mp4", ".mov", ".webm"}
 ALLOWED_PRODUCT_VIDEO_MIME_TYPES = {"video/mp4", "video/quicktime", "video/webm"}
 
 
-async def _audit_review_product_qas(db: Session, product, current_user: User) -> list[dict[str, str]]:
+async def _audit_review_product_qas(
+    db: Session, product, current_user: User, *, preserved_ids: set[str] | None = None,
+) -> list[dict[str, str]]:
     """Semantically audit review-state QA before it can enter customer retrieval."""
     qa_items = [
         item
         for item in product_service.get_qa_items(db, product.sku)
         if str(item.integrity_status or "").strip().lower() == "review"
+        and str(item.id) not in (preserved_ids or set())
     ]
     verdicts = []
     for qa in qa_items:
@@ -86,7 +92,7 @@ def _qa_write_response(qa, integrity_audit: dict, vector_sync: dict) -> dict:
 
 @router.post("/sync-to-vector")
 def sync_all_to_vector(
-    current_user = Depends(require_permission("ai.call")),
+    current_user = Depends(require_permission("knowledge.sync")),
     db: Session = Depends(get_db),
 ):
     """Sync all products to the vector knowledge base."""
@@ -99,7 +105,7 @@ def sync_all_to_vector(
 @router.post("/sync-pending-to-vector")
 def sync_pending_to_vector(
     limit: int = Query(50, ge=1, le=500),
-    current_user = Depends(require_permission("ai.call")),
+    current_user = Depends(require_permission("knowledge.sync")),
     db: Session = Depends(get_db),
 ):
     """Retry vector sync only for products marked as not synced."""
@@ -109,7 +115,7 @@ def sync_pending_to_vector(
 @router.post("/{sku}/sync-to-vector")
 def sync_one_to_vector(
     sku: str,
-    current_user = Depends(require_permission("ai.call")),
+    current_user = Depends(require_permission("knowledge.sync")),
     db: Session = Depends(get_db),
 ):
     """Sync a single product to the vector knowledge base."""
@@ -118,7 +124,7 @@ def sync_one_to_vector(
 
 @router.get("/vector-status")
 def vector_status(
-    current_user = Depends(require_permission("ai.call")),
+    current_user = Depends(require_permission("knowledge.manage")),
     db: Session = Depends(get_db),
 ):
     """Get vector database status."""
@@ -198,7 +204,7 @@ def get_product_audit_overview(
     limit: int = Query(500, ge=1, le=500),
     q: str | None = Query(None, max_length=200),
     issues_only: bool = Query(False),
-    current_user: User = Depends(require_product_permission("read")),
+    current_user: User = Depends(require_permission("product.audit.view")),
     db: Session = Depends(get_db),
 ):
     """Return a read-only product/QA/asset/vector reconciliation view."""
@@ -212,10 +218,45 @@ def get_product_audit_overview(
     )
 
 
+@router.get("/candidates")
+def get_product_candidates(
+    purpose: Literal["qa", "media", "full", "file"] = Query(...),
+    q: str = Query("", max_length=200),
+    limit: int = Query(100, ge=1, le=100),
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    permissions = {
+        "qa": ("product.qa.manage", "product.edit"),
+        "media": ("media.read",),
+        "full": ("product.full.view",),
+        "file": ("knowledge.files.manage",),
+    }[purpose]
+    if not any(has_permission(db, current_user.id, key) for key in permissions):
+        raise HTTPException(status_code=403, detail=f"Permission required: {' or '.join(permissions)}")
+    query = db.query(Product.sku, Product.product_name_cn, Product.product_name_en, Product.brand)
+    if q.strip():
+        pattern = "%" + q.strip().replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "%"
+        query = query.filter(or_(*(
+            field.ilike(pattern, escape="\\")
+            for field in (Product.sku, Product.product_name_cn, Product.product_name_en, Product.brand)
+        )))
+    return {"items": [dict(row._mapping) for row in query.order_by(Product.sku).limit(limit).all()]}
+
+
+@router.get("/{sku}/full-view")
+def get_product_full_view(
+    sku: str,
+    current_user: User = Depends(require_permission("product.full.view")),
+    db: Session = Depends(get_db),
+):
+    return product_service.get_product_detail(db, sku)
+
+
 @router.get("/by-sku/{sku}")
 def get_product_by_sku(
     sku: str,
-    current_user: User = Depends(require_product_permission("read")),
+    current_user: User = Depends(require_any_permission("product.read", "product.edit")),
     db: Session = Depends(get_db),
 ):
     return product_service.get_product_detail(db, sku)
@@ -224,22 +265,29 @@ def get_product_by_sku(
 @router.get("/{sku}")
 def get_product(
     sku: str,
-    current_user: User = Depends(require_product_permission("read")),
+    current_user: User = Depends(require_any_permission("product.read", "product.edit")),
     db: Session = Depends(get_db),
 ):
     return product_service.get_product_detail(db, sku)
 
 
+class ProductCreatePayload(ProductCreate):
+    # Preserve aggregate sections for the common validator instead of silently
+    # discarding them through ProductCreate's default extra=ignore behavior.
+    model_config = {"extra": "allow"}
+
+
 @router.post("")
 async def create_product(
-    product_data: ProductCreate,
+    product_data: ProductCreatePayload,
     request: Request,
     current_user: User = Depends(require_product_permission("create")),
     db: Session = Depends(get_db),
 ):
-    product = product_service.create_product(
-        db, product_data.model_dump(), creator_id=current_user.id
-    )
+    payload = product_data.model_dump()
+    sku = str(payload["sku"]).strip()
+    payload = product_write_authorization.authorize_product_replacement(db, current_user, sku, payload)
+    product = product_service.create_product(db, payload, creator_id=current_user.id)
     await _audit_review_product_qas(db, product, current_user)
     after_data = product_service.get_product_detail(db, product.sku)
     log = operation_log_service.log_operation(
@@ -305,13 +353,15 @@ async def update_product_full(
         raise HTTPException(status_code=400, detail="Request SKU must match product SKU")
     body = {**body, "sku": sku}
     product_service.validate_product_payload(body)
+    body = product_write_authorization.authorize_product_replacement(db, current_user, sku, body)
+    preserved_qa_ids = {str(item["id"]) for item in body["qa_items"] if item.get("id")}
     product = product_service.replace_product(
         db,
         sku,
         body,
         creator_id=current_user.id,
     )
-    await _audit_review_product_qas(db, product, current_user)
+    await _audit_review_product_qas(db, product, current_user, preserved_ids=preserved_qa_ids)
     after_data = product_service.get_product_detail(db, product.sku)
     log = operation_log_service.log_operation(
         db,
@@ -730,6 +780,7 @@ def add_product_media(
     current_user: User = Depends(require_product_permission("update")),
     db: Session = Depends(get_db),
 ):
+    product_write_authorization.authorize_product_media_write(db, current_user, body)
     media = product_service.add_product_media(db, sku, body)
     operation_log_service.log_operation(
         db,
@@ -754,7 +805,9 @@ def update_product_media(
     current_user: User = Depends(require_product_permission("update")),
     db: Session = Depends(get_db),
 ):
-    media = product_service.update_product_media(db, media_id, body)
+    current = product_service.get_product_media(db, sku, media_id)
+    product_write_authorization.authorize_product_media_write(db, current_user, body, current=current)
+    media = product_service.update_product_media(db, media_id, body, sku=sku)
     operation_log_service.log_operation(
         db,
         operator_id=current_user.id,
@@ -777,7 +830,9 @@ def delete_product_media(
     current_user: User = Depends(require_product_permission("update")),
     db: Session = Depends(get_db),
 ):
-    product_service.delete_product_media(db, media_id)
+    product_service.get_product_media(db, sku, media_id)
+    product_write_authorization.authorize_product_media_write(db, current_user)
+    product_service.delete_product_media(db, media_id, sku=sku)
     operation_log_service.log_operation(
         db,
         operator_id=current_user.id,

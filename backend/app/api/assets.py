@@ -11,7 +11,7 @@ from sqlalchemy.orm import Session
 
 from ..core.config import settings
 from ..core.database import get_db
-from ..core.security import has_permission, require_permission, require_product_permission
+from ..core.security import has_permission, require_any_permission, require_permission, require_product_permission
 from ..models.user import User
 from ..schemas.asset import AssetTagsUpdate, ProductAssetCreate, ProductAssetUpdate
 from ..services import asset_service
@@ -43,7 +43,7 @@ def list_assets(
     sub_category: str | None = None,
     asset_type: str | None = None,
     grouped: bool = False,
-    current_user: User = Depends(require_product_permission("read")),
+    current_user: User = Depends(require_any_permission("media.read", "media.search", "product.full.view", "product.edit")),
     db: Session = Depends(get_db),
 ):
     items = asset_service.list_assets(db, sku, category, sub_category, asset_type)
@@ -56,7 +56,7 @@ def list_assets(
 def get_asset(
     sku: str,
     asset_id: str,
-    current_user: User = Depends(require_product_permission("read")),
+    current_user: User = Depends(require_any_permission("media.read", "media.search", "product.full.view", "product.edit")),
     db: Session = Depends(get_db),
 ):
     return asset_service.model_to_dict(asset_service.get_asset(db, sku, asset_id))

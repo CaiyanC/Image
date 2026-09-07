@@ -2,7 +2,7 @@ from fastapi import APIRouter, Depends, Query, HTTPException, Request, status
 from sqlalchemy.orm import Session
 
 from ..core.database import get_db
-from ..core.security import is_management_user, require_product_permission
+from ..core.security import has_permission, is_management_user, require_any_permission, require_product_permission
 from ..models.user import User
 from ..schemas.product import (
     CheckSkusRequest, BatchCreateRequest,
@@ -16,11 +16,18 @@ def _draft_owner_scope(user: User, db: Session):
     return None if is_management_user(db, user.id) else user.id
 
 
+def _require_draft_target_permission(db: Session, user: User, sku: str | None) -> None:
+    existing = draft_service.get_product_by_sku(db, str(sku or "").strip())
+    permission = "product.edit" if existing else "product.create"
+    if not has_permission(db, user.id, permission):
+        raise HTTPException(status_code=403, detail=f"Permission required: {permission}")
+
+
 @router.get("")
 def list_drafts(
     skip: int = 0,
     limit: int = 20,
-    current_user: User = Depends(require_product_permission("read")),
+    current_user: User = Depends(require_any_permission("product.read", "product.create", "product.edit")),
     db: Session = Depends(get_db),
 ):
     if is_management_user(db, current_user.id):
@@ -34,9 +41,11 @@ def list_drafts(
 def create_draft(
     body: dict,
     request: Request,
-    current_user: User = Depends(require_product_permission("create")),
+    current_user: User = Depends(require_any_permission("product.create", "product.edit")),
     db: Session = Depends(get_db),
 ):
+    nested = body.get("draft_data") if isinstance(body.get("draft_data"), dict) else {}
+    _require_draft_target_permission(db, current_user, body.get("sku") or nested.get("sku"))
     draft = draft_service.create_draft(db, current_user.id, body)
     operation_log_service.log_operation(
         db,
@@ -89,7 +98,7 @@ def batch_import(
 @router.get("/{draft_id}")
 def get_draft(
     draft_id: str,
-    current_user: User = Depends(require_product_permission("read")),
+    current_user: User = Depends(require_any_permission("product.read", "product.create", "product.edit")),
     db: Session = Depends(get_db),
 ):
     draft = draft_service.get_draft_by_id(db, draft_id, _draft_owner_scope(current_user, db))
@@ -103,9 +112,16 @@ def update_draft(
     draft_id: str,
     body: dict,
     request: Request,
-    current_user: User = Depends(require_product_permission("update")),
+    current_user: User = Depends(require_any_permission("product.create", "product.edit")),
     db: Session = Depends(get_db),
 ):
+    existing = draft_service.get_draft_by_id(db, draft_id, _draft_owner_scope(current_user, db))
+    if not existing:
+        raise HTTPException(status_code=404, detail="Draft not found")
+    nested = body.get("draft_data") if isinstance(body.get("draft_data"), dict) else {}
+    _require_draft_target_permission(
+        db, current_user, body.get("sku") or existing.sku or nested.get("sku") or (existing.draft_data or {}).get("sku"),
+    )
     draft = draft_service.update_draft(db, draft_id, body, _draft_owner_scope(current_user, db))
     operation_log_service.log_operation(
         db,
@@ -150,10 +166,10 @@ def delete_draft(
 def publish_draft(
     draft_id: str,
     request: Request,
-    current_user: User = Depends(require_product_permission("create")),
+    current_user: User = Depends(require_any_permission("product.create", "product.edit")),
     db: Session = Depends(get_db),
 ):
-    detail = draft_service.publish_draft(db, draft_id, _draft_owner_scope(current_user, db))
+    detail = draft_service.publish_draft(db, draft_id, acting_user=current_user)
     operation_log_service.log_operation(
         db,
         operator_id=current_user.id,

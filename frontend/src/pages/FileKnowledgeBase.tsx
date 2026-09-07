@@ -1,5 +1,4 @@
 import { useEffect, useMemo, useState, type ChangeEvent, type DragEvent } from 'react'
-import type { ProductListItem } from '../types'
 import type { KnowledgeFileRecord } from '../services/api'
 import { api } from '../services/api'
 import {
@@ -12,6 +11,7 @@ import {
 const MAX_FILE_SIZE = 20 * 1024 * 1024
 const ALLOWED_EXTENSIONS = ['txt', 'docx', 'pptx', 'xlsx', 'pdf']
 const SEARCH_DELAY_MS = 250
+type ProductCandidate = Awaited<ReturnType<typeof api.products.candidates>>['items'][number]
 
 export default function FileKnowledgeBase() {
   const files = useFileKnowledgeStore((state) => state.files)
@@ -30,7 +30,7 @@ export default function FileKnowledgeBase() {
   const [uploading, setUploading] = useState(false)
   const [error, setError] = useState('')
   const [skuSearching, setSkuSearching] = useState(false)
-  const [skuSuggestions, setSkuSuggestions] = useState<ProductListItem[]>([])
+  const [skuSuggestions, setSkuSuggestions] = useState<ProductCandidate[]>([])
   const [skuSearchError, setSkuSearchError] = useState('')
   const [dragging, setDragging] = useState(false)
   const [records, setRecords] = useState<KnowledgeFileRecord[]>([])
@@ -71,7 +71,7 @@ export default function FileKnowledgeBase() {
       setSkuSearching(true)
       setSkuSearchError('')
       try {
-        const response = await api.products.search(query)
+        const response = await api.products.candidates('file', query, 8)
         if (!active) return
         setSkuSuggestions((response.items || []).slice(0, 8))
       } catch (err) {
@@ -130,7 +130,7 @@ export default function FileKnowledgeBase() {
     setSkuSearchError('')
   }
 
-  function handleAddSku(item: ProductListItem) {
+  function handleAddSku(item: ProductCandidate) {
     const sku = normalizeSkuText(item.sku)
     const label = item.product_name_cn || item.product_name_en || sku
     addSku({ sku, label })

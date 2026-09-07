@@ -7,6 +7,11 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
 from app.core.database import Base
+from app.models.group import Group
+from app.models.permissions import GroupPermission, Permission
+from app.models.product_asset import ProductAsset
+from app.models.user import User
+from app.models.user_group import UserGroup
 from app.models.product import Product
 from app.models.knowledge_base import KnowledgeChunk, KnowledgeDocument
 from app.models.product_associations import (
@@ -384,14 +389,42 @@ class ProductImportSafetyTest(unittest.TestCase):
         Base.metadata.create_all(
             engine,
             tables=[
+                User.__table__,
+                Group.__table__,
+                UserGroup.__table__,
+                Permission.__table__,
+                GroupPermission.__table__,
                 Product.__table__,
                 ProductQa.__table__,
                 ProductQaNegative.__table__,
                 ProductPrompts.__table__,
+                ProductSpecs.__table__,
+                ProductBusiness.__table__,
+                ProductContent.__table__,
+                ProductMedia.__table__,
+                ProductAsset.__table__,
+                ListingChannel.__table__,
+                ProductListingChannel.__table__,
+                SalesRegion.__table__,
+                ProductSalesRegion.__table__,
+                Certification.__table__,
+                ProductCertification.__table__,
+                Keyword.__table__,
+                ProductKeyword.__table__,
             ],
         )
         self.Session = sessionmaker(bind=engine)
         self.db = self.Session()
+        self.addCleanup(engine.dispose)
+        self.actor = User(id="tester", username="tester", email="tester@example.com",
+                          password_hash="unused", is_active=True)
+        self.db.add_all([
+            self.actor,
+            Group(id="import-editors", group_name="Import test editors"),
+            UserGroup(user_id="tester", group_id="import-editors", group_role="member"),
+            Permission(id="import-edit", permission_key="product.edit", permission_name="Edit product"),
+            GroupPermission(group_id="import-editors", permission_id="import-edit"),
+        ])
         self.product = Product(
             id="safe-import-product",
             sku="SAFE-IMPORT-1",
@@ -400,6 +433,11 @@ class ProductImportSafetyTest(unittest.TestCase):
             brand="alocs",
         )
         self.db.add(self.product)
+        self.db.add_all([
+            ProductSpecs(product_id=self.product.id, capacity="1L", power="100W",
+                         technical_advantages='["durable"]', usage_instruction="Use normally"),
+            ProductContent(product_id=self.product.id, title_cn="Title", long_description_cn="Description"),
+        ])
         self.db.add(ProductQa(
             id="existing-qa",
             product_id=self.product.id,
@@ -466,9 +504,8 @@ class ProductImportSafetyTest(unittest.TestCase):
         )
 
         with (
-            patch.object(draft_service, "get_draft_by_id", return_value=draft),
+            patch.object(draft_service, "get_draft_by_id", return_value=draft) as get_draft,
             patch.object(draft_service, "get_product_by_sku", return_value=self.product),
-            patch.object(product_service, "_validate_product_data"),
             patch.object(product_service, "sync_product_m2m"),
             patch.object(
                 draft_service,
@@ -482,8 +519,9 @@ class ProductImportSafetyTest(unittest.TestCase):
             # production still deletes its mapped draft row.
             patch.object(self.db, "delete") as delete_draft,
         ):
-            draft_service.publish_draft(self.db, draft.id, "tester")
+            draft_service.publish_draft(self.db, draft.id, acting_user=self.actor)
 
+        get_draft.assert_called_once_with(self.db, draft.id, self.actor.id, for_update=True)
         delete_draft.assert_called_once_with(draft)
         sync_product.assert_called_once_with(self.db, self.product.sku)
         self.assertEqual(invalidate_cache.call_count, 2)

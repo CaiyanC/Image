@@ -14,7 +14,7 @@ from sqlalchemy.orm import Session
 from ..core.config import settings
 from ..core.database import SessionLocal, get_db
 from ..core.rate_limit import enforce_rate_limit
-from ..core.security import get_current_super_admin
+from ..core.security import require_permission
 from ..models.knowledge_base import KnowledgeChunk, KnowledgeDocument, KnowledgeParseTask
 from ..models.product import Product
 from ..models.user import User
@@ -87,7 +87,7 @@ class RecoverStuckFilesRequest(BaseModel):
 
 @router.get("/status")
 def status(
-    current_user: User = Depends(get_current_super_admin),
+    current_user: User = Depends(require_permission("knowledge.manage")),
     db: Session = Depends(get_db),
 ):
     return knowledge_service.vector_status(db)
@@ -95,7 +95,7 @@ def status(
 
 @router.get("/health")
 def health(
-    current_user: User = Depends(get_current_super_admin),
+    current_user: User = Depends(require_permission("knowledge.manage")),
     db: Session = Depends(get_db),
 ):
     return knowledge_service.health_report(db)
@@ -104,7 +104,7 @@ def health(
 @router.post("/search-preview")
 async def search_preview(
     body: KnowledgeSearchPreviewRequest,
-    current_user: User = Depends(get_current_super_admin),
+    current_user: User = Depends(require_permission("knowledge.manage")),
     db: Session = Depends(get_db),
 ):
     limit = min(max(body.limit, 1), 20)
@@ -114,7 +114,7 @@ async def search_preview(
 @router.post("/reindex-products")
 async def reindex_products(
     body: ProductReindexRequest,
-    current_user: User = Depends(get_current_super_admin),
+    current_user: User = Depends(require_permission("knowledge.sync")),
     db: Session = Depends(get_db),
 ):
     mode = (body.mode or "pending").strip().lower()
@@ -139,7 +139,7 @@ async def reindex_products(
 @router.post("/jobs/reindex-products")
 def create_reindex_job(
     body: ProductReindexRequest,
-    current_user: User = Depends(get_current_super_admin),
+    current_user: User = Depends(require_permission("knowledge.sync")),
     db: Session = Depends(get_db),
 ):
     enforce_rate_limit(user_id=current_user.id, scope="knowledge.reindex_job", limit=10, window_seconds=600)
@@ -158,7 +158,7 @@ def create_reindex_job(
 @router.post("/jobs/retry-embeddings")
 def create_embedding_retry_job(
     body: EmbeddingRetryRequest,
-    current_user: User = Depends(get_current_super_admin),
+    current_user: User = Depends(require_permission("knowledge.sync")),
     db: Session = Depends(get_db),
 ):
     enforce_rate_limit(user_id=current_user.id, scope="knowledge.embedding_retry", limit=20, window_seconds=600)
@@ -174,7 +174,7 @@ def create_embedding_retry_job(
 @router.get("/jobs")
 def list_jobs(
     limit: int = Query(20, ge=1, le=100),
-    current_user: User = Depends(get_current_super_admin),
+    current_user: User = Depends(require_permission("knowledge.manage")),
     db: Session = Depends(get_db),
 ):
     return knowledge_job_service.list_jobs(db, limit=limit)
@@ -183,7 +183,7 @@ def list_jobs(
 @router.get("/jobs/{job_id}")
 def get_job(
     job_id: str,
-    current_user: User = Depends(get_current_super_admin),
+    current_user: User = Depends(require_permission("knowledge.manage")),
     db: Session = Depends(get_db),
 ):
     job = knowledge_job_service.get_job(db, job_id)
@@ -195,7 +195,7 @@ def get_job(
 @router.post("/documents")
 def create_document(
     body: KnowledgeDocumentCreate,
-    current_user: User = Depends(get_current_super_admin),
+    current_user: User = Depends(require_permission("knowledge.manage")),
     db: Session = Depends(get_db),
 ):
     doc = knowledge_service.create_document(
@@ -220,7 +220,7 @@ def create_document(
 @router.get("/tasks/{task_id}")
 def get_parse_task(
     task_id: str,
-    current_user: User = Depends(get_current_super_admin),
+    current_user: User = Depends(require_permission("knowledge.files.manage")),
     db: Session = Depends(get_db),
 ):
     reconcile_parse_task_states(db, task_id=task_id)
@@ -233,7 +233,7 @@ def get_parse_task(
 @router.get("/files")
 def list_knowledge_files(
     limit: int = Query(50, ge=1, le=200),
-    current_user: User = Depends(get_current_super_admin),
+    current_user: User = Depends(require_permission("knowledge.files.manage")),
     db: Session = Depends(get_db),
 ):
     # A parser can commit the document and be interrupted before it commits
@@ -257,10 +257,10 @@ def list_knowledge_files(
 @router.get("/files/{document_id}/download")
 def download_knowledge_file(
     document_id: str,
-    current_user: User = Depends(get_current_super_admin),
+    current_user: User = Depends(require_permission("knowledge.files.manage")),
     db: Session = Depends(get_db),
 ):
-    get_current_super_admin(current_user, db)
+    require_permission("knowledge.files.manage")(current_user, db)
     document = db.query(KnowledgeDocument).filter(KnowledgeDocument.id == document_id).first()
     if not document or document.source_type != "file":
         raise HTTPException(status_code=404, detail="Document not found")
@@ -275,7 +275,7 @@ def download_knowledge_file(
 @router.delete("/files/{document_id}")
 def delete_knowledge_file(
     document_id: str,
-    current_user: User = Depends(get_current_super_admin),
+    current_user: User = Depends(require_permission("knowledge.files.manage")),
     db: Session = Depends(get_db),
 ):
     document = db.query(KnowledgeDocument).filter(KnowledgeDocument.id == document_id).first()
@@ -296,7 +296,7 @@ def delete_knowledge_file(
 async def upload_files(
     files: list[UploadFile] = File(...),
     related_skus: str | None = Form(default=None),
-    current_user: User = Depends(get_current_super_admin),
+    current_user: User = Depends(require_permission("knowledge.files.manage")),
     db: Session = Depends(get_db),
 ):
     enforce_rate_limit(user_id=current_user.id, scope="knowledge.files.upload", limit=45, window_seconds=60)
@@ -451,7 +451,7 @@ async def upload_files(
 @router.post("/files/recover-stuck")
 def recover_stuck_files(
     body: RecoverStuckFilesRequest,
-    current_user: User = Depends(get_current_super_admin),
+    current_user: User = Depends(require_permission("knowledge.files.manage")),
     db: Session = Depends(get_db),
 ):
     timeout_minutes = min(max(body.timeout_minutes or 30, 1), 24 * 60)

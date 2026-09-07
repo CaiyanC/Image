@@ -14,7 +14,21 @@ from ..models.tool_run import ToolRun
 MAX_UPLOAD_FILES = 20
 MAX_UPLOAD_BYTES = 50 * 1024 * 1024
 ALLOWED_SUFFIX = ".xlsx"
-_SAFE_FILE_NAME = re.compile(r"^[0-9a-f]{32}\.xlsx$")
+_UNSAFE_INPUT_NAME = re.compile(r'[\x00-\x1f<>:"/\\|?*]')
+MAX_INPUT_BASENAME_LENGTH = 100
+
+
+def _safe_input_basename(filename: str | None) -> str:
+    # Browser filenames can contain either Windows or POSIX separators,
+    # regardless of the server OS. Never retain a caller-supplied directory.
+    basename = (filename or "upload.xlsx").replace("\\", "/").rsplit("/", 1)[-1]
+    basename = _UNSAFE_INPUT_NAME.sub("_", basename).strip().rstrip(". ")
+    if Path(basename).suffix.lower() != ALLOWED_SUFFIX:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Only .xlsx files are allowed")
+    # Bound the complete storage component including the UUID prefix. Retain
+    # business tokens such as '30天' needed by the workbook role detector.
+    stem = Path(basename).stem[:MAX_INPUT_BASENAME_LENGTH - len(ALLOWED_SUFFIX)].rstrip(". ") or "upload"
+    return stem + ALLOWED_SUFFIX
 
 
 def run_directory(run_id: str) -> Path:
@@ -55,9 +69,7 @@ def ensure_run_access(run: ToolRun, *, user_id: str, is_management: bool) -> Too
 
 
 def save_input_file(run: ToolRun, *, filename: str | None, source: BinaryIO) -> dict:
-    original_name = Path(filename or "upload.xlsx").name
-    if Path(original_name).suffix.lower() != ALLOWED_SUFFIX:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Only .xlsx files are allowed")
+    original_name = _safe_input_basename(filename)
     payload = source.read(MAX_UPLOAD_BYTES + 1)
     if not payload:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Uploaded file is empty")
@@ -66,7 +78,7 @@ def save_input_file(run: ToolRun, *, filename: str | None, source: BinaryIO) -> 
 
     input_dir = run_directory(run.id) / "input"
     input_dir.mkdir(parents=True, exist_ok=True)
-    storage_name = f"{uuid.uuid4().hex}.xlsx"
+    storage_name = f"{uuid.uuid4().hex}_{original_name}"
     path = input_dir / storage_name
     path.write_bytes(payload)
     return {

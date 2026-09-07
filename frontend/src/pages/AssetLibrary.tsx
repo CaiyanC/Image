@@ -1,9 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { api } from '../services/api'
-import { canUsePermission } from '../services/permissionFeedback'
 import { SecureImage, SecureVideo } from '../components/SecureFile'
-import { useAuthStore } from '../store/authStore'
-import type { AssetTags, AssetTaxonomy, ProductAsset, ProductListItem } from '../types'
+import { hasPermission, useAuthStore } from '../store/authStore'
+import type { AssetTags, AssetTaxonomy, ProductAsset } from '../types'
 import {
   AMAZON_SLOTS,
   ASSET_CATEGORIES,
@@ -26,14 +25,15 @@ import {
 } from './assetLibraryHelpers'
 
 type EditForm = Partial<ProductAsset>
+type ProductCandidate = Awaited<ReturnType<typeof api.products.candidates>>['items'][number]
 
 export default function AssetLibrary() {
-  const { user, isManagement } = useAuthStore()
-  const canManageAssets = canUsePermission(user, isManagement, 'product.edit') && canUsePermission(user, isManagement, 'media.upload')
-  const canEditTags = canManageAssets && canUsePermission(user, isManagement, 'tag.edit')
-  const canReviewAssets = canUsePermission(user, isManagement, 'media.review')
-  const [products, setProducts] = useState<ProductListItem[]>([])
-  const [searchResults, setSearchResults] = useState<ProductListItem[]>([])
+  const { user } = useAuthStore()
+  const canManageAssets = hasPermission(user, 'product.edit') && hasPermission(user, 'media.upload')
+  const canEditTags = canManageAssets && hasPermission(user, 'tag.edit')
+  const canReviewAssets = hasPermission(user, 'media.review')
+  const [products, setProducts] = useState<ProductCandidate[]>([])
+  const [searchResults, setSearchResults] = useState<ProductCandidate[]>([])
   const initialSku = new URLSearchParams(window.location.search).get('sku') || ''
   const [searchSku, setSearchSku] = useState(initialSku)
   const [selectedSku, setSelectedSku] = useState(initialSku)
@@ -59,7 +59,9 @@ export default function AssetLibrary() {
   const [tagPresets, setTagPresets] = useState(TAG_PRESETS)
 
   useEffect(() => {
-    api.products.list(0, 100).then(result => setProducts(result.items)).catch(() => setProducts([]))
+    let active = true
+    api.products.candidates('media').then(result => { if (active) setProducts(result.items) }).catch(() => { if (active) setProducts([]) })
+    return () => { active = false }
   }, [])
 
   useEffect(() => {
@@ -73,9 +75,10 @@ export default function AssetLibrary() {
       return
     }
     let cancelled = false
-    api.products.getBySku(selectedSku)
-      .then(product => {
-        if (!cancelled) setSelectedProductName(product.product_name_cn || product.product_name_en || '')
+    api.products.candidates('media', selectedSku)
+      .then(({ items }) => {
+        const product = items.find((item) => item.sku === selectedSku)
+        if (!cancelled) setSelectedProductName(product?.product_name_cn || product?.product_name_en || '')
       })
       .catch(() => {
         if (!cancelled) setSelectedProductName('')
@@ -104,12 +107,13 @@ export default function AssetLibrary() {
       setSearchResults([])
       return
     }
+    let active = true
     const timer = window.setTimeout(() => {
-      api.products.search(keyword)
-        .then(result => setSearchResults(result.items))
-        .catch(() => setSearchResults([]))
+      api.products.candidates('media', keyword)
+        .then(result => { if (active) setSearchResults(result.items) })
+        .catch(() => { if (active) setSearchResults([]) })
     }, 200)
-    return () => window.clearTimeout(timer)
+    return () => { active = false; window.clearTimeout(timer) }
   }, [searchSku])
 
   const loadAssets = useCallback(async () => {

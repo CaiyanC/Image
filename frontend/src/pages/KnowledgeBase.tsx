@@ -1,9 +1,12 @@
 import { useEffect, useState } from 'react'
 import type { ReactNode } from 'react'
 import { api } from '../services/api'
+import { hasPermission, useAuthStore } from '../store/authStore'
 import type { KnowledgeBaseHealth, KnowledgeJob, KnowledgeSearchPreview } from '../services/api'
 
 export default function KnowledgeBase() {
+  const user = useAuthStore((state) => state.user)
+  const canSync = hasPermission(user, 'knowledge.sync')
   const [health, setHealth] = useState<KnowledgeBaseHealth | null>(null)
   const [preview, setPreview] = useState<KnowledgeSearchPreview | null>(null)
   const [query, setQuery] = useState('露营咖啡')
@@ -63,6 +66,7 @@ export default function KnowledgeBase() {
   }
 
   async function createReindexJob(mode: 'pending' | 'full') {
+    if (!hasPermission(useAuthStore.getState().user, 'knowledge.sync')) return
     setJobLoading(true)
     setError('')
     try {
@@ -76,6 +80,7 @@ export default function KnowledgeBase() {
   }
 
   async function retryEmbeddings() {
+    if (!hasPermission(useAuthStore.getState().user, 'knowledge.sync')) return
     setJobLoading(true)
     setError('')
     try {
@@ -105,7 +110,7 @@ export default function KnowledgeBase() {
           </div>
           <div className="flex flex-wrap gap-2">
             <button className="btn-secondary px-4 py-2 text-sm" onClick={() => { loadHealth(); loadJobs() }} disabled={jobLoading}>刷新</button>
-            <button className="btn-secondary px-4 py-2 text-sm" onClick={() => createReindexJob('pending')} disabled={jobLoading || hasActiveJob}>
+            {canSync && <><button className="btn-secondary px-4 py-2 text-sm" onClick={() => createReindexJob('pending')} disabled={jobLoading || hasActiveJob}>
               同步待处理
             </button>
             <button className="btn-secondary px-4 py-2 text-sm" onClick={retryEmbeddings} disabled={jobLoading || hasActiveJob}>
@@ -113,7 +118,7 @@ export default function KnowledgeBase() {
             </button>
             <button className="btn-primary px-4 py-2 text-sm" onClick={() => createReindexJob('full')} disabled={jobLoading || hasActiveJob}>
               {jobLoading || hasActiveJob ? '任务执行中...' : '全量重建'}
-            </button>
+            </button></>}
           </div>
         </div>
       </div>

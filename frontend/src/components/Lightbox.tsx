@@ -1,5 +1,5 @@
 import { useEffect, useCallback } from 'react'
-import { useSignedFileUrl } from './SecureFile'
+import { useFileDownload, useSignedFileUrl } from './SecureFile'
 
 interface LightboxProps {
   images: string[]
@@ -11,6 +11,7 @@ interface LightboxProps {
 export default function Lightbox({ images, currentIndex, onClose, onNavigate }: LightboxProps) {
   const total = images.length
   const current = useSignedFileUrl(images[currentIndex])
+  const { canDownload, download, downloading, downloadError } = useFileDownload(images[currentIndex])
 
   const goNext = useCallback(() => {
     onNavigate((currentIndex + 1) % total)
@@ -72,20 +73,21 @@ export default function Lightbox({ images, currentIndex, onClose, onNavigate }: 
         {currentIndex + 1} / {total}
       </div>
 
-      <a
-        href={current.url || images[currentIndex]}
-        download
-        onClick={(e) => e.stopPropagation()}
+      {canDownload && <button
+        type="button"
+        disabled={downloading}
+        onClick={(e) => { e.stopPropagation(); void download() }}
         className="absolute top-4 left-20 w-10 h-10 rounded-full glass-light flex items-center justify-center text-white hover:text-apple-blue transition-colors z-10"
-        title="下载"
+        title="下载原图"
       >
         <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
           <path strokeLinecap="round" strokeLinejoin="round" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
         </svg>
-      </a>
+      </button>}
+      {downloadError && <div role="alert" className="absolute top-16 left-20 text-red-300">{downloadError}</div>}
 
       <img
-        src={current.url || images[currentIndex]}
+        src={current.url || undefined}
         alt={`Generated ${currentIndex + 1}`}
         className="max-w-[90vw] max-h-[85vh] object-contain rounded-xl select-none"
         onClick={(e) => e.stopPropagation()}

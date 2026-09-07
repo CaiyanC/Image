@@ -1,14 +1,25 @@
 import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { api, type PlatformTool } from '../services/api'
+import { hasPermission, useAuthStore } from '../store/authStore'
 
 export default function ToolCenter() {
   const [tools, setTools] = useState<PlatformTool[]>([])
   const [error, setError] = useState('')
+  const [loading, setLoading] = useState(true)
+  const user = useAuthStore((state) => state.user)
+  const permissionSignature = [...(user?.permissions || [])].sort().join('|')
+  const visibleTools = tools.filter((tool) => tool.is_enabled && hasPermission(user, tool.permission_key))
 
   useEffect(() => {
-    api.tools.list().then(setTools).catch((err: Error) => setError(err.message))
-  }, [])
+    let active = true
+    setLoading(true)
+    setError('')
+    api.tools.list().then((items) => { if (active) setTools(items) })
+      .catch((err: Error) => { if (active) { setTools([]); setError(err.message) } })
+      .finally(() => { if (active) setLoading(false) })
+    return () => { active = false }
+  }, [permissionSignature])
 
   return (
     <main className="mx-auto max-w-6xl px-4 pb-12 pt-8 md:px-6">
@@ -19,9 +30,10 @@ export default function ToolCenter() {
       </div>
       {error && <div className="mb-5 rounded-2xl bg-red-50 px-4 py-3 text-sm text-red-600">{error}</div>}
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-        {tools.map((tool) => <ToolCard key={tool.tool_key} tool={tool} />)}
+        {visibleTools.map((tool) => <ToolCard key={tool.tool_key} tool={tool} />)}
       </div>
-      {!error && tools.length === 0 && <p className="rounded-3xl bg-white/55 p-8 text-center text-sm text-apple-gray-medium">当前账号暂未分配可用工具，请联系管理员。</p>}
+      {loading && <p className="p-8 text-center text-sm text-apple-gray-medium">正在加载可用工具…</p>}
+      {!loading && !error && visibleTools.length === 0 && <p className="rounded-3xl bg-white/55 p-8 text-center text-sm text-apple-gray-medium">当前账号暂未分配可用工具，请联系管理员。</p>}
     </main>
   )
 }
