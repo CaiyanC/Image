@@ -44,25 +44,25 @@ def test_customer_service_pipeline_override_is_dev_only(monkeypatch):
     assert customer_pipeline_service.resolve_customer_service_pipeline("semantic-rag-v2") == "semantic_rag_v2"
 
     monkeypatch.setattr(settings, "APP_ENV", "prod")
-    assert customer_pipeline_service.resolve_customer_service_pipeline("semantic_rag_v2") == "legacy"
-    assert customer_pipeline_service.resolve_customer_service_pipeline("workbuddy_rag_v1") == "legacy"
+    assert customer_pipeline_service.resolve_customer_service_pipeline("semantic_rag_v2") == "workbuddy_rag_v1"
+    assert customer_pipeline_service.resolve_customer_service_pipeline("workbuddy_rag_v1") == "workbuddy_rag_v1"
 
     monkeypatch.setattr(settings, "APP_ENV", "dev")
     assert customer_pipeline_service.resolve_customer_service_pipeline("workbuddy-rag-v1") == "workbuddy_rag_v1"
 
 
-def test_server_selected_agent_pipeline_is_available_in_prod(monkeypatch):
+def test_server_selected_agent_cannot_bypass_single_production_pipeline(monkeypatch):
     monkeypatch.setattr(settings, "CUSTOMER_SERVICE_PIPELINE", "legacy")
     monkeypatch.setattr(settings, "CUSTOMER_SERVICE_PIPELINE_OVERRIDE_ENABLED", False)
     monkeypatch.setattr(settings, "APP_ENV", "prod")
 
     assert customer_pipeline_service.resolve_customer_service_pipeline(
         "workbuddy_agent_v2",
-    ) == "legacy"
+    ) == "workbuddy_rag_v1"
     assert customer_pipeline_service.resolve_customer_service_pipeline(
         "workbuddy_agent_v2",
         server_selected=True,
-    ) == "workbuddy_agent_v2"
+    ) == "workbuddy_rag_v1"
 
 
 def test_invalid_configured_pipeline_uses_environment_safe_default(monkeypatch):
@@ -71,7 +71,27 @@ def test_invalid_configured_pipeline_uses_environment_safe_default(monkeypatch):
     assert customer_pipeline_service.configured_customer_service_pipeline() == "semantic_rag_v2"
 
     monkeypatch.setattr(settings, "APP_ENV", "prod")
-    assert customer_pipeline_service.configured_customer_service_pipeline() == "legacy"
+    assert customer_pipeline_service.configured_customer_service_pipeline() == "workbuddy_rag_v1"
+
+
+def test_production_agent_entry_is_closed(monkeypatch):
+    from fastapi import HTTPException
+    from starlette.requests import Request
+
+    monkeypatch.setattr(settings, "APP_ENV", "prod")
+    request = Request({"type": "http"})
+    with pytest.raises(HTTPException) as error:
+        customer_service_api._select_workbuddy_agent_pipeline(request)
+    assert error.value.status_code == 404
+
+
+def test_development_agent_entry_remains_available(monkeypatch):
+    from starlette.requests import Request
+
+    monkeypatch.setattr(settings, "APP_ENV", "dev")
+    request = Request({"type": "http"})
+    customer_service_api._select_workbuddy_agent_pipeline(request)
+    assert getattr(request.state, customer_service_api._SERVER_PIPELINE_STATE) == "workbuddy_agent_v2"
 
 
 def test_recommendation_response_cache_is_scoped_to_pipeline(monkeypatch):
@@ -407,7 +427,8 @@ def test_v2_provider_failure_returns_v2_safe_answer_without_legacy_fallback(
     assert result["debug"]["pipeline_version"] == "semantic_rag_v2"
     assert result["debug"]["no_legacy_route"] is True
     assert result["answer_type"] == "clarification"
-    assert "没有找到" in result["answer"] or "补充" in result["answer"]
+    assert "暂时无法确认" in result["answer"]
+    assert "商品资料" not in result["answer"]
 
 
 def test_v2_repairs_generic_clarification_for_bound_product(
@@ -504,7 +525,8 @@ def test_v2_repairs_generic_clarification_for_bound_product(
             )
         )
 
-    assert result["answer"].startswith("这款资料明确标注搭建简单")
+    assert result["answer"].startswith("这款已确认搭建简单")
+    assert "尚未确认抗风等级" in result["answer"]
     assert result["answer_type"] == "recommendation"
     assert result["result_skus"] == ["SKU-REPAIR"]
     assert len(answer_calls) == 2
@@ -1612,7 +1634,7 @@ def test_workbuddy_keeps_answer_when_optional_identity_metadata_is_missing(
             )
         )
 
-    assert result["answer"] == "如果你指的是木柄候选锅A，资料未确认木柄是否可拆。"
+    assert result["answer"] == "如果你指的是木柄候选锅A，暂时无法确认木柄是否可拆。"
     assert result["needs_clarification"] is False
     assert result["result_skus"] == []
     assert result["results"] == []
@@ -2050,7 +2072,7 @@ def test_workbuddy_streams_one_structured_llm_response_without_duplicate_answer(
         assert kwargs["response_format"] == {"type": "json_object"}
         response = json.dumps(
             {
-                "answer": "流式测试锅容量是 1L。",
+                "answer": "资料显示流式测试锅容量是 1L。",
                 "answer_type": "product_detail",
                 "request_kind": "product_fact",
                 "needs_clarification": False,
@@ -2099,7 +2121,8 @@ def test_workbuddy_streams_one_structured_llm_response_without_duplicate_answer(
 
     assert provider_calls == ["customer_service_workbuddy_answer"]
     assert "".join(emitted) == result["answer"]
-    assert result["answer"] == "流式测试锅容量是 1L。"
+    assert result["answer"] == "已确认流式测试锅容量是 1L。"
+    assert all("资料" not in delta for delta in emitted)
 
 
 def test_workbuddy_followup_uses_confirmed_context_without_hard_scoping_rag(

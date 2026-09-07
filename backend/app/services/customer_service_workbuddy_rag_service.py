@@ -23,6 +23,8 @@ from sqlalchemy.orm import Session
 from ..core.config import settings
 from ..models.knowledge_base import CustomerServiceConversation, CustomerServiceMessage
 from ..models.product import Product
+from .customer_facing_answer_contract import CUSTOMER_FACING_ANSWER_CONTRACT, render_customer_answer
+from .customer_answer_consistency_contract import answer_consistency_issues, consistency_repair_instruction
 from . import (
     customer_agent_service,
     customer_enterprise_guardrail_service,
@@ -146,7 +148,7 @@ def _compact_product_for_prompt(detail: dict[str, Any]) -> dict[str, Any]:
     compact = _compact_product_detail(detail)
     specs = compact.get("specs") if isinstance(compact.get("specs"), dict) else {}
     business = compact.get("business") if isinstance(compact.get("business"), dict) else {}
-    return _compact_prompt_value({
+    packet = _compact_prompt_value({
         "evidence_role": "canonical_product_record",
         "authority_level": "canonical",
         "sku": compact.get("sku"),
@@ -156,6 +158,8 @@ def _compact_product_for_prompt(detail: dict[str, Any]) -> dict[str, Any]:
         "series": compact.get("series"),
         "category": compact.get("category"),
         "sub_category": compact.get("sub_category"),
+        "lifecycle_status": compact.get("lifecycle_status"),
+        "active_flag": compact.get("active_flag"),
         "specs": {
             "capacity": specs.get("capacity"),
             "gross_weight_g": specs.get("gross_weight_g"),
@@ -173,6 +177,11 @@ def _compact_product_for_prompt(detail: dict[str, Any]) -> dict[str, Any]:
             "usage_scenarios": business.get("usage_scenarios"),
         },
     }, string_limit=120, list_limit=8, dict_limit=20)
+    # Canonical evidence points here instead of repeating the live record.
+    # Never discard lifecycle or truncate a safety exception at that pointer.
+    packet["interpretation_constraints"] = compact.get("interpretation_constraints") or {}
+    packet["specs"]["usage_instruction"] = specs.get("usage_instruction")
+    return packet
 
 
 def _evidence_authority_metadata(
@@ -760,6 +769,7 @@ async def _generate_answer(
     *,
     payload: dict[str, Any],
     answer_delta_callback: Callable[[str], Awaitable[None]] | None = None,
+    _consistency_retry: bool = False,
 ) -> tuple[dict[str, Any] | None, dict[str, Any]]:
     system_prompt = (
         "【热源兼容事实边界】先按本轮要回答的具体 SKU 核对热源字段：客户问‘能用 X 吗/兼容 X 吗/适配什么燃料’时，只有该 SKU 的 evidence 在适用热源或使用说明中明确写出 X，才能回答支持；未写出就回答‘未列出/暂不能确认’，不能用常识补全。‘明火直烧’、‘开放火焰’、‘燃气’、‘多种热源’都不能自动推出酒精炉、燃气炉、木柴、木炭或电磁炉等具体选项。另一个 SKU 的 evidence 只能说明另一个 SKU，不能替当前 SKU 作兼容证明。若同 SKU 使用说明明确写出酒精炉/燃气炉版本，则可以按该版本回答，但仍要说明以所购版本和配置为准。这个边界优先级高于营销文案、候选列表和经验建议。\n"
@@ -793,12 +803,12 @@ async def _generate_answer(
         "若资料只覆盖基础型号，就说明资料覆盖范围，不要把基础型号事实升级成未确认版本的结论。"
         "开放式推荐若没有额外偏好，只要有可核对的候选，就按完整需求语义选出合适候选并说明依据；"
         "不要因为缺少非必要偏好直接说没有依据，也不要按召回顺序机械推荐。\n"
-        "你是自然、连贯、像真人同事一样工作的中文客服。先理解当前问题、conversation_history 和 previous_turn_memory，再依据本轮 evidence 与 candidate_products 回答；不要向客户暴露内部字段、检索、模型或流程。"
+        "你是直接接待顾客的中文商品客服。先理解当前问题、conversation_history 和 previous_turn_memory，再依据本轮 evidence 与 candidate_products 回答；不要向客户暴露内部字段、检索、模型或流程。"
         "请同时遵守 payload.turn_identity_contract：它是本轮客户身份与候选证据的语义边界；customer_identity_bound=false 时，候选 SKU 只能作为证据来源，不能当作客户已选商品。"
         "若 payload 提供 active_context_products，‘它/这款/刚才两款/上一轮’等上下文指代优先在这些商品内理解；只有客户明确要求换一款、其他选择或扩大推荐时，才引入其他候选。不要让新召回候选静默替换上一轮比较参与者。"
-        "experience_guidance 是人工审核或经过边界校验的自动汇总非事实沟通经验，只能帮助你更自然地承接顾虑、组织取舍和给出下一步；不能证明商品事实、不能替代 evidence、不能选择 SKU，也不能向客户提及。简单事实问题或不相关建议应直接忽略，不要强行推销或增加篇幅。完整回答当前问题的前提下优先三到六句短答，复杂比较确有必要时再用少量条目。"
-        "历史和记忆只用于理解代词、承接上下文和替换意图，不是新的商品事实；商品事实只能来自本轮 evidence，并保留它所属的 SKU。canonical_product_record 是结构化主数据，product_qa 是同 SKU 补充；出现直接冲突时如实说明资料差异。"
-        "canonical_product_record 对同一 SKU 的非空结构化字段拥有最高事实权威；同 SKU QA/知识只能补充主数据未填写的事实，不能静默改写主数据。适用热源等封闭兼容字段只认可资料明确列出的具体选项，‘明火’或‘燃气’等宽泛词不能推出具体的酒精炉等选项；空值、‘/’、暂无或未知表示主数据未填写，不是通用兼容。只有同 SKU 主数据该字段为空时，才可按已审核 QA 明确列出的范围补充并提示主数据待补充；同一封闭字段一旦已有非空主数据，即使 QA 已审核，也不能把 QA 追加的具体选项当作扩展兼容；两者不一致时以主数据为准并说明资料差异。不要把这种情况误称为直接冲突，也不能扩大 QA 的范围。热源兼容不等于室内使用许可：只有同 SKU 证据明确说明室内或家用场景时才能回答可以室内使用；仅有热源、露营或户外资料时，不得推导室内可用或室内安全，应说明资料未直接确认并提醒遵守炉具通风和安全要求。"
+        "experience_guidance 是人工审核或经过边界校验的自动汇总非事实沟通经验，只能帮助你更自然地承接顾虑、组织取舍和给出下一步；不能证明商品事实、不能替代 evidence、不能选择 SKU，也不能向客户提及。简单事实问题或不相关建议应直接忽略，不要强行推销或增加篇幅。完整回答当前问题的前提下优先一到三句短答，复杂比较确有必要时再用少量条目。"
+        "历史和记忆只用于理解代词、承接上下文和替换意图，不是新的商品事实；商品事实只能来自本轮 evidence，并保留它所属的 SKU。canonical_product_record 是结构化主数据，product_qa 是同 SKU 补充；出现直接冲突时以主产品记录的明确参数回答，不能将旧描述当作同等权威。"
+        "canonical_product_record 对同一 SKU 的非空结构化字段拥有最高事实权威；同 SKU QA/知识只能补充主数据未填写的事实，不能静默改写主数据。适用热源等封闭兼容字段只认可资料明确列出的具体选项，‘明火’或‘燃气’等宽泛词不能推出具体的酒精炉等选项；空值、‘/’、暂无或未知表示主数据未填写，不是通用兼容。只有同 SKU 主数据该字段为空时，才可按已审核 QA 明确列出的范围补充，缺失字段仅作内部核对记录，顾客回复不提内部登记状态；同一封闭字段一旦已有非空主数据，即使 QA 已审核，也不能把 QA 追加的具体选项当作扩展兼容；两者不一致时以主数据为准，对顾客仅说明仍影响其问题的具体不确定项。不要把这种情况误称为直接冲突，也不能扩大 QA 的范围。热源兼容不等于室内使用许可：只有同 SKU 证据明确说明室内或家用场景时才能回答可以室内使用；仅有热源、露营或户外资料时，不得推导室内可用或室内安全，应只说明该使用场景暂时无法确认并提醒遵守炉具通风和安全要求。"
         "回答内容优先。若多个候选对客户当前询问的同一事实都有明确且一致的资料，可以直接回答共同事实，并列出实际支持该回答的 SKU；不要因为召回多个 SKU 就机械澄清。只有商品身份、必要条件或事实确实存在歧义/缺失时才澄清；资料不足时说明边界，不要编造。重量、容量、尺寸不能自行升级成‘无负担、一定适合、完全满足’等更强结论。"
         "如果当前问题已经明确表达购买犹豫、价格价值、适用选择或顾虑，且有同 SKU evidence，必须先直接承接顾虑，再用 evidence 回答已知事实，给出有条件的判断和一个具体下一步；不能只反问客户想了解哪方面。明确的参数、兼容、使用或安全事实问题直接按 evidence 回答，不要让 experience_guidance 改写事实答案。\n"
         "推荐或比较可以引用多个候选，但只能使用 evidence 中实际存在的 SKU，不要按候选排序自动推荐。普通安全/使用问题直接依据资料回答。不要为了填写分类、选卡或记忆字段而改变一个本来可用的回答，也不要为了填字段编造事实。"
@@ -820,6 +830,9 @@ async def _generate_answer(
         "\u5982\u679c current_question \u5df2\u660e\u786e\u5305\u542b SKU \u6216\u7cbe\u786e\u5546\u54c1\u4e3b\u4f53\uff0c\u4e14 evidence \u4e2d\u5b58\u5728\u540c\u4e00 SKU\uff0c\u7981\u6b62\u8f93\u51fa\u8981\u6c42\u5ba2\u6237\u8865\u5145\u5546\u54c1\u540d\u79f0\u6216 SKU \u7684\u6a21\u677f\u5316 clarification\u3002"
         "\u5373\u4f7f\u95ee\u9898\u5305\u542b\u5c1a\u672a\u767b\u8bb0\u7684\u7ef4\u5ea6\uff0c\u4e5f\u5fc5\u987b\u5148\u56de\u7b54 evidence \u80fd\u786e\u8ba4\u7684\u4e8b\u5b9e\uff0c\u518d\u8bf4\u660e\u7f3a\u5931\u7ef4\u5ea6\uff0c\u53ea\u8ffd\u95ee\u90a3\u4e00\u9879\u4fe1\u606f\uff1b\u4e0d\u8981\u628a\u201c\u7f3a\u5c11\u4e00\u4e2a\u5b57\u6bb5\u201d\u6269\u5927\u6210\u201c\u6ca1\u6709\u627e\u5230\u672c\u95ee\u9898\u4f9d\u636e\u201d\u3002\n"
     )
+    system_prompt += "\n" + CUSTOMER_FACING_ANSWER_CONTRACT
+    if _consistency_retry:
+        system_prompt += "\n" + str(payload.get("answer_consistency_repair") or "")
     start = perf_counter()
     metadata: dict[str, Any] = {}
     try:
@@ -867,6 +880,16 @@ async def _generate_answer(
             raw_text = "".join(raw_parts)
             metadata["answer_streamed"] = bool(emitted_answer)
         raw = _extract_json_object(raw_text)
+        issues = answer_consistency_issues(raw, payload)
+        if issues and not _consistency_retry:
+            repaired, retry_metadata = await _generate_answer(db,
+                payload={**payload, "answer_consistency_repair": consistency_repair_instruction(issues)},
+                answer_delta_callback=answer_delta_callback, _consistency_retry=True)
+            return repaired, {**retry_metadata, "consistency_retry_count": 1,
+                "consistency_issues": issues, "elapsed_ms": round(customer_perf_service.perf_ms(start), 2)}
+        if issues:
+            return None, {**metadata, "raw_valid": False, "consistency_rejected": issues,
+                          "elapsed_ms": round(customer_perf_service.perf_ms(start), 2)}
         metadata["elapsed_ms"] = round(customer_perf_service.perf_ms(start), 2)
         metadata["raw_valid"] = bool(raw)
         return raw, metadata
@@ -927,7 +950,7 @@ def _partial_json_answer(raw_text: str) -> str:
 def _safe_missing_answer(*, has_identity_ambiguity: bool) -> str:
     if has_identity_ambiguity:
         return "我还不能确认你指的是哪一款商品。请补充商品名称或 SKU，我再按对应商品核对。"
-    return "我查看了当前商品资料，但没有找到能直接确认这个问题的依据。你可以补充具体商品名称或 SKU，我再继续核对。"
+    return "暂时无法确认这个问题的答案，建议下单前向店铺人工核实。"
 
 
 def _normalize_identity_resolution(value: Any) -> str:
@@ -978,7 +1001,7 @@ def _validated_workbuddy_answer(
         if str(item.get("evidence_id") or "").strip()
     }
     value = raw if isinstance(raw, dict) else {}
-    answer = _clip_text(value.get("answer"), 2400)
+    answer = render_customer_answer(_clip_text(value.get("answer"), 2400))
     selected_skus = [
         sku for sku in _normalize_skus(value.get("selected_skus"), limit=_MAX_CANDIDATE_SKUS)
         if sku in allowed_skus
@@ -1336,11 +1359,17 @@ async def ask_customer_service_workbuddy_rag(
         experience_guidance=experience_guidance,
         active_context_products=active_context_products,
     )
+    async def buffer_until_validated(_delta: str) -> None:
+        # Raw deltas may contain attribution or fail the identity contract.
+        # Publish only the validated final answer through _persist_result.
+        return None
+
     answer_raw, answer_metadata = await _generate_answer(
         db,
         payload=payload,
-        answer_delta_callback=answer_delta_callback,
+        answer_delta_callback=buffer_until_validated if answer_delta_callback else None,
     )
+    answer_metadata["answer_streamed"] = False
 
     raw_answer_type = str((answer_raw or {}).get("answer_type") or "").strip().lower()
     raw_identity_resolution = _normalize_identity_resolution(
