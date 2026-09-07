@@ -514,6 +514,13 @@ def _audit_has_value(value) -> bool:
     return True
 
 
+def _audit_source_requires_confirmation(specs: ProductSpecs | None, product: Product | None = None) -> bool:
+    return bool(
+        (specs and str(specs.usage_instruction or '').startswith('使用说明待产品负责人核实'))
+        or (product and '待产品负责人核实' in str(product.quality_note or ''))
+    )
+
+
 def _audit_asset_storage_state(url: str | None) -> str:
     """Check local upload references without touching external URLs."""
     raw = str(url or "").strip().split("?", 1)[0].replace("\\", "/")
@@ -671,6 +678,8 @@ def get_product_audit_overview(
                 vector_counts["other"] += 1
 
         issues: list[str] = []
+        if _audit_source_requires_confirmation(specs, product):
+            issues.append("source_requires_confirmation")
         if missing_fields:
             issues.append("product_fields_missing")
         if qa_counts["review"] or qa_counts["other"]:

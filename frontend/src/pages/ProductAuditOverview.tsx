@@ -5,6 +5,7 @@ import { useAuthStore } from '../store/authStore'
 
 const ISSUE_LABELS: Record<string, string> = {
   product_fields_missing: '基础字段缺失',
+  source_requires_confirmation: '原始资料已隔离，待产品负责人确认',
   qa_needs_review: 'QA待审核',
   asset_needs_review: '素材待处理',
   asset_storage_unavailable: '素材文件异常',
@@ -77,7 +78,7 @@ export default function ProductAuditOverview() {
         <>
           <section className="mt-6 grid grid-cols-2 gap-3 lg:grid-cols-5">
             <Metric title="产品总数" value={data.summary.products_total} detail={`已返回 ${data.pagination.returned} 条`} />
-            <Metric title="核对通过" value={data.summary.products_ready} detail={`有问题 ${data.summary.products_with_issues} 个`} tone={data.summary.products_with_issues ? 'warning' : 'good'} />
+            <Metric title="数据检查通过" value={data.summary.products_ready} detail={`需处理 ${data.summary.products_with_issues} 个；不等同公司启用验收`} tone={data.summary.products_with_issues ? 'warning' : 'good'} />
             <Metric title="QA" value={data.summary.qa_total} detail={`已审 ${data.summary.qa_approved} · 待审 ${data.summary.qa_review}`} />
             <Metric title="图片素材" value={data.summary.asset_total} detail={`已审 ${data.summary.asset_approved} · 待处理 ${data.summary.asset_pending}`} tone={data.summary.asset_invalid || data.summary.asset_duplicates ? 'warning' : 'default'} />
             <Metric title="产品向量" value={data.summary.vector_product_chunks} detail={`已同步 ${data.summary.vector_synced} · 失败 ${data.summary.vector_failed}`} tone={data.summary.vector_pending || data.summary.vector_failed ? 'warning' : 'good'} />
