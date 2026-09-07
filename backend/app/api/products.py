@@ -129,7 +129,16 @@ def vector_status(
     synced = db.query(KnowledgeChunk).filter(KnowledgeChunk.embedding_status == "synced").count()
     failed = db.query(KnowledgeChunk).filter(KnowledgeChunk.embedding_status == "failed").count()
     pending_products = db.query(Product).filter(Product.sync_flag.is_(False)).count()
-    skus = [row[0] for row in db.query(distinct(KnowledgeChunk.sku)).all()]
+    # File/experience chunks may legitimately have no product binding.  They
+    # remain part of total_chunks, but a product vector status must not count
+    # their NULL/blank SKU as an additional product or expose it to callers.
+    skus = list(dict.fromkeys(
+        str(row[0]).strip().upper()
+        for row in db.query(distinct(KnowledgeChunk.sku))
+        .filter(KnowledgeChunk.sku.is_not(None))
+        .all()
+        if str(row[0] or "").strip()
+    ))
     return {
         "total_chunks": total,
         "synced": synced,

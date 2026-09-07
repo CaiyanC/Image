@@ -176,6 +176,27 @@ class Settings:
     CUSTOMER_SERVICE_WORKBUDDY_REASONING_EFFORT: str = os.getenv(
         "CUSTOMER_SERVICE_WORKBUDDY_REASONING_EFFORT", "none"
     ).strip().lower()
+    # Optional non-factual RAG guidance for conversational strategy. Product
+    # facts remain exclusively in the existing evidence packet, and the
+    # feature can be disabled without changing any of the three pipelines.
+    CUSTOMER_SERVICE_EXPERIENCE_RAG_ENABLED: bool = os.getenv(
+        "CUSTOMER_SERVICE_EXPERIENCE_RAG_ENABLED", "false"
+    ).lower() == "true"
+    CUSTOMER_SERVICE_EXPERIENCE_RAG_MAX_CARDS: int = int(
+        os.getenv("CUSTOMER_SERVICE_EXPERIENCE_RAG_MAX_CARDS", "1")
+    )
+    CUSTOMER_SERVICE_EXPERIENCE_RAG_MAX_CHARS: int = int(
+        os.getenv("CUSTOMER_SERVICE_EXPERIENCE_RAG_MAX_CHARS", "1200")
+    )
+    # Experience guidance is optional conversational context, not product
+    # evidence. Require a real vector-retrieval score before it can enter a
+    # prompt so lexical fallback rows cannot bypass the relevance boundary.
+    CUSTOMER_SERVICE_EXPERIENCE_RAG_MIN_SCORE: float = float(
+        os.getenv("CUSTOMER_SERVICE_EXPERIENCE_RAG_MIN_SCORE", "0.50")
+    )
+    CUSTOMER_SERVICE_EXPERIENCE_RAG_MIN_MARGIN: float = float(
+        os.getenv("CUSTOMER_SERVICE_EXPERIENCE_RAG_MIN_MARGIN", "0.02")
+    )
 
     DATABASE_URL: str = os.getenv(
         "DATABASE_URL",

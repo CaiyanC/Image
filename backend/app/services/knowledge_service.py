@@ -12,6 +12,10 @@ from . import dmxapi_service
 from . import customer_cache_service
 
 
+CUSTOMER_EXPERIENCE_SOURCE_TYPE = "customer_experience"
+_NON_FACT_GUIDANCE_SOURCE_TYPES = (CUSTOMER_EXPERIENCE_SOURCE_TYPE,)
+
+
 def _knowledge_retrieval_revision(db: Session) -> str:
     """Return a cheap data/embedding revision for retrieval-cache keys.
 
@@ -220,6 +224,7 @@ def keyword_retrieve(
     *,
     skus: list[str] | None = None,
     sections: list[str] | None = None,
+    source_types: list[str] | None = None,
 ) -> list[dict]:
     query_text = query.strip()
     if not query_text:
@@ -231,6 +236,21 @@ def keyword_retrieve(
         for section in (sections or [])
         if str(section or "").strip()
     ))
+    normalized_source_types = tuple(dict.fromkeys(
+        str(source_type or "").strip()
+        for source_type in (source_types or [])
+        if str(source_type or "").strip()
+    ))
+    if source_types is not None and not normalized_source_types:
+        return []
+    if normalized_source_types:
+        db_query = db_query.filter(KnowledgeChunk.source_type.in_(normalized_source_types))
+    else:
+        # Non-factual guidance is retrieved through its dedicated service and
+        # must never enter a product/QA evidence page by accident.
+        db_query = db_query.filter(
+            KnowledgeChunk.source_type.notin_(_NON_FACT_GUIDANCE_SOURCE_TYPES)
+        )
     section_filters = []
     for section in normalized_sections:
         if section.casefold() == "qa":
@@ -551,6 +571,28 @@ def merge_retrieval_rows(
     return [row for _origin, _index, row in combined[:limit]]
 
 
+def _annotate_retrieval_signal(
+    rows: list[dict] | None,
+    signal: str,
+    *,
+    enabled: bool,
+) -> list[dict]:
+    """Add an internal signal marker only for callers that need provenance.
+
+    Normal customer-service retrieval keeps its historical row contract. The
+    experience-guidance channel opts in so it can distinguish a vector result
+    from a lexical fallback without exposing implementation metadata to the
+    other answer prompts.
+    """
+    if not enabled:
+        return list(rows or [])
+    return [
+        {**row, "_retrieval_signal": signal}
+        for row in (rows or [])
+        if isinstance(row, dict)
+    ]
+
+
 async def semantic_retrieve(
     db: Session,
     query: str,
@@ -560,6 +602,8 @@ async def semantic_retrieve(
     prefer_product_sources: bool = False,
     skus: list[str] | None = None,
     sections: list[str] | None = None,
+    source_types: list[str] | None = None,
+    _include_retrieval_signal: bool = False,
 ) -> list[dict]:
     if not query.strip():
         return []
@@ -574,6 +618,13 @@ async def semantic_retrieve(
         for section in (sections or [])
         if str(section or "").strip()
     ))
+    normalized_source_types = tuple(dict.fromkeys(
+        str(source_type or "").strip()
+        for source_type in (source_types or [])
+        if str(source_type or "").strip()
+    ))
+    if source_types is not None and not normalized_source_types:
+        return []
     # Include the live corpus revision so a product/QA sync is immediately
     # visible to every worker, rather than waiting for the five-minute local
     # candidate-cache TTL to expire.
@@ -587,6 +638,9 @@ async def semantic_retrieve(
         prefer_product_sources,
         normalized_skus,
         normalized_sections,
+        normalized_source_types,
+        source_types is not None,
+        _include_retrieval_signal,
         retrieval_revision,
     )
     cached = customer_cache_service.recommendation_candidate_cache.get(cache_key)
@@ -602,6 +656,12 @@ async def semantic_retrieve(
                 limit=limit,
                 skus=list(normalized_skus),
                 sections=list(normalized_sections),
+                source_types=list(normalized_source_types) if source_types is not None else None,
+            )
+            rows = _annotate_retrieval_signal(
+                rows,
+                "lexical",
+                enabled=_include_retrieval_signal,
             )
             customer_cache_service.recommendation_candidate_cache.set(cache_key, rows)
             return rows
@@ -612,6 +672,20 @@ async def semantic_retrieve(
             customer_cache_service.embedding_cache.set(embedding_key, embedding)
         where = "c.embedding_status = 'synced' AND c.embedding IS NOT NULL"
         params = {"embedding": _vector_literal(embedding), "limit": limit}
+        if normalized_source_types:
+            source_type_placeholders = []
+            for index, source_type in enumerate(normalized_source_types):
+                key = f"source_type_{index}"
+                source_type_placeholders.append(f":{key}")
+                params[key] = source_type
+            where += f" AND c.source_type IN ({', '.join(source_type_placeholders)})"
+        else:
+            non_fact_placeholders = []
+            for index, source_type in enumerate(_NON_FACT_GUIDANCE_SOURCE_TYPES):
+                key = f"excluded_source_type_{index}"
+                non_fact_placeholders.append(f":{key}")
+                params[key] = source_type
+            where += f" AND c.source_type NOT IN ({', '.join(non_fact_placeholders)})"
         if sku:
             where += (
                 " AND (c.sku = :sku "
@@ -660,6 +734,7 @@ async def semantic_retrieve(
                 limit=limit,
                 skus=list(normalized_skus),
                 sections=list(normalized_sections),
+                source_types=list(normalized_source_types) if source_types is not None else None,
             )
             customer_cache_service.recommendation_candidate_cache.set(cache_key, rows)
             return rows
@@ -673,6 +748,11 @@ async def semantic_retrieve(
                     row["document_source_id"],
                 ),
                 "score": 1 - float(row["distance"] or 0),
+                **(
+                    {"_retrieval_signal": "vector"}
+                    if _include_retrieval_signal
+                    else {}
+                ),
             }
             for row in rows
         ]
@@ -686,6 +766,12 @@ async def semantic_retrieve(
             limit=max(limit * 3, limit),
             skus=list(normalized_skus),
             sections=list(normalized_sections),
+            source_types=list(normalized_source_types) if source_types is not None else None,
+        )
+        keyword_rows = _annotate_retrieval_signal(
+            keyword_rows,
+            "lexical",
+            enabled=_include_retrieval_signal,
         )
         result = merge_retrieval_rows(
             vector_result,
@@ -708,6 +794,12 @@ async def semantic_retrieve(
                 limit=limit,
                 skus=list(normalized_skus),
                 sections=list(normalized_sections),
+                source_types=list(normalized_source_types) if source_types is not None else None,
+            )
+            rows = _annotate_retrieval_signal(
+                rows,
+                "lexical",
+                enabled=_include_retrieval_signal,
             )
         except Exception:
             rows = []

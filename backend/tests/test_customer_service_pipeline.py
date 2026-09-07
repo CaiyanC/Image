@@ -140,6 +140,115 @@ def test_explicit_sku_binding_accepts_plain_sku_adjacent_to_chinese(route_client
         ) == ["CB254"]
 
 
+def test_catalog_validated_short_sku_binds_unique_suffix_and_keeps_variant_ambiguity(
+    route_client_and_db,
+):
+    _client, _headers, Session = route_client_and_db
+    with Session() as db:
+        db.add_all([
+            Product(
+                id="short-sku-c78-id",
+                sku="CW-C78",
+                barcode="short-sku-c78-barcode",
+                product_name_cn="享野套锅",
+                brand="测试品牌",
+                category="锅具",
+            ),
+            Product(
+                id="short-sku-s10-1-id",
+                sku="CW-S10-1",
+                barcode="short-sku-s10-1-barcode",
+                product_name_cn="激川单锅",
+                brand="测试品牌",
+                category="锅具",
+            ),
+            Product(
+                id="short-sku-s10-a-id",
+                sku="CW-S10-A",
+                barcode="short-sku-s10-a-barcode",
+                product_name_cn="激川单锅",
+                brand="测试品牌",
+                category="锅具",
+            ),
+        ])
+        db.commit()
+
+        assert customer_service_semantic_rag_v2_service._explicit_skus(
+            db,
+            "C78\u6574\u5957\u62ff\u5728\u624b\u91cc\u591a\u91cd\uff1f",
+        ) == ["CW-C78"]
+        assert customer_service_semantic_rag_v2_service._explicit_skus(
+            db,
+            "S10\u7684\u5bb9\u91cf\u662f\u591a\u5c11\uff1f",
+        ) == ["CW-S10-1", "CW-S10-A"]
+        assert customer_service_semantic_rag_v2_service._explicit_skus(
+            db,
+            "C79\u7684\u5bb9\u91cf\u662f\u591a\u5c11\uff1f",
+        ) == []
+
+
+def test_semantic_rag_accepts_model_selected_sku_when_recall_was_ambiguous():
+    assert customer_service_semantic_rag_v2_service._answer_resolved_identity(
+        {
+            "answer": "享野套锅整套毛重约1320g。",
+            "answer_type": "product_detail",
+            "needs_clarification": False,
+            "selected_skus": ["CW-C78"],
+            "evidence_ids": ["v2-e1"],
+        },
+        evidence=[
+            {"sku": "CW-C78", "evidence_id": "v2-e1"},
+            {"sku": "CW-C71", "evidence_id": "v2-e2"},
+        ],
+        identity_ambiguity=True,
+    ) is True
+
+    assert customer_service_semantic_rag_v2_service._answer_resolved_identity(
+        {
+            "answer": "这款商品约1320g。",
+            "answer_type": "product_detail",
+            "needs_clarification": False,
+            "selected_skus": ["CW-C78"],
+            "evidence_ids": ["v2-e2"],
+        },
+        evidence=[
+            {"sku": "CW-C78", "evidence_id": "v2-e1"},
+            {"sku": "CW-C71", "evidence_id": "v2-e2"},
+        ],
+        identity_ambiguity=True,
+    ) is False
+
+
+def test_semantic_candidate_rerank_fuses_independent_query_passes():
+    rows = [
+        {"sku": "SKU-DISTRACTOR", "retrieval_query_index": 0, "retrieval_rank": 0},
+        {"sku": "SKU-TARGET", "retrieval_query_index": 0, "retrieval_rank": 6},
+        {"sku": "SKU-OTHER", "retrieval_query_index": 1, "retrieval_rank": 0},
+        {"sku": "SKU-TARGET", "retrieval_query_index": 1, "retrieval_rank": 1},
+    ]
+
+    assert customer_service_semantic_rag_v2_service._rank_retrieved_skus(
+        rows,
+        limit=3,
+    ) == ["SKU-TARGET", "SKU-DISTRACTOR", "SKU-OTHER"]
+
+
+def test_workbuddy_candidate_fusion_keeps_question_and_profile_skus_visible():
+    question_rows = [
+        {"sku": "SKU-NOISY", "retrieval_rank": 0},
+        {"sku": "SKU-TARGET", "retrieval_rank": 7},
+    ]
+    profile_rows = [
+        {"sku": "SKU-TARGET", "retrieval_rank": 1},
+        {"sku": "SKU-OTHER", "retrieval_rank": 2},
+    ]
+
+    assert customer_service_workbuddy_rag_service._fused_retrieved_skus(
+        [question_rows, profile_rows],
+        limit=3,
+    ) == ["SKU-TARGET", "SKU-NOISY", "SKU-OTHER"]
+
+
 def test_legacy_chat_trace_reports_configured_request_model(monkeypatch):
     monkeypatch.setattr(
         customer_llm_service.dmxapi_service,
@@ -299,6 +408,111 @@ def test_v2_provider_failure_returns_v2_safe_answer_without_legacy_fallback(
     assert result["debug"]["no_legacy_route"] is True
     assert result["answer_type"] == "clarification"
     assert "没有找到" in result["answer"] or "补充" in result["answer"]
+
+
+def test_v2_repairs_generic_clarification_for_bound_product(
+    route_client_and_db,
+    monkeypatch,
+):
+    _client, _headers, Session = route_client_and_db
+    monkeypatch.setattr(settings, "APP_ENV", "dev")
+    monkeypatch.setattr(settings, "CUSTOMER_SERVICE_PIPELINE_OVERRIDE_ENABLED", True)
+
+    with Session() as db:
+        db.add(
+            Product(
+                id="v2-repair-product-id",
+                sku="SKU-REPAIR",
+                barcode="v2-repair-barcode",
+                product_name_cn="质量复核测试天幕",
+                brand="测试品牌",
+                category="天幕",
+            )
+        )
+        db.commit()
+
+    answer_calls: list[dict] = []
+
+    async def fake_chat(_db, messages, **kwargs):
+        purpose = kwargs.get("purpose")
+        if purpose == "customer_service_v2_semantic_plan":
+            return json.dumps(
+                {
+                    "request_kind": "recommendation",
+                    "subject_scope": "page_product",
+                    "product_subjects": ["SKU-REPAIR"],
+                    "search_queries": ["SKU-REPAIR搭建和防风值不值得买"],
+                    "requested_dimensions": ["搭建", "防风", "购买判断"],
+                    "response_focus": "回答购买判断并说明证据边界",
+                },
+                ensure_ascii=False,
+            )
+        assert purpose == "customer_service_v2_answer"
+        payload = json.loads(messages[-1]["content"])
+        answer_calls.append({"payload": payload, "temperature": kwargs.get("temperature")})
+        if len(answer_calls) == 1:
+            return json.dumps(
+                {
+                    "answer": "我查看了当前商品资料，但没有找到能直接确认这个问题的依据。你可以补充具体商品名称或 SKU，我再继续核对。",
+                    "answer_type": "clarification",
+                    "needs_clarification": True,
+                },
+                ensure_ascii=False,
+            )
+        return json.dumps(
+            {
+                "answer": "这款资料明确标注搭建简单，但没有登记抗风等级，因此常规露营可以考虑，强风场景不建议仅凭现有资料下单。",
+                "answer_type": "recommendation",
+                "request_kind": "recommendation",
+                "needs_clarification": False,
+                "confidence": "medium",
+                "uncertainty": "partial",
+                "selected_skus": ["SKU-REPAIR"],
+            },
+            ensure_ascii=False,
+        )
+
+    async def fake_retrieve(_db, _query, *, sku=None, **_kwargs):
+        return [
+            {
+                "source_type": "product_qa",
+                "sku": sku or "SKU-REPAIR",
+                "content": "问：搭建和防风怎么样？答：搭建简单；资料未登记抗风等级。",
+                "metadata": {"source_id": "product:SKU-REPAIR:qa:setup-wind"},
+                "score": 0.99,
+            }
+        ]
+
+    monkeypatch.setattr(
+        customer_service_semantic_rag_v2_service.customer_llm_service,
+        "chat_completion",
+        fake_chat,
+    )
+    monkeypatch.setattr(
+        customer_service_semantic_rag_v2_service.knowledge_service,
+        "semantic_retrieve",
+        fake_retrieve,
+    )
+
+    with Session() as db:
+        result = asyncio.run(
+            customer_service_service.ask_customer_service(
+                db,
+                user_id="v2-repair-user",
+                question="SKU-REPAIR搭建和防风值不值得买？",
+                pipeline="semantic_rag_v2",
+            )
+        )
+
+    assert result["answer"].startswith("这款资料明确标注搭建简单")
+    assert result["answer_type"] == "recommendation"
+    assert result["result_skus"] == ["SKU-REPAIR"]
+    assert len(answer_calls) == 2
+    assert answer_calls[0]["payload"]["bound_product_skus"] == ["SKU-REPAIR"]
+    assert answer_calls[1]["payload"]["answer_repair_request"]
+    assert answer_calls[1]["temperature"] == 0
+    assert result["answer_metadata"]["repair_attempted"] is True
+    assert result["answer_metadata"]["repair_applied"] is True
 
 
 def test_workbuddy_path_uses_one_answer_llm_and_keeps_legacy_isolated(
@@ -1295,7 +1509,12 @@ def test_workbuddy_rejects_resolved_identity_with_cross_sku_evidence(
             customer_service_service.ask_customer_service(
                 db,
                 user_id="workbuddy-cross-sku-user",
-                question="交叉证据锅A的容量是多少？",
+                # Keep the identity unresolved so both retrieved SKUs remain
+                # in this turn's evidence packet.  When a named product is
+                # present, the production path correctly filters unrelated
+                # SKU evidence before the model sees it; that is a separate
+                # same-SKU boundary and cannot exercise this provenance check.
+                question="这个锅的容量是多少？",
                 pipeline="workbuddy_rag_v1",
             )
         )
@@ -2129,6 +2348,7 @@ def test_workbuddy_persists_and_reloads_semantic_working_memory_across_turns(
         db.commit()
 
     calls: list[dict[str, object]] = []
+    chat_calls: list[dict[str, object]] = []
 
     async def fake_retrieve(_db, *, query=None, sku=None, skus=None, **_kwargs):
         calls.append({"query": query, "sku": sku, "skus": skus})
@@ -2144,7 +2364,8 @@ def test_workbuddy_persists_and_reloads_semantic_working_memory_across_turns(
 
     async def fake_chat(_db, messages, **_kwargs):
         payload = json.loads(messages[-1]["content"])
-        turn = len(calls)
+        chat_calls.append(payload)
+        turn = len(chat_calls)
         if turn == 1:
             assert payload["previous_turn_memory"] == {}
             return json.dumps(
@@ -2229,7 +2450,11 @@ def test_workbuddy_persists_and_reloads_semantic_working_memory_across_turns(
             )
         )
 
-    assert len(calls) == 2
+    # Each unanchored WorkBuddy turn now has a question page and a live
+    # profile page; both are retrieval inputs, while the model still answers
+    # once per turn.
+    assert len(calls) == 4
+    assert len(chat_calls) == 2
     assert calls[0]["skus"] is None
     assert calls[1]["skus"] is None
     assert first["result_skus"] == []

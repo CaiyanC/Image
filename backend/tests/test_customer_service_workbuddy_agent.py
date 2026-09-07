@@ -187,13 +187,22 @@ def test_workbuddy_agent_model_selects_wide_semantic_catalog_tool(
         ))
 
     assert len(llm_calls) == 3
-    assert len(retrieval_calls) == 4
-    assert retrieval_calls[0]["sections"] == ["profile"]
-    assert retrieval_calls[0]["limit"] == 48
-    assert retrieval_calls[1]["sections"] == ["profile"]
-    assert retrieval_calls[1]["limit"] == 96
-    assert retrieval_calls[2]["sections"] == ["qa"]
-    assert retrieval_calls[2]["sku"] == "CW-S10-A"
+    experience_calls = [
+        item for item in retrieval_calls
+        if item.get("source_types") == ["customer_experience"]
+    ]
+    fact_calls = [
+        item for item in retrieval_calls
+        if item.get("source_types") != ["customer_experience"]
+    ]
+    assert len(experience_calls) == 2
+    assert len(fact_calls) == 4
+    assert fact_calls[0]["sections"] == ["profile"]
+    assert fact_calls[0]["limit"] == 48
+    assert fact_calls[1]["sections"] == ["profile"]
+    assert fact_calls[1]["limit"] == 96
+    assert fact_calls[2]["sections"] == ["qa"]
+    assert fact_calls[2]["sku"] == "CW-S10-A"
     assert result["pipeline_version"] == "workbuddy_agent_v2"
     assert result["debug"]["no_legacy_route"] is True
     assert result["answer_metadata"]["retrieval_mode"] == "model_selected_semantic_tools"
@@ -587,6 +596,8 @@ def test_workbuddy_agent_prompt_requires_conditional_candidate_identity():
     assert "必须先用‘如果你指的是……’明确候选身份" in prompt
     assert "identity_status 使用 candidate 或 unresolved；此时 answer 必须保持条件式" in prompt
     assert "needs_clarification=true" in prompt
+    assert "read_product 返回的当前事实包只有一个 SKU" in prompt
+    assert "服务器不会按候选数量替你决定" in prompt
 
 
 def test_workbuddy_agent_candidate_identity_protocol_uses_model_metadata_only():
@@ -721,6 +732,106 @@ def test_workbuddy_agent_semantic_prefetch_is_internal_system_context(
     assert prefetch_message["role"] == "system"
     assert payload["internal_context"] == "semantic_catalog_prefetch"
     assert payload["customer_authored"] is False
+
+
+def test_workbuddy_agent_removes_internal_vocabulary_from_public_answer():
+    answer = customer_service_workbuddy_agent_service._sanitize_public_answer(
+        "检索结果中的其他 SKU 不能替代 evidence；请调用 RAG 工具。"
+    )
+
+    assert "检索" not in answer
+    assert "evidence" not in answer
+    assert "RAG" not in answer
+    assert "工具" not in answer
+    assert "其他商品信息" in answer
+
+
+def test_workbuddy_agent_skips_experience_guidance_for_direct_fact(
+    monkeypatch,
+):
+    async def fake_prefetch(*_args, **_kwargs):
+        return []
+
+    async def fail_experience_retrieve(*_args, **_kwargs):
+        raise AssertionError("direct fact must not retrieve experience guidance")
+
+    async def fake_chat(_db, **_kwargs):
+        return json.dumps({
+            "answer": "CB253 \u7684\u5bb9\u91cf\u662f 1.4L\u3002",
+            "response_mode": "conversational",
+            "identity_status": "confirmed",
+            "answer_type": "faq",
+            "needs_clarification": False,
+        }, ensure_ascii=False)
+
+    monkeypatch.setattr(
+        customer_service_workbuddy_agent_service,
+        "_prefetch_semantic_catalog",
+        fake_prefetch,
+    )
+    monkeypatch.setattr(
+        customer_service_workbuddy_agent_service.customer_experience_rag_service,
+        "retrieve_experience_guidance",
+        fail_experience_retrieve,
+    )
+    monkeypatch.setattr(
+        customer_service_workbuddy_agent_service.customer_llm_service,
+        "chat_completion",
+        fake_chat,
+    )
+
+    response, _evidence, _events, _calls, metadata = asyncio.run(
+        customer_service_workbuddy_agent_service._run_agent(
+            None,
+            question="CB253 \u5bb9\u91cf\u662f\u591a\u5c11\uff1f",
+            history=[],
+            page_sku=None,
+            context_skus=[],
+        )
+    )
+
+    assert response["answer_type"] == "faq"
+    assert metadata["experience_guidance_count"] == 0
+
+
+def test_workbuddy_agent_exposes_identity_resolution_context_to_model():
+    unanchored = customer_service_workbuddy_agent_service._build_messages(
+        question="木柄可以取下吗？",
+        history=[],
+        page_sku=None,
+        context_skus=[],
+    )
+    identity_message = next(
+        item for item in unanchored
+        if item["role"] == "system"
+        and item["content"].lstrip().startswith("{")
+        and '"internal_context": "identity_resolution_context"' in item["content"]
+    )
+    identity_payload = json.loads(identity_message["content"])
+    context = identity_payload["identity_resolution_context"]
+    assert context["unanchored_candidate_set"] is True
+    assert context["customer_identity_bound"] is False
+    assert context["candidate_skus_are_not_customer_selection"] is True
+
+    anchored = customer_service_workbuddy_agent_service._build_messages(
+        question="CW-C78整套多重？",
+        history=[],
+        page_sku=None,
+        context_skus=[],
+        explicit_skus=["CW-C78"],
+    )
+    anchored_message = next(
+        item for item in anchored
+        if item["role"] == "system"
+        and item["content"].lstrip().startswith("{")
+        and '"internal_context": "identity_resolution_context"' in item["content"]
+    )
+    anchored_context = json.loads(anchored_message["content"])[
+        "identity_resolution_context"
+    ]
+    assert anchored_context["unanchored_candidate_set"] is False
+    assert anchored_context["customer_identity_bound"] is True
+    assert anchored_context["explicit_product_skus"] == ["CW-C78"]
 
 
 def test_workbuddy_agent_read_product_deduplicates_and_bounds_same_sku_packet(
