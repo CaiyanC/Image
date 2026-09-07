@@ -3,7 +3,7 @@ import json
 import logging
 from time import perf_counter
 
-from fastapi import APIRouter, Depends, Query, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel, Field
 from starlette.responses import StreamingResponse
 from sqlalchemy.orm import Session
@@ -237,6 +237,8 @@ _SERVER_PIPELINE_STATE = "customer_service_server_pipeline"
 
 def _select_workbuddy_agent_pipeline(request: Request) -> None:
     """Bind the dedicated Agent endpoint to its runtime on the server side."""
+    if str(customer_pipeline_service.settings.APP_ENV).strip().lower() == "prod":
+        raise HTTPException(status_code=404, detail="Not found")
     setattr(
         request.state,
         _SERVER_PIPELINE_STATE,

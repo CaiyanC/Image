@@ -155,10 +155,8 @@ interface CustomerServiceProps {
 }
 
 export default function CustomerService({
-  // The normal page keeps the established semantic-RAG baseline.  The Agent
-  // page uses a dedicated server-owned endpoint, so production never needs to
-  // trust a caller-supplied pipeline override.
-  pipeline = 'semantic_rag_v2',
+  // The public entry and its history namespace use the selected RAG chain.
+  pipeline = 'workbuddy_rag_v1',
   title = '智能客服',
   subtitle = '基于产品资料和知识库回答',
 }: CustomerServiceProps = {}) {
@@ -1065,7 +1063,7 @@ function timestampOf(value?: string | null): number {
 
 function customerServiceDraftKey(
   userKey?: string | null,
-  pipeline: CustomerServicePipeline = 'semantic_rag_v2',
+  pipeline: CustomerServicePipeline = 'workbuddy_rag_v1',
 ): string {
   return `customer-service:draft:${pipeline}:${userKey || 'anonymous'}`
 }

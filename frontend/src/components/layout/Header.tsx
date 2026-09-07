@@ -37,7 +37,7 @@ export default function Header() {
   // it has three competing customer-service modes.
   const customerServiceItems = [
     ...(has('ai.customer_service') ? [{ path: '/customer-service', label: '智能客服' }] : []),
-    ...(has('ai.customer_service')
+    ...(import.meta.env.MODE === 'dev' && has('ai.customer_service')
       ? [{ path: '/customer-service/agent', label: '智能客服 · Agent' }]
       : []),
   ]

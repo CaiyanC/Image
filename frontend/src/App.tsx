@@ -254,7 +254,9 @@ export default function App() {
           element={
             <PermissionRoute permissionKey="ai.customer_service">
               <Layout>
-                <AgentCustomerService />
+                {import.meta.env.MODE === 'dev'
+                  ? <AgentCustomerService />
+                  : <Navigate to="/customer-service" replace />}
               </Layout>
             </PermissionRoute>
           }

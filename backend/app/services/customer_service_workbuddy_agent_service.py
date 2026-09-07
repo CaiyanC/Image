@@ -22,6 +22,8 @@ from sqlalchemy.orm import Session
 from ..core.config import settings
 from ..models.knowledge_base import CustomerServiceConversation, CustomerServiceMessage
 from ..models.product import Product
+from .customer_facing_answer_contract import CUSTOMER_FACING_ANSWER_CONTRACT, render_customer_answer
+from .customer_answer_consistency_contract import answer_consistency_issues, consistency_repair_instruction
 from . import (
     customer_enterprise_guardrail_service,
     customer_experience_rag_service,
@@ -133,7 +135,7 @@ def _agent_system_prompt() -> str:
         "不要因为 SKU 出现就误判为记忆动作，必须先用相应工具核对并回答本轮问题。只有没有事实问题且客户明确要求记住时，才使用 conversational。\n"
         "你是一个使用工具工作的中文智能客服 Agent。你负责理解当前问题和完整对话上下文，"
         "不要依赖固定关键词、问题类型树或候选顺序作答。历史回复只能帮助理解上下文；"
-        "系统可能提供 customer_experience_guidance；它是人工审核或经过边界校验的自动汇总非事实沟通经验，只能帮助承接顾虑、组织表达和给出自然下一步，不能证明商品事实、不能替代工具、不能选择 SKU，也不能向客户提及。简单事实问题或不相关建议直接忽略，不要强行推销或拉长回复。完整回答当前问题的前提下优先三到六句自然中文短答，复杂比较确有必要时再用少量条目。"
+        "系统可能提供 customer_experience_guidance；它是人工审核或经过边界校验的自动汇总非事实沟通经验，只能帮助承接顾虑、组织表达和给出自然下一步，不能证明商品事实、不能替代工具、不能选择 SKU，也不能向客户提及。简单事实问题或不相关建议直接忽略，不要强行推销或拉长回复。完整回答当前问题的前提下优先一到三句自然中文短答，复杂比较确有必要时再用少量条目。"
         "涉及当前商品、公司知识、操作方法或安全事实，应使用本轮工具结果重新确认；只有寒暄、"
         "纯沟通或不包含可核验事实的回复才可以不调用工具。客户给出明确 SKU 或上下文商品时，"
         "直接用 read_product 核对；客户给出商品名、简称或自然描述但尚无 SKU 时，先用 search_catalog"
@@ -178,14 +180,14 @@ def _agent_system_prompt() -> str:
         "核对；某项没有明确写出、只有更宽泛的描述，或只出现在另一个 SKU 中，都不能视为该"
         "候选已满足。当前主数据的权威级别高于补充 QA；fact_authority=false 的候选画像或未审核"
         "营销文案只能帮助理解和发现，不能单独证明客户可见事实。如果补充资料与当前主数据直接"
-        "冲突，应保留主数据表述并自然说明资料差异。不要把召回排名当作推荐结论。推荐或比较前，先从目录结果中"
+        "冲突，应保留主数据表述，对顾客仅说明仍影响其问题的具体不确定项。不要把召回排名当作推荐结论。推荐或比较前，先从目录结果中"
         "按客户完整需求语义选择多个真正有竞争力的候选，再用一次 read_product 深读这些 SKU 并逐项比较；只有目录"
         "确实没有第二个合理候选时才只读一个。若只核对了一个商品且尚未完成横向比较，就把它表述为可考虑选项，"
         "不要声称它是最推荐、最佳或更适合。最终选择前，在内部逐个候选核对客户明确用途、已有装备和强调的偏好；"
         "客户没有要求的套装件数或附加卖点，不能替代这些需求。若入选商品在主要需求上有已知弱项，而另一个已核对"
         "候选在同一需求上的事实更有利，应改选后者，或在答案里说清仍选择前者的具体理由。资料不足时自然说明缺口"
         "或向客户澄清。\n"
-        "对于适用热源等封闭兼容字段，只能把当前资料明确列出的具体选项视为已支持；‘明火’、‘燃气’等宽泛描述不能自动推出酒精炉等具体燃料或炉具。空值、‘/’、暂无或未知表示主数据未填写，不是通用兼容；只有同 SKU 主数据该字段为空时，才可按已审核 QA 明确列出的范围补充并提示主数据待补充。同一封闭字段一旦已有非空主数据，即使 QA 已审核，也不能把 QA 追加的具体选项当作扩展兼容；两者不一致时以主数据为准并说明资料差异。重量、容量、尺寸等测量值也不能单独推出无负担、一定适合或完全满足。若 QA 与同 SKU 非空主数据直接冲突，保留主数据并说明资料差异。热源兼容不等于室内使用许可：只有同 SKU 证据明确说明室内或家用场景时才能这样回答；仅列出热源、露营或户外场景时，不能推导室内可用或室内安全，应说明资料未直接确认并提醒遵守炉具通风和安全要求。\n"
+        "对于适用热源等封闭兼容字段，只能把当前资料明确列出的具体选项视为已支持；‘明火’、‘燃气’等宽泛描述不能自动推出酒精炉等具体燃料或炉具。空值、‘/’、暂无或未知表示主数据未填写，不是通用兼容；只有同 SKU 主数据该字段为空时，才可按已审核 QA 明确列出的范围补充，缺失字段仅作内部核对记录，顾客回复不提内部登记状态。同一封闭字段一旦已有非空主数据，即使 QA 已审核，也不能把 QA 追加的具体选项当作扩展兼容；两者不一致时以主数据为准，对顾客仅说明仍影响其问题的具体不确定项。重量、容量、尺寸等测量值也不能单独推出无负担、一定适合或完全满足。若 QA 与同 SKU 非空主数据直接冲突，保留主数据，对顾客仅说明仍影响其问题的具体不确定项。热源兼容不等于室内使用许可：只有同 SKU 证据明确说明室内或家用场景时才能这样回答；仅列出热源、露营或户外场景时，不能推导室内可用或室内安全，应只说明该使用场景暂时无法确认并提醒遵守炉具通风和安全要求。\n"
         "面向客户的 answer 只写自然答案，不要暴露工具名、agent-e 等证据 ID、authority_level、"
         "fact_authority、内部字段名、JSON 协议或系统流程；这些归因信息只放在对应结构化字段中。"
         "答复应先给客户可执行的结论，再给必要依据和取舍；同一事实不要在开头、列表和结尾反复重述。"
@@ -212,7 +214,8 @@ def _agent_system_prompt() -> str:
         "没有实时价格库存能力时，应在确认商品后直接说明无法核实，不能用 active_flag、生命周期或"
         "静态文案推断现货、可售或当前可购买；即使客户没有主动询问库存，也不要在推荐理由中做这种"
         "升级。也不要再次要求客户确认已经明确给出的 SKU。其余字段没有把握就省略。"
-        "不要输出内部推理。"
+        "不要输出内部推理。\n"
+        + CUSTOMER_FACING_ANSWER_CONTRACT
     )
 
 
@@ -1237,16 +1240,18 @@ def _sanitize_public_answer(value: Any) -> str:
     """Remove implementation vocabulary before an Agent answer is exposed."""
     answer = _clip_text(value, _PUBLIC_ANSWER_LIMIT)
     for internal, customer_facing in (
+        ("RAG 工具", "资料查询功能"),
+        ("RAG工具", "资料查询功能"),
+        ("工具调用", "功能调用"),
         ("检索结果", "其他商品信息"),
         ("检索", "查询"),
         ("RAG", "资料"),
         ("evidence", "资料"),
         ("证据包", "资料"),
-        ("工具", "功能"),
         ("路由", "处理流程"),
     ):
         answer = answer.replace(internal, customer_facing)
-    return _clip_text(answer, _PUBLIC_ANSWER_LIMIT)
+    return render_customer_answer(_clip_text(answer, _PUBLIC_ANSWER_LIMIT))
 
 
 async def _emit_accepted_answer(
@@ -1321,17 +1326,18 @@ async def _run_agent(
         result_count=len(semantic_prefetch),
     )
 
+    # An explicit current-turn identity supersedes page/history/prefetch.
+    # Semantic neighbours are only a discovery fallback, never extra owners
+    # of experience guidance for an already identified product.
+    experience_scope = (
+        explicit_skus
+        or ([page_sku] if page_sku else [])
+        or context_skus[:3]
+        or [item.get("sku") for item in semantic_prefetch[:4] if isinstance(item, dict)]
+    )
     experience_skus = list(dict.fromkeys(
         str(value or "").strip().upper()
-        for value in [
-            page_sku,
-            *context_skus[:3],
-            *[
-                item.get("sku")
-                for item in semantic_prefetch[:4]
-                if isinstance(item, dict)
-            ],
-        ]
+        for value in experience_scope
         if str(value or "").strip()
     ))[:6]
     experience_start = perf_counter()
@@ -1532,6 +1538,11 @@ async def _run_agent(
                     )
                     if grounding_error_details:
                         grounding_error = "claim_provenance_invalid"
+                if not grounding_error:
+                    grounding_error_details = answer_consistency_issues(response,
+                        {"evidence": evidence, "explicit_product_skus": explicit_skus, "current_question": question})
+                    if grounding_error_details:
+                        grounding_error = "answer_consistency_conflict"
                 if (
                     grounding_retry_counts.get(grounding_error, 0)
                     < _MAX_GROUNDING_RETRIES_PER_ERROR
@@ -1567,12 +1578,18 @@ async def _run_agent(
                             {
                                 "agent_protocol_error": grounding_error,
                                 "rejected_claims": grounding_error_details,
-                                "instruction": protocol_instruction,
+                                "instruction": consistency_repair_instruction(grounding_error_details)
+                                    if grounding_error == "answer_consistency_conflict" else protocol_instruction,
                             },
                             ensure_ascii=False,
                         ),
                     })
                     continue
+                if grounding_error == "answer_consistency_conflict":
+                    response = {**response, "answer": "这项具体结论暂时无法可靠确认，请先核对所选商品的说明和配置。",
+                        "answer_type": "clarification", "needs_clarification": True,
+                        "selected_skus": [], "claims": [], "uncertainty": "unconfirmed"}
+                    last_metadata["consistency_rejected"] = grounding_error_details
                 await _emit_accepted_answer(answer_delta_callback, buffered_deltas, response)
                 last_metadata["semantic_prefetch_count"] = len(semantic_prefetch)
                 last_metadata["semantic_prefetch_error"] = prefetch_error
@@ -1986,7 +2003,7 @@ async def ask_customer_service_workbuddy_agent(
             error=type(exc).__name__,
         )
         answer_raw = {
-            "answer": "当前商品资料服务暂时没有正常返回，请稍后再试。",
+            "answer": "抱歉，这次暂时无法完成查询，请稍后再试。",
             "answer_type": "clarification",
             "needs_clarification": True,
             "confidence": "low",
@@ -2068,7 +2085,7 @@ async def ask_customer_service_workbuddy_agent(
         warnings.append("selected_sku_missing_canonical_grounded_claim")
     answer = _sanitize_public_answer(answer_raw.get("answer"))
     if not answer:
-        answer = "我已经查看了本轮资料，但这次没有生成完整回复，请再试一次。"
+        answer = "抱歉，这次没有生成完整回复，请再试一次。"
         warnings.append("empty_agent_answer")
 
     answer_type = str(answer_raw.get("answer_type") or "faq").strip().lower()
