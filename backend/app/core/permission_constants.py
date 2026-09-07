@@ -68,6 +68,14 @@ PERMISSION_DEFS = [
     ("profile.view", "查看个人资料", "page"),
     ("category.read", "查看产品品类", "api"),
     ("product.read", "查看产品", "page"),
+    ("product.audit.view", "查看产品完整性审查", "page"),
+    ("product.full.view", "查看产品全景资料", "page"),
+    ("media.read", "查看素材库", "page"),
+    ("media.search", "搜索素材", "page"),
+    ("tools.view", "查看工具中心", "page"),
+    ("knowledge.manage", "管理产品知识库", "page"),
+    ("knowledge.files.manage", "管理文件知识库", "page"),
+    ("knowledge.sync", "同步知识库索引", "button"),
     ("product.create", "创建产品", "button"),
     ("product.edit", "编辑产品", "button"),
     (PRODUCT_QA_MANAGE_PERMISSION, "管理产品 QA", "button"),
@@ -91,6 +99,10 @@ PERMISSION_DEFS = [
 
 ROUTE_DEFS = [
     ("/customer-service", "智能客服", "page"),
+    ("/customer-service/agent", "智能客服 Agent", "page"),
+    ("/products/audit", "产品完整性审查", "page"),
+    ("/products/full-view", "产品全景资料", "page"),
+    ("/admin/access-control", "账号与权限", "page"),
     ("/", "工作区", "page"),
     ("/history", "历史记录", "page"),
     ("/profile", "个人资料", "page"),
@@ -116,6 +128,19 @@ ROUTE_DEFS = [
 ]
 
 COMMON_PERMISSION_KEYS = ["history.view", "profile.view"]
+
+# Split existing capabilities once using actual grants, never preset department
+# names. Empty sources intentionally require explicit assignment by management.
+DERIVED_PERMISSION_SOURCES = {
+    "product.audit.view": ("product.read",),
+    "product.full.view": ("product.read",),
+    "media.read": ("product.read",),
+    "media.search": ("product.read",),
+    "tools.view": ("profile.view", "finance.ecommerce_data_fill", "ai.generate", "ai.customer_service"),
+    "knowledge.manage": (),
+    "knowledge.files.manage": (),
+    "knowledge.sync": (),
+}
 
 _OFFICE_KEYS = ["product.read", "media.download", "ai.call", "ai.generate", "new_product.view"]
 _COMMERCE_KEYS = [
@@ -166,18 +191,31 @@ for _group_name in (FINANCE_GROUP_NAME, EXECUTIVE_OFFICE_GROUP_NAME, IT_GROUP_NA
     if ECOMMERCE_DATA_FILL_PERMISSION not in GROUP_PERMISSION_KEYS[_group_name]:
         GROUP_PERMISSION_KEYS[_group_name].append(ECOMMERCE_DATA_FILL_PERMISSION)
 
+for _permission_keys in GROUP_PERMISSION_KEYS.values():
+    _permission_keys.append("tools.view")
+    if "product.read" in _permission_keys:
+        _permission_keys.extend(["product.audit.view", "product.full.view", "media.read", "media.search"])
+
 PERMISSION_ROUTE_MAP = {
     "ai.generate": ["/"],
-    "ai.customer_service": ["/customer-service"],
+    "ai.customer_service": ["/customer-service", "/customer-service/agent"],
     "history.view": ["/history"],
-    "profile.view": ["/profile", "/tools"],
-    "product.read": ["/products", "/assets", "/assets/search", "/products/drafts"],
-    "product.create": ["/products/create", "/products/create/:draftId"],
-    "product.edit": ["/products/create", "/products/edit/:sku", "/products/drafts", "/products/qa/new"],
+    "profile.view": ["/profile"],
+    "tools.view": ["/tools"],
+    "product.read": ["/products", "/products/drafts"],
+    "product.audit.view": ["/products/audit"],
+    "product.full.view": ["/products/full-view"],
+    "media.read": ["/assets"],
+    "media.search": ["/assets/search"],
+    "knowledge.manage": ["/knowledge-base"],
+    "knowledge.files.manage": ["/file-knowledge"],
+    "product.create": ["/products/create", "/products/create/:draftId", "/products/drafts"],
+    "product.edit": ["/products/edit/:sku", "/products/qa/new", "/products/create/:draftId", "/products/drafts"],
     PRODUCT_QA_MANAGE_PERMISSION: ["/products/qa/new"],
     "product.delete": ["/products"],
     ECOMMERCE_DATA_FILL_PERMISSION: ["/tools/ecommerce-data-fill"],
     SYSTEM_ADMIN_PERMISSION: [
+        "/admin/access-control",
         "/knowledge-base",
         "/file-knowledge",
         "/admin/users",
@@ -228,7 +266,7 @@ DEFAULT_TOOL_DEFS = [
         "category": "业务工具",
         "icon_key": "image",
         "route_path": "/assets",
-        "permission_key": "product.read",
+        "permission_key": "media.read",
         "sort_order": 40,
     },
     {

@@ -13,9 +13,10 @@ from sqlalchemy.pool import StaticPool
 from app.core.database import Base, get_db
 from app.core.config import settings
 from app.core.permission_constants import MANAGEMENT_GROUP_NAME
-from app.core.security import get_current_user
+from app.core.security import create_access_token
 from app.main import app
 from app.models.group import Group
+from app.models.permissions import GroupPermission, Permission
 from app.models.product import Product
 from app.models.product_asset import ProductAsset
 from app.models.user import User
@@ -27,22 +28,25 @@ class AssetApiTest(unittest.TestCase):
         self.tmpdir = tempfile.TemporaryDirectory()
         self.previous_upload_dir = settings.UPLOAD_DIR
         settings.UPLOAD_DIR = self.tmpdir.name
-        engine = create_engine(
+        self.engine = create_engine(
             "sqlite:///:memory:",
             connect_args={"check_same_thread": False},
             poolclass=StaticPool,
         )
         Base.metadata.create_all(
-            engine,
+            self.engine,
             tables=[
                 Product.__table__,
                 ProductAsset.__table__,
                 User.__table__,
                 Group.__table__,
                 UserGroup.__table__,
+                Permission.__table__,
+                GroupPermission.__table__,
             ],
         )
-        self.Session = sessionmaker(bind=engine)
+        self.Session = sessionmaker(bind=self.engine)
+        self.auth_version = 7
         db = self.Session()
         db.add(User(
             id="test-user",
@@ -52,6 +56,7 @@ class AssetApiTest(unittest.TestCase):
             user_type="human",
             display_name="Tester",
             is_active=True,
+            auth_version=self.auth_version,
         ))
         db.add(Group(id="management-group", group_name=MANAGEMENT_GROUP_NAME, description="management"))
         db.add(UserGroup(user_id="test-user", group_id="management-group", group_role="admin"))
@@ -81,19 +86,21 @@ class AssetApiTest(unittest.TestCase):
             finally:
                 session.close()
 
-        def allow_user():
-            class UserStub:
-                id = "test-user"
-                username = "tester"
-            return UserStub()
-
         app.dependency_overrides[get_db] = override_db
-        app.dependency_overrides[get_current_user] = allow_user
-        self.client = TestClient(app)
+        # Authenticate against the persisted User through the real dependency.
+        # File capabilities must carry its actual auth_version, not a stub default.
+        self.client = TestClient(app, headers={
+            "Authorization": f"Bearer {create_access_token({'sub': 'test-user', 'ver': self.auth_version})}",
+        })
+        self.file_rate_limit = patch("app.api.files.enforce_rate_limit", return_value=None)
+        self.file_rate_limit.start()
+        self.addCleanup(self.file_rate_limit.stop)
 
     def tearDown(self):
+        self.client.close()
         app.dependency_overrides.clear()
         settings.UPLOAD_DIR = self.previous_upload_dir
+        self.engine.dispose()
         self.tmpdir.cleanup()
 
     def test_create_list_update_and_patch_tags(self):
@@ -130,6 +137,82 @@ class AssetApiTest(unittest.TestCase):
         self.assertEqual(moved.status_code, 200)
         self.assertEqual(moved.json()["category_code"], "08")
         self.assertEqual(moved.json()["sub_category"], "历史版本")
+
+    def test_edit_only_can_preview_existing_assets_without_download_upload_or_review(self):
+        base_url = "/api/products/API-ASSET-1/assets"
+        media_path = "/uploads/assets/API-ASSET-1/existing.png"
+        payload = {"category_code": "01", "category_name": "产品标准图", "url": media_path}
+        created = self.client.post(base_url, json=payload)
+        self.assertEqual(created.status_code, 200, created.text)
+        asset_id = created.json()["id"]
+        stored_file = Path(settings.UPLOAD_DIR) / media_path.removeprefix("/uploads/")
+        stored_file.parent.mkdir(parents=True, exist_ok=True)
+        Image.new("RGB", (8, 8), color=(20, 80, 140)).save(stored_file, format="PNG")
+
+        # Replace the fixture's management membership with exactly product.edit.
+        with self.Session() as db:
+            db.get(Group, "management-group").group_name = "edit-only"
+            db.query(UserGroup).filter_by(user_id="test-user").one().group_role = "member"
+            permission = Permission(permission_key="product.edit", permission_name="Edit", permission_type="api")
+            db.add(permission)
+            db.flush()
+            db.add(GroupPermission(group_id="management-group", permission_id=permission.id))
+            db.commit()
+
+        listed = self.client.get(base_url)
+        self.assertEqual(listed.status_code, 200, listed.text)
+        self.assertEqual([item["id"] for item in listed.json()], [asset_id])
+        self.assertEqual(self.client.get(f"{base_url}?grouped=true").status_code, 200)
+        detail = self.client.get(f"{base_url}/{asset_id}")
+        self.assertEqual(detail.status_code, 200, detail.text)
+        self.assertEqual(detail.json()["url"], media_path)
+        signed = self.client.post("/api/files/sign", json={"path": media_path})
+        self.assertEqual(signed.status_code, 200, signed.text)
+        preview_url = signed.json()["url"]
+        preview = self.client.get(preview_url)
+        self.assertEqual(preview.status_code, 200, preview.text)
+        self.assertTrue(preview.headers["content-disposition"].startswith("inline;"))
+        download = self.client.post("/api/files/sign", json={"path": media_path, "purpose": "download"})
+        self.assertEqual(download.status_code, 403, download.text)
+        self.assertIn("media.download", download.text)
+
+        for response in (
+            self.client.post(base_url, json=payload),
+            self.client.post(f"{base_url}/batch", json=[payload]),
+            self.client.post(f"{base_url}/upload", data={"category_code": "01", "category_name": "产品标准图"},
+                             files={"files": ("new.png", stored_file.read_bytes(), "image/png")}),
+            self.client.put(f"{base_url}/{asset_id}", json={"status_tag": "已审核"}),
+            self.client.delete(f"{base_url}/{asset_id}"),
+        ):
+            self.assertEqual(response.status_code, 403, response.text)
+            self.assertIn("media.upload", response.text)
+
+        # Explicit upload permission still must not imply review or download.
+        with self.Session() as db:
+            permission = Permission(permission_key="media.upload", permission_name="Upload", permission_type="api")
+            db.add(permission)
+            db.flush()
+            db.add(GroupPermission(group_id="management-group", permission_id=permission.id))
+            db.commit()
+        review = self.client.put(f"{base_url}/{asset_id}", json={"status_tag": "已审核"})
+        self.assertEqual(review.status_code, 403, review.text)
+        self.assertIn("media.review", review.text)
+        approved_upload = self.client.post(
+            f"{base_url}/upload",
+            data={"category_code": "01", "category_name": "产品标准图", "status_tag": "已审核"},
+            files={"files": ("approved.png", stored_file.read_bytes(), "image/png")},
+        )
+        self.assertEqual(approved_upload.status_code, 403, approved_upload.text)
+        self.assertIn("media.review", approved_upload.text)
+        self.assertEqual(self.client.post("/api/files/sign", json={"path": media_path, "purpose": "download"}).status_code, 403)
+        with self.Session() as db:
+            self.assertEqual(db.query(ProductAsset).count(), 1)
+            self.assertEqual(db.get(ProductAsset, asset_id).status_tag, "待审核")
+            db.query(GroupPermission).filter_by(group_id="management-group").delete()
+            db.commit()
+        self.assertEqual(self.client.get(base_url).status_code, 403)
+        self.assertEqual(self.client.get(f"{base_url}/{asset_id}").status_code, 403)
+        self.assertEqual(self.client.get(preview_url).status_code, 403)
 
     def test_upload_rejects_image_in_video_category(self):
         response = self.client.post(
@@ -191,14 +274,43 @@ class AssetApiTest(unittest.TestCase):
 
         signed = self.client.post("/api/files/sign", json={"path": asset["url"]})
         self.assertEqual(signed.status_code, 200, signed.text)
-        downloaded = self.client.get(signed.json()["url"])
+        preview_url = signed.json()["url"]
+        previewed = self.client.get(preview_url)
+        self.assertEqual(previewed.status_code, 200)
+        self.assertTrue(previewed.headers["content-disposition"].startswith("inline;"))
+
+        signed_download = self.client.post("/api/files/sign", json={"path": asset["url"], "purpose": "download"})
+        self.assertEqual(signed_download.status_code, 200, signed_download.text)
+        download_url = signed_download.json()["url"]
+        downloaded = self.client.get(download_url)
         self.assertEqual(downloaded.status_code, 200)
-        self.assertGreater(len(downloaded.content), 0)
+        self.assertTrue(downloaded.headers["content-disposition"].startswith("attachment;"))
+        self.assertEqual(downloaded.content, original.read_bytes())
+
+        # Mutate a separate DB session after signing: both capabilities must
+        # re-read account state even when the request supplies a fresh login.
+        with self.Session() as db:
+            user = db.get(User, "test-user")
+            self.assertIsNotNone(user)
+            self.assertEqual(user.auth_version, self.auth_version)
+            user.auth_version += 1
+            self.auth_version = user.auth_version
+            db.commit()
+        self.client.headers["Authorization"] = (
+            f"Bearer {create_access_token({'sub': 'test-user', 'ver': self.auth_version})}"
+        )
+        self.assertEqual(self.client.get(preview_url).status_code, 403)
+        self.assertEqual(self.client.get(download_url).status_code, 403)
+        refreshed = self.client.post("/api/files/sign", json={"path": asset["url"], "purpose": "download"})
+        self.assertEqual(refreshed.status_code, 200, refreshed.text)
+        refreshed_url = refreshed.json()["url"]
+        self.assertEqual(self.client.get(refreshed_url).status_code, 200)
 
         deleted = self.client.delete(f"/api/products/API-ASSET-1/assets/{asset['id']}")
         self.assertEqual(deleted.status_code, 200, deleted.text)
         self.assertFalse(original.exists())
         self.assertFalse(thumbnail.exists())
+        self.assertEqual(self.client.get(refreshed_url).status_code, 404)
 
     def test_upload_flags_exact_duplicate_for_manual_review(self):
         image_data = io.BytesIO()

@@ -5,8 +5,11 @@ from fastapi import HTTPException
 from fastapi.encoders import jsonable_encoder
 from sqlalchemy.orm import Session
 
+from ..core.security import has_permission
 from ..models.product_operation_snapshot import ProductOperationSnapshot
+from ..models.user import User
 from . import operation_log_service, product_service
+from .product_write_authorization import authorize_product_replacement
 
 
 def create_product_snapshot(
@@ -40,7 +43,12 @@ def restore_product_snapshot(
     operator_id: str,
     request=None,
 ) -> dict[str, Any]:
-    snapshot = db.query(ProductOperationSnapshot).filter(ProductOperationSnapshot.id == snapshot_id).first()
+    actor = db.query(User).filter(User.id == operator_id).first()
+    if actor is None or not actor.is_active or not has_permission(db, actor.id, "product.delete"):
+        raise HTTPException(status_code=403, detail="Permission required: product.delete")
+    snapshot = db.query(ProductOperationSnapshot).filter(
+        ProductOperationSnapshot.id == snapshot_id,
+    ).populate_existing().with_for_update().first()
     if not snapshot:
         raise HTTPException(status_code=404, detail="Product snapshot not found")
     if snapshot.restored_at:
@@ -51,17 +59,18 @@ def restore_product_snapshot(
     current_data = _safe_product_detail(db, snapshot.sku) if current_exists else None
 
     if target_data:
+        payload = authorize_product_replacement(db, actor, snapshot.sku, _payload_from_detail(target_data))
         if current_exists:
             product = product_service.replace_product(
                 db,
                 snapshot.sku,
-                _payload_from_detail(target_data),
+                payload,
                 creator_id=operator_id,
             )
         else:
             product = product_service.create_product(
                 db,
-                _payload_from_detail(target_data),
+                payload,
                 creator_id=operator_id,
             )
         restored_sku = product.sku

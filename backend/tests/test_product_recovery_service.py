@@ -6,6 +6,8 @@ from sqlalchemy.exc import StatementError
 from sqlalchemy.orm import sessionmaker
 
 from app.core.database import Base
+from app.models.group import Group
+from app.models.permissions import GroupPermission, Permission
 from app.models import (
     OperationLog,
     Product,
@@ -39,7 +41,10 @@ class ProductRecoveryServiceTest(unittest.TestCase):
         engine = create_engine("sqlite:///:memory:")
         Base.metadata.create_all(engine, tables=[
             User.__table__,
+            Group.__table__,
             UserGroup.__table__,
+            Permission.__table__,
+            GroupPermission.__table__,
             OperationLog.__table__,
             Product.__table__,
             ProductAsset.__table__,
@@ -64,7 +69,18 @@ class ProductRecoveryServiceTest(unittest.TestCase):
         ])
         self.Session = sessionmaker(bind=engine)
         self.db = self.Session()
+        self.addCleanup(engine.dispose)
         self.db.add(User(id="user-1", username="alice", email="alice@example.com", password_hash="hash"))
+        # Exercise real permission joins as a regular member, without bypassing
+        # the new recovery guard through a management role or authorization mock.
+        self.db.add_all([
+            Group(id="recovery-writers", group_name="Recovery test writers"),
+            UserGroup(user_id="user-1", group_id="recovery-writers", group_role="member"),
+        ])
+        for key in ("product.create", "product.edit", "product.delete", "media.upload", "media.review", "tag.edit"):
+            permission = Permission(id=f"recovery-{key}", permission_key=key, permission_name=key)
+            self.db.add(permission)
+            self.db.add(GroupPermission(group_id="recovery-writers", permission_id=permission.id))
         self.db.commit()
         self.product_payload = {
             "sku": "SKU-1",

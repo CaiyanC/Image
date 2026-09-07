@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { Link, useLocation, useNavigate } from 'react-router-dom'
-import { useAuthStore } from '../../store/authStore'
+import { getLandingPath, hasPermission, useAuthStore } from '../../store/authStore'
 
 export default function Header() {
   const { user, logout } = useAuthStore()
@@ -23,7 +23,7 @@ export default function Header() {
   }, [])
 
   function has(permissionKey: string) {
-    return isSuperAdmin || user?.permissions?.includes(permissionKey)
+    return hasPermission(user, permissionKey)
   }
 
   async function handleLogout() {
@@ -43,20 +43,23 @@ export default function Header() {
   ]
 
   const navItems = [
-    { path: '/tools', label: '工具中心' },
+    ...(has('tools.view') ? [{ path: '/tools', label: '工具中心' }] : []),
+    ...(has('finance.ecommerce_data_fill') ? [{ path: '/tools/ecommerce-data-fill', label: '电商数据填表' }] : []),
     ...customerServiceItems,
-    ...(isSuperAdmin ? [{ path: '/knowledge-base', label: '知识库运维' }] : []),
-    ...(isSuperAdmin ? [{ path: '/file-knowledge', label: '文件知识库' }] : []),
+    ...(has('knowledge.manage') ? [{ path: '/knowledge-base', label: '知识库运维' }] : []),
+    ...(has('knowledge.files.manage') ? [{ path: '/file-knowledge', label: '文件知识库' }] : []),
     ...(has('ai.generate') ? [{ path: '/', label: '创作' }] : []),
     ...(has('history.view') ? [{ path: '/history', label: '历史' }] : []),
     ...(has('product.read') ? [{ path: '/products', label: '产品' }] : []),
-    ...(has('product.read') ? [{ path: '/products/audit', label: '产品核对' }] : []),
-    ...(has('product.read') ? [{ path: '/products/full-view', label: '全字段视图' }] : []),
+    ...(has('product.audit.view') ? [{ path: '/products/audit', label: '产品核对' }] : []),
+    ...(has('product.full.view') ? [{ path: '/products/full-view', label: '全字段视图' }] : []),
+    ...(has('product.create') ? [{ path: '/products/create', label: '新增产品' }] : []),
+    ...(has('product.read') || has('product.create') || has('product.edit') ? [{ path: '/products/drafts', label: '草稿箱' }] : []),
     ...(has('product.qa.manage') || has('product.edit') ? [{ path: '/products/qa/new', label: 'QA录入' }] : []),
-    ...(has('product.read') ? [{ path: '/assets', label: '素材库' }] : []),
-    ...(has('product.read') ? [{ path: '/assets/search', label: '素材检索' }] : []),
+    ...(has('media.read') ? [{ path: '/assets', label: '素材库' }] : []),
+    ...(has('media.search') ? [{ path: '/assets/search', label: '素材检索' }] : []),
   ]
-  const homePath = navItems[0]?.path || '/no-access'
+  const homePath = getLandingPath(user)
 
   const superAdminItems = [
     { path: '/admin/department-workbench', label: '部门工作台' },

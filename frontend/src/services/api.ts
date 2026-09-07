@@ -1091,6 +1091,14 @@ export const api = {
   },
 
   products: {
+    candidates: (purpose: 'qa' | 'media' | 'full' | 'file', q = '', limit = 100) => {
+      const query = new URLSearchParams({ purpose, limit: String(limit) })
+      if (q.trim()) query.set('q', q.trim())
+      return request<{ items: Array<Pick<Product, 'sku' | 'product_name_cn' | 'product_name_en' | 'brand'>> }>(`/products/candidates?${query.toString()}`)
+    },
+
+    fullView: (sku: string) => request<Product>(`/products/${encodeURIComponent(sku)}/full-view`),
+
     list: (skip = 0, limit = 20, search?: string) => {
       let url = `/products?skip=${skip}&limit=${limit}`
       if (search) url += `&q=${encodeURIComponent(search)}`
@@ -1414,19 +1422,19 @@ export const api = {
   },
 
   files: {
-    sign: async (path: string) => {
+    sign: async (path: string, purpose: 'preview' | 'download' = 'preview') => {
       const response = await request<{ url: string; expires_in: number }>(
         '/files/sign',
-        { method: 'POST', body: JSON.stringify({ path }) },
+        { method: 'POST', body: JSON.stringify({ path, purpose }) },
       )
       return { ...response, url: toBackendUrl(response.url) }
     },
-    signBatch: async (paths: string[]) => {
+    signBatch: async (paths: string[], purpose: 'preview' | 'download' = 'preview') => {
       const response = await request<{
         items: Array<{ path: string; url: string; expires_in: number }>
       }>('/files/sign-batch', {
         method: 'POST',
-        body: JSON.stringify({ paths }),
+        body: JSON.stringify({ paths, purpose }),
       })
       return response.items.map((item) => ({ ...item, url: toBackendUrl(item.url) }))
     },

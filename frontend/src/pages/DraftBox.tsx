@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { api } from '../services/api'
 import type { ProductDraft } from '../types'
-import { useAuthStore } from '../store/authStore'
+import { getLandingPath, useAuthStore } from '../store/authStore'
 import { canUsePermission, showNoPermissionToast } from '../services/permissionFeedback'
 
 export default function DraftBox() {
@@ -70,14 +70,16 @@ export default function DraftBox() {
 
   async function handleBatchDelete() {
     let count = 0
+    const successIds = new Set<string>()
     for (const id of selectedIds) {
-      try { await api.drafts.delete(id); count++ } catch {}
+      try { await api.drafts.delete(id); count++; successIds.add(id) } catch {}
     }
-    setDrafts(drafts.filter(d => !selectedIds.has(d.id)))
+    setDrafts(drafts.filter(d => !successIds.has(d.id)))
+    const failed = selectedIds.size - count
     setSelectedIds(new Set())
     setBatchMode(false)
     setBatchConfirm(null)
-    showNotice('success', `已删除 ${count} 个草稿`)
+    showNotice(failed ? 'error' : 'success', `已删除 ${count} 个草稿${failed ? `，${failed} 个失败，已保留在列表中` : ''}`)
   }
 
   async function handleBatchPublish() {
@@ -118,6 +120,15 @@ export default function DraftBox() {
     action()
   }
 
+  function runWithDraftWrite(action: () => void) {
+    if (!['product.create', 'product.edit'].some(key => canUsePermission(user, isManagement, key))) {
+      showNoPermissionToast()
+      return
+    }
+    // Server verifies create vs edit against each draft's current target SKU.
+    action()
+  }
+
   const filteredDrafts = drafts.filter(d => {
     const data = d.draft_data || {}
     return (d.sku?.toLowerCase() || '').includes(searchQuery.toLowerCase()) ||
@@ -137,8 +148,8 @@ export default function DraftBox() {
     <div className="p-4 max-w-4xl mx-auto">
       <div className="flex items-center justify-between mb-6">
         <div>
-          <button onClick={() => navigate('/products')} className="text-sm text-blue-500 hover:text-blue-700 mb-1 flex items-center gap-1">
-            ← 返回产品管理
+          <button onClick={() => navigate(getLandingPath(user))} className="text-sm text-blue-500 hover:text-blue-700 mb-1 flex items-center gap-1">
+            ← 返回可用页面
           </button>
           <h1 className="text-2xl font-bold text-apple-text tracking-tight">📋 草稿箱</h1>
           <p className="text-sm text-apple-gray-medium mt-1">保存的产品草稿，可继续编辑或发布</p>
@@ -149,7 +160,7 @@ export default function DraftBox() {
               <span className="text-sm text-apple-gray-medium">{selectedIds.size} 个已选</span>
               <button onClick={() => { setBatchMode(false); setSelectedIds(new Set()) }}
                 className="px-3 py-1.5 text-sm text-gray-600 hover:bg-gray-100 rounded-lg transition-colors">取消</button>
-              <button onClick={() => selectedIds.size > 0 && runWithPermission('product.create', () => setBatchConfirm('publish'))}
+              <button onClick={() => selectedIds.size > 0 && runWithDraftWrite(() => setBatchConfirm('publish'))}
                 className="px-3 py-1.5 text-sm bg-green-500 text-white rounded-lg hover:bg-green-600 transition-colors disabled:opacity-50"
                 disabled={selectedIds.size === 0}>批量发布</button>
               <button onClick={() => selectedIds.size > 0 && runWithPermission('product.edit', () => setBatchConfirm('delete'))}
@@ -240,11 +251,11 @@ export default function DraftBox() {
                 </div>
                 </div>
                 <div className="flex items-center gap-2">
-                  <button onClick={() => runWithPermission('product.edit', () => navigate(`/products/create/${draft.id}`))}
+                  <button onClick={() => runWithDraftWrite(() => navigate(`/products/create/${draft.id}`))}
                     className="px-3 py-1.5 text-sm text-blue-600 hover:bg-blue-50 rounded-lg transition-colors">
                     编辑
                   </button>
-                  <button onClick={() => runWithPermission('product.create', () => handlePublish(draft.id))}
+                  <button onClick={() => runWithDraftWrite(() => handlePublish(draft.id))}
                     className="px-3 py-1.5 text-sm text-green-600 hover:bg-green-50 rounded-lg transition-colors">
                     发布
                   </button>

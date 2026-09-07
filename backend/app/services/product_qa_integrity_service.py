@@ -35,6 +35,15 @@ _REJECTING_CONFLICT_TYPES = {
 }
 
 
+def _is_known_cross_domain_template(product: Product, answer: str) -> bool:
+    """Reject a confirmed legacy template, not general mentions of heating/oil."""
+    template = "首次使用前用温水和软布冲洗即可（无需洗洁精）。烹饪前中小火预热2-3分钟，再倒油使用效果更佳。"
+    if re.sub(r"\s+", "", str(answer or "")) != template:
+        return False
+    name = str(product.product_name_cn or "")
+    return "水壶" in name or (product.category == "炉具" and "锅" not in name)
+
+
 def _authoritative_formal_facts(specs: ProductSpecs | None) -> dict[str, dict[str, Any]]:
     """Expose live product columns as an explicit semantic authority map."""
     if specs is None:
@@ -242,6 +251,8 @@ async def audit_product_qa_item(
     """Persist a conflict-only semantic verdict for one sealed same-SKU QA item."""
     if not str(qa.question or "").strip() or not str(qa.answer or "").strip():
         verdict = {"status": "rejected", "reason": "Question or answer is empty."}
+    elif _is_known_cross_domain_template(product, qa.answer):
+        verdict = {"status": "rejected", "reason": "已确认的跨品类旧模板：炉具/水壶不能套用锅具预热倒油说明。"}
     else:
         try:
             evidence = _product_evidence(db, product)
@@ -390,7 +401,8 @@ async def audit_product_qa_item(
     # transaction's persistent QA instance, so there is no need to load a
     # second identity.
     audited_at = datetime.now(timezone.utc)
-    integrity_model = str(settings.SEMANTIC_PREPLAN_MODEL or "deepseek")
+    integrity_model = ('rule-known-cross-domain-template-v1' if _is_known_cross_domain_template(product, qa.answer)
+                       else str(settings.SEMANTIC_PREPLAN_MODEL or "deepseek"))
     qa.integrity_status = verdict["status"]
     qa.integrity_reason = verdict["reason"]
     qa.integrity_model = integrity_model

@@ -7,8 +7,11 @@ from typing import Optional
 from fastapi import HTTPException, status
 from sqlalchemy.orm import Session
 
+from ..core.security import is_management_user
 from ..models.product_draft import ProductDraft
 from ..models.product import Product
+from ..models.user import User
+from .product_write_authorization import authorize_product_draft_publish
 from .product_service import (
     create_product,
     get_product_by_sku,
@@ -69,7 +72,7 @@ def _draft_to_dict(draft: ProductDraft) -> dict:
             result[flat_key] = dd[stored_key]
             result[stored_key] = dd[stored_key]
     # QA pass-through
-    for key in ("qa_items", "qa_negative"):
+    for key in ("qa_items", "qa_negative", "assets"):
         if key in dd:
             result[key] = dd[key]
     return result
@@ -83,6 +86,9 @@ def _build_draft_data(data: dict) -> dict:
     for key in ("product_name_cn", "product_name_en", "barcode", "brand", "series",
                 "category", "product_level", "launch_date", "lifecycle_status",
                 "person_in_charge"):
+        if key in data and data[key] is not None:
+            dd[key] = data[key]
+    for key in ("specs", "business", "content", "media", "assets", "prompts"):
         if key in data and data[key] is not None:
             dd[key] = data[key]
     for flat_key, stored_key in (("specs_data", "specs"), ("business_data", "business"),
@@ -111,10 +117,12 @@ def get_all_drafts(db: Session, skip: int = 0, limit: int = 20):
     return [_draft_to_dict(d) for d in drafts], total
 
 
-def get_draft_by_id(db: Session, draft_id: str, user_id = None) -> Optional[ProductDraft]:
+def get_draft_by_id(db: Session, draft_id: str, user_id = None, *, for_update: bool = False) -> Optional[ProductDraft]:
     query = db.query(ProductDraft).filter(ProductDraft.id == draft_id)
     if user_id:
         query = query.filter(ProductDraft.created_by == str(user_id))
+    if for_update:
+        query = query.populate_existing().with_for_update()
     return query.first()
 
 
@@ -172,22 +180,51 @@ def _refresh_published_product(db: Session, sku: str) -> dict:
     return get_product_detail(db, normalized_sku)
 
 
-def publish_draft(db: Session, draft_id: str, user_id: str = None) -> dict:
-    draft = get_draft_by_id(db, draft_id, user_id)
+def publish_draft(db: Session, draft_id: str, *, acting_user: User) -> dict:
+    """Publish under the actor's authority, independently of draft ownership."""
+    try:
+        return _publish_draft(db, draft_id, acting_user=acting_user)
+    except Exception:
+        db.rollback()
+        raise
+
+
+def _publish_draft(db: Session, draft_id: str, *, acting_user: User) -> dict:
+    if acting_user is None or not acting_user.is_active:
+        raise HTTPException(status_code=403, detail="An active acting user is required")
+    owner_scope = None if is_management_user(db, acting_user.id) else acting_user.id
+    draft = get_draft_by_id(db, draft_id, owner_scope, for_update=True)
     if not draft:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Draft not found")
 
-    draft_data = draft.draft_data or {}
-    sku = draft.sku or draft_data.get("sku", "").strip()
+    draft_data = dict(draft.draft_data or {})
+    sku = str(draft.sku or draft_data.get("sku") or "").strip()
     if not sku:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Draft must have a valid SKU")
 
     existing_product = get_product_by_sku(db, sku)
+    # Accept the same aliases as product creation, while updating canonical
+    # sections below. Do not modify the persisted draft before authorization.
+    for flat, nested in (("specs_data", "specs"), ("business_data", "business"),
+                         ("content_data", "content"), ("prompts_data", "prompts")):
+        if flat in draft_data:
+            draft_data[nested] = draft_data.pop(flat)
+    asset_section_supplied = (
+        "assets" in draft_data or "media_data" in draft_data or isinstance(draft_data.get("media"), dict)
+    )
+    draft_data = authorize_product_draft_publish(db, acting_user, sku, draft_data)
 
     if existing_product:
         # Validate L2 required fields (except certification)
         from .product_service import _to_json_str, _validate_product_data
-        _validate_product_data(draft_data)
+        from .product_service import _build_detail
+        validation_data = _build_detail(existing_product, db)
+        for key, value in draft_data.items():
+            if key in {"specs", "business", "content"} and isinstance(value, dict):
+                validation_data[key] = {**(validation_data.get(key) or {}), **value}
+            else:
+                validation_data[key] = value
+        _validate_product_data(validation_data)
 
         # Update existing product with draft data
         from ..models.product_content import ProductContent
@@ -286,28 +323,15 @@ def publish_draft(db: Session, draft_id: str, user_id: str = None) -> dict:
         # A partial draft must not erase L4 relations it did not carry.  An
         # explicit section still replaces that section atomically, preserving
         # the existing draft-publish semantics for deliberate QA updates.
-        if "media" in draft_data:
+        if asset_section_supplied:
             from . import product_asset_sync_service
-            product_asset_sync_service.sync_product_assets_from_media_data(
-                db, existing_product, draft_data.get("media")
+            product_asset_sync_service.sync_product_assets_from_snapshot_data(
+                db, existing_product, draft_data["assets"]
             )
 
-        # QA items - delete old and insert new
-        from ..models.product_qa import ProductQa, ProductQaNegative
-        if "qa_items" in draft_data:
-            db.query(ProductQa).filter(ProductQa.product_id == pid).delete()
-            for qa in (draft_data.get("qa_items") or []):
-                if qa.get("question") or qa.get("answer"):
-                    db.add(ProductQa(product_id=pid, question=qa.get("question", ""),
-                        answer=qa.get("answer", ""), tags=qa.get("tags"), priority=qa.get("priority")))
-
-        if "qa_negative" in draft_data:
-            qa_neg = draft_data.get("qa_negative") or {}
-            db.query(ProductQaNegative).filter(ProductQaNegative.product_id == pid).delete()
-            if qa_neg.get("high_freq_negative_words") or qa_neg.get("response_tone"):
-                db.add(ProductQaNegative(product_id=pid,
-                    high_freq_negative_words=qa_neg.get("high_freq_negative_words"),
-                    response_tone=qa_neg.get("response_tone"), priority=qa_neg.get("priority")))
+        # Persist the authorized plan; unchanged rows keep their audit history.
+        from .product_write_authorization import apply_product_qa_write
+        apply_product_qa_write(db, existing_product, draft_data)
 
         # Product prompts follow the same explicit-section rule.
         from ..models.product_prompts import ProductPrompts
@@ -334,7 +358,7 @@ def publish_draft(db: Session, draft_id: str, user_id: str = None) -> dict:
 
     # New product: create from draft data
     draft_data["sku"] = sku
-    product = create_product(db, draft_data, creator_id=user_id or draft.created_by)
+    product = create_product(db, draft_data, creator_id=acting_user.id, commit=False)
     db.delete(draft)
     db.commit()
     return _refresh_published_product(db, product.sku)

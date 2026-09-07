@@ -117,7 +117,7 @@ def logout(response: Response):
 
 @router.get("/me", response_model=UserResponse)
 def get_me(
-    current_user: User = Depends(require_permission("profile.view")),
+    current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
     groups = get_user_groups(db, current_user.id)

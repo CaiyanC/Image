@@ -1364,6 +1364,11 @@ def replace_product(
 
     payload = {**data, "sku": sku}
     validate_product_payload(payload)
+    from .product_write_authorization import (
+        validate_legacy_media_replacement, prepare_product_qa_write, apply_product_qa_write,
+    )
+    legacy_media_records = validate_legacy_media_replacement(db, sku, payload)
+    qa_records, _ = prepare_product_qa_write(db, sku, payload)
     has_asset_table = inspect(db.get_bind()).has_table(ProductAsset.__tablename__)
     old_asset_records = (
         [
@@ -1380,7 +1385,7 @@ def replace_product(
         old_asset_files = delete_product(db, sku, commit=False)
         product = create_product(
             db,
-            payload,
+            {**payload, "qa_items": [], "qa_negative": None},
             creator_id=creator_id,
             commit=False,
             asset_table_available=has_asset_table,
@@ -1392,6 +1397,11 @@ def replace_product(
                 manual_asset_records,
                 replace=False,
             )
+        # Keep IDs and governance metadata, rebinding only the product identity.
+        # This insert is in the same transaction as deletion and product creation.
+        for record in legacy_media_records:
+            db.add(ProductMedia(**{**record, "product_id": product.id, "sku": sku}))
+        apply_product_qa_write(db, product, qa_records)
         db.commit()
         db.refresh(product)
     except Exception:
@@ -1825,10 +1835,19 @@ def add_product_media(db: Session, sku: str, data: dict):
     return media
 
 
-def update_product_media(db: Session, media_id: str, data: dict):
-    media = db.query(ProductMedia).filter(ProductMedia.id == media_id).first()
+def get_product_media(db: Session, sku: str, media_id: str):
+    media = db.query(ProductMedia).join(Product, Product.id == ProductMedia.product_id).filter(
+        ProductMedia.id == media_id,
+        ProductMedia.sku == sku,
+        Product.sku == sku,
+    ).populate_existing().with_for_update().first()
     if not media:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Media not found")
+    return media
+
+
+def update_product_media(db: Session, media_id: str, data: dict, *, sku: str):
+    media = get_product_media(db, sku, media_id)
 
     updatable = {
         "media_layer", "media_group", "media_type", "channel_name", "page_type",
@@ -1851,10 +1870,8 @@ def update_product_media(db: Session, media_id: str, data: dict):
     return media
 
 
-def delete_product_media(db: Session, media_id: str):
-    media = db.query(ProductMedia).filter(ProductMedia.id == media_id).first()
-    if not media:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Media not found")
+def delete_product_media(db: Session, media_id: str, *, sku: str):
+    media = get_product_media(db, sku, media_id)
     product_id = media.product_id
     db.delete(media)
     db.commit()

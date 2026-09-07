@@ -18,6 +18,31 @@ from app.services import customer_agent_intent_service, customer_service_service
 from scripts.audit_product_qa_integrity import apply_audit_ledger, ensure_development_target
 
 
+@pytest.mark.parametrize("name,category,expected", [
+    ("小圆炉", "炉具", True), ("户外水壶", "水壶", True),
+    ("煎锅", "锅具", False), ("炉锅套装", "炉具", False),
+])
+def test_confirmed_cross_domain_template_guard_is_narrow(name, category, expected):
+    answer = "首次使用前用温水和软布冲洗即可（无需洗洁精）。烹饪前中小火预热2-3分钟，再倒油使用效果更佳。"
+    product = Product(product_name_cn=name, category=category)
+    assert product_qa_integrity_service._is_known_cross_domain_template(product, answer) is expected
+    assert not product_qa_integrity_service._is_known_cross_domain_template(product, "不要套用以下说明：" + answer)
+
+
+def test_known_bad_template_is_rejected_before_model_call(monkeypatch):
+    answer = "首次使用前用温水和软布冲洗即可（无需洗洁精）。烹饪前中小火预热2-3分钟，再倒油使用效果更佳。"
+    product = Product(product_name_cn="小圆炉", category="炉具")
+    qa = ProductQa(question="第一次使用？", answer=answer)
+    def unexpected(*args, **kwargs):
+        raise AssertionError("Known bad template must not reach model audit")
+    monkeypatch.setattr(product_qa_integrity_service, '_product_evidence', unexpected)
+    db = SimpleNamespace(add=lambda x: None, flush=lambda rows: None)
+    result = asyncio.run(product_qa_integrity_service.audit_product_qa_item(db, product, qa))
+    assert result['status'] == qa.integrity_status == 'rejected'
+    assert qa.answer == answer
+    assert qa.integrity_model == 'rule-known-cross-domain-template-v1'
+
+
 def test_integrity_authority_includes_size_and_surface_finish():
     specs = ProductSpecs(
         product_id="qa-integrity-authority-product",

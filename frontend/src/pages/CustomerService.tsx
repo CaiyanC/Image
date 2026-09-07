@@ -163,7 +163,8 @@ export default function CustomerService({
   subtitle = '基于产品资料和知识库回答',
 }: CustomerServiceProps = {}) {
   const { isManagement, user } = useAuthStore()
-  const canManageQa = isManagement || Boolean(
+  const canManageKnowledge = Boolean(user?.permissions?.includes('knowledge.manage'))
+  const canManageQa = Boolean(
     user?.permissions?.includes('product.qa.manage') || user?.permissions?.includes('product.edit'),
   )
   const initialConversationKey = useMemo(() => createLocalConversationKey(), [])
@@ -353,17 +354,17 @@ export default function CustomerService({
     // for knowledge/review panels before showing it, otherwise old records
     // appear as a surprising late batch after the user sends a new message.
     void loadConversationList()
-    try {
-      const [status, review] = await Promise.all([
-        api.knowledgeBase.status(),
-        api.customerService.reviewSamples(50),
-      ])
-      setKnowledgeStatus(status)
-      setReviewSummary(review.summary || null)
-    } catch {
-      // Side data should not block the chat surface.
-    }
-  }, [loadConversationList])
+    const statusRequest = canManageKnowledge
+      ? api.knowledgeBase.status().then((status) => {
+        const current = useAuthStore.getState()
+        if (current.user?.permissions?.includes('knowledge.manage')) setKnowledgeStatus(status)
+      }).catch(() => setKnowledgeStatus(null))
+      : Promise.resolve(setKnowledgeStatus(null))
+    const reviewRequest = api.customerService.reviewSamples(50)
+      .then((review) => setReviewSummary(review.summary || null))
+      .catch(() => setReviewSummary(null))
+    await Promise.allSettled([statusRequest, reviewRequest])
+  }, [loadConversationList, canManageKnowledge])
 
   useEffect(() => {
     void loadSideData()
@@ -740,7 +741,7 @@ export default function CustomerService({
 
         <main className="col-span-12 lg:col-span-6 glass rounded-2xl overflow-hidden flex flex-col">
           <div className="p-4 border-b border-black/5">
-            {isManagement && (
+            {canManageKnowledge && (
               <div className="flex justify-end">
                 <button
                   type="button"
@@ -863,13 +864,13 @@ export default function CustomerService({
         </main>
 
         <aside className="col-span-12 lg:col-span-3 space-y-4">
-          {debugMode && (
+          {debugMode && canManageKnowledge && (
             <section className="glass rounded-2xl p-4">
               <h2 className="text-sm font-semibold text-apple-text mb-3">知识库状态</h2>
               <div className="space-y-2 text-sm">
-                <Info label="pgvector" value={knowledgeStatus?.available ? '已启用' : '未启用'} />
-                <Info label="知识分片" value={String(knowledgeStatus?.chunks ?? 0)} />
-                <Info label="已向量化" value={String(knowledgeStatus?.embedded_chunks ?? 0)} />
+                <Info label="pgvector" value={knowledgeStatus ? (knowledgeStatus.available ? '已启用' : '未启用') : '暂不可用'} />
+                <Info label="知识分片" value={String(knowledgeStatus?.chunks ?? '—')} />
+                <Info label="已向量化" value={String(knowledgeStatus?.embedded_chunks ?? '—')} />
               </div>
             </section>
 
@@ -913,13 +914,13 @@ export default function CustomerService({
             )}
           </section>
 
-          {debugMode && (
+          {debugMode && canManageKnowledge && (
             <section className="glass rounded-2xl p-4">
               <h2 className="text-sm font-semibold text-apple-text mb-3">客服回放概览</h2>
               <div className="space-y-2 text-sm">
-                <Info label="样本数" value={String(reviewSummary?.total_samples ?? 0)} />
-                <Info label="澄清样本" value={String(reviewSummary?.clarification_samples ?? 0)} />
-                <Info label="异常样本" value={String(reviewSummary?.anomaly_samples ?? 0)} />
+                <Info label="样本数" value={String(reviewSummary?.total_samples ?? '—')} />
+                <Info label="澄清样本" value={String(reviewSummary?.clarification_samples ?? '—')} />
+                <Info label="异常样本" value={String(reviewSummary?.anomaly_samples ?? '—')} />
               </div>
             </section>
           )}

@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { api } from '../services/api'
-import { useAuthStore } from '../store/authStore'
+import { getLandingPath, useAuthStore } from '../store/authStore'
 
 export default function Login() {
   const allowPublicRegistration = import.meta.env.VITE_ENABLE_PUBLIC_REGISTRATION === 'true'
@@ -20,20 +20,7 @@ export default function Login() {
     try {
       const data = await api.auth.login(username, password)
       setAuth(data.user)
-      const permissions = data.user.permissions || []
-      if (permissions.includes('ai.generate')) {
-        navigate('/')
-      } else if (permissions.includes('ai.customer_service')) {
-        navigate('/customer-service')
-      } else if (permissions.includes('history.view')) {
-        navigate('/history')
-      } else if (permissions.includes('product.read')) {
-        navigate('/products')
-      } else if (permissions.includes('profile.view')) {
-        navigate('/profile')
-      } else {
-        navigate('/no-access')
-      }
+      navigate(getLandingPath(data.user), { replace: true })
     } catch (err) {
       setError(err instanceof Error ? err.message : '账号或密码错误')
     } finally {

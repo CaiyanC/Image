@@ -2,7 +2,7 @@ from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
 
 from ..core.database import get_db
-from ..core.security import require_product_permission
+from ..core.security import require_any_permission, require_permission
 from ..models.user import User
 from ..services import asset_service, asset_taxonomy
 
@@ -11,7 +11,7 @@ router = APIRouter(prefix="/api/assets", tags=["asset-search"])
 
 @router.get("/taxonomy")
 def get_asset_taxonomy(
-    current_user: User = Depends(require_product_permission("read")),
+    current_user: User = Depends(require_any_permission("media.read", "media.search", "media.upload", "product.full.view")),
 ):
     del current_user
     return asset_taxonomy.dictionary_payload()
@@ -38,7 +38,7 @@ def search_assets(
     channel_tags: list[str] = Query(default=[]),
     language_tags: list[str] = Query(default=[]),
     limit: int = Query(default=100, ge=1, le=100),
-    current_user: User = Depends(require_product_permission("read")),
+    current_user: User = Depends(require_permission("media.search")),
     db: Session = Depends(get_db),
 ):
     del current_user

@@ -4,6 +4,7 @@ import os
 import shutil
 import uuid
 from pathlib import Path
+from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.responses import FileResponse
@@ -23,17 +24,20 @@ from ..models.user import User
 
 router = APIRouter(prefix="/api/files", tags=["files"])
 
-SIGNED_FILE_EXPIRE_SECONDS = int(os.getenv("SIGNED_FILE_EXPIRE_SECONDS", "600"))
+SIGNED_FILE_EXPIRE_SECONDS = min(600, max(1, int(os.getenv("SIGNED_FILE_EXPIRE_SECONDS", "600"))))
 FILE_SIGN_LIMIT_PER_MINUTE = 45
 FILE_SIGN_BATCH_LIMIT_PER_MINUTE = 30
 MAX_FILE_SIGN_BATCH_SIZE = 100
 _SIGNED_FILE_ALGORITHM = settings.ALGORITHM
 _SIGNED_FILE_AUDIENCE = f"file-access:{settings.APP_ENV}"
 logger = logging.getLogger(__name__)
+FilePurpose = Literal["preview", "download"]
+_MEDIA_PREVIEW_PERMISSIONS = ("media.read", "media.search", "product.read", "product.full.view", "product.edit")
 
 
 class FileSignRequest(BaseModel):
     path: str = Field(..., min_length=1, max_length=1000)
+    purpose: FilePurpose = "preview"
 
 
 class FileSignResponse(BaseModel):
@@ -43,6 +47,7 @@ class FileSignResponse(BaseModel):
 
 class FileSignBatchRequest(BaseModel):
     paths: list[str] = Field(..., min_length=1, max_length=MAX_FILE_SIGN_BATCH_SIZE)
+    purpose: FilePurpose = "preview"
 
 
 class FileSignBatchItem(FileSignResponse):
@@ -66,8 +71,8 @@ def sign_file(
         window_seconds=60,
     )
     normalized_path = _normalize_upload_url(body.path)
-    _authorize_sign_request(db, current_user, normalized_path)
-    token = _create_file_token(normalized_path)
+    _authorize_sign_request(db, current_user, normalized_path, body.purpose)
+    token = _create_file_token(normalized_path, current_user, body.purpose)
     return FileSignResponse(url=f"/api/files/signed/{token}", expires_in=SIGNED_FILE_EXPIRE_SECONDS)
 
 
@@ -84,11 +89,11 @@ def sign_files_batch(
         window_seconds=60,
     )
     normalized_paths = list(dict.fromkeys(_normalize_upload_url(path) for path in body.paths))
-    _authorize_sign_batch(db, current_user, normalized_paths)
+    _authorize_sign_batch(db, current_user, normalized_paths, body.purpose)
     return FileSignBatchResponse(items=[
         FileSignBatchItem(
             path=path,
-            url=f"/api/files/signed/{_create_file_token(path)}",
+            url=f"/api/files/signed/{_create_file_token(path, current_user, body.purpose)}",
             expires_in=SIGNED_FILE_EXPIRE_SECONDS,
         )
         for path in normalized_paths
@@ -96,17 +101,37 @@ def sign_files_batch(
 
 
 @router.get("/signed/{token}")
-def get_signed_file(token: str):
-    normalized_path = _decode_file_token(token)
+def get_signed_file(
+    token: str,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    payload = _decode_file_claims(token)
+    if str(current_user.id) != payload["user_id"]:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="File token belongs to another user")
+    normalized_path = _normalize_upload_url(payload["sub"])
+    # A file token supplements login; it cannot transfer the signer's access.
+    # Recheck persisted account state and grants even for video range requests.
+    user = db.query(User).filter(User.id == current_user.id).populate_existing().first()
+    if not user or not user.is_active or int(user.auth_version or 0) != payload["auth_version"]:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="File authorization revoked")
+    _authorize_sign_request(db, user, normalized_path, payload["purpose"])
     file_path = _resolve_upload_path(normalized_path)
     if not file_path.is_file():
         _copy_legacy_upload_if_available(normalized_path, file_path)
     if not file_path.is_file():
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="File not found")
-    return FileResponse(file_path)
+    return FileResponse(
+        file_path,
+        filename=file_path.name,
+        content_disposition_type="attachment" if payload["purpose"] == "download" else "inline",
+        headers={"Cache-Control": "private, no-store", "X-Content-Type-Options": "nosniff"},
+    )
 
 
-def _authorize_sign_request(db: Session, user: User, normalized_path: str) -> None:
+def _authorize_sign_request(
+    db: Session, user: User, normalized_path: str, purpose: FilePurpose = "preview",
+) -> None:
     if normalized_path.startswith("/uploads/knowledge-files/"):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
@@ -118,9 +143,11 @@ def _authorize_sign_request(db: Session, user: User, normalized_path: str) -> No
             return
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Reference image access denied")
     if normalized_path.startswith(("/uploads/images/", "/uploads/videos/", "/uploads/assets/")):
-        if has_permission(db, user.id, "product.read"):
+        if purpose == "download" and not has_permission(db, user.id, "media.download"):
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Permission required: media.download")
+        if any(has_permission(db, user.id, permission) for permission in _MEDIA_PREVIEW_PERMISSIONS):
             return
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Permission required: product.read")
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Permission required: " + " or ".join(_MEDIA_PREVIEW_PERMISSIONS))
     if normalized_path.startswith("/uploads/generated/"):
         if _is_generation_owner_or_manager(db, user, normalized_path):
             return
@@ -128,8 +155,11 @@ def _authorize_sign_request(db: Session, user: User, normalized_path: str) -> No
     raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Unsupported file scope")
 
 
-def _authorize_sign_batch(db: Session, user: User, normalized_paths: list[str]) -> None:
-    product_read_allowed: bool | None = None
+def _authorize_sign_batch(
+    db: Session, user: User, normalized_paths: list[str], purpose: FilePurpose = "preview",
+) -> None:
+    media_preview_allowed: bool | None = None
+    media_download_allowed: bool | None = None
     management_allowed: bool | None = None
     for normalized_path in normalized_paths:
         if normalized_path.startswith("/uploads/knowledge-files/"):
@@ -138,11 +168,16 @@ def _authorize_sign_batch(db: Session, user: User, normalized_paths: list[str]) 
                 detail="Knowledge files must be downloaded through the knowledge base API",
             )
         if normalized_path.startswith(("/uploads/images/", "/uploads/videos/", "/uploads/assets/")):
-            if product_read_allowed is None:
-                product_read_allowed = has_permission(db, user.id, "product.read")
-            if product_read_allowed:
+            if purpose == "download":
+                if media_download_allowed is None:
+                    media_download_allowed = has_permission(db, user.id, "media.download")
+                if not media_download_allowed:
+                    raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Permission required: media.download")
+            if media_preview_allowed is None:
+                media_preview_allowed = any(has_permission(db, user.id, permission) for permission in _MEDIA_PREVIEW_PERMISSIONS)
+            if media_preview_allowed:
                 continue
-            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Permission required: product.read")
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Permission required: " + " or ".join(_MEDIA_PREVIEW_PERMISSIONS))
         if normalized_path.startswith("/uploads/reference-images/"):
             owner_id = normalized_path.removeprefix("/uploads/reference-images/").split("/", 1)[0]
             if owner_id == str(user.id):
@@ -180,25 +215,47 @@ def _is_generation_owner(db: Session, user: User, normalized_path: str) -> bool:
     return bool(row and str(row.user_id) == str(user.id))
 
 
-def _create_file_token(normalized_path: str) -> str:
+def _create_file_token(
+    normalized_path: str, user: User | None = None, purpose: FilePurpose = "preview",
+) -> str:
     from datetime import datetime, timedelta, timezone
 
-    expire = datetime.now(timezone.utc) + timedelta(seconds=SIGNED_FILE_EXPIRE_SECONDS)
-    payload = {"sub": normalized_path, "aud": _SIGNED_FILE_AUDIENCE, "exp": expire}
+    now = datetime.now(timezone.utc)
+    expire = now + timedelta(seconds=min(600, SIGNED_FILE_EXPIRE_SECONDS))
+    payload = {"sub": normalized_path, "aud": _SIGNED_FILE_AUDIENCE, "exp": expire, "iat": now}
+    if user is not None:
+        payload.update(user_id=str(user.id), auth_version=int(user.auth_version or 0), purpose=purpose)
     return jwt.encode(payload, settings.SECRET_KEY, algorithm=_SIGNED_FILE_ALGORITHM)
 
 
 def _decode_file_token(token: str) -> str:
+    return _normalize_upload_url(_decode_file_claims(token)["sub"])
+
+
+def _decode_file_claims(token: str) -> dict:
     try:
         payload = jwt.decode(
             token,
             settings.SECRET_KEY,
             algorithms=[_SIGNED_FILE_ALGORITHM],
             audience=_SIGNED_FILE_AUDIENCE,
+            options={"require": ["sub", "aud", "exp", "iat", "user_id", "auth_version", "purpose"]},
         )
+        if (
+            not isinstance(payload["sub"], str)
+            or not isinstance(payload["user_id"], str)
+            or not payload["user_id"]
+            or type(payload["auth_version"]) is not int
+            or payload["purpose"] not in ("preview", "download")
+            or type(payload["exp"]) is not int
+            or type(payload["iat"]) is not int
+            or not 0 < payload["exp"] - payload["iat"] <= 600
+        ):
+            raise InvalidTokenError("Invalid file claims")
     except InvalidTokenError:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Invalid or expired file token")
-    return _normalize_upload_url(str(payload.get("sub") or ""))
+    # Legacy path-only tokens cannot be reauthorized: require a fresh sign.
+    return payload
 
 
 def _normalize_upload_url(raw_path: str) -> str:
