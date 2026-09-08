@@ -99,6 +99,11 @@ def answer_consistency_issues(response: dict[str, Any] | None, payload: dict[str
     if not isinstance(response, dict): return []
     answer = str(response.get('answer') or '')
     question = str(payload.get('current_question') or '')
+    if _is_alcohol_cookware_recommendation(question) and "暂时无法确认这个问题的答案" in answer:
+        return [{
+            "code": "generic_alcohol_recommendation_fallback",
+            "reason": "酒精炉锅具推荐不能用无具体原因的通用兜底；应只保留同 SKU 热源明确支持的锅具，或明确说明没有符合项。",
+        }]
     if (
         _is_alcohol_cookware_recommendation(question)
         and str(response.get("answer_type") or "").strip().lower() in {"recommendation", "comparison"}

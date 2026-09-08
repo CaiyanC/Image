@@ -109,6 +109,20 @@ def test_alcohol_stove_recommendation_rejects_open_fire_only_cookware():
     assert '酒精锅（GOOD）' in safe_alcohol_stove_recommendation(payload)
 
 
+def test_generic_alcohol_recommendation_fallback_is_repaired():
+    payload = {
+        'current_question': '适合酒精炉的锅具给几个选择。',
+        'candidate_products': [
+            {'sku': 'BAD', 'product_name_cn': '普通锅', 'category': '锅具', 'specs': {'heat_source': '明火直烧'}},
+        ],
+    }
+    issues = answer_consistency_issues(
+        {'answer': '暂时无法确认这个问题的答案，建议下单前向店铺人工核实。', 'answer_type': 'clarification'},
+        payload,
+    )
+    assert issues[0]['code'] == 'generic_alcohol_recommendation_fallback'
+
+
 def test_alcohol_stove_recommendation_has_bounded_no_match_fallback():
     payload = {
         'current_question': '适合酒精炉的锅具给几个选择。',
