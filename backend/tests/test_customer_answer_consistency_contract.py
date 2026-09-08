@@ -149,3 +149,35 @@ def test_explicit_product_generic_fallback_is_repaired():
         payload,
     )
     assert issues[0]['code'] == 'generic_explicit_product_fallback'
+
+
+def test_workbuddy_retries_when_provider_returns_invalid_json(monkeypatch):
+    from app.services import customer_service_workbuddy_rag_service as rag
+
+    calls = []
+
+    async def chat(*_args, **kwargs):
+        calls.append(kwargs)
+        if len(calls) == 1:
+            return "not-json"
+        return json.dumps({
+            'answer': '这款资料已确认支持明火直烧。',
+            'answer_type': 'faq',
+            'selected_skus': ['TEST-1'],
+        }, ensure_ascii=False)
+
+    monkeypatch.setattr(rag.customer_llm_service, 'chat_completion', chat)
+    result, metadata = asyncio.run(rag._generate_answer(
+        None,
+        payload={
+            **packet(),
+            'current_question': 'TEST-1 支持什么热源？',
+            'explicit_product_skus': ['TEST-1'],
+        },
+    ))
+
+    assert result and result['answer'] == '这款资料已确认支持明火直烧。'
+    assert len(calls) == 2
+    assert metadata['consistency_retry_count'] == 1
+    assert metadata['consistency_issues'][0]['code'] == 'invalid_answer_json'
+    assert '合法的 JSON object' in calls[1]['messages'][0]['content']

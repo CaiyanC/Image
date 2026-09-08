@@ -907,7 +907,19 @@ async def _generate_answer(
             raw_text = "".join(raw_parts)
             metadata["answer_streamed"] = bool(emitted_answer)
         raw = _extract_json_object(raw_text)
-        issues = answer_consistency_issues(raw, payload)
+        if isinstance(raw, dict) and str(raw.get("answer") or "").strip():
+            issues = answer_consistency_issues(raw, payload)
+        else:
+            # JSON mode is an output contract, not a best-effort hint.  The
+            # provider can still occasionally return an empty or malformed
+            # content block; give the same governed answer path one repair
+            # attempt before exposing the generic safe answer.  Without this
+            # branch, an evidence-backed question can be mislabeled as
+            # "暂时无法确认" even though retrieval succeeded.
+            issues = [{
+                "code": "invalid_answer_json",
+                "reason": "上游没有返回包含顾客可见 answer 的可解析 JSON 对象。",
+            }]
         if issues and not _consistency_retry:
             repaired, retry_metadata = await _generate_answer(db,
                 payload={**payload, "answer_consistency_repair": consistency_repair_instruction(issues)},

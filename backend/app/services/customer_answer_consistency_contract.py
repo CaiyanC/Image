@@ -198,6 +198,13 @@ def answer_consistency_issues(response: dict[str, Any] | None, payload: dict[str
 
 
 def consistency_repair_instruction(issues: list[dict[str, str]]) -> str:
+    if any(issue.get("code") == "invalid_answer_json" for issue in issues):
+        return (
+            "上一版模型没有返回可解析的 JSON 对象，不能把这次有证据的问题降级成通用兜底。"
+            "请重新阅读本轮 payload，只输出一个合法的 JSON object；不要输出 Markdown、代码围栏、"
+            "解释文字或 JSON 之外的前后缀。answer 必须是可以直接发送给顾客的自然中文回复，"
+            "其余字段按原协议选择性返回；只使用本轮 evidence 中能确认的事实。"
+        )
     return ('上一版答案与本轮同SKU明确事实或条件冲突，不能直接发送。'
             '请保留可以确认的回答，只修正冲突，不编造新事实，不追加无关加热步骤。'
             '酒精炉锅具推荐只能保留同SKU资料明确写有酒精炉/液体或固体酒精且品类确为锅具或炊具的候选；'
