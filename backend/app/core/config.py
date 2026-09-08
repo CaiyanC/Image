@@ -197,6 +197,19 @@ class Settings:
     CUSTOMER_SERVICE_EXPERIENCE_RAG_MIN_MARGIN: float = float(
         os.getenv("CUSTOMER_SERVICE_EXPERIENCE_RAG_MIN_MARGIN", "0.02")
     )
+    # Dynamic answer review is a model-mediated second look for answers that
+    # are likely to benefit from it. It is opt-in per environment so
+    # production keeps the existing latency profile until dev evaluation
+    # proves the change is worthwhile.
+    CUSTOMER_SERVICE_DYNAMIC_REVIEW_ENABLED: bool = os.getenv(
+        "CUSTOMER_SERVICE_DYNAMIC_REVIEW_ENABLED", "false"
+    ).lower() == "true"
+    CUSTOMER_SERVICE_DYNAMIC_REVIEW_MAX_TOKENS: int = int(
+        os.getenv("CUSTOMER_SERVICE_DYNAMIC_REVIEW_MAX_TOKENS", "420")
+    )
+    CUSTOMER_SERVICE_DYNAMIC_REVIEW_REASONING_EFFORT: str = os.getenv(
+        "CUSTOMER_SERVICE_DYNAMIC_REVIEW_REASONING_EFFORT", "none"
+    ).strip().lower()
 
     DATABASE_URL: str = os.getenv(
         "DATABASE_URL",

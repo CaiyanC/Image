@@ -33,6 +33,7 @@ from .customer_answer_consistency_contract import (
 from . import customer_followup_context_contract as followup_context
 from . import (
     customer_agent_service,
+    customer_dynamic_answer_review_service,
     customer_enterprise_guardrail_service,
     customer_experience_rag_service,
     customer_llm_service,
@@ -821,7 +822,7 @@ async def _generate_answer(
         "你是直接接待顾客的中文商品客服。先理解当前问题、conversation_history 和 previous_turn_memory，再依据本轮 evidence 与 candidate_products 回答；不要向客户暴露内部字段、检索、模型或流程。"
         "请同时遵守 payload.turn_identity_contract：它是本轮客户身份与候选证据的语义边界；customer_identity_bound=false 时，候选 SKU 只能作为证据来源，不能当作客户已选商品。"
         "若 payload 提供 active_context_products，‘它/这款/刚才两款/上一轮’等上下文指代优先在这些商品内理解；只有客户明确要求换一款、其他选择或扩大推荐时，才引入其他候选。不要让新召回候选静默替换上一轮比较参与者。"
-        "experience_guidance 是人工审核或经过边界校验的自动汇总非事实沟通经验，只能帮助你更自然地承接顾虑、组织取舍和给出下一步；不能证明商品事实、不能替代 evidence、不能选择 SKU，也不能向客户提及。简单事实问题或不相关建议应直接忽略，不要强行推销或增加篇幅。完整回答当前问题的前提下优先一到三句短答，复杂比较确有必要时再用少量条目。"
+        "experience_guidance 是人工审核或经过边界校验的历史案例信号，只能帮助你更自然地承接顾虑、组织取舍和给出下一步；不能证明商品事实、不能替代 evidence、不能选择 SKU，也不能向客户提及。case_signal 中的正向模式和阻塞模式只是样本观察，只有与当前顾虑相似时才参考；简单事实问题或不相关案例直接忽略，不要强行推销或增加篇幅。完整回答当前问题的前提下优先一到三句短答，复杂比较确有必要时再用少量条目。"
         "历史和记忆只用于理解代词、承接上下文和替换意图，不是新的商品事实；商品事实只能来自本轮 evidence，并保留它所属的 SKU。canonical_product_record 是结构化主数据，product_qa 是同 SKU 补充；出现直接冲突时以主产品记录的明确参数回答，不能将旧描述当作同等权威。"
         "canonical_product_record 对同一 SKU 的非空结构化字段拥有最高事实权威；同 SKU QA/知识只能补充主数据未填写的事实，不能静默改写主数据。适用热源等封闭兼容字段只认可资料明确列出的具体选项，‘明火’或‘燃气’等宽泛词不能推出具体的酒精炉等选项；空值、‘/’、暂无或未知表示主数据未填写，不是通用兼容。只有同 SKU 主数据该字段为空时，才可按已审核 QA 明确列出的范围补充，缺失字段仅作内部核对记录，顾客回复不提内部登记状态；同一封闭字段一旦已有非空主数据，即使 QA 已审核，也不能把 QA 追加的具体选项当作扩展兼容；两者不一致时以主数据为准，对顾客仅说明仍影响其问题的具体不确定项。不要把这种情况误称为直接冲突，也不能扩大 QA 的范围。热源兼容不等于室内使用许可：只有同 SKU 证据明确说明室内或家用场景时才能回答可以室内使用；仅有热源、露营或户外资料时，不得推导室内可用或室内安全，应只说明该使用场景暂时无法确认并提醒遵守炉具通风和安全要求。"
         "回答内容优先。若多个候选对客户当前询问的同一事实都有明确且一致的资料，可以直接回答共同事实，并列出实际支持该回答的 SKU；不要因为召回多个 SKU 就机械澄清。只有商品身份、必要条件或事实确实存在歧义/缺失时才澄清；资料不足时说明边界，不要编造。重量、容量、尺寸不能自行升级成‘无负担、一定适合、完全满足’等更强结论。"
@@ -839,7 +840,9 @@ async def _generate_answer(
         '"request_kind":"product_fact|product_qa|recommendation|comparison|general_knowledge|clarification（可选）",'
         '"needs_clarification":true或false,"confidence":"high|medium|low（可选）",'
         '"uncertainty":"confirmed|partial|unconfirmed（可选）",'
-        '"suggested_followups":["确有帮助时再给自然追问"]}'
+        '"suggested_followups":["确有帮助时再给自然追问"],'
+        '"quality_review":{"recommended":true或false,"focus":["可选的复核重点"]}}'
+        "quality_review 是内部质量信号，必须填写 recommended；当回答存在取舍、上下文歧义、资料边界或可能影响购买判断时设为 true，否则设为 false。它不会展示给客户。"
     )
     system_prompt += (
         "\u5982\u679c current_question \u5df2\u660e\u786e\u5305\u542b SKU \u6216\u7cbe\u786e\u5546\u54c1\u4e3b\u4f53\uff0c\u4e14 evidence \u4e2d\u5b58\u5728\u540c\u4e00 SKU\uff0c\u7981\u6b62\u8f93\u51fa\u8981\u6c42\u5ba2\u6237\u8865\u5145\u5546\u54c1\u540d\u79f0\u6216 SKU \u7684\u6a21\u677f\u5316 clarification\u3002"
@@ -881,7 +884,6 @@ async def _generate_answer(
             )
         else:
             raw_parts: list[str] = []
-            emitted_answer = ""
             async for chunk in customer_llm_service.chat_completion_stream(
                 db,
                 messages=messages,
@@ -894,19 +896,24 @@ async def _generate_answer(
                 metadata=metadata,
             ):
                 raw_parts.append(str(chunk))
-                partial_answer = _partial_json_answer("".join(raw_parts))
-                if (
-                    partial_answer
-                    and partial_answer.startswith(emitted_answer)
-                    and len(partial_answer) > len(emitted_answer)
-                ):
-                    delta = partial_answer[len(emitted_answer):2400]
-                    if delta:
-                        await answer_delta_callback(delta)
-                        emitted_answer += delta
             raw_text = "".join(raw_parts)
-            metadata["answer_streamed"] = bool(emitted_answer)
+            # Keep stream chunks buffered until the answer has passed the
+            # optional dynamic review and the public-answer contract. The
+            # persistence layer emits the final answer, so a discarded draft
+            # cannot leak through SSE.
         raw = _extract_json_object(raw_text)
+        dynamic_review_metadata: dict[str, Any] = {
+            "attempted": False,
+            "decision": "not_needed",
+        }
+        if isinstance(raw, dict) and not _consistency_retry:
+            raw, dynamic_review_metadata = await customer_dynamic_answer_review_service.review_answer(
+                db,
+                question=str(payload.get("current_question") or ""),
+                payload=payload,
+                response=raw,
+            )
+        metadata["dynamic_review"] = dynamic_review_metadata
         if isinstance(raw, dict) and str(raw.get("answer") or "").strip():
             issues = answer_consistency_issues(raw, payload)
         else:
@@ -925,7 +932,8 @@ async def _generate_answer(
                 payload={**payload, "answer_consistency_repair": consistency_repair_instruction(issues)},
                 answer_delta_callback=answer_delta_callback, _consistency_retry=True)
             return repaired, {**retry_metadata, "consistency_retry_count": 1,
-                "consistency_issues": issues, "elapsed_ms": round(customer_perf_service.perf_ms(start), 2)}
+                "consistency_issues": issues, "dynamic_review": dynamic_review_metadata,
+                "elapsed_ms": round(customer_perf_service.perf_ms(start), 2)}
         if issues:
             safe_answer = safe_alcohol_stove_recommendation(payload)
             if safe_answer:
@@ -951,6 +959,18 @@ async def _generate_answer(
                           "elapsed_ms": round(customer_perf_service.perf_ms(start), 2)}
         metadata["elapsed_ms"] = round(customer_perf_service.perf_ms(start), 2)
         metadata["raw_valid"] = bool(raw)
+        if answer_delta_callback is not None:
+            # The callback is deliberately invoked only after dynamic review
+            # and the consistency contract have accepted the final answer.
+            # The normal request path supplies a buffering callback here and
+            # emits the same answer from _persist_result; direct callers still
+            # receive the validated answer exactly once.
+            try:
+                await answer_delta_callback(str(raw.get("answer") or ""))
+            except Exception:
+                customer_perf_service.log_event(
+                    "customer_service_workbuddy.stream_callback_error"
+                )
         return raw, metadata
     except Exception as exc:
         customer_perf_service.log_event(
@@ -964,46 +984,6 @@ async def _generate_answer(
             "error": type(exc).__name__,
         })
         return None, metadata
-
-
-def _partial_json_answer(raw_text: str) -> str:
-    """Read the answer string while an OpenAI JSON stream is incomplete."""
-    match = re.search(r'"answer"\s*:\s*"', raw_text)
-    if not match:
-        return ""
-    cursor = match.end()
-    chars: list[str] = []
-    escaped = False
-    while cursor < len(raw_text):
-        char = raw_text[cursor]
-        cursor += 1
-        if escaped:
-            if char == "n":
-                chars.append("\n")
-            elif char == "r":
-                chars.append("\r")
-            elif char == "t":
-                chars.append("\t")
-            elif char in {'"', "\\", "/"}:
-                chars.append(char)
-            elif char == "u" and cursor + 4 <= len(raw_text):
-                codepoint = raw_text[cursor:cursor + 4]
-                if not re.fullmatch(r"[0-9a-fA-F]{4}", codepoint):
-                    break
-                chars.append(chr(int(codepoint, 16)))
-                cursor += 4
-            else:
-                # Do not expose an incomplete escape sequence to the client.
-                break
-            escaped = False
-            continue
-        if char == "\\":
-            escaped = True
-            continue
-        if char == '"':
-            break
-        chars.append(char)
-    return "".join(chars)
 
 
 def _safe_missing_answer(*, has_identity_ambiguity: bool) -> str:

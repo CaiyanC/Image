@@ -18,23 +18,6 @@ from . import knowledge_service
 
 _APPROVED_REVIEW_STATUSES = {"approved_pilot", "auto_generated_pilot"}
 _AUTHORITY_LEVEL = "candidate_only"
-_STRATEGY_QUERY_MARKERS = (
-    "\u54ea\u6b3e\u5408\u9002", "\u54ea\u4e2a\u5408\u9002", "\u4ec0\u4e48\u5408\u9002",
-    "犹豫", "纠结", "值得买", "值不值得", "性价比", "价格高", "太贵", "贵不贵",
-    "推荐", "怎么选", "选哪", "帮我选", "帮我挑", "适合我", "购买前", "为什么买",
-    "卖点", "亮点", "怎么介绍", "客服", "如何承接", "顾虑", "担心", "不满意",
-    "差评", "退换", "下单", "想买", "买这款", "怎么样",
-)
-_FACT_QUERY_MARKERS = (
-    "容量", "重量", "尺寸", "材质", "热源", "炉具", "燃料", "兼容", "适配",
-    "配件", "包含", "承重", "清洁", "清洗", "怎么用", "使用方法", "保修", "发货", "物流",
-)
-_DIRECT_FACT_QUERY_MARKERS = (
-    "\u5ba4\u5185", "\u5361\u5f0f\u7089", "\u71c3\u6c14\u7089", "\u660e\u706b", "\u9152\u7cbe\u7089",
-    "\u662f\u4ec0\u4e48", "\u662f\u591a\u5c11", "\u80fd\u5426", "\u80fd\u4e0d\u80fd", "\u53ef\u4ee5\u5417",
-    "\u53ef\u4e0d\u53ef\u4ee5", "\u4f7f\u7528\u5417", "\u80fd\u7528\u5417", "\u53ef\u7528\u5417", "\u662f\u5426",
-    "\u5982\u4f55\u4f7f\u7528", "\u600e\u6837\u4f7f\u7528", "\u5b89\u5168\u4f7f\u7528", "\u4f7f\u7528\u6ce8\u610f", "\u6ce8\u610f\u4e8b\u9879", "\u6ce8\u610f\u4ec0\u4e48",
-)
 
 
 def _clip_text(value: Any, limit: int) -> str:
@@ -53,16 +36,14 @@ def _normalized_skus(values: list[str] | None) -> list[str]:
 
 
 def should_retrieve_experience_guidance(question: str) -> bool:
-    """Keep soft experience guidance on strategy questions, not direct facts."""
-    query = " ".join(str(question or "").strip().split())
-    if not query:
-        return False
-    if any(marker in query for marker in _STRATEGY_QUERY_MARKERS):
-        return True
-    return not any(
-        marker in query
-        for marker in (*_FACT_QUERY_MARKERS, *_DIRECT_FACT_QUERY_MARKERS)
-    )
+    """Allow semantic retrieval to decide whether a case is relevant.
+
+    This compatibility helper intentionally does not classify the question by
+    keywords. The caller may retrieve a small case packet for any non-empty
+    turn; the answer model can ignore an unrelated case without changing the
+    factual evidence path.
+    """
+    return bool(" ".join(str(question or "").strip().split()))
 
 
 def _approved_guidance_row(row: dict[str, Any]) -> bool:
@@ -88,6 +69,63 @@ def _vector_score(row: dict[str, Any]) -> float | None:
     if not math.isfinite(score):
         return None
     return score
+
+
+def _bounded_labels(value: Any, limit: int = 5) -> list[str]:
+    if isinstance(value, str):
+        values = [value]
+    elif isinstance(value, (list, tuple, set)):
+        values = list(value)
+    else:
+        values = []
+    output: list[str] = []
+    for item in values:
+        text = _clip_text(item, 120)
+        if text and text not in output:
+            output.append(text)
+        if len(output) >= limit:
+            break
+    return output
+
+
+def _safe_int(value: Any) -> int:
+    try:
+        return int(value or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
+def _case_signal(metadata: dict[str, Any]) -> dict[str, Any]:
+    """Expose outcome patterns as model-readable signals, not answer text."""
+    insights = metadata.get("conversion_insights")
+    insights = insights if isinstance(insights, dict) else {}
+    counts = metadata.get("sample_counts")
+    counts = counts if isinstance(counts, dict) else {}
+    return {
+        "signal_strength": (
+            "observed"
+            if str(metadata.get("insight_status") or "").strip() == "observed_strict"
+            else "inferred"
+            if str(metadata.get("insight_status") or "").strip()
+            else "unknown"
+        ),
+        "coverage_status": _clip_text(metadata.get("coverage_status"), 80) or None,
+        "outcome_shape": _clip_text(insights.get("outcome_shape"), 80) or None,
+        "outcome_sample_count": _safe_int(insights.get("outcome_sample_count")),
+        "positive_patterns": {
+            "intents": _bounded_labels(insights.get("conversion_intents")),
+            "styles": _bounded_labels(insights.get("conversion_styles")),
+        },
+        "friction_patterns": {
+            "reasons": _bounded_labels(insights.get("non_conversion_reasons")),
+            "intents": _bounded_labels(insights.get("non_conversion_intents")),
+            "negative_reasons": _bounded_labels(insights.get("negative_reasons")),
+        },
+        "sample_counts": {
+            key: _safe_int(counts.get(key))
+            for key in ("good", "bad", "reviews", "chats")
+        },
+    }
 
 
 async def retrieve_experience_guidance(
@@ -242,6 +280,8 @@ async def retrieve_experience_guidance(
             "sku": str(row.get("sku") or "").strip().upper() or None,
             "intent": str(metadata.get("intent") or "").strip() or None,
             "guidance": clipped,
+            "case_signal": _case_signal(metadata),
+            "retrieval_score": round(_score, 4),
             "authority_level": _AUTHORITY_LEVEL,
             "fact_authority": False,
         })

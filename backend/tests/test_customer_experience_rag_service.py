@@ -79,6 +79,8 @@ class CustomerExperienceRagServiceTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(rows), 1)
         self.assertFalse(rows[0]["fact_authority"])
         self.assertEqual(rows[0]["authority_level"], "candidate_only")
+        self.assertIn("case_signal", rows[0])
+        self.assertEqual(rows[0]["case_signal"]["signal_strength"], "unknown")
         self.assertTrue(any(
             call.kwargs.get("sku") == "CF-PG19"
             for call in retrieve.await_args_list
@@ -320,7 +322,7 @@ class CustomerExperienceRagServiceTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(rows), 2)
         self.assertIn("CB253", [row["sku"] for row in rows])
 
-    def test_strategy_gate_skips_direct_facts(self):
+    def test_retrieval_is_not_question_keyword_routed(self):
         self.assertTrue(
             customer_experience_rag_service.should_retrieve_experience_guidance(
                 "价格有点高，我还在犹豫值不值得买？"
@@ -331,25 +333,25 @@ class CustomerExperienceRagServiceTest(unittest.IsolatedAsyncioTestCase):
                 "客户担心安全，客服怎么承接？"
             )
         )
-        self.assertFalse(
+        self.assertTrue(
             customer_experience_rag_service.should_retrieve_experience_guidance(
                 "这个水壶的容量、材质和适用热源是什么？"
             )
         )
-        self.assertFalse(
+        self.assertTrue(
             customer_experience_rag_service.should_retrieve_experience_guidance(
                 "这个折叠箱的尺寸、容量和承重怎么确认？"
             )
         )
 
-    def test_direct_fact_forms_do_not_retrieve_experience_guidance(self):
+    def test_direct_fact_forms_can_receive_semantic_case_context(self):
         for question in (
             "CS-B14 \u80fd\u5728\u5ba4\u5185\u4f7f\u7528\u5417\uff1f",
             "CB254 \u80fd\u7528\u5361\u5f0f\u7089\u5417\uff1f",
             "CW-C83 \u6709\u6ca1\u6709\u4fdd\u4fee\uff1f",
             "\u6237\u5916\u9152\u7cbe\u7089\u5982\u4f55\u5b89\u5168\u4f7f\u7528\uff1f",
         ):
-            self.assertFalse(
+            self.assertTrue(
                 customer_experience_rag_service.should_retrieve_experience_guidance(
                     question
                 )

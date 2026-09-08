@@ -27,6 +27,7 @@ from .customer_product_interpretation_contract import product_interpretation_con
 from .customer_answer_consistency_contract import answer_consistency_issues, consistency_repair_instruction
 from . import (
     customer_agent_service,
+    customer_dynamic_answer_review_service,
     customer_enterprise_guardrail_service,
     customer_experience_rag_service,
     customer_llm_service,
@@ -1662,9 +1663,9 @@ async def _generate_answer(
         "先承接问题并请求商品名或 SKU、订单信息和具体现象，经验卡只能帮助组织接待话术，不能把候选商品资料当成当前商品事实。"
         "开放式推荐或比较仍由你根据完整需求进行语义选择，不因候选多就机械澄清，但必须让选择依据来自 evidence。\n"
         "你是面向客户的自然中文客服。商品事实必须基于 evidence 回答，evidence 之外的内容一律不能当作商品事实。"
-        "experience_guidance 是从历史客服经验中人工审核或经过边界校验的自动汇总非事实沟通建议，只能帮助组织表达、承接顾虑和给出自然下一步；"
+        "experience_guidance 是从历史客服经验中人工审核或经过边界校验的历史案例信号，只能帮助组织表达、承接顾虑和给出自然下一步；"
         "如果当前问题已经明确表达购买犹豫、价格价值、适用选择或顾虑，且有同 SKU evidence，必须先直接承接顾虑，再用 evidence 回答已知事实，给出有条件的判断和一个具体下一步；不能只反问客户想了解哪方面。明确的参数、兼容、使用或安全事实问题直接按 evidence 回答，不要让 experience_guidance 改写事实答案。\n"
-        "它不能证明任何商品事实、不能替代 evidence、不能决定 SKU，也不能向客户提及。若当前只是简单事实问题或建议不相关，直接忽略；不要强行推销或拉长回复。"
+        "它不能证明任何商品事实、不能替代 evidence、不能决定 SKU，也不能向客户提及。case_signal 中的正向模式和阻塞模式只是样本观察，只有与当前顾虑相似时才参考。若当前只是简单事实问题或案例不相关，直接忽略；不要强行推销或拉长回复。"
         "在完整回答当前问题的前提下优先短答，简单问题一到三句即可；只有复杂比较确有必要时才用少量条目展开。"
         "product_record 是当前商品主数据，knowledge/product QA 是 RAG 证据；不同 SKU 的证据绝不能混用。"
         "canonical_product_record 对同一 SKU 的非空结构化字段拥有最高事实权威；同 SKU product QA/知识只能补充主数据未填写的内容，不能静默覆盖主数据。"
@@ -1688,7 +1689,9 @@ async def _generate_answer(
         '"uncertainty":"confirmed|partial|unconfirmed",'
         '"selected_skus":["evidence中的SKU"],'
         '"evidence_ids":["实际使用的evidence_id"],'
-        '"suggested_followups":["可选的自然追问"]}'
+        '"suggested_followups":["可选的自然追问"],'
+        '"quality_review":{"recommended":true或false,"focus":["可选的复核重点"]}}'
+        "quality_review 是内部质量信号，必须填写 recommended；当回答存在取舍、上下文歧义、资料边界或可能影响购买判断时设为 true，否则设为 false。它不会展示给客户。"
     )
     system_prompt += (
         "\u5982\u679c current_question \u5df2\u660e\u786e\u5305\u542b SKU \u6216\u7cbe\u786e\u5546\u54c1\u4e3b\u4f53\uff0c\u4e14 evidence \u4e2d\u5b58\u5728\u540c\u4e00 SKU\uff0c\u7981\u6b62\u8f93\u51fa\u8981\u6c42\u5ba2\u6237\u8865\u5145\u5546\u54c1\u540d\u79f0\u6216 SKU \u7684\u6a21\u677f\u5316 clarification\u3002"
@@ -1720,18 +1723,31 @@ async def _generate_answer(
             response_format={"type": "json_object"},
         )
         parsed = _extract_json_object(raw)
+        dynamic_review_metadata: dict[str, Any] = {
+            "attempted": False,
+            "decision": "not_needed",
+        }
+        if isinstance(parsed, dict) and not _consistency_retry:
+            parsed, dynamic_review_metadata = await customer_dynamic_answer_review_service.review_answer(
+                db,
+                question=str(payload.get("current_question") or ""),
+                payload=payload,
+                response=parsed,
+            )
         issues = answer_consistency_issues(parsed, payload)
         if issues and not _consistency_retry:
             repaired, metadata = await _generate_answer(db, payload={**payload,
                 "answer_consistency_repair": consistency_repair_instruction(issues)}, _consistency_retry=True)
             return repaired, {**metadata, "consistency_retry_count": 1,
-                "consistency_issues": issues, "elapsed_ms": round(customer_perf_service.perf_ms(start), 2)}
+                "consistency_issues": issues, "dynamic_review": dynamic_review_metadata,
+                "elapsed_ms": round(customer_perf_service.perf_ms(start), 2)}
         if issues:
             return None, {"raw_valid": False, "consistency_rejected": issues,
                           "elapsed_ms": round(customer_perf_service.perf_ms(start), 2)}
         return parsed, {
             "elapsed_ms": round(customer_perf_service.perf_ms(start), 2),
             "raw_valid": bool(_extract_json_object(raw)),
+            "dynamic_review": dynamic_review_metadata,
         }
     except Exception as exc:
         customer_perf_service.log_event(
