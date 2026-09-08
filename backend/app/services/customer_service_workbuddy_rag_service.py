@@ -839,7 +839,6 @@ async def _generate_answer(
         "\u5982\u679c current_question \u5df2\u660e\u786e\u5305\u542b SKU \u6216\u7cbe\u786e\u5546\u54c1\u4e3b\u4f53\uff0c\u4e14 evidence \u4e2d\u5b58\u5728\u540c\u4e00 SKU\uff0c\u7981\u6b62\u8f93\u51fa\u8981\u6c42\u5ba2\u6237\u8865\u5145\u5546\u54c1\u540d\u79f0\u6216 SKU \u7684\u6a21\u677f\u5316 clarification\u3002"
         "\u5373\u4f7f\u95ee\u9898\u5305\u542b\u5c1a\u672a\u767b\u8bb0\u7684\u7ef4\u5ea6\uff0c\u4e5f\u5fc5\u987b\u5148\u56de\u7b54 evidence \u80fd\u786e\u8ba4\u7684\u4e8b\u5b9e\uff0c\u518d\u8bf4\u660e\u7f3a\u5931\u7ef4\u5ea6\uff0c\u53ea\u8ffd\u95ee\u90a3\u4e00\u9879\u4fe1\u606f\uff1b\u4e0d\u8981\u628a\u201c\u7f3a\u5c11\u4e00\u4e2a\u5b57\u6bb5\u201d\u6269\u5927\u6210\u201c\u6ca1\u6709\u627e\u5230\u672c\u95ee\u9898\u4f9d\u636e\u201d\u3002\n"
     )
-    system_prompt += "\n" + CUSTOMER_FACING_ANSWER_CONTRACT
     system_prompt += (
         "\n若有 replacement_context，这是仍有效的购买需求，换SKU不等于撤销用途、容量对象或供货条件。"
         "只能推荐 replacement_eligible_skus 中的商品；其余商品可说明不适合，不能先推荐再承认不符合。"
@@ -850,6 +849,9 @@ async def _generate_answer(
         "保留原需求未解决，不把失败候选记作已确认商品。"
         "生命周期常规品不证明实时库存或正常供货承诺；没有库存证据时只说常规品，实际库存及发货需确认。"
     )
+    # Keep the customer-facing contract as the final system instruction so
+    # later operational notes cannot accidentally weaken its output boundary.
+    system_prompt += "\n" + CUSTOMER_FACING_ANSWER_CONTRACT
     if _consistency_retry:
         system_prompt += "\n" + str(payload.get("answer_consistency_repair") or "")
     start = perf_counter()

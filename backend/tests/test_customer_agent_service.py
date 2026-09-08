@@ -1098,6 +1098,10 @@ class CustomerAgentServiceTest(unittest.TestCase):
         self.assertIsNotNone(intent)
         self.assertEqual(intent.intent, "clarify")
 
+    def test_ordinal_context_detection_does_not_capture_first_use(self):
+        self.assertFalse(customer_agent_intent_service._has_context_reference("第一次使用怎么清洗"))
+        self.assertTrue(customer_agent_intent_service._has_context_reference("第二个多少钱"))
+
     def test_parse_intent_keeps_candidate_set_reference_as_clarify_without_context(self):
         intent = customer_agent_intent_service.parse_intent("这些里面哪个更适合？")
 
