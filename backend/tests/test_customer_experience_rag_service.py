@@ -357,6 +357,28 @@ class CustomerExperienceRagServiceTest(unittest.IsolatedAsyncioTestCase):
                 )
             )
 
+    def test_outcome_signal_packet_keeps_learning_signals_compact(self):
+        rows = customer_experience_rag_service.outcome_signal_packet([
+            {
+                "guidance_id": "case-1",
+                "sku": "cw-c94",
+                "intent": "选购与推荐",
+                "retrieval_score": 0.88,
+                "case_signal": {
+                    "signal_strength": "observed",
+                    "outcome_evidence": {
+                        "positive_observations": 8,
+                        "confirmed_conversion_observations": 2,
+                        "denominator_available": False,
+                    },
+                },
+            },
+        ])
+
+        self.assertEqual(rows[0]["sku"], "CW-C94")
+        self.assertEqual(rows[0]["signal"]["outcome_evidence"]["positive_observations"], 8)
+        self.assertFalse(rows[0]["signal"]["outcome_evidence"]["denominator_available"])
+
     def test_three_pipelines_keep_guidance_separate_from_fact_evidence(self):
         guidance = [{
             "guidance_id": "customer_experience:pilot:CF-PG19:value",

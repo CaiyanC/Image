@@ -78,6 +78,7 @@ async def _review_once(review_result):
                 "evidence_ids": ["e1"],
                 "confidence": "medium",
                 "uncertainty": "partial",
+                "quality_review": {"recommended": True},
             },
         )
     return result, metadata, mocked

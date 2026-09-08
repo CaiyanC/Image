@@ -125,17 +125,11 @@ def should_review_response(
     if not _clip(value.get("answer"), 2400):
         return False
     hint = value.get("quality_review")
-    if isinstance(hint, dict) and hint.get("recommended") is True:
-        return True
-    # The answer model supplies a semantic pre-signal.  It avoids paying for
-    # a second model call on every recommendation/comparison merely because of
-    # its output label; the reviewer remains available whenever the model or
-    # an explicit uncertainty state says a second look is useful.
-    if isinstance(hint, dict) and "recommended" in hint:
-        return hint.get("recommended") is True
-    uncertainty = str(value.get("uncertainty") or "").strip().lower()
-    confidence = str(value.get("confidence") or "").strip().lower()
-    return uncertainty in {"partial", "unconfirmed"} or confidence == "low"
+    # The primary answer model already receives the historical outcome packet.
+    # Pay for a second pass only when that model explicitly says the draft has
+    # a semantic quality concern; missing/low-confidence metadata alone is not
+    # enough to add a second model latency hit.
+    return isinstance(hint, dict) and hint.get("recommended") is True
 
 
 def _review_packet(
@@ -172,6 +166,7 @@ def _review_packet(
             payload.get("experience_cases")
             or payload.get("experience_guidance")
         ),
+        "experience_outcome_signals": payload.get("experience_outcome_signals") or [],
     }
 
 
@@ -182,6 +177,7 @@ def _review_system_prompt() -> str:
         "重点看：是否回答了客户真正的问题，事实是否只来自当前资料，推荐或比较是否说清取舍，"
         "表达是否自然、简洁、可执行，是否把内部处理过程说给了客户听。"
         "历史案例只代表沟通经验，不能新增商品事实、选择 SKU 或替换当前资料。"
+        "experience_outcome_signals 中的样本只帮助判断哪些表达动作可能减少顾虑；没有分母时不能声称提高了真实转化率。"
         "如果草稿已经可用，返回 keep；只有确实能改善时才返回 revise。"
         "revise 时只重写客户可见的 answer，保留原草稿已经确认的事实、SKU 和不确定边界，"
         "不要编造资料，也不要使用固定客服腔或提及资料库、检索、证据、经验卡、模型、流程。"

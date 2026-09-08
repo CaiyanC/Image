@@ -24,7 +24,12 @@ from ..models.knowledge_base import (
 from ..models.product import Product
 from .customer_facing_answer_contract import CUSTOMER_FACING_ANSWER_CONTRACT, render_customer_answer
 from .customer_product_interpretation_contract import product_interpretation_constraints
-from .customer_answer_consistency_contract import answer_consistency_issues, consistency_repair_instruction
+from .customer_answer_consistency_contract import (
+    alcohol_stove_recommendation_skus,
+    answer_consistency_issues,
+    consistency_repair_instruction,
+    safe_alcohol_stove_recommendation,
+)
 from . import (
     customer_agent_service,
     customer_dynamic_answer_review_service,
@@ -1581,6 +1586,9 @@ def _answer_prompt_payload(
         ],
         "evidence": evidence,
         "experience_guidance": experience_guidance,
+        "experience_outcome_signals": customer_experience_rag_service.outcome_signal_packet(
+            experience_guidance
+        ),
         "answer_repair_request": answer_repair_request or "",
     }
 
@@ -1665,7 +1673,8 @@ async def _generate_answer(
         "你是面向客户的自然中文客服。商品事实必须基于 evidence 回答，evidence 之外的内容一律不能当作商品事实。"
         "experience_guidance 是从历史客服经验中人工审核或经过边界校验的历史案例信号，只能帮助组织表达、承接顾虑和给出自然下一步；"
         "如果当前问题已经明确表达购买犹豫、价格价值、适用选择或顾虑，且有同 SKU evidence，必须先直接承接顾虑，再用 evidence 回答已知事实，给出有条件的判断和一个具体下一步；不能只反问客户想了解哪方面。明确的参数、兼容、使用或安全事实问题直接按 evidence 回答，不要让 experience_guidance 改写事实答案。\n"
-        "它不能证明任何商品事实、不能替代 evidence、不能决定 SKU，也不能向客户提及。case_signal 中的正向模式和阻塞模式只是样本观察，只有与当前顾虑相似时才参考。若当前只是简单事实问题或案例不相关，直接忽略；不要强行推销或拉长回复。"
+        "它不能证明任何商品事实、不能替代 evidence、不能决定 SKU，也不能向客户提及。experience_outcome_signals 是从好评、差评、未转化样本和客服对话归纳出的沟通结果信号；confirmed_* 只是被明确标记的子集，样本量小、结果混合或没有分母时不要把它当成真实转化率。只在当前意图和顾虑相似时参考 helpful/friction 信号，不要照抄历史话术，也不要把信号写成商品事实。若当前只是简单事实问题或案例不相关，直接忽略；不要强行推销或拉长回复。"
+        "购买决策问题的目标是让客户能继续做决定：按完整语义自然给出倾向或可选范围，用当前 evidence 说明一到两个最相关事实和取舍，再给一个具体的核对或下一步；不要只堆参数、只说‘看需求’或泛化介绍。简单事实、安全和售后问题直接回答本身，不追加无关卖点。这个顺序是决策目标，不是固定句式，按当前对话自然组织。"
         "在完整回答当前问题的前提下优先短答，简单问题一到三句即可；只有复杂比较确有必要时才用少量条目展开。"
         "product_record 是当前商品主数据，knowledge/product QA 是 RAG 证据；不同 SKU 的证据绝不能混用。"
         "canonical_product_record 对同一 SKU 的非空结构化字段拥有最高事实权威；同 SKU product QA/知识只能补充主数据未填写的内容，不能静默覆盖主数据。"
@@ -1757,6 +1766,33 @@ async def _generate_answer(
                 "consistency_issues": issues, "dynamic_review": dynamic_review_metadata,
                 "elapsed_ms": round(customer_perf_service.perf_ms(start), 2)}
         if issues:
+            # Keep a narrow, governed compatibility boundary when the model
+            # still violates the alcohol-stove recommendation contract after
+            # one repair.  Returning the bounded evidence-aware answer is
+            # preferable to dropping an otherwise grounded question into the
+            # generic "暂时无法确认" fallback.  This is not a response
+            # template or question router; it is the final safety outcome for
+            # a known evidence-conflict contract, shared with WorkBuddy RAG.
+            safe_answer = safe_alcohol_stove_recommendation(payload)
+            if safe_answer:
+                safe_skus = alcohol_stove_recommendation_skus(payload)
+                return {
+                    "answer": safe_answer,
+                    "answer_type": "recommendation",
+                    "request_kind": "recommendation",
+                    "selected_skus": safe_skus[:8],
+                    "selection_state": "selected" if safe_skus else "no_match",
+                    "identity_resolution": "resolved" if safe_skus else "unresolved",
+                    "needs_clarification": False,
+                    "confidence": "high" if safe_skus else "medium",
+                    "uncertainty": "confirmed" if safe_skus else "partial",
+                }, {
+                    "raw_valid": True,
+                    "consistency_fallback": "safe_alcohol_stove_recommendation",
+                    "consistency_rejected": issues,
+                    "dynamic_review": dynamic_review_metadata,
+                    "elapsed_ms": round(customer_perf_service.perf_ms(start), 2),
+                }
             return None, {"raw_valid": False, "consistency_rejected": issues,
                           "elapsed_ms": round(customer_perf_service.perf_ms(start), 2)}
         return parsed, {

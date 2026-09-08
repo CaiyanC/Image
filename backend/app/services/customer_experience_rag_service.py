@@ -121,11 +121,52 @@ def _case_signal(metadata: dict[str, Any]) -> dict[str, Any]:
             "intents": _bounded_labels(insights.get("non_conversion_intents")),
             "negative_reasons": _bounded_labels(insights.get("negative_reasons")),
         },
+        "outcome_evidence": {
+            "positive_observations": _safe_int(insights.get("conversion_samples")),
+            "confirmed_conversion_observations": _safe_int(
+                insights.get("confirmed_conversion_samples")
+            ),
+            "non_conversion_observations": _safe_int(
+                insights.get("non_conversion_samples")
+            ),
+            "confirmed_non_conversion_observations": _safe_int(
+                insights.get("confirmed_non_conversion_samples")
+            ),
+            "negative_observations": _safe_int(insights.get("negative_samples")),
+            "denominator_available": False,
+        },
         "sample_counts": {
             key: _safe_int(counts.get(key))
             for key in ("good", "bad", "reviews", "chats")
         },
     }
+
+
+def outcome_signal_packet(rows: list[dict[str, Any]] | None) -> list[dict[str, Any]]:
+    """Return a compact outcome-learning packet for the answer model.
+
+    The full experience card is useful for retrieval and audit, but its prose
+    can bury the small set of outcome signals that should influence a reply.
+    This projection keeps the learned positive/friction patterns visible while
+    preserving the rule that they are not product facts or a conversion rate.
+    """
+    packet: list[dict[str, Any]] = []
+    for row in rows or []:
+        if not isinstance(row, dict):
+            continue
+        signal = row.get("case_signal")
+        if not isinstance(signal, dict):
+            continue
+        packet.append({
+            "guidance_id": str(row.get("guidance_id") or "").strip() or None,
+            "sku": str(row.get("sku") or "").strip().upper() or None,
+            "intent": str(row.get("intent") or "").strip() or None,
+            "retrieval_score": row.get("retrieval_score"),
+            "signal": signal,
+        })
+        if len(packet) >= 4:
+            break
+    return packet
 
 
 async def retrieve_experience_guidance(

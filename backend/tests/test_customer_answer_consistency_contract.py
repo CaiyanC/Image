@@ -123,6 +123,32 @@ def test_generic_alcohol_recommendation_fallback_is_repaired():
     assert issues[0]['code'] == 'generic_alcohol_recommendation_fallback'
 
 
+def test_semantic_writer_uses_bounded_alcohol_fallback_after_one_failed_repair(monkeypatch):
+    from app.services import customer_service_semantic_rag_v2_service as formal
+
+    calls = []
+
+    async def chat(*_args, **kwargs):
+        calls.append(kwargs)
+        return json.dumps({
+            'answer': '暂时无法确认这个问题的答案，建议下单前向店铺人工核实。',
+            'answer_type': 'clarification',
+        }, ensure_ascii=False)
+
+    monkeypatch.setattr(formal.customer_llm_service, 'chat_completion', chat)
+    result, metadata = asyncio.run(formal._generate_answer(None, payload={
+        'current_question': '适合酒精炉的锅具给几个选择。',
+        'candidate_products': [
+            {'sku': 'BAD', 'product_name_cn': '普通锅', 'category': '锅具',
+             'specs': {'heat_source': '明火直烧'}},
+        ],
+    }))
+
+    assert len(calls) == 2
+    assert result and '不能把仅标注明火' in result['answer']
+    assert metadata['consistency_fallback'] == 'safe_alcohol_stove_recommendation'
+
+
 @pytest.mark.parametrize('pipeline', ['formal', 'rag'])
 def test_dynamic_review_cannot_replace_valid_answer_with_generic_alcohol_fallback(monkeypatch, pipeline):
     from app.services import customer_service_semantic_rag_v2_service as formal
