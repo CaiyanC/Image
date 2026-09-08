@@ -15,28 +15,7 @@ export function hasPermission(user: User | null, permissionKey: string): boolean
 }
 
 export function getLandingPath(user: User | null): string {
-  const destinations = [
-    ['ai.generate', '/'],
-    ['ai.customer_service', '/customer-service'],
-    ['tools.view', '/tools'],
-    ['finance.ecommerce_data_fill', '/tools/ecommerce-data-fill'],
-    ['product.read', '/products'],
-    ['product.qa.manage', '/products/qa/new'],
-    ['product.edit', '/products/qa/new'],
-    ['product.create', '/products/create'],
-    ['product.audit.view', '/products/audit'],
-    ['product.full.view', '/products/full-view'],
-    ['media.read', '/assets'],
-    ['media.search', '/assets/search'],
-    ['knowledge.manage', '/knowledge-base'],
-    ['knowledge.files.manage', '/file-knowledge'],
-    ['history.view', '/history'],
-    ['system.admin', '/admin/access-control'],
-    ['profile.view', '/profile'],
-  ]
-  return destinations.find(([permission]) =>
-    permission === 'system.admin' ? isManagement(user) : hasPermission(user, permission),
-  )?.[1] || '/no-access'
+  return user ? '/tools' : '/login'
 }
 
 interface AuthState {

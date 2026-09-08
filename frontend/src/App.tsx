@@ -130,11 +130,11 @@ export default function App() {
         <Route
           path="/tools"
           element={
-            <PermissionRoute permissionKey="tools.view">
+            <ProtectedRoute>
               <Layout>
                 <ToolCenter />
               </Layout>
-            </PermissionRoute>
+            </ProtectedRoute>
           }
         />
         <Route
@@ -243,7 +243,7 @@ export default function App() {
             element={
               <PermissionRoute permissionKey="ai.customer_service">
                 <Layout>
-                  <WorkbuddyCustomerService />
+                  <SuperAdminRoute><WorkbuddyCustomerService /></SuperAdminRoute>
                 </Layout>
               </PermissionRoute>
             }
@@ -255,7 +255,7 @@ export default function App() {
             <PermissionRoute permissionKey="ai.customer_service">
               <Layout>
                 {import.meta.env.MODE === 'dev'
-                  ? <AgentCustomerService />
+                  ? <SuperAdminRoute><AgentCustomerService /></SuperAdminRoute>
                   : <Navigate to="/customer-service" replace />}
               </Layout>
             </PermissionRoute>

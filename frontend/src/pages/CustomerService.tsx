@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { AgentAction, AgentStep, ApiRequestError, CustomerServicePipeline, ProductSearchResult, api } from '../services/api'
 import { useAuthStore } from '../store/authStore'
+import ProductLookup from '../components/ProductLookup'
 
 interface ChatMessage {
   id?: string
@@ -688,9 +689,9 @@ export default function CustomerService({
   }
 
   return (
-    <div className="p-4 max-w-7xl mx-auto h-[calc(100vh-88px)]">
+    <div className="p-4 max-w-[1600px] mx-auto lg:h-[calc(100dvh-144px)] min-h-[560px]">
       <div className="grid grid-cols-12 gap-4 h-full">
-        <aside className="col-span-12 lg:col-span-3 glass rounded-2xl overflow-hidden flex flex-col">
+        <aside className="col-span-12 lg:col-span-3 glass rounded-2xl overflow-hidden flex flex-col max-h-48 lg:max-h-none min-h-0">
           <div className="p-4 border-b border-black/5 flex items-center justify-between">
             <div>
               <h1 className="text-lg font-bold text-apple-text">{title}</h1>
@@ -737,7 +738,7 @@ export default function CustomerService({
           </div>
         </aside>
 
-        <main className="col-span-12 lg:col-span-6 glass rounded-2xl overflow-hidden flex flex-col">
+        <main className="col-span-12 lg:col-span-6 glass rounded-2xl overflow-hidden flex flex-col min-h-[420px] lg:min-h-0">
           <div className="p-4 border-b border-black/5">
             {canManageKnowledge && (
               <div className="flex justify-end">
@@ -861,7 +862,8 @@ export default function CustomerService({
           </div>
         </main>
 
-        <aside className="col-span-12 lg:col-span-3 space-y-4">
+        <aside className="col-span-12 lg:col-span-3 space-y-4 min-h-0 overflow-y-auto">
+          <ProductLookup />
           {debugMode && canManageKnowledge && (
             <section className="glass rounded-2xl p-4">
               <h2 className="text-sm font-semibold text-apple-text mb-3">知识库状态</h2>
