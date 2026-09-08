@@ -1728,12 +1728,27 @@ async def _generate_answer(
             "decision": "not_needed",
         }
         if isinstance(parsed, dict) and not _consistency_retry:
+            draft_before_review = parsed
             parsed, dynamic_review_metadata = await customer_dynamic_answer_review_service.review_answer(
                 db,
                 question=str(payload.get("current_question") or ""),
                 payload=payload,
                 response=parsed,
             )
+            # A wording-only reviewer must never replace a valid draft with a
+            # contract-breaking answer.  Restore the draft first; if the
+            # draft itself was inconsistent, the governed one-shot repair
+            # below can still fix it with the original evidence.
+            reviewed_issues = answer_consistency_issues(parsed, payload)
+            if dynamic_review_metadata.get("changed") and reviewed_issues:
+                parsed = draft_before_review
+                dynamic_review_metadata = {
+                    **dynamic_review_metadata,
+                    "decision": "keep",
+                    "changed": False,
+                    "error": "revised_answer_rejected_by_consistency",
+                    "rejected_consistency_issues": reviewed_issues,
+                }
         issues = answer_consistency_issues(parsed, payload)
         if issues and not _consistency_retry:
             repaired, metadata = await _generate_answer(db, payload={**payload,
