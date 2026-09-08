@@ -73,6 +73,52 @@ async def _run_ai_request(factory, *, timeout: float | None = None):
             raise TimeoutError("AI 响应超时，请稍后重试") from exc
 
 
+def _normalize_messages_for_response_format(
+    messages: list[dict],
+    response_format: dict | None,
+) -> list[dict]:
+    """Make OpenAI-compatible JSON mode requests portable across providers.
+
+    Some OpenAI-compatible gateways validate the JSON-mode requirement only
+    against a user message.  The application prompt may already describe the
+    JSON contract in a system message, but that is not sufficient for those
+    gateways and they reject the request before the model is called.  Keep
+    the caller's messages immutable and add a short user-level instruction
+    only when JSON object mode is requested and the final user message does
+    not already mention JSON.
+    """
+    if not (
+        isinstance(response_format, dict)
+        and response_format.get("type") == "json_object"
+    ):
+        return messages
+
+    normalized = [dict(message) for message in messages]
+    instruction = "Please return the response as a json object."
+    for index in range(len(normalized) - 1, -1, -1):
+        message = normalized[index]
+        if message.get("role") != "user":
+            continue
+        content = message.get("content")
+        if isinstance(content, str):
+            if "json" not in content.lower():
+                message["content"] = f"{content}\n{instruction}"
+        elif isinstance(content, list):
+            text_content = " ".join(
+                str(item.get("text") or "")
+                for item in content
+                if isinstance(item, dict) and item.get("type") == "text"
+            )
+            if "json" not in text_content.lower():
+                message["content"] = [*content, {"type": "text", "text": instruction}]
+        else:
+            message["content"] = instruction
+        return normalized
+
+    normalized.append({"role": "user", "content": instruction})
+    return normalized
+
+
 def _make_url(base: str, path: str) -> str:
     parsed = urlparse(base)
     clean_base = f"{parsed.scheme}://{parsed.netloc}/"
@@ -754,9 +800,10 @@ async def chat_completion(
         raise ValueError(f"聊天模型 '{cfg['id']}' 未配置 API Key")
 
     request_model = cfg.get("api_model") or cfg["id"] if resolved_model else (api_model_override or cfg.get("api_model") or cfg["id"])
+    request_messages = _normalize_messages_for_response_format(messages, response_format)
     body = {
         "model": request_model,
-        "messages": messages,
+        "messages": request_messages,
         "temperature": temperature,
         "max_tokens": max_tokens,
     }
@@ -855,9 +902,10 @@ async def chat_completion_stream(
     if not api_key:
         raise ValueError(f"chat model '{cfg['id']}' has no API key")
 
+    request_messages = _normalize_messages_for_response_format(messages, response_format)
     body = {
         "model": cfg.get("api_model") or cfg["id"] if resolved_model else (api_model_override or cfg.get("api_model") or cfg["id"]),
-        "messages": messages,
+        "messages": request_messages,
         "temperature": temperature,
         "max_tokens": max_tokens,
         "stream": True,

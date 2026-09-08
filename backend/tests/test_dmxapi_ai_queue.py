@@ -152,5 +152,39 @@ class ChatTransportRecoveryTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(calls, ["first", "second"])
 
 
+class JsonModeMessageNormalizationTest(unittest.TestCase):
+    def test_adds_provider_compatible_user_instruction_without_mutating_input(self):
+        messages = [{"role": "system", "content": "Use the answer contract."}, {"role": "user", "content": "What is the price?"}]
+
+        normalized = dmxapi_service._normalize_messages_for_response_format(
+            messages,
+            {"type": "json_object"},
+        )
+
+        self.assertNotEqual(normalized, messages)
+        self.assertEqual(messages[-1]["content"], "What is the price?")
+        self.assertIn("json object", normalized[-1]["content"])
+
+    def test_does_not_duplicate_instruction_when_user_message_mentions_json(self):
+        messages = [{"role": "user", "content": "Return a JSON object."}]
+
+        normalized = dmxapi_service._normalize_messages_for_response_format(
+            messages,
+            {"type": "json_object"},
+        )
+
+        self.assertEqual(normalized[-1]["content"], messages[-1]["content"])
+
+    def test_leaves_non_json_mode_messages_unchanged(self):
+        messages = [{"role": "user", "content": "What is the price?"}]
+
+        normalized = dmxapi_service._normalize_messages_for_response_format(
+            messages,
+            None,
+        )
+
+        self.assertIs(normalized, messages)
+
+
 if __name__ == "__main__":
     unittest.main()
