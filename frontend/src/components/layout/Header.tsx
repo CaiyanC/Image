@@ -31,50 +31,24 @@ export default function Header() {
     navigate('/login')
   }
 
-  // Keep only the two supported customer-service entry points in the menu.
-  // WorkBuddy remains a direct development route for rollback/comparison, but
-  // exposing it beside the normal and Agent paths makes the product look like
-  // it has three competing customer-service modes.
-  const customerServiceItems = [
-    ...(has('ai.customer_service') ? [{ path: '/customer-service', label: '智能客服' }] : []),
-    ...(import.meta.env.MODE === 'dev' && has('ai.customer_service')
-      ? [{ path: '/customer-service/agent', label: '智能客服 · Agent' }]
-      : []),
-  ]
-
-  const navItems = [
-    ...(has('tools.view') ? [{ path: '/tools', label: '工具中心' }] : []),
-    ...(has('finance.ecommerce_data_fill') ? [{ path: '/tools/ecommerce-data-fill', label: '电商数据填表' }] : []),
-    ...customerServiceItems,
-    ...(has('knowledge.manage') ? [{ path: '/knowledge-base', label: '知识库运维' }] : []),
-    ...(has('knowledge.files.manage') ? [{ path: '/file-knowledge', label: '文件知识库' }] : []),
-    ...(has('ai.generate') ? [{ path: '/', label: '创作' }] : []),
-    ...(has('history.view') ? [{ path: '/history', label: '历史' }] : []),
-    ...(has('product.read') ? [{ path: '/products', label: '产品' }] : []),
-    ...(has('product.audit.view') ? [{ path: '/products/audit', label: '产品核对' }] : []),
-    ...(has('product.full.view') ? [{ path: '/products/full-view', label: '全字段视图' }] : []),
-    ...(has('product.create') ? [{ path: '/products/create', label: '新增产品' }] : []),
-    ...(has('product.read') || has('product.create') || has('product.edit') ? [{ path: '/products/drafts', label: '草稿箱' }] : []),
-    ...(has('product.qa.manage') || has('product.edit') ? [{ path: '/products/qa/new', label: 'QA录入' }] : []),
-    ...(has('media.read') ? [{ path: '/assets', label: '素材库' }] : []),
-    ...(has('media.search') ? [{ path: '/assets/search', label: '素材检索' }] : []),
-  ]
   const homePath = getLandingPath(user)
 
   const superAdminItems = [
+    ...(isSuperAdmin ? [
     { path: '/admin/department-workbench', label: '部门工作台' },
     { path: '/admin/tools', label: '工具管理' },
     { path: '/admin/access-control', label: '组织与权限' },
     { path: '/admin/model-governance', label: '模型治理' },
     { path: '/admin/settings', label: '设置' },
     { path: '/admin/logs', label: '日志' },
+    ] : []),
   ]
 
-  const isAdminActive = location.pathname.startsWith('/admin')
+  const isAdminActive = superAdminItems.some(item => location.pathname === item.path)
 
   return (
-    <header className="fixed left-0 right-0 top-0 z-50 h-28 md:h-20">
-      <div className="glass-dark mx-3 mt-3 flex h-14 items-center justify-between rounded-[28px] px-4 sm:mx-5 sm:px-5">
+    <header className="fixed left-0 right-0 top-0 z-50 h-20">
+      <div className="mx-3 mt-3 flex h-14 items-center justify-between rounded-lg border border-slate-200 bg-white px-4 sm:mx-5 sm:px-5">
         <div className="flex min-w-0 flex-1 items-center gap-4 lg:gap-8">
           <Link to={homePath} className="group flex min-w-0 items-center gap-3">
             <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-2xl bg-gradient-accent text-sm font-black text-white shadow-[0_12px_24px_rgba(15,118,110,0.22)]">
@@ -89,23 +63,10 @@ export default function Header() {
               </span>
             </span>
           </Link>
-          <nav className="hidden min-w-0 flex-1 items-center gap-1 overflow-x-auto rounded-full border border-white/50 bg-white/35 p-1 shadow-inner md:flex">
-            {navItems.map((item) => (
-              <Link
-                key={item.path}
-                to={item.path}
-              className={`shrink-0 whitespace-nowrap rounded-full px-3.5 py-1.5 text-sm font-bold transition-all duration-200 ${
-                  location.pathname === item.path ? 'nav-active' : 'nav-idle'
-                }`}
-              >
-                {item.label}
-              </Link>
-            ))}
-          </nav>
         </div>
 
         <div className="flex shrink-0 items-center gap-1.5" ref={menuRef}>
-          {isSuperAdmin && (
+          {superAdminItems.length > 0 && (
             <div className="relative">
               <button
                 onClick={() => setAdminOpen(!adminOpen)}
@@ -113,7 +74,7 @@ export default function Header() {
                   isAdminActive ? 'nav-active' : 'nav-idle'
                 }`}
               >
-                管理
+                系统管理
                 <svg className={`h-3 w-3 transition-transform duration-200 ${adminOpen ? 'rotate-180' : ''}`} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
                   <path strokeLinecap="round" strokeLinejoin="round" d="M19 9l-7 7-7-7" />
                 </svg>
@@ -179,21 +140,6 @@ export default function Header() {
           </div>
         </div>
       </div>
-      {navItems.length > 0 && (
-        <nav className="glass-dark mx-3 mt-2 flex gap-1 overflow-x-auto rounded-full p-1 md:hidden">
-          {navItems.map((item) => (
-            <Link
-              key={item.path}
-              to={item.path}
-                className={`shrink-0 whitespace-nowrap rounded-full px-3.5 py-1.5 text-sm font-bold transition-all duration-200 ${
-                location.pathname === item.path ? 'nav-active' : 'nav-idle'
-              }`}
-            >
-              {item.label}
-            </Link>
-          ))}
-        </nav>
-      )}
     </header>
   )
 }

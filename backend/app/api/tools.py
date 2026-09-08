@@ -21,7 +21,7 @@ router = APIRouter(prefix="/api/tools", tags=["tools"])
 
 @router.get("", response_model=list[ToolResponse])
 def list_available_tools(
-    current_user: User = Depends(require_permission("tools.view")),
+    current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
     permissions = get_user_permissions(db, current_user.id)

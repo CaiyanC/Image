@@ -5,7 +5,7 @@ import type { Product, ProductAsset } from '../types'
 import L1L4Importer from '../components/ProductImport/L1L4Importer'
 import L5Importer from '../components/ProductImport/L5Importer'
 import { SecureImage, SecureVideo } from '../components/SecureFile'
-import { useAuthStore } from '../store/authStore'
+import { hasPermission, useAuthStore } from '../store/authStore'
 import { canUsePermission, showNoPermissionToast } from '../services/permissionFeedback'
 
 export default function ProductManagement() {
@@ -300,23 +300,24 @@ export default function ProductManagement() {
 
   return (
     <div className="p-4 max-w-7xl mx-auto">
-      <div className="flex items-center justify-between mb-6">
-        <h1 className="text-2xl font-bold text-apple-text tracking-tight">产品管理</h1>
-        <div className="flex items-center gap-3">
-          <button onClick={() => navigate('/products/drafts')}
-            className="px-4 py-2 bg-gray-100 text-gray-700 rounded-lg text-sm font-medium hover:bg-gray-200 transition-colors">
-            📋 草稿箱
-          </button>
-          <button onClick={() => runWithPermission('product.create', () => navigate('/products/create'))}
+      <div className="flex flex-wrap items-center justify-between gap-3 mb-6">
+        <h1 className="text-2xl font-bold text-apple-text tracking-tight">产品资料</h1>
+        <div className="flex flex-wrap items-center gap-3">
+          {hasPermission(user, 'product.create') && <button onClick={() => runWithPermission('product.create', () => navigate('/products/create'))}
             className="px-4 py-2 bg-blue-500 text-white rounded-lg text-sm font-medium hover:bg-blue-600 transition-colors">
             + 新增产品
-          </button>
-          <div onClickCapture={(event) => guardImporterClick(event, 'product.create')}>
-            <L1L4Importer onImportComplete={() => loadProducts(page)} />
-          </div>
-          <div onClickCapture={(event) => guardImporterClick(event, 'product.edit')}>
-            <L5Importer onImportComplete={() => loadProducts(page)} />
-          </div>
+          </button>}
+          {(hasPermission(user, 'product.create') || hasPermission(user, 'product.edit')) && <details className="relative">
+            <summary className="cursor-pointer rounded-lg border border-slate-200 bg-white px-4 py-2 text-sm font-medium text-slate-600">批量导入</summary>
+            <div className="absolute right-0 z-20 mt-2 w-64 space-y-3 rounded-lg border border-slate-200 bg-white p-3 shadow-lg">
+              {hasPermission(user, 'product.create') && <div onClickCapture={(event) => guardImporterClick(event, 'product.create')}>
+                <L1L4Importer onImportComplete={() => loadProducts(page)} />
+              </div>}
+              {hasPermission(user, 'product.edit') && <div onClickCapture={(event) => guardImporterClick(event, 'product.edit')}>
+                <L5Importer onImportComplete={() => loadProducts(page)} />
+              </div>}
+            </div>
+          </details>}
         </div>
       </div>
 

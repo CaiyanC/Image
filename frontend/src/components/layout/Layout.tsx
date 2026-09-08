@@ -1,4 +1,7 @@
 import Header from './Header'
+import BusinessSidebar from './BusinessSidebar'
+import SectionNavigation from './SectionNavigation'
+import './business.css'
 
 interface LayoutProps {
   children: React.ReactNode
@@ -6,15 +9,11 @@ interface LayoutProps {
 
 export default function Layout({ children }: LayoutProps) {
   return (
-    <div className="min-h-screen bg-gradient-subtle text-apple-text">
-      <div className="fixed inset-0 overflow-hidden pointer-events-none">
-        <div className="absolute inset-0 subtle-grid" />
-        <div className="ambient-orb absolute -top-32 -right-28 h-[28rem] w-[28rem] bg-cyan-300/30" />
-        <div className="ambient-orb absolute left-[-10rem] top-1/3 h-[24rem] w-[24rem] bg-amber-300/28" />
-        <div className="ambient-orb absolute bottom-[-12rem] right-1/4 h-[26rem] w-[26rem] bg-emerald-300/22" />
-      </div>
+    <div className="business-shell min-h-screen bg-slate-50 text-slate-900">
       <Header />
-      <main className="relative z-10 pt-28 md:pt-20">
+      <div className="pt-20"><BusinessSidebar /></div>
+      <main className="relative z-10 min-w-0 md:ml-44">
+        <SectionNavigation />
         {children}
       </main>
     </div>

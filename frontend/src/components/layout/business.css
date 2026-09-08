@@ -1,0 +1,15 @@
+/* Business pages use a quiet surface; login and generated media remain untouched. */
+.business-shell .glass,
+.business-shell .glass-dark {
+  background: #fff;
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+  border: 1px solid #e2e8f0;
+  border-radius: 12px;
+  box-shadow: 0 1px 3px rgb(15 23 42 / 4%);
+}
+
+.business-shell :is(a, button, summary):focus-visible {
+  outline: 2px solid #0f766e;
+  outline-offset: 3px;
+}

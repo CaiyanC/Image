@@ -247,6 +247,27 @@ class ToolDirectoryApiTest(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertIn("ecommerce_data_fill", [item["tool_key"] for item in response.json()])
 
+    def test_directory_needs_login_but_not_tools_view_grant(self):
+        with patch('app.api.tools.get_user_permissions', return_value={ECOMMERCE_DATA_FILL_PERMISSION}):
+            response = self.client.get('/api/tools')
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual([item['tool_key'] for item in response.json()], ['ecommerce_data_fill'])
+
+    def test_directory_empty_grants_and_disabled_tools_do_not_leak_cards(self):
+        with patch('app.api.tools.get_user_permissions', return_value=set()):
+            response = self.client.get('/api/tools')
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json(), [])
+        with self.Session() as db:
+            db.query(Tool).filter_by(tool_key='ecommerce_data_fill').update({'is_enabled': False})
+            db.commit()
+        with patch('app.api.tools.get_user_permissions', return_value={ECOMMERCE_DATA_FILL_PERMISSION}):
+            self.assertEqual(self.client.get('/api/tools').json(), [])
+
+    def test_anonymous_directory_request_remains_denied(self):
+        app.dependency_overrides.pop(get_current_user)
+        self.assertEqual(self.client.get('/api/tools').status_code, 401)
+
     def test_management_can_register_a_code_allowlisted_tool(self):
         db = self.Session()
         db.query(Tool).filter_by(tool_key="customer_service").delete()
