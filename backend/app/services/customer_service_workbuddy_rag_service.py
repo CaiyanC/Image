@@ -24,7 +24,12 @@ from ..core.config import settings
 from ..models.knowledge_base import CustomerServiceConversation, CustomerServiceMessage
 from ..models.product import Product
 from .customer_facing_answer_contract import CUSTOMER_FACING_ANSWER_CONTRACT, render_customer_answer
-from .customer_answer_consistency_contract import answer_consistency_issues, consistency_repair_instruction
+from .customer_answer_consistency_contract import (
+    alcohol_stove_recommendation_skus,
+    answer_consistency_issues,
+    consistency_repair_instruction,
+    safe_alcohol_stove_recommendation,
+)
 from . import customer_followup_context_contract as followup_context
 from . import (
     customer_agent_service,
@@ -910,6 +915,26 @@ async def _generate_answer(
             return repaired, {**retry_metadata, "consistency_retry_count": 1,
                 "consistency_issues": issues, "elapsed_ms": round(customer_perf_service.perf_ms(start), 2)}
         if issues:
+            safe_answer = safe_alcohol_stove_recommendation(payload)
+            if safe_answer:
+                safe_skus = alcohol_stove_recommendation_skus(payload)
+                return {
+                    "answer": safe_answer,
+                    "answer_type": "recommendation",
+                    "request_kind": "recommendation",
+                    "selected_skus": safe_skus[:8],
+                    "selection_state": "selected" if safe_skus else "no_match",
+                    "identity_resolution": "resolved" if safe_skus else "unresolved",
+                    "needs_clarification": False,
+                    "confidence": "high" if safe_skus else "medium",
+                    "uncertainty": "confirmed" if safe_skus else "partial",
+                }, {
+                    **metadata,
+                    "raw_valid": True,
+                    "consistency_fallback": "safe_alcohol_stove_recommendation",
+                    "consistency_rejected": issues,
+                    "elapsed_ms": round(customer_perf_service.perf_ms(start), 2),
+                }
             return None, {**metadata, "raw_valid": False, "consistency_rejected": issues,
                           "elapsed_ms": round(customer_perf_service.perf_ms(start), 2)}
         metadata["elapsed_ms"] = round(customer_perf_service.perf_ms(start), 2)

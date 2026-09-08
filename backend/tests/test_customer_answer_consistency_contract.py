@@ -2,7 +2,12 @@ import copy
 import asyncio
 import json
 import pytest
-from app.services.customer_answer_consistency_contract import answer_consistency_issues, canonical_products
+from app.services.customer_answer_consistency_contract import (
+    alcohol_stove_recommendation_skus,
+    answer_consistency_issues,
+    canonical_products,
+    safe_alcohol_stove_recommendation,
+)
 
 
 def packet(heat='明火直烧、卡式炉', instruction='不可直接明火加热（除非产品明确支持）'):
@@ -84,3 +89,49 @@ def test_agent_buffers_conflict_and_uses_existing_bounded_retry(monkeypatch,repa
     assert '不要直接放在明火上加热' not in ''.join(display)
     if repair_ok:assert result['answer']=='可以装热饮。'
     else:assert meta['consistency_rejected'] and result['needs_clarification']
+
+
+def test_alcohol_stove_recommendation_rejects_open_fire_only_cookware():
+    payload = {
+        'current_question': '适合酒精炉的锅具给几个选择。',
+        'candidate_products': [
+            {'sku': 'GOOD', 'product_name_cn': '酒精锅', 'category': '锅具', 'specs': {'heat_source': '液体酒精'}},
+            {'sku': 'BAD', 'product_name_cn': '普通锅', 'category': '锅具', 'specs': {'heat_source': '明火直烧、卡式炉'}},
+            {'sku': 'STOVE', 'product_name_cn': '酒精炉水壶', 'category': '水壶、酒精炉', 'specs': {'heat_source': '液体酒精'}},
+        ],
+    }
+    issues = answer_consistency_issues(
+        {'answer': '推荐 GOOD、BAD 和 STOVE。', 'answer_type': 'recommendation', 'selected_skus': ['GOOD', 'BAD', 'STOVE']},
+        payload,
+    )
+    assert issues[0]['code'] == 'alcohol_stove_candidate_mismatch'
+    assert alcohol_stove_recommendation_skus(payload) == ['GOOD']
+    assert '酒精锅（GOOD）' in safe_alcohol_stove_recommendation(payload)
+
+
+def test_alcohol_stove_recommendation_has_bounded_no_match_fallback():
+    payload = {
+        'current_question': '适合酒精炉的锅具给几个选择。',
+        'candidate_products': [
+            {'sku': 'BAD', 'product_name_cn': '普通锅', 'category': '锅具', 'specs': {'heat_source': '明火直烧'}},
+        ],
+    }
+    answer = safe_alcohol_stove_recommendation(payload)
+    assert '不能把仅标注明火' in answer
+    assert alcohol_stove_recommendation_skus(payload) == []
+
+
+def test_explicit_product_generic_fallback_is_repaired():
+    payload = {
+        'current_question': 'CW-C06PRO 和 CW-C19T-37 有什么区别？',
+        'explicit_product_skus': ['CW-C06PRO', 'CW-C19T-37'],
+        'candidate_products': [
+            {'sku': 'CW-C06PRO', 'specs': {'heat_source': '明火直烧'}},
+            {'sku': 'CW-C19T-37', 'specs': {'heat_source': '明火直烧'}},
+        ],
+    }
+    issues = answer_consistency_issues(
+        {'answer': '暂时无法确认这个问题的答案，建议下单前向店铺人工核实。', 'answer_type': 'clarification'},
+        payload,
+    )
+    assert issues[0]['code'] == 'generic_explicit_product_fallback'

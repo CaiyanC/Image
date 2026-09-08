@@ -24,10 +24,130 @@ def canonical_products(payload: dict[str, Any]) -> list[dict[str, Any]]:
     return list(by_sku.values())
 
 
+def _is_alcohol_cookware_recommendation(question: str) -> bool:
+    value = str(question or "")
+    return (
+        any(term in value for term in ("酒精炉", "液体酒精", "固体酒精"))
+        and any(term in value for term in ("锅", "锅具", "套锅", "单锅", "炊具"))
+        and any(term in value for term in ("推荐", "选择", "哪些", "几个", "给"))
+    )
+
+
+def _supports_alcohol_stove(product: dict[str, Any]) -> bool:
+    specs = product.get("specs") if isinstance(product.get("specs"), dict) else {}
+    alcohol_terms = ("酒精炉", "液体酒精", "固体酒精", "alcohol stove")
+    negative_pattern = re.compile(
+        r"(?:不支持|未显示支持|不适合|不建议|不能|不可|未标注).{0,12}"
+        r"(?:酒精炉|液体酒精|固体酒精|alcohol stove)",
+        flags=re.I,
+    )
+    heat_source = str(specs.get("heat_source") or "")
+    if any(term.lower() in heat_source.lower() for term in alcohol_terms) and not negative_pattern.search(heat_source):
+        return True
+    usage_instruction = str(specs.get("usage_instruction") or "")
+    return bool(
+        any(term.lower() in usage_instruction.lower() for term in alcohol_terms)
+        and re.search(r"支持|适合|可用|可以用|能用|兼容|适配|均可", usage_instruction)
+        and not negative_pattern.search(usage_instruction)
+    )
+
+
+def _is_cookware_product(product: dict[str, Any]) -> bool:
+    category = str(product.get("category") or product.get("product_category") or "")
+    return any(term in category for term in ("锅具", "炊具"))
+
+
+def alcohol_stove_recommendation_skus(payload: dict[str, Any]) -> list[str]:
+    """Return only catalogue candidates that satisfy the explicit request."""
+    if not _is_alcohol_cookware_recommendation(payload.get("current_question")):
+        return []
+    result: list[str] = []
+    for product in canonical_products(payload):
+        sku = str(product.get("sku") or "").strip().upper()
+        if sku and _is_cookware_product(product) and _supports_alcohol_stove(product):
+            result.append(sku)
+    return list(dict.fromkeys(result))
+
+
+def safe_alcohol_stove_recommendation(payload: dict[str, Any]) -> str | None:
+    """Build a bounded fallback when the answer model violates the heat boundary."""
+    if not _is_alcohol_cookware_recommendation(payload.get("current_question")):
+        return None
+    skus = alcohol_stove_recommendation_skus(payload)
+    if not skus:
+        return (
+            "当前没有明确标注适合酒精炉的锅具，不能把仅标注明火、卡式炉、分体炉或一体炉的普通锅具"
+            "直接当作酒精炉适配推荐。若你接受带酒精炉的一体组合，我可以按这个范围继续筛选。"
+        )
+    products = {
+        str(item.get("sku") or "").strip().upper(): item
+        for item in canonical_products(payload)
+        if str(item.get("sku") or "").strip()
+    }
+    labels = []
+    for sku in skus[:3]:
+        product = products.get(sku) or {}
+        name = str(product.get("product_name_cn") or product.get("name") or sku).strip()
+        labels.append(f"{name}（{sku}）")
+    return (
+        "可优先看" + "、".join(labels) + "。它们的同款资料明确写有酒精炉或液体酒精热源；"
+        "仅标注明火、卡式炉、分体炉或一体炉的普通锅具不作为酒精炉适配推荐。"
+    )
+
+
 def answer_consistency_issues(response: dict[str, Any] | None, payload: dict[str, Any]) -> list[dict[str, str]]:
     if not isinstance(response, dict): return []
     answer = str(response.get('answer') or '')
     question = str(payload.get('current_question') or '')
+    if (
+        _is_alcohol_cookware_recommendation(question)
+        and str(response.get("answer_type") or "").strip().lower() in {"recommendation", "comparison"}
+    ):
+        selected = response.get("selected_skus")
+        selected_values = [selected] if isinstance(selected, str) else list(selected or [])
+        for claim in response.get("claims") or []:
+            if not isinstance(claim, dict):
+                continue
+            claim_skus = claim.get("skus")
+            selected_values.extend(
+                [claim_skus] if isinstance(claim_skus, str) else list(claim_skus or [])
+            )
+            if claim.get("sku"):
+                selected_values.append(claim.get("sku"))
+        selected_skus = list(dict.fromkeys(
+            str(item or "").strip().upper()
+            for item in selected_values
+            if str(item or "").strip()
+        ))
+        products = {
+            str(item.get("sku") or "").strip().upper(): item
+            for item in canonical_products(payload)
+            if str(item.get("sku") or "").strip()
+        }
+        invalid_skus = [
+            sku for sku in selected_skus
+            if sku in products
+            and (not _is_cookware_product(products[sku]) or not _supports_alcohol_stove(products[sku]))
+        ]
+        if invalid_skus:
+            return [{
+                "code": "alcohol_stove_candidate_mismatch",
+                "sku": ",".join(invalid_skus[:8]),
+                "reason": (
+                    "酒精炉锅具推荐只能保留同 SKU 资料明确写有酒精炉/液体或固体酒精，且品类为锅具或炊具的候选；"
+                    "仅支持明火、卡式炉、分体炉或一体炉不能推出酒精炉适配。"
+                ),
+            }]
+    if (
+        payload.get("explicit_product_skus")
+        and canonical_products(payload)
+        and str(response.get("answer_type") or "").strip().lower() == "clarification"
+        and "暂时无法确认这个问题的答案" in answer
+    ):
+        return [{
+            "code": "generic_explicit_product_fallback",
+            "reason": "已明确商品且本轮有同 SKU 商品资料，不能用无具体缺失项的通用兜底，应直接回答可确认事实或说明具体未确认维度。",
+        }]
     # A narrow missing-aspect check, not an intent router or quality score.
     if re.search(r'(?:什么|哪些|何种).{0,8}不适合|优缺点|利弊', question) and not re.search(
             r'不适合|不太适合|不建议|多余|重复|取舍|不足|缺点|偏重|负担|不能保证|无法确认|不能确认', answer):
@@ -75,5 +195,7 @@ def answer_consistency_issues(response: dict[str, Any] | None, payload: dict[str
 def consistency_repair_instruction(issues: list[dict[str, str]]) -> str:
     return ('上一版答案与本轮同SKU明确事实或条件冲突，不能直接发送。'
             '请保留可以确认的回答，只修正冲突，不编造新事实，不追加无关加热步骤。'
+            '酒精炉锅具推荐只能保留同SKU资料明确写有酒精炉/液体或固体酒精且品类确为锅具或炊具的候选；'
+            '仅写明火、卡式炉、分体炉或一体炉的普通锅具不能当作酒精炉适配推荐。'
             '尤其不能把带有“除非明确支持”的条件句改成绝对禁止。'
             '继续使用原JSON协议，不输出检查过程。冲突：'+json.dumps(issues, ensure_ascii=False))
