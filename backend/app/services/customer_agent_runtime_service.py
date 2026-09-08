@@ -81,6 +81,12 @@ async def process_agent_request(
         if recommendation_context_skus
         else last_turn_summary
     )
+    explanation_summary = (
+        recommendation_summary
+        if recommendation_summary.get("intent") == "recommend_products"
+        and (recommendation_summary.get("result_skus") or [])
+        else last_turn_summary
+    )
     empty_subset_context = recommendation_context if recommendation_context.get("empty_subset") else candidate_context
     if empty_subset_context.get("empty_subset") and _is_empty_subset_followup(question):
         return _scoped_candidate_context_result(
@@ -118,6 +124,82 @@ async def process_agent_request(
     )
     if scoped_candidate_result:
         return scoped_candidate_result
+    if (
+        not explicit_product_detection.get("has_new_product")
+        and _is_explanation_followup(question, explanation_summary)
+    ):
+        explanation_skus = _explanation_followup_skus(question, explanation_summary)
+        detail_results: list[dict] = []
+        detail_steps: list[dict] = []
+        for sku_item in explanation_skus[:5]:
+            arguments = {
+                "skus": [sku_item],
+                "fields": [
+                    "specs.capacity",
+                    "specs.body_material",
+                    "specs.heat_source",
+                    "specs.power",
+                    "business.top_selling_points",
+                    "business.usage_scenarios",
+                    "business.target_audience",
+                    "business.positioning",
+                    "business.price_positioning",
+                ],
+            }
+            result = await customer_agent_tool_service.execute_tool_async(
+                db,
+                user_id=user_id,
+                name="get_product_detail",
+                arguments=arguments,
+            )
+            detail_steps.append(_step_from_tool_result("get_product_detail", arguments, result))
+            detail_results.append(result)
+        if detail_results:
+            explanation_rows = _collect_results(detail_results) or []
+            if _is_plural_recommendation_explanation(question) and len(explanation_rows) > 1:
+                followup_answer = _compose_multi_recommendation_explanation_answer(
+                    question,
+                    explanation_rows,
+                    explanation_summary,
+                )
+            else:
+                followup_row = explanation_rows[0] if explanation_rows else {}
+                followup_answer = _compose_recommendation_explanation_answer(
+                    question,
+                    followup_row,
+                    explanation_summary,
+                )
+            if followup_answer:
+                result = _build_result(
+                    question,
+                    None,
+                    detail_results,
+                    followup_answer,
+                    detail_steps,
+                    conversation_history=conversation_history,
+                    intent_override="recommend_products",
+                    preserve_llm_answer=True,
+                )
+                result["intent"] = "recommendation"
+                result["answer_type"] = "recommendation"
+                result["result_skus"] = list(explanation_skus[:5])
+                result["candidate_skus"] = list(explanation_skus[:5])
+                result["skip_polish"] = True
+                debug = dict(result.get("debug") or {})
+                debug["agent_mode"] = "recommendation_explanation_followup"
+                debug["followup_target_skus"] = explanation_skus[:5]
+                result["debug"] = debug
+                return result
+            return _build_result(
+                question,
+                None,
+                detail_results,
+                None,
+                detail_steps,
+                conversation_history=conversation_history,
+                intent_override="recommend_products",
+                preserve_llm_answer=False,
+            )
     early_followup_domain = [
         str(item or "").strip().upper()
         for item in (
@@ -155,6 +237,42 @@ async def process_agent_request(
             return deterministic_followup
     route_hints = _build_route_hints(question, explicit_product_detection, entity_stack)
     dialogue_state = customer_dialogue_state.build_dialogue_state(question, conversation_history)
+    direct_detail_skus = _entity_stack_direct_detail_skus(question, entity_stack)
+    if (
+        direct_detail_skus
+        and not explicit_product_detection.get("has_new_product")
+        and not _is_explanation_followup(question, explanation_summary)
+        and not _is_compare_like_question(question, context_skus=direct_detail_skus)
+        and not _is_recommendation_change_followup(question, recommendation_summary)
+        and not _requires_write_tool(question)
+    ):
+        fields = _context_detail_fields(question, conversation_history)
+        arguments = {"skus": direct_detail_skus[:1], "fields": fields}
+        result = await customer_agent_tool_service.execute_tool_async(
+            db,
+            user_id=user_id,
+            name="get_product_detail",
+            arguments=arguments,
+        )
+        direct_route_hints = dict(route_hints or {})
+        direct_route_hints["entity_stack_direct_detail"] = True
+        direct_route_hints["resolved_skus"] = direct_detail_skus[:1]
+        return await _build_result_async(
+            db,
+            question,
+            direct_detail_skus[0],
+            [result],
+            None,
+            [_step_from_tool_result("get_product_detail", arguments, result)],
+            conversation_history=conversation_history,
+            conversation_id=conversation_id,
+            user_id=user_id,
+            intent_override="product_detail",
+            intent_hint="product_detail",
+            entity_stack=entity_stack,
+            route_hints=direct_route_hints,
+            answer_delta_callback=answer_delta_callback,
+        )
     if (
         _is_underspecified_recommendation_question(question)
         and not previous_result_skus
@@ -371,9 +489,19 @@ async def process_agent_request(
                 route_hints={"query_type": "comparison", "fast_path": True, "compare_fast_path": True},
                 answer_delta_callback=answer_delta_callback,
             )
-        if not conversation_history and not entity_stack and _is_specific_recommendation_question(question):
+        if (
+            (not conversation_history and not entity_stack and _is_specific_recommendation_question(question))
+            or (entity_stack and _is_contextual_safety_or_certification_followup(question))
+        ):
             route_plan = {}
-            customer_perf_service.log_event("plan_conversation_route.skipped", reason="fresh_recommendation_question")
+            customer_perf_service.log_event(
+                "plan_conversation_route.skipped",
+                reason=(
+                    "contextual_safety_or_certification_followup"
+                    if entity_stack and _is_contextual_safety_or_certification_followup(question)
+                    else "fresh_recommendation_question"
+                ),
+            )
         else:
             plan_start = perf_counter()
             route_plan = await _plan_conversation_route(
@@ -381,7 +509,13 @@ async def process_agent_request(
                 question,
                 entity_stack,
                 conversation_history,
-                force_query_type=_may_need_specific_product_classification(question),
+                force_query_type=(
+                    _may_need_specific_product_classification(question)
+                    and not (
+                        entity_stack
+                        and _is_contextual_safety_or_certification_followup(question)
+                    )
+                ),
                 recommendation_context=recommendation_context,
             )
             customer_perf_service.log_stage(
@@ -396,7 +530,7 @@ async def process_agent_request(
         # outage path.
         local_resolved_skus = []
         if not local_resolved_skus and _is_contextual_safety_or_certification_followup(question) and entity_stack:
-            local_resolved_skus = _latest_context_skus_from_stack(entity_stack, limit=1)
+            local_resolved_skus = _context_skus_for_local_followup(question, entity_stack, limit=1)
         if local_resolved_skus:
             route_plan = dict(route_plan or {})
             route_plan["resolved_skus"] = local_resolved_skus
@@ -1292,6 +1426,40 @@ def _latest_context_skus_from_stack(entity_stack: list[dict], limit: int = 1) ->
         if len(skus) >= limit:
             break
     return skus
+
+
+def _context_skus_for_local_followup(question: str, entity_stack: list[dict], limit: int = 1) -> list[str]:
+    """Resolve explicit backward references from the newest-first stack."""
+    if any(marker in str(question or "") for marker in ("前面", "之前", "更早", "上面", "前一款")):
+        ranked = sorted(
+            (item for item in entity_stack if isinstance(item, dict) and item.get("sku")),
+            key=lambda item: int(item.get("turn")) if str(item.get("turn") or "").isdigit() else 10**9,
+        )
+        skus: list[str] = []
+        for entity in ranked:
+            sku = str(entity.get("sku") or "").strip().upper()
+            if sku and sku not in skus:
+                skus.append(sku)
+            if len(skus) >= limit:
+                break
+        return skus
+    return _latest_context_skus_from_stack(entity_stack, limit=limit)
+
+
+def _entity_stack_direct_detail_skus(question: str, entity_stack: list[dict]) -> list[str]:
+    """Use a singleton entity as the local target for an unambiguous follow-up."""
+    if not entity_stack or not _needs_previous_context(question):
+        return []
+    if _is_compare_like_question(question):
+        return []
+    skus = _unique_skus([
+        str(entity.get("sku") or "").strip().upper()
+        for entity in entity_stack
+        if isinstance(entity, dict) and str(entity.get("sku") or "").strip()
+    ])
+    return skus if len(skus) == 1 else []
+
+
 def _sanitize_conversation_route(plan: dict | None) -> dict[str, Any]:
     if not isinstance(plan, dict):
         return {}
@@ -4465,6 +4633,60 @@ def _is_candidate_scope_followup(question: str) -> bool:
             "\u54ea\u4e9b\u652f\u6301",
         )
     )
+
+
+def _is_explanation_followup(question: str, last_turn_summary: dict) -> bool:
+    available_skus = (
+        (last_turn_summary or {}).get("result_skus")
+        or (last_turn_summary or {}).get("ordered_result_skus")
+        or (last_turn_summary or {}).get("recommended_skus")
+        or (last_turn_summary or {}).get("candidate_skus")
+        or []
+    )
+    if not available_skus or (last_turn_summary or {}).get("intent") != "recommend_products":
+        return False
+    if _is_compare_like_question(question, context_skus=available_skus):
+        return False
+    text = str(question or "")
+    return any(
+        term in text
+        for term in (
+            "为什么推荐",
+            "推荐理由",
+            "理由",
+            "解释",
+            "依据",
+            "第一个",
+            "第一款",
+            "首个",
+            "首款",
+            "前面推荐的",
+            "刚才推荐的",
+        )
+    )
+
+
+def _explanation_followup_skus(question: str, last_turn_summary: dict) -> list[str]:
+    skus = [
+        str(item or "").strip().upper()
+        for item in (
+            (last_turn_summary or {}).get("result_skus")
+            or (last_turn_summary or {}).get("ordered_result_skus")
+            or (last_turn_summary or {}).get("recommended_skus")
+            or (last_turn_summary or {}).get("candidate_skus")
+            or []
+        )
+        if str(item or "").strip()
+    ]
+    if not skus:
+        return []
+    text = str(question or "")
+    if any(term in text for term in ("第一个", "第一款", "首个", "首款")):
+        first_from_answer = _extract_skus_in_order(str((last_turn_summary or {}).get("assistant_answer") or ""))
+        if first_from_answer:
+            return first_from_answer[:1]
+        return skus[:1]
+    return skus[:5]
 
 
 def _is_recommendation_change_followup(question: str, last_turn_summary: dict) -> bool:

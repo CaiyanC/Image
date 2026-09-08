@@ -11147,7 +11147,13 @@ def _has_context_reference(text: str) -> bool:
     # but a raw substring check also matches the ordinary word “其他”.  Keep
     # the pronoun only when it is not immediately preceded by “其”.
     has_pronoun = bool(re.search(r"(?<!其)他", value))
-    return has_pronoun or any(word in value for word in CONTEXT_WORDS)
+    # Ordinal references only identify a product when there is a prior result
+    # list.  Without one, questions such as “最后一个多少钱” must clarify
+    # instead of falling through to a generic product-detail parse.  Require a
+    # product-unit suffix so routine phrases such as “第一次使用” are not
+    # mistaken for references.
+    has_ordinal_reference = bool(re.search(r"第[一二三四五六七八九十百千万0-9]+(?:个|款|件|项)|最后(?:一个|一款)|上一款|下一款", value))
+    return has_pronoun or has_ordinal_reference or any(word in value for word in CONTEXT_WORDS)
 
 
 def _extract_skus(text: str) -> list[str]:

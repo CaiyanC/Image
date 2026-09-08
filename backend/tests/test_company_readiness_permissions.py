@@ -10,7 +10,7 @@ from app.api import auth, asset_search, assets, knowledge_base, tools
 from app.core.database import Base, _seed_default_permissions, get_db
 from app.core.permission_constants import DERIVED_PERMISSION_SOURCES, PERMISSION_DEFS
 from app.core.security import get_current_user, require_product_permission
-from app.models import Group, GroupPermission, Permission, PermissionRoute, Route, User, UserGroup
+from app.models import Group, GroupPermission, Permission, PermissionRoute, Route, Tool, User, UserGroup
 from app.models.product_specs import ProductSpecs
 from app.models.product import Product
 from app.services.product_service import _audit_source_requires_confirmation
@@ -27,7 +27,7 @@ def test_quarantined_source_is_not_reported_as_ready():
 def fixture_db():
     engine = create_engine("sqlite://", connect_args={"check_same_thread": False}, poolclass=StaticPool)
     Base.metadata.create_all(engine, tables=[model.__table__ for model in (
-        User, Group, UserGroup, Permission, GroupPermission, Route, PermissionRoute,
+        User, Group, UserGroup, Permission, GroupPermission, Route, PermissionRoute, Tool,
     )])
     db = sessionmaker(bind=engine, expire_on_commit=False)()
     user = User(id="employee", username="employee", password_hash="unused", is_active=True)
@@ -122,26 +122,26 @@ def test_identity_restore_does_not_require_profile_permission(fixture_db):
         assert client.put("/api/auth/me", json={"full_name": "changed"}).status_code == 403
 
 
-@pytest.mark.parametrize("method,path,payload", [
-    ("GET", "/api/tools", None),
-    ("GET", "/api/assets/search", None),
-    ("GET", "/api/assets/taxonomy", None),
-    ("GET", "/api/products/P/assets", None),
-    ("GET", "/api/products/P/assets/A", None),
-    ("GET", "/api/knowledge-base/status", None),
-    ("GET", "/api/knowledge-base/health", None),
-    ("GET", "/api/knowledge-base/files", None),
-    ("GET", "/api/knowledge-base/jobs", None),
-    ("POST", "/api/knowledge-base/reindex-products", {}),
-    ("POST", "/api/knowledge-base/jobs/reindex-products", {}),
-    ("POST", "/api/knowledge-base/jobs/retry-embeddings", {}),
+@pytest.mark.parametrize("method,path,payload,expected_status", [
+    ("GET", "/api/tools", None, 200),
+    ("GET", "/api/assets/search", None, 403),
+    ("GET", "/api/assets/taxonomy", None, 403),
+    ("GET", "/api/products/P/assets", None, 403),
+    ("GET", "/api/products/P/assets/A", None, 403),
+    ("GET", "/api/knowledge-base/status", None, 403),
+    ("GET", "/api/knowledge-base/health", None, 403),
+    ("GET", "/api/knowledge-base/files", None, 403),
+    ("GET", "/api/knowledge-base/jobs", None, 403),
+    ("POST", "/api/knowledge-base/reindex-products", {}, 403),
+    ("POST", "/api/knowledge-base/jobs/reindex-products", {}, 403),
+    ("POST", "/api/knowledge-base/jobs/retry-embeddings", {}, 403),
 ])
-def test_old_general_grants_do_not_bypass_new_guards(fixture_db, method, path, payload):
+def test_old_general_grants_do_not_bypass_new_guards(fixture_db, method, path, payload, expected_status):
     db, user, group = fixture_db
     grant(db, group, "ai.call")
     grant(db, group, "product.read")
     with client_for(db, user) as client:
-        assert client.request(method, path, json=payload).status_code == 403
+        assert client.request(method, path, json=payload).status_code == expected_status
 
 
 def test_seed_removes_obsolete_route_permission_relation(fixture_db):

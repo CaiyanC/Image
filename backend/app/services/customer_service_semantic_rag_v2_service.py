@@ -303,6 +303,338 @@ def _load_conversation_context(
     return history, candidates
 
 
+def _latest_pending_clarification_context(
+    db: Session,
+    *,
+    user_id: str,
+    conversation_id: str | None,
+) -> dict[str, Any]:
+    """Read the last server-owned clarification slot for this v2 conversation.
+
+    The slot is persisted in the assistant metadata envelope.  Reading only an
+    assistant turn belonging to the same user and semantic pipeline prevents a
+    stale or cross-runtime conversation from changing the meaning of a new
+    question.
+    """
+    if not conversation_id:
+        return {}
+    rows = (
+        db.query(CustomerServiceMessage)
+        .join(
+            CustomerServiceConversation,
+            CustomerServiceConversation.id == CustomerServiceMessage.conversation_id,
+        )
+        .filter(
+            CustomerServiceMessage.conversation_id == conversation_id,
+            CustomerServiceMessage.role == "assistant",
+            CustomerServiceConversation.user_id == str(user_id),
+            CustomerServiceConversation.pipeline == customer_pipeline_service.SEMANTIC_RAG_V2_PIPELINE,
+        )
+        .order_by(CustomerServiceMessage.created_at.desc(), CustomerServiceMessage.id.desc())
+        .limit(8)
+        .all()
+    )
+    for row in rows:
+        for item in _parse_source_items(row.sources_json):
+            if not isinstance(item, dict) or item.get("type") != "agent_meta":
+                continue
+            pending = item.get("pending_clarification_context")
+            if not isinstance(pending, dict):
+                continue
+            requested_field = str(pending.get("requested_field") or "").strip().lower()
+            if requested_field in {"price", "heat_source"}:
+                return {
+                    "intent": str(pending.get("intent") or "product_detail").strip(),
+                    "requested_field": requested_field,
+                    "capability_question": str(pending.get("capability_question") or "").strip(),
+                    "product_scope": str(pending.get("product_scope") or "").strip(),
+                    "original_question": _clip_text(pending.get("original_question"), 500),
+                }
+    return {}
+
+
+def _identity_only_text(value: Any) -> str:
+    text = customer_agent_service.normalize_search_text(value)
+    return re.sub(r"[\\s\\,，。！？!?：:；;、（）()【】\\[\\]<>《》\"'‘’“”]+", "", text).strip().upper()
+
+
+def _clarification_slot_product_sku(
+    db: Session,
+    question: str,
+    explicit_skus: list[str],
+) -> str:
+    """Resolve a pure product-name/SKU reply, without treating a new sentence as one."""
+    question_key = _identity_only_text(question)
+    if not question_key:
+        return ""
+    if len(explicit_skus) == 1 and question_key == _identity_only_text(explicit_skus[0]):
+        return str(explicit_skus[0]).strip().upper()
+
+    matched_skus: list[str] = []
+    for product in db.query(Product).all():
+        for name in (product.product_name_cn, product.product_name_en):
+            if not str(name or "").strip():
+                continue
+            if question_key == _identity_only_text(name):
+                sku_value = str(product.sku or "").strip().upper()
+                if sku_value and sku_value not in matched_skus:
+                    matched_skus.append(sku_value)
+                break
+    return matched_skus[0] if len(matched_skus) == 1 else ""
+
+
+def _clarification_scope_matches_product(scope: str, detail: dict[str, Any]) -> bool:
+    normalized_scope = str(scope or "").strip().lower()
+    if not normalized_scope or normalized_scope in {"产品", "商品"}:
+        return True
+    haystack = " ".join(
+        str(detail.get(key) or "")
+        for key in ("product_name_cn", "product_name_en", "category", "sub_category")
+    ).lower()
+    aliases = {
+        "锅": ("锅", "锅具", "套锅", "单锅", "煎锅", "炒锅", "烤盘"),
+        "锅具": ("锅", "锅具", "套锅", "单锅", "煎锅", "炒锅", "烤盘"),
+        "套锅": ("套锅", "锅具"),
+        "单锅": ("单锅", "锅具"),
+        "壶": ("壶", "水具"),
+        "水壶": ("壶", "水具"),
+        "杯": ("杯", "水具"),
+        "炉": ("炉", "炉具"),
+        "炉具": ("炉", "炉具"),
+    }
+    accepted = aliases.get(normalized_scope, (normalized_scope,))
+    return any(term in haystack for term in accepted)
+
+
+def _clarification_slot_carryover_answer(
+    db: Session,
+    *,
+    detail: dict[str, Any],
+    pending: dict[str, Any],
+) -> tuple[str, str, str] | None:
+    """Answer a recovered slot from the live product record, without an LLM."""
+    sku = str(detail.get("sku") or "").strip().upper()
+    name = str(detail.get("product_name_cn") or detail.get("product_name_en") or sku).strip()
+    field = str(pending.get("requested_field") or "").strip().lower()
+    specs = detail.get("specs") if isinstance(detail.get("specs"), dict) else {}
+    business = detail.get("business") if isinstance(detail.get("business"), dict) else {}
+    if field == "price":
+        tier = str(business.get("price_positioning") or "").strip()
+        if tier:
+            return (
+                f"{name}（{sku}）的目录价格定位为{tier}；"
+                "实际售价会随平台、店铺和活动变化，请以下单页面显示的价格为准。",
+                "partial",
+                "business.price_positioning",
+            )
+        return (
+            f"{name}（{sku}）的实时售价未维护在产品主数据中，请以下单页面显示的价格为准。",
+            "partial",
+            "business.price_positioning",
+        )
+    if field == "heat_source":
+        from . import customer_service_service as shared_service
+
+        heat_source = str(specs.get("heat_source") or "").strip()
+        row = {
+            "sku": sku,
+            "product_name_cn": name,
+            "category": detail.get("category"),
+            "heat_source": heat_source,
+        }
+        raw_answer, status = shared_service._phase1_alcohol_stove_compatibility_answer(db, row)
+        if status == "supported":
+            return (
+                f"{name}（{sku}）支持酒精炉；适用热源为：{heat_source or '酒精炉'}。",
+                "confirmed",
+                "specs.heat_source",
+            )
+        if status == "unsupported":
+            return (
+                f"{name}（{sku}）不支持酒精炉；适用热源为：{heat_source or '未登记'}。",
+                "confirmed",
+                "specs.heat_source",
+            )
+        if status == "not_listed":
+            return (
+                f"{name}（{sku}）目前没有标注支持酒精炉；已登记的适用热源为：{heat_source or '未登记'}。",
+                "partial",
+                "specs.heat_source",
+            )
+        return (raw_answer, "unconfirmed", "specs.heat_source")
+    return None
+
+
+def _clarification_slot_carryover_agent_result(
+    db: Session,
+    *,
+    question: str,
+    pending: dict[str, Any],
+    sku: str,
+    scope_mismatch: bool = False,
+) -> dict[str, Any] | None:
+    try:
+        detail = product_service.get_product_detail(db, sku)
+    except Exception:
+        return None
+    evidence = _build_evidence(
+        [],
+        {sku: detail},
+        allowed_skus={sku},
+        allow_unbound=False,
+    )
+    if scope_mismatch:
+        scope = str(pending.get("product_scope") or "产品").strip()
+        name = str(detail.get("product_name_cn") or detail.get("product_name_en") or sku).strip()
+        category = str(detail.get("category") or detail.get("sub_category") or "其他产品").strip()
+        answer = (
+            f"你上一条问的是{scope}类产品的价格，但这次给出的{name}（{sku}）属于{category}。"
+            f"请确认是否要查询这款产品的价格。"
+        )
+        return {
+            "answer": answer,
+            "answer_type": "clarification",
+            "intent": "clarify",
+            "needs_clarification": True,
+            "confidence": "high",
+            "uncertainty": "unconfirmed",
+            "result_skus": [],
+            "candidate_skus": [sku],
+            "evidence": evidence,
+            "sources": [],
+            "steps": [{"type": "clarification_slot_scope_check", "label": "核对产品范围", "ok": True}],
+            "suggested_followups": [f"请确认是否查询 {sku} 的价格"],
+            "answer_metadata": {
+                "pipeline_version": "semantic_rag_v2",
+                "semantic_owner": "deterministic_clarification_slot_carryover",
+                "evidence_status": "matched",
+                "evidence_ids": [item.get("evidence_id") for item in evidence],
+                "requested_field": pending.get("requested_field"),
+            },
+            "debug": {
+                "pipeline_version": "semantic_rag_v2",
+                "agent_mode": "clarification_scope_mismatch",
+                "no_legacy_route": True,
+                "target_skus": [],
+                "candidate_skus": [sku],
+                "pending_clarification_context": pending,
+            },
+            "results": [],
+            "skip_polish": True,
+        }
+    answer_data = _clarification_slot_carryover_answer(db, detail=detail, pending=pending)
+    if not answer_data:
+        return None
+    answer, uncertainty, requested_field = answer_data
+    return {
+        "answer": answer,
+        "answer_type": "product_detail",
+        "intent": "product_detail",
+        "needs_clarification": False,
+        "confidence": "high" if uncertainty == "confirmed" else "medium",
+        "uncertainty": uncertainty,
+        "result_skus": [sku],
+        "candidate_skus": [sku],
+        "evidence": evidence,
+        "sources": [],
+        "steps": [{"type": "clarification_slot_carryover", "label": "续接待确认字段", "ok": True}],
+        "suggested_followups": [],
+        "answer_metadata": {
+            "pipeline_version": "semantic_rag_v2",
+            "semantic_owner": "deterministic_clarification_slot_carryover",
+            "evidence_status": "matched",
+            "evidence_ids": [item.get("evidence_id") for item in evidence],
+            "requested_field": requested_field,
+            "pending_original_question": pending.get("original_question"),
+        },
+        "debug": {
+            "pipeline_version": "semantic_rag_v2",
+            "agent_mode": "clarification_slot_carryover",
+            "no_legacy_route": True,
+            "semantic_owner": "deterministic_slot_carryover",
+            "target_skus": [sku],
+            "candidate_skus": [sku],
+            "pending_clarification_context": pending,
+        },
+        "results": [detail],
+        "skip_polish": True,
+    }
+
+
+def _model_outage_recommendation_result(
+    db: Session,
+    *,
+    question: str,
+) -> dict[str, Any] | None:
+    """Keep a model-outage recommendation turn from inheriting a prior slot.
+
+    This is an outage-only classification recovery. It never selects a SKU
+    from wording alone; when the catalogue has no verified match it tells the
+    customer exactly what is missing instead of reusing the prior price slot.
+    """
+    text = customer_agent_service.normalize_search_text(question)
+    if not any(term in text for term in ("推荐", "推荐个", "推荐一", "哪款", "选哪", "哪个好")):
+        return None
+    scope = "水壶" if any(term in text for term in ("水壶", "烧水壶")) else "锅具" if any(
+        term in text for term in ("锅", "锅具", "套锅")
+    ) else ""
+    if not scope:
+        return None
+    products = []
+    for product in db.query(Product).all():
+        haystack = " ".join(
+            str(getattr(product, key, "") or "")
+            for key in ("product_name_cn", "product_name_en", "category", "sub_category")
+        )
+        if scope in haystack:
+            products.append(product)
+    details: list[dict[str, Any]] = []
+    for product in products[:5]:
+        try:
+            details.append(product_service.get_product_detail(db, product.sku))
+        except Exception:
+            continue
+    if details:
+        first = details[0]
+        name = str(first.get("product_name_cn") or first.get("product_name_en") or first.get("sku") or "").strip()
+        sku = str(first.get("sku") or "").strip().upper()
+        answer = f"可以先看{name}（{sku}）。当前模型暂时不可用，我已按目录中可核对的{scope}资料保留候选，具体选择可继续告诉我人数、场景或预算。"
+        result_skus = [sku] if sku else []
+    else:
+        answer = f"当前目录里暂未找到可核对的{scope}候选。请补充具体产品名或 SKU，我再按产品主数据查询。"
+        result_skus = []
+    return {
+        "answer": answer,
+        "answer_type": "recommendation",
+        "intent": "recommendation",
+        "needs_clarification": False,
+        "confidence": "low",
+        "uncertainty": "partial",
+        "result_skus": result_skus,
+        "candidate_skus": [str(item.get("sku") or "").strip().upper() for item in details if item.get("sku")],
+        "evidence": [],
+        "sources": [],
+        "steps": [{"type": "model_outage_recovery", "label": "模型不可用时保留推荐意图", "ok": True}],
+        "suggested_followups": ["可以补充人数、使用场景或预算"],
+        "answer_metadata": {
+            "pipeline_version": "semantic_rag_v2",
+            "semantic_owner": "deterministic_outage_recovery",
+            "evidence_status": "catalogue_match" if details else "missing",
+            "model_outage_recovery": True,
+        },
+        "debug": {
+            "pipeline_version": "semantic_rag_v2",
+            "agent_mode": "semantic_model_outage_recovery",
+            "no_legacy_route": True,
+            "semantic_owner": "deterministic_outage_recovery",
+            "target_skus": result_skus,
+            "candidate_skus": [str(item.get("sku") or "").strip().upper() for item in details if item.get("sku")],
+        },
+        "results": details[:1],
+        "skip_polish": True,
+    }
+
+
 def _sku_tokens_with_catalogue(text: str, catalogue_skus: list[str]) -> list[str]:
     """Longest exact catalogue spelling wins; never merge distinct variants."""
     normalized = str(text or "").upper().replace("（", "(").replace("）", ")")
@@ -1676,6 +2008,48 @@ async def ask_customer_service_semantic_rag_v2(
             and str(token or "").strip().upper() not in resolved_explicit_skus
         )
     ))[:4]
+    pending_clarification = _latest_pending_clarification_context(
+        db,
+        user_id=str(user_id),
+        conversation_id=conversation_id,
+    )
+    carryover_sku = _clarification_slot_product_sku(
+        db,
+        original_question,
+        explicit_skus,
+    )
+    if pending_clarification and carryover_sku:
+        try:
+            carryover_detail = product_service.get_product_detail(db, carryover_sku)
+        except Exception:
+            carryover_detail = None
+        if carryover_detail and not _clarification_scope_matches_product(
+            pending_clarification.get("product_scope"),
+            carryover_detail,
+        ):
+            carryover_result = _clarification_slot_carryover_agent_result(
+                db,
+                question=original_question,
+                pending=pending_clarification,
+                sku=carryover_sku,
+                scope_mismatch=True,
+            )
+        else:
+            carryover_result = _clarification_slot_carryover_agent_result(
+                db,
+                question=original_question,
+                pending=pending_clarification,
+                sku=carryover_sku,
+            )
+        if carryover_result:
+            return await _persist_result(
+                db,
+                user_id=str(user_id),
+                question=original_question,
+                conversation_id=conversation_id,
+                agent_result=carryover_result,
+                answer_delta_callback=answer_delta_callback,
+            )
     plan, plan_metadata = await _semantic_plan(
         db,
         question=original_question,
@@ -1848,6 +2222,20 @@ async def ask_customer_service_semantic_rag_v2(
         bound_product_skus=target_skus,
     )
     answer_raw, answer_metadata = await _generate_answer(db, payload=payload)
+    if not answer_raw and not plan.get("plan_available"):
+        outage_result = _model_outage_recommendation_result(
+            db,
+            question=original_question,
+        )
+        if outage_result:
+            return await _persist_result(
+                db,
+                user_id=str(user_id),
+                question=original_question,
+                conversation_id=conversation_id,
+                agent_result=outage_result,
+                answer_delta_callback=answer_delta_callback,
+            )
     if _needs_explicit_product_answer_repair(
         answer_raw,
         bound_product_skus=target_skus,

@@ -42,6 +42,7 @@ from app.models import (  # noqa: E402
     ProductSpecs,
     SalesRegion,
     SystemConfig,
+    Tool,
     User,
     UserGroup,
 )
@@ -72,6 +73,7 @@ def _customer_service_test_tables():
         KnowledgeDocument.__table__,
         KnowledgeChunk.__table__,
         SystemConfig.__table__,
+        Tool.__table__,
         User.__table__,
         Group.__table__,
         UserGroup.__table__,

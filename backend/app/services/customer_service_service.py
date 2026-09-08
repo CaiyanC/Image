@@ -90,6 +90,93 @@ COMPOSITE_FACT_RECOMMENDATION_MARKERS = (
     "推荐一下",
 )
 
+
+def _question_entities_for_entity_stack(db: Session, question: str, limit: int = 20) -> list[dict]:
+    """Return product mentions in conversation order for the entity ledger.
+
+    Exact SKU/name hits must win over broad name-prefix matches.  The entity
+    stack is later used for discourse context only, so this helper returns
+    catalogue identity and display names without deciding the customer's
+    intent.
+    """
+    text = customer_agent_service.normalize_search_text(question)
+    if not text:
+        return []
+    exact_matches: list[tuple[int, int, str, dict]] = []
+    matches: list[tuple[int, int, str, dict]] = []
+    seen: set[str] = set()
+    for product in db.query(Product).all():
+        sku = str(product.sku or "").strip().upper()
+        if not sku or sku in seen:
+            continue
+        sku_text = customer_agent_service.normalize_search_text(sku)
+        name_cn = customer_agent_service.normalize_search_text(getattr(product, "product_name_cn", "") or "")
+        name_en = customer_agent_service.normalize_search_text(getattr(product, "product_name_en", "") or "")
+        exact_pos: int | None = None
+        exact_len = 0
+        for candidate in (sku_text, name_cn, name_en):
+            if not candidate or candidate not in text:
+                continue
+            pos = text.index(candidate)
+            if exact_pos is None or pos < exact_pos or (pos == exact_pos and len(candidate) > exact_len):
+                exact_pos = pos
+                exact_len = len(candidate)
+        row = {
+            "sku": sku,
+            "product_name_cn": getattr(product, "product_name_cn", None),
+            "product_name_en": getattr(product, "product_name_en", None),
+            "category": getattr(product, "category", None),
+        }
+        if exact_pos is not None:
+            seen.add(sku)
+            exact_matches.append((exact_pos, -exact_len, sku, row))
+            continue
+
+        candidates: list[str] = []
+        for candidate in (name_cn, name_en):
+            if not candidate:
+                continue
+            candidates.append(candidate)
+            stripped_people_prefix = re.sub(r"^[0-9一二两三四五六七八九十－\-]+人", "", candidate)
+            if stripped_people_prefix and stripped_people_prefix != candidate:
+                candidates.append(stripped_people_prefix)
+        best_pos: int | None = None
+        best_len = 0
+        for candidate in candidates:
+            if not candidate:
+                continue
+            if candidate in text:
+                pos = text.index(candidate)
+                if best_pos is None or pos < best_pos or (pos == best_pos and len(candidate) > best_len):
+                    best_pos = pos
+                    best_len = len(candidate)
+                continue
+            if len(candidate) < 4:
+                continue
+            for prefix_len in range(len(candidate) - 1, 3, -1):
+                prefix = candidate[:prefix_len]
+                if prefix and prefix in text:
+                    pos = text.index(prefix)
+                    if best_pos is None or pos < best_pos or (pos == best_pos and prefix_len > best_len):
+                        best_pos = pos
+                        best_len = prefix_len
+                    break
+        if best_pos is None:
+            continue
+        seen.add(sku)
+        matches.append((best_pos, -best_len, sku, row))
+
+    if exact_matches:
+        exact_matches.sort(key=lambda item: (item[0], item[1], item[2]))
+        if not re.search(r"(依次问|/|／|、|以及|还有|和)", text):
+            return [item[3] for item in exact_matches[:limit]]
+        exact_skus = {item[2] for item in exact_matches}
+        exact_matches.extend(item for item in matches if item[2] not in exact_skus)
+        exact_matches.sort(key=lambda item: (item[0], item[1], item[2]))
+        return [item[3] for item in exact_matches[:limit]]
+    matches.sort(key=lambda item: (item[0], item[1], item[2]))
+    return [item[3] for item in matches[:limit]]
+
 _STRUCTURED_UNKNOWN_FACT_TERMS: dict[str, tuple[str, ...]] = {
     "售后电话": ("售后服务电话", "售后联系电话", "售后电话", "客服电话", "客服热线"),
     "库存": ("库存", "现货", "有货", "还有货", "现在有货"),
