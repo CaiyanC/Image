@@ -227,6 +227,46 @@ class CustomerExperienceRagServiceTest(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(retrieve.await_args_list[1].kwargs.get("sku"))
         self.assertIsNone(retrieve.await_args_list[1].kwargs.get("skus"))
 
+    async def test_unbound_query_does_not_receive_product_specific_guidance(self):
+        metadata = {
+            "review_status": "auto_generated_pilot",
+            "production_use": "experience_guidance_only",
+            "authority_level": "candidate_only",
+            "fact_authority": False,
+        }
+        retrieve = AsyncMock(return_value=[
+            {
+                "source_type": knowledge_service.CUSTOMER_EXPERIENCE_SOURCE_TYPE,
+                "sku": "OTHER-SKU",
+                "content": "具体产品的经验，不应泄漏到无商品问题。",
+                "metadata": {**metadata, "source_id": "customer_experience:product:other"},
+                "score": 0.99,
+                "_retrieval_signal": "vector",
+            },
+            {
+                "source_type": knowledge_service.CUSTOMER_EXPERIENCE_SOURCE_TYPE,
+                "sku": None,
+                "content": "跨产品通用经验。",
+                "metadata": {**metadata, "source_id": "customer_experience:global:one"},
+                "score": 0.70,
+                "_retrieval_signal": "vector",
+            },
+        ])
+        with (
+            patch.object(settings, "CUSTOMER_SERVICE_EXPERIENCE_RAG_ENABLED", True),
+            patch.object(settings, "CUSTOMER_SERVICE_EXPERIENCE_RAG_MIN_SCORE", 0.50),
+            patch.object(settings, "CUSTOMER_SERVICE_EXPERIENCE_RAG_MAX_CARDS", 2),
+            patch.object(knowledge_service, "semantic_retrieve", retrieve),
+        ):
+            rows = await customer_experience_rag_service.retrieve_experience_guidance(
+                object(),
+                question="客户犹豫值不值得买，怎么沟通",
+                skus=[],
+            )
+
+        self.assertEqual([row["guidance"] for row in rows], ["跨产品通用经验。"])
+        self.assertEqual([row["sku"] for row in rows], [None])
+
     async def test_semantically_tied_cards_are_not_injected(self):
         metadata = {
             "source_id": "customer_experience:pilot:v2:global:one",

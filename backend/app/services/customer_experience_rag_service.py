@@ -267,6 +267,17 @@ async def retrieve_experience_guidance(
                 source_types=[knowledge_service.CUSTOMER_EXPERIENCE_SOURCE_TYPE],
                 _include_retrieval_signal=True,
             )
+            # An unbound customer turn has no product identity to authorize a
+            # product-specific card. Keep only cross-product guidance here;
+            # once the normal pipeline resolves a SKU it passes that scope
+            # back into this function and the corresponding product cards are
+            # eligible again. This is a retrieval-scope guard, not a question
+            # keyword router, and it prevents an unrelated SKU's experience
+            # signal from shaping a general answer.
+            rows = [
+                row for row in (rows or [])
+                if isinstance(row, dict) and not str(row.get("sku") or "").strip()
+            ]
     except Exception:
         # Experience is optional. Failure must leave the existing RAG path
         # untouched instead of replacing a factual answer with a fallback.
