@@ -123,6 +123,71 @@ def test_generic_alcohol_recommendation_fallback_is_repaired():
     assert issues[0]['code'] == 'generic_alcohol_recommendation_fallback'
 
 
+def test_semantic_writer_uses_bounded_alcohol_fallback_after_one_failed_repair(monkeypatch):
+    from app.services import customer_service_semantic_rag_v2_service as formal
+
+    calls = []
+
+    async def chat(*_args, **kwargs):
+        calls.append(kwargs)
+        return json.dumps({
+            'answer': '暂时无法确认这个问题的答案，建议下单前向店铺人工核实。',
+            'answer_type': 'clarification',
+        }, ensure_ascii=False)
+
+    monkeypatch.setattr(formal.customer_llm_service, 'chat_completion', chat)
+    result, metadata = asyncio.run(formal._generate_answer(None, payload={
+        'current_question': '适合酒精炉的锅具给几个选择。',
+        'candidate_products': [
+            {'sku': 'BAD', 'product_name_cn': '普通锅', 'category': '锅具',
+             'specs': {'heat_source': '明火直烧'}},
+        ],
+    }))
+
+    assert len(calls) == 2
+    assert result and '不能把仅标注明火' in result['answer']
+    assert metadata['consistency_fallback'] == 'safe_alcohol_stove_recommendation'
+
+
+@pytest.mark.parametrize('pipeline', ['formal', 'rag'])
+def test_dynamic_review_cannot_replace_valid_answer_with_generic_alcohol_fallback(monkeypatch, pipeline):
+    from app.services import customer_service_semantic_rag_v2_service as formal
+    from app.services import customer_service_workbuddy_rag_service as rag
+
+    service = formal if pipeline == 'formal' else rag
+    calls = []
+    original = {
+        'answer': '当前资料没有明确标注适合酒精炉的锅具，我不把普通锅具直接当作适配推荐。',
+        'answer_type': 'recommendation',
+        'selected_skus': [],
+    }
+
+    async def chat(*_args, **kwargs):
+        calls.append(kwargs)
+        return json.dumps(original, ensure_ascii=False)
+
+    async def bad_review(*_args, **_kwargs):
+        return {
+            **original,
+            'answer': '暂时无法确认这个问题的答案，建议下单前向店铺人工核实。',
+        }, {'attempted': True, 'decision': 'revise', 'changed': True}
+
+    monkeypatch.setattr(service.customer_llm_service, 'chat_completion', chat)
+    monkeypatch.setattr(service.customer_dynamic_answer_review_service, 'review_answer', bad_review)
+    result, metadata = asyncio.run(service._generate_answer(None, payload={
+        'current_question': '适合酒精炉的锅具给几个选择。',
+        'candidate_products': [
+            {'sku': 'BAD', 'product_name_cn': '普通锅', 'category': '锅具',
+             'specs': {'heat_source': '明火直烧'}},
+        ],
+    }))
+
+    assert len(calls) == 1
+    assert result['answer'] == original['answer']
+    assert metadata['dynamic_review']['changed'] is False
+    assert metadata['dynamic_review']['error'] == 'revised_answer_rejected_by_consistency'
+
+
 def test_alcohol_stove_recommendation_has_bounded_no_match_fallback():
     payload = {
         'current_question': '适合酒精炉的锅具给几个选择。',

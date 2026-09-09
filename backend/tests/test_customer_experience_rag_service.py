@@ -79,6 +79,8 @@ class CustomerExperienceRagServiceTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(rows), 1)
         self.assertFalse(rows[0]["fact_authority"])
         self.assertEqual(rows[0]["authority_level"], "candidate_only")
+        self.assertIn("case_signal", rows[0])
+        self.assertEqual(rows[0]["case_signal"]["signal_strength"], "unknown")
         self.assertTrue(any(
             call.kwargs.get("sku") == "CF-PG19"
             for call in retrieve.await_args_list
@@ -225,6 +227,46 @@ class CustomerExperienceRagServiceTest(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(retrieve.await_args_list[1].kwargs.get("sku"))
         self.assertIsNone(retrieve.await_args_list[1].kwargs.get("skus"))
 
+    async def test_unbound_query_does_not_receive_product_specific_guidance(self):
+        metadata = {
+            "review_status": "auto_generated_pilot",
+            "production_use": "experience_guidance_only",
+            "authority_level": "candidate_only",
+            "fact_authority": False,
+        }
+        retrieve = AsyncMock(return_value=[
+            {
+                "source_type": knowledge_service.CUSTOMER_EXPERIENCE_SOURCE_TYPE,
+                "sku": "OTHER-SKU",
+                "content": "具体产品的经验，不应泄漏到无商品问题。",
+                "metadata": {**metadata, "source_id": "customer_experience:product:other"},
+                "score": 0.99,
+                "_retrieval_signal": "vector",
+            },
+            {
+                "source_type": knowledge_service.CUSTOMER_EXPERIENCE_SOURCE_TYPE,
+                "sku": None,
+                "content": "跨产品通用经验。",
+                "metadata": {**metadata, "source_id": "customer_experience:global:one"},
+                "score": 0.70,
+                "_retrieval_signal": "vector",
+            },
+        ])
+        with (
+            patch.object(settings, "CUSTOMER_SERVICE_EXPERIENCE_RAG_ENABLED", True),
+            patch.object(settings, "CUSTOMER_SERVICE_EXPERIENCE_RAG_MIN_SCORE", 0.50),
+            patch.object(settings, "CUSTOMER_SERVICE_EXPERIENCE_RAG_MAX_CARDS", 2),
+            patch.object(knowledge_service, "semantic_retrieve", retrieve),
+        ):
+            rows = await customer_experience_rag_service.retrieve_experience_guidance(
+                object(),
+                question="客户犹豫值不值得买，怎么沟通",
+                skus=[],
+            )
+
+        self.assertEqual([row["guidance"] for row in rows], ["跨产品通用经验。"])
+        self.assertEqual([row["sku"] for row in rows], [None])
+
     async def test_semantically_tied_cards_are_not_injected(self):
         metadata = {
             "source_id": "customer_experience:pilot:v2:global:one",
@@ -320,7 +362,56 @@ class CustomerExperienceRagServiceTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(rows), 2)
         self.assertIn("CB253", [row["sku"] for row in rows])
 
-    def test_strategy_gate_skips_direct_facts(self):
+    async def test_explicit_sku_prefers_observed_topic_card_over_legacy_no_outcome_card(self):
+        legacy_metadata = {
+            "source_id": "customer_experience:pilot:v1:CB253:scenario",
+            "review_status": "approved_pilot",
+            "production_use": "experience_guidance_only",
+            "authority_level": "candidate_only",
+            "fact_authority": False,
+        }
+        observed_metadata = {
+            **legacy_metadata,
+            "source_id": "customer_experience:catalog:v2:topic-observed",
+            "card_kind": "product_topic",
+            "insight_status": "observed_strict",
+        }
+        retrieve = AsyncMock(side_effect=[
+            [
+                {
+                    "source_type": customer_experience_rag_service.knowledge_service.CUSTOMER_EXPERIENCE_SOURCE_TYPE,
+                    "sku": "CB253",
+                    "content": "旧卡没有结果信号",
+                    "metadata": legacy_metadata,
+                    "score": 0.90,
+                    "_retrieval_signal": "vector",
+                },
+                {
+                    "source_type": customer_experience_rag_service.knowledge_service.CUSTOMER_EXPERIENCE_SOURCE_TYPE,
+                    "sku": "CB253",
+                    "content": "新卡带有严格历史结果信号",
+                    "metadata": observed_metadata,
+                    "score": 0.72,
+                    "_retrieval_signal": "vector",
+                },
+            ],
+            [],
+        ])
+        with (
+            patch.object(settings, "CUSTOMER_SERVICE_EXPERIENCE_RAG_ENABLED", True),
+            patch.object(settings, "CUSTOMER_SERVICE_EXPERIENCE_RAG_MIN_SCORE", 0.50),
+            patch.object(settings, "CUSTOMER_SERVICE_EXPERIENCE_RAG_MAX_CARDS", 1),
+            patch.object(knowledge_service, "semantic_retrieve", retrieve),
+        ):
+            rows = await customer_experience_rag_service.retrieve_experience_guidance(
+                object(),
+                question="这个产品怎么选",
+                skus=["CB253"],
+            )
+
+        self.assertEqual([row["guidance"] for row in rows], ["新卡带有严格历史结果信号"])
+
+    def test_retrieval_is_not_question_keyword_routed(self):
         self.assertTrue(
             customer_experience_rag_service.should_retrieve_experience_guidance(
                 "价格有点高，我还在犹豫值不值得买？"
@@ -331,29 +422,51 @@ class CustomerExperienceRagServiceTest(unittest.IsolatedAsyncioTestCase):
                 "客户担心安全，客服怎么承接？"
             )
         )
-        self.assertFalse(
+        self.assertTrue(
             customer_experience_rag_service.should_retrieve_experience_guidance(
                 "这个水壶的容量、材质和适用热源是什么？"
             )
         )
-        self.assertFalse(
+        self.assertTrue(
             customer_experience_rag_service.should_retrieve_experience_guidance(
                 "这个折叠箱的尺寸、容量和承重怎么确认？"
             )
         )
 
-    def test_direct_fact_forms_do_not_retrieve_experience_guidance(self):
+    def test_direct_fact_forms_can_receive_semantic_case_context(self):
         for question in (
             "CS-B14 \u80fd\u5728\u5ba4\u5185\u4f7f\u7528\u5417\uff1f",
             "CB254 \u80fd\u7528\u5361\u5f0f\u7089\u5417\uff1f",
             "CW-C83 \u6709\u6ca1\u6709\u4fdd\u4fee\uff1f",
             "\u6237\u5916\u9152\u7cbe\u7089\u5982\u4f55\u5b89\u5168\u4f7f\u7528\uff1f",
         ):
-            self.assertFalse(
+            self.assertTrue(
                 customer_experience_rag_service.should_retrieve_experience_guidance(
                     question
                 )
             )
+
+    def test_outcome_signal_packet_keeps_learning_signals_compact(self):
+        rows = customer_experience_rag_service.outcome_signal_packet([
+            {
+                "guidance_id": "case-1",
+                "sku": "cw-c94",
+                "intent": "选购与推荐",
+                "retrieval_score": 0.88,
+                "case_signal": {
+                    "signal_strength": "observed",
+                    "outcome_evidence": {
+                        "positive_observations": 8,
+                        "confirmed_conversion_observations": 2,
+                        "denominator_available": False,
+                    },
+                },
+            },
+        ])
+
+        self.assertEqual(rows[0]["sku"], "CW-C94")
+        self.assertEqual(rows[0]["signal"]["outcome_evidence"]["positive_observations"], 8)
+        self.assertFalse(rows[0]["signal"]["outcome_evidence"]["denominator_available"])
 
     def test_three_pipelines_keep_guidance_separate_from_fact_evidence(self):
         guidance = [{
