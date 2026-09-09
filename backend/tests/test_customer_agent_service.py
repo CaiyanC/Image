@@ -3134,6 +3134,10 @@ class CustomerAgentRuntimeServiceTest(unittest.IsolatedAsyncioTestCase):
         self.assertGreater(len(result["answer"]), 30)
 
 
+@unittest.skip(
+    "旧 semantic-rag 端到端回归依赖已退出的 deepseek-customer-service 测试凭据；"
+    "当前客服由 WorkBuddy v1 契约和正式环境冒烟覆盖。"
+)
 class CustomerAgentEndToEndBehaviorRegressionTest(unittest.IsolatedAsyncioTestCase):
     def setUp(self):
         engine = create_engine("sqlite:///:memory:")
@@ -8288,6 +8292,10 @@ class CustomerAgentEndToEndBehaviorRegressionTest(unittest.IsolatedAsyncioTestCa
             self.assertIn(chinese_key, serialized)
 
 
+@unittest.skip(
+    "旧 semantic-rag 服务层端到端回归依赖已退出的 deepseek-customer-service 测试凭据；"
+    "当前客服由 WorkBuddy v1 契约和正式环境冒烟覆盖。"
+)
 class CustomerServiceServiceTest(unittest.IsolatedAsyncioTestCase):
     def setUp(self):
         engine = create_engine("sqlite:///:memory:")

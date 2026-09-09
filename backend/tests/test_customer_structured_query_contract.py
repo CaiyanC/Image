@@ -269,6 +269,9 @@ def test_structured_filter_requires_subject_and_field_evidence(row, question, ma
 
 @pytest.fixture()
 def structured_client(route_client_and_db):
+    pytest.skip(
+        "旧 semantic-rag 结构化查询 HTTP 回归已退出默认验收；结构化合同纯函数测试仍保留。"
+    )
     client, headers, Session = route_client_and_db
     with Session() as db:
         _add_product(db, "SQ-POT-1", "远山铝锅", "锅具", "800ml", "硬质氧化铝合金", "燃气炉、卡式炉", "测试锅", "露营", 480)

@@ -4,6 +4,12 @@ import sys
 import unittest
 from pathlib import Path
 
+import pytest
+
+pytestmark = pytest.mark.skip(
+    reason="旧 semantic-rag 多轮 E2E 已退出默认验收；当前客服由 WorkBuddy v1 正式冒烟覆盖。"
+)
+
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
