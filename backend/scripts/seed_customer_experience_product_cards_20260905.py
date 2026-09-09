@@ -1,15 +1,16 @@
-"""Build one safe experience card for every product in the dev catalogue.
+"""Build safe experience cards for every product in the dev catalogue.
 
 The source exports contain many repeated rows across the seven learning
 libraries.  This script deliberately reads only the six non-evaluation
 libraries, deduplicates rows by ``qaId``, and keeps only records whose SKU was
 already strictly mapped to the current product master.
 
-The generated card is communication guidance, not product evidence.  It
-contains aggregate counts and topic labels, never historical answers, links,
-prices, or guessed product attributes.  Products without a confirmed
-historical sample still receive a visible ``no_history`` card so coverage is
-explicit rather than silently incomplete.
+The generated cards are communication guidance, not product evidence.  Each
+product receives a broad coverage card and, when the source supports it,
+smaller topic cards.  Cards contain aggregate counts and topic labels, never
+historical answers, links, prices, or guessed product attributes.  Products
+without a confirmed historical sample still receive a visible ``no_history``
+card so coverage is explicit rather than silently incomplete.
 """
 
 from __future__ import annotations
@@ -23,6 +24,7 @@ import re
 import sys
 import uuid
 from collections import Counter, defaultdict
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable
 
@@ -56,6 +58,27 @@ SOURCE_ID_PREFIX = "customer_experience:catalog:v1:"
 CARD_VERSION = "experience-catalog-v2"
 MAX_SOURCE_RECORD_IDS = 64
 MAX_TOPIC_LABELS = 6
+MIN_STRICT_TOPIC_SAMPLES = 3
+MIN_INFERRED_TOPIC_SIGNALS = 3
+MAX_STRICT_TOPIC_CARDS_PER_PRODUCT = 8
+MAX_INFERRED_TOPIC_CARDS_PER_PRODUCT = 2
+EXPERIENCE_FALLBACK_TOPIC = "其他沟通与决策"
+TOPIC_CARD_SOURCE_ID_PREFIX = "customer_experience:catalog:v2:"
+TOPIC_CARD_VERSION = "experience-topic-v1"
+SOURCE_INTENT_TOPIC_RULES = (
+    # The source export already carries an intent label.  Prefer this
+    # one-to-one mapping over broad word matches such as "适用", which can
+    # otherwise put a heat-source row into both selection and compatibility.
+    ("选购与场景匹配", ("选购与推荐",)),
+    ("规格与容量", ("规格参数查询",)),
+    ("热源与兼容边界", ("适用热源与兼容性",)),
+    ("使用与安全", ("使用方法与安全",)),
+    ("材质与耐用性", ("材质与耐用性",)),
+    ("套装与配件", ("套装与配件",)),
+    ("价格与权益", ("价格、活动与赠品", "价格与活动")),
+    ("发货与售后", ("物流配送", "售后与问题处理")),
+    (EXPERIENCE_FALLBACK_TOPIC, ("评价回应与回访", "其他咨询", "综合问题处理")),
+)
 QA_TOPIC_PATTERNS = (
     ("场景与选购匹配", ("场景", "适合", "适用", "选购", "推荐", "人数", "targetGroup", "positioning")),
     ("规格与容量", ("尺寸", "重量", "容量", "功率", "口径", "厚度", "规格", "dimensions", "capacity", "weight")),
@@ -343,6 +366,74 @@ def _topic_labels_from_text(value: Any) -> list[str]:
     ]
 
 
+def _experience_topic_labels(sample: dict[str, Any]) -> list[str]:
+    """Assign a source sample to broad themes for offline aggregation only.
+
+    This is intentionally not used to route customer questions.  A sample can
+    belong to more than one theme when its existing source labels support it;
+    otherwise it is kept in a neutral bucket instead of being discarded.
+    """
+    intent_text = _text(sample.get("intent"))
+    for topic_label, markers in SOURCE_INTENT_TOPIC_RULES:
+        if any(marker in intent_text for marker in markers):
+            return [topic_label]
+
+    # These source intents are deliberately broad.  Using every noun in a
+    # review/question for them caused one row to enter several unrelated topic
+    # cards (for example, a review mentioning both capacity and accessories).
+    # Keep the source's own broad classification intact before using a textual
+    # fallback for rows that have no usable intent label.
+    if intent_text:
+        intent_labels = _topic_labels_from_text(intent_text)
+        if intent_labels:
+            return [intent_labels[0]]
+
+    reason_text = " ".join(
+        _text(sample.get(field))
+        for field in ("reasonCategory", "failureReason", "repairStatus")
+    )
+    reason_labels = _topic_labels_from_text(reason_text)
+    if reason_labels:
+        return reason_labels
+
+    question_labels = _topic_labels_from_text(_text(sample.get("question")))
+    return question_labels or [EXPERIENCE_FALLBACK_TOPIC]
+
+
+def _topic_sample_groups(
+    samples: list[dict[str, Any]],
+) -> dict[str, list[dict[str, Any]]]:
+    groups: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    for sample in samples:
+        for label in _experience_topic_labels(sample):
+            groups[label].append(sample)
+    return dict(groups)
+
+
+def _topic_card_slug(sku: str, topic_label: str) -> str:
+    digest = hashlib.sha1(
+        f"{sku}|{topic_label}".encode("utf-8")
+    ).hexdigest()[:16]
+    return f"topic-{digest}"
+
+
+def _topic_signal_counts(
+    signals: dict[str, Any],
+) -> dict[str, dict[str, int]]:
+    """Merge same-SKU QA and conversation theme counts without copying text."""
+    qa_counts = Counter(signals.get("qa_topic_counts") or {})
+    conversation_counts = Counter(signals.get("conversation_topic_counts") or {})
+    labels = set(qa_counts) | set(conversation_counts)
+    return {
+        label: {
+            "qa": int(qa_counts.get(label, 0)),
+            "conversation": int(conversation_counts.get(label, 0)),
+            "total": int(qa_counts.get(label, 0) + conversation_counts.get(label, 0)),
+        }
+        for label in labels
+    }
+
+
 def _empty_catalog_signals() -> dict[str, Any]:
     return {
         "qa_total": 0,
@@ -620,6 +711,219 @@ def build_experience_card(
     }
 
 
+def build_topic_experience_card(
+    product: Any,
+    topic_label: str,
+    samples: list[dict[str, Any]] | None = None,
+    *,
+    source_root: Path | None = None,
+    catalog_signals: dict[str, Any] | None = None,
+    global_insights: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Build one narrow product/topic card from aggregate learning signals.
+
+    Topic cards deliberately repeat no source answer.  Their narrower
+    vocabulary makes semantic retrieval more likely to select the right
+    experience signal, while the live product evidence path remains the only
+    authority for facts.
+    """
+    samples = list(samples or [])
+    topic_label = _text(topic_label) or EXPERIENCE_FALLBACK_TOPIC
+    sku = _normalise_sku(_product_value(product, "sku"))
+    name = _product_value(product, "product_name_cn") or sku
+    signals = {**_empty_catalog_signals(), **(catalog_signals or {})}
+    global_insights = global_insights or _role_insights([])
+    outcome_insights = _role_insights(samples)
+    counts = _sample_counts(samples)
+    intent_counts = Counter(_counter_value(item.get("intent")) for item in samples)
+    reason_counts = Counter()
+    style_counts = Counter()
+    libraries = Counter()
+    source_record_ids: list[str] = []
+    for sample in samples:
+        for library in sample.get("_library_labels") or sample.get("_libraries") or ():
+            libraries[library] += 1
+        reason_counts.update(_reason_labels(sample))
+        for value in sample.get("styleSignals") or []:
+            label = _counter_value(value)
+            if label:
+                style_counts[label] += 1
+        for source_record_id in sample.get("_source_record_ids") or []:
+            if source_record_id and source_record_id not in source_record_ids:
+                source_record_ids.append(source_record_id)
+
+    source_intents = _top_values(intent_counts, 5)
+    reason_labels = _top_values(reason_counts, 5)
+    style_labels = _top_values(style_counts, 5)
+    source_intent_text = "、".join(source_intents) or "暂无稳定来源意图标签"
+    positive_intent_text = "、".join(outcome_insights["conversion_intents"])
+    positive_intent_text = positive_intent_text or "暂无稳定正向意图标签"
+    positive_style_text = "、".join(outcome_insights["conversion_styles"])
+    positive_style_text = positive_style_text or "暂无稳定正向表达标签"
+    friction_reason_text = "、".join(outcome_insights["non_conversion_reasons"])
+    friction_reason_text = friction_reason_text or "暂无明确未转化原因标签"
+    friction_intent_text = "、".join(outcome_insights["non_conversion_intents"])
+    friction_intent_text = friction_intent_text or "暂无稳定未转化意图标签"
+    negative_reason_text = "、".join(outcome_insights["negative_reasons"])
+    negative_reason_text = negative_reason_text or "暂无明确差评原因标签"
+
+    if samples:
+        content = (
+            f"{name}（SKU：{sku}）产品经验卡｜{topic_label}\n"
+            "定位：只用于沟通策略和取舍承接，不是商品事实，不可替代当前 SKU 的产品证据。\n"
+            f"主题范围：来源意图主要为【{source_intent_text}】；本卡聚合已确认 SKU 的商品评价和客服样本，不复制历史问答。\n"
+            f"结果观察：正向库样本 {outcome_insights['conversion_samples']} 条（明确成交/下单 {outcome_insights['confirmed_conversion_samples']} 条），"
+            f"未转化库样本 {outcome_insights['non_conversion_samples']} 条（明确未成交 {outcome_insights['confirmed_non_conversion_samples']} 条），"
+            f"负向/不满意样本 {outcome_insights['negative_samples']} 条。\n"
+            f"正向信号：相关意图集中在【{positive_intent_text}】，记录中较常出现的有效表达动作是【{positive_style_text}】；"
+            "这些是相似场景下的沟通线索，不是本产品的因果证明。\n"
+            f"摩擦信号：未转化意图集中在【{friction_intent_text}】，常见阻塞标签为【{friction_reason_text}】；"
+            f"负向样本主要出现【{negative_reason_text}】。\n"
+            "使用方式：当前问题与本主题相近时，把这些信号用于理解顾虑、组织证据和解释取舍；"
+            "回复中的参数、兼容、功能、价格、时效和售后结论仍必须来自当前 SKU 的事实证据。\n"
+            "边界：不要照搬历史原话、链接、价格、赠品、时效或未经确认的事实；当前数据没有曝光、咨询、下单分母，不能据此计算真实转化率或证明因果。"
+        )
+        coverage_status = "history_available"
+        insight_status = "observed_strict"
+        inference_basis = "strictly_mapped_outcome_libraries_by_topic"
+        review_status_detail = "自动按严格确认 SKU 的主题结果聚合；未逐卡人工复核，仅限沟通策略使用"
+    else:
+        topic_signal_counts = _topic_signal_counts(signals)
+        topic_counts = topic_signal_counts.get(topic_label, {})
+        qa_count = int(topic_counts.get("qa", 0))
+        conversation_count = int(topic_counts.get("conversation", 0))
+        reference_actions = global_insights.get("conversion_styles") or [
+            "先理解客户目标", "把选择依据说清楚", "说明关键取舍", "给出下一步"
+        ]
+        reference_blockers = global_insights.get("non_conversion_reasons") or [
+            "商品识别/绑定不稳定", "规格/参数信息未完成", "选购匹配未完成"
+        ]
+        content = (
+            f"{name}（SKU：{sku}）推导型产品经验卡｜{topic_label}\n"
+            "定位：这是基于同 SKU 已审核 QA/客服主题和跨产品结果样本形成的待验证沟通假设，不是该产品已证实的转化因果。\n"
+            f"主题依据：同 SKU 已审核 QA {qa_count} 条、客服观察 {conversation_count} 条；只使用主题和计数，不复制原问答、客服原话、链接或商品事实。\n"
+            f"可迁移的正向线索（待验证）：相似结果样本中较常见的有效动作是【{'、'.join(reference_actions[:4])}】；"
+            "当前只能作为承接顾虑和解释取舍的思路。\n"
+            f"可迁移的摩擦线索（待验证）：相似未转化样本常见阻塞是【{'、'.join(reference_blockers[:5])}】；"
+            "本 SKU 仍需以当前产品证据逐项核实，不能把推导补成承诺。\n"
+            "使用方式：当前问题与本主题相近时，先理解客户目标，再让模型结合当前 SKU 证据形成自然回答；"
+            "不要照搬其他产品表达，也不要为了使用本卡而增加回复篇幅。\n"
+            "边界：后续需要真实曝光、咨询、加购、下单和未成交原因，才能检验本假设；不能把本卡当真实转化率。"
+        )
+        coverage_status = "inferred_from_catalog_and_global"
+        insight_status = "inferred_from_same_sku_catalog_and_global"
+        inference_basis = "same_sku_topic_catalog_signals_plus_global_outcome_patterns"
+        review_status_detail = "自动按同 SKU 主题计数和跨产品结果模式推导；待真实订单数据验证，仅限沟通策略使用"
+
+    slug = _topic_card_slug(sku, topic_label)
+    source_id = TOPIC_CARD_SOURCE_ID_PREFIX + slug
+    metadata = {
+        "productKey": _product_value(product, "id"),
+        "productName": name,
+        "sku": sku,
+        "productRefs": [{
+            "productKey": _product_value(product, "id"),
+            "sku": sku,
+            "barcode": _product_value(product, "barcode"),
+            "productName": name,
+        }],
+        "productMatchStatus": "matched_confirmed",
+        "card_kind": "product_topic",
+        "topic_key": topic_label,
+        "topic_label": topic_label,
+        "coverage_status": coverage_status,
+        "sample_counts": counts,
+        "topic_sample_count": len(samples),
+        "topic_signal_counts": _topic_signal_counts(signals).get(topic_label, {}),
+        "catalog_signal_counts": signals,
+        "conversion_insights": outcome_insights,
+        "insight_status": insight_status,
+        "inference_basis": inference_basis,
+        "global_reference_insights": {
+            "conversion_actions": list(global_insights.get("conversion_styles") or []),
+            "non_conversion_blockers": list(global_insights.get("non_conversion_reasons") or []),
+        },
+        "topic_labels": [topic_label],
+        "source_intent_labels": source_intents,
+        "reason_labels": reason_labels,
+        "style_labels": style_labels,
+        "source_library_counts": dict(libraries),
+        "source_record_count": len(source_record_ids),
+        "source_record_ids": source_record_ids[:MAX_SOURCE_RECORD_IDS],
+        "sourceFile": str(source_root) if source_root else None,
+        "reviewStatus": "auto_generated_pilot",
+        "review_status": "auto_generated_pilot",
+        "review_status_detail": review_status_detail,
+        "productionUse": "experience_guidance_only",
+        "production_use": "experience_guidance_only",
+        "answerApprovedForStandard": False,
+        "authority_level": "candidate_only",
+        "fact_authority": False,
+        "manual_reviewed": False,
+        "generation_method": "deterministic_product_conversion_insight_topic_v1",
+        "pilot_version": TOPIC_CARD_VERSION,
+        "intent": topic_label,
+        "source_id": source_id,
+    }
+    return {
+        "source_id": source_id,
+        "slug": slug,
+        "title": f"{sku} 产品经验卡｜{topic_label}" + (
+            "" if samples else "（推导待验证）"
+        ),
+        "content": content,
+        "metadata": metadata,
+    }
+
+
+def build_topic_experience_cards(
+    product: Any,
+    samples: list[dict[str, Any]] | None = None,
+    *,
+    source_root: Path | None = None,
+    catalog_signals: dict[str, Any] | None = None,
+    global_insights: dict[str, Any] | None = None,
+) -> list[dict[str, Any]]:
+    """Build useful topic cards without creating one-card-per-row noise."""
+    samples = list(samples or [])
+    signals = {**_empty_catalog_signals(), **(catalog_signals or {})}
+    if samples:
+        groups = _topic_sample_groups(samples)
+        ranked_groups = sorted(
+            groups.items(),
+            key=lambda item: (-len(item[1]), item[0]),
+        )
+        selected = []
+        for topic_label, topic_samples in ranked_groups:
+            if len(topic_samples) < MIN_STRICT_TOPIC_SAMPLES:
+                continue
+            selected.append((topic_label, topic_samples))
+            if len(selected) >= MAX_STRICT_TOPIC_CARDS_PER_PRODUCT:
+                break
+    else:
+        topic_counts = _topic_signal_counts(signals)
+        selected = [
+            (topic_label, [])
+            for topic_label, counts in sorted(
+                topic_counts.items(),
+                key=lambda item: (-int(item[1].get("total", 0)), item[0]),
+            )
+            if int(counts.get("total", 0)) >= MIN_INFERRED_TOPIC_SIGNALS
+        ][:MAX_INFERRED_TOPIC_CARDS_PER_PRODUCT]
+
+    return [
+        build_topic_experience_card(
+            product,
+            topic_label,
+            topic_samples,
+            source_root=source_root,
+            catalog_signals=signals,
+            global_insights=global_insights,
+        )
+        for topic_label, topic_samples in selected
+    ]
+
+
 def build_all_cards(
     products: Iterable[Any],
     samples_by_sku: dict[str, list[dict[str, Any]]],
@@ -628,20 +932,31 @@ def build_all_cards(
     catalog_signals_by_sku: dict[str, dict[str, Any]] | None = None,
     global_insights: dict[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
-    return [
-        build_experience_card(
+    cards: list[dict[str, Any]] = []
+    for product in sorted(
+        products,
+        key=lambda item: _normalise_sku(_product_value(item, "sku")),
+    ):
+        sku = _normalise_sku(_product_value(product, "sku"))
+        if not sku:
+            continue
+        samples = samples_by_sku.get(sku, [])
+        signals = (catalog_signals_by_sku or {}).get(sku, {})
+        cards.append(build_experience_card(
             product,
-            samples_by_sku.get(_normalise_sku(_product_value(product, "sku")), []),
+            samples,
             source_root=source_root,
-            catalog_signals=(catalog_signals_by_sku or {}).get(
-                _normalise_sku(_product_value(product, "sku")),
-                {},
-            ),
+            catalog_signals=signals,
             global_insights=global_insights,
-        )
-        for product in sorted(products, key=lambda item: _normalise_sku(_product_value(item, "sku")))
-        if _normalise_sku(_product_value(product, "sku"))
-    ]
+        ))
+        cards.extend(build_topic_experience_cards(
+            product,
+            samples,
+            source_root=source_root,
+            catalog_signals=signals,
+            global_insights=global_insights,
+        ))
+    return cards
 
 
 def _upsert_card(db, card: dict[str, Any]) -> tuple[KnowledgeDocument, str, bool]:
@@ -723,6 +1038,45 @@ def _upsert_card(db, card: dict[str, Any]) -> tuple[KnowledgeDocument, str, bool
     return document, action, needs_embedding
 
 
+def _stale_topic_cards(
+    db,
+    current_source_ids: set[str],
+) -> list[KnowledgeDocument]:
+    """Find only this generator's now-obsolete topic cards."""
+    stale: list[KnowledgeDocument] = []
+    documents = db.query(KnowledgeDocument).filter(
+        KnowledgeDocument.source_type == knowledge_service.CUSTOMER_EXPERIENCE_SOURCE_TYPE,
+        KnowledgeDocument.source_id.like(f"{TOPIC_CARD_SOURCE_ID_PREFIX}%"),
+        KnowledgeDocument.is_active.is_(True),
+    ).all()
+    for document in documents:
+        if document.source_id not in current_source_ids:
+            stale.append(document)
+    return stale
+
+
+def _retire_stale_topic_cards(
+    db,
+    current_source_ids: set[str],
+) -> int:
+    """Deactivate stale generated cards while retaining their audit rows."""
+    stale = _stale_topic_cards(db, current_source_ids)
+    if not stale:
+        return 0
+    retired_at = datetime.now(timezone.utc).isoformat()
+    for document in stale:
+        try:
+            metadata = json.loads(document.metadata_json or "{}")
+        except (TypeError, ValueError):
+            metadata = {}
+        metadata["retired_reason"] = "topic_bucketing_refresh"
+        metadata["retired_at"] = retired_at
+        document.metadata_json = json.dumps(metadata, ensure_ascii=False, sort_keys=True)
+        document.is_active = False
+    db.commit()
+    return len(stale)
+
+
 async def seed(
     *,
     source_root: Path,
@@ -757,6 +1111,12 @@ async def seed(
             catalog_signals_by_sku=catalog_signals_by_sku,
             global_insights=global_insights,
         )
+        current_topic_source_ids = {
+            card["source_id"]
+            for card in cards
+            if card["metadata"].get("card_kind") == "product_topic"
+        }
+        stale_topic_cards = _stale_topic_cards(db, current_topic_source_ids)
         history_cards = sum(
             card["metadata"]["coverage_status"] == "history_available"
             for card in cards
@@ -766,6 +1126,20 @@ async def seed(
             for card in cards
         )
         pending_cards = len(cards) - history_cards - inferred_cards
+        topic_cards = sum(
+            card["metadata"].get("card_kind") == "product_topic"
+            for card in cards
+        )
+        strict_topic_cards = sum(
+            card["metadata"].get("card_kind") == "product_topic"
+            and card["metadata"].get("coverage_status") == "history_available"
+            for card in cards
+        )
+        inferred_topic_cards = sum(
+            card["metadata"].get("card_kind") == "product_topic"
+            and card["metadata"].get("coverage_status") == "inferred_from_catalog_and_global"
+            for card in cards
+        )
         result: dict[str, Any] = {
             "database": database_name,
             "source_root": str(source_root),
@@ -775,6 +1149,11 @@ async def seed(
             "inferred_cards": inferred_cards,
             "pending_cards": pending_cards,
             "no_history_cards": pending_cards,
+            "topic_cards": topic_cards,
+            "strict_topic_cards": strict_topic_cards,
+            "inferred_topic_cards": inferred_topic_cards,
+            "stale_topic_cards": len(stale_topic_cards),
+            "retired_topic_cards": 0,
             "confirmed_sample_skus": len(samples_by_sku),
             "catalog_signal_skus": len(catalog_signals_by_sku),
             "dry_run": dry_run,
@@ -785,8 +1164,15 @@ async def seed(
             "failed": 0,
         }
         if dry_run:
+            summary_cards = [
+                card for card in cards
+                if card["metadata"].get("card_kind") != "product_topic"
+            ]
             result["sample_counts_total"] = {
-                key: sum(card["metadata"]["sample_counts"].get(key, 0) for card in cards)
+                key: sum(
+                    card["metadata"]["sample_counts"].get(key, 0)
+                    for card in summary_cards
+                )
                 for key in ("good", "neutral", "bad", "reviews", "chats", "risk", "repair", "style")
             }
             result["catalog_signal_totals"] = {
@@ -815,6 +1201,10 @@ async def seed(
                 )
                 result["embedded"] += int(embedding_result.get("embedded") or 0)
                 result["failed"] += int(embedding_result.get("failed") or 0)
+        result["retired_topic_cards"] = _retire_stale_topic_cards(
+            db,
+            current_topic_source_ids,
+        )
         return result
     finally:
         db.close()

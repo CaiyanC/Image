@@ -322,6 +322,55 @@ class CustomerExperienceRagServiceTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(rows), 2)
         self.assertIn("CB253", [row["sku"] for row in rows])
 
+    async def test_explicit_sku_prefers_observed_topic_card_over_legacy_no_outcome_card(self):
+        legacy_metadata = {
+            "source_id": "customer_experience:pilot:v1:CB253:scenario",
+            "review_status": "approved_pilot",
+            "production_use": "experience_guidance_only",
+            "authority_level": "candidate_only",
+            "fact_authority": False,
+        }
+        observed_metadata = {
+            **legacy_metadata,
+            "source_id": "customer_experience:catalog:v2:topic-observed",
+            "card_kind": "product_topic",
+            "insight_status": "observed_strict",
+        }
+        retrieve = AsyncMock(side_effect=[
+            [
+                {
+                    "source_type": customer_experience_rag_service.knowledge_service.CUSTOMER_EXPERIENCE_SOURCE_TYPE,
+                    "sku": "CB253",
+                    "content": "旧卡没有结果信号",
+                    "metadata": legacy_metadata,
+                    "score": 0.90,
+                    "_retrieval_signal": "vector",
+                },
+                {
+                    "source_type": customer_experience_rag_service.knowledge_service.CUSTOMER_EXPERIENCE_SOURCE_TYPE,
+                    "sku": "CB253",
+                    "content": "新卡带有严格历史结果信号",
+                    "metadata": observed_metadata,
+                    "score": 0.72,
+                    "_retrieval_signal": "vector",
+                },
+            ],
+            [],
+        ])
+        with (
+            patch.object(settings, "CUSTOMER_SERVICE_EXPERIENCE_RAG_ENABLED", True),
+            patch.object(settings, "CUSTOMER_SERVICE_EXPERIENCE_RAG_MIN_SCORE", 0.50),
+            patch.object(settings, "CUSTOMER_SERVICE_EXPERIENCE_RAG_MAX_CARDS", 1),
+            patch.object(knowledge_service, "semantic_retrieve", retrieve),
+        ):
+            rows = await customer_experience_rag_service.retrieve_experience_guidance(
+                object(),
+                question="这个产品怎么选",
+                skus=["CB253"],
+            )
+
+        self.assertEqual([row["guidance"] for row in rows], ["新卡带有严格历史结果信号"])
+
     def test_retrieval_is_not_question_keyword_routed(self):
         self.assertTrue(
             customer_experience_rag_service.should_retrieve_experience_guidance(

@@ -3,6 +3,8 @@ from types import SimpleNamespace
 from scripts.seed_customer_experience_product_cards_20260905 import (
     build_all_cards,
     build_experience_card,
+    build_topic_experience_card,
+    _experience_topic_labels,
     _role_insights,
 )
 
@@ -124,6 +126,13 @@ def test_outcome_insights_separate_explicit_conversion_from_library_labels():
     assert insights["confirmed_non_conversion_samples"] == 1
 
 
+def test_topic_grouping_prefers_source_intent_over_terms_in_review_text():
+    assert _experience_topic_labels({
+        "intent": "套装与配件",
+        "question": "客户同时提到容量、热源和轻便，客服如何回复？",
+    }) == ["套装与配件"]
+
+
 def test_uncovered_product_gets_an_inferred_conversion_hypothesis():
     card = build_experience_card(
         _product("NEW-1"),
@@ -145,3 +154,101 @@ def test_uncovered_product_gets_an_inferred_conversion_hypothesis():
     assert "转化假设（待验证）" in card["content"]
     assert "规格与容量" in card["content"]
     assert "真实转化率" in card["content"]
+
+
+def test_topic_card_scopes_outcome_signals_without_copying_source_answers():
+    samples = [
+        {
+            "qaId": "q1",
+            "quality": "good",
+            "recordType": "客服对话",
+            "intent": "选购与推荐",
+            "result": {"conversion": True},
+            "styleSignals": ["先给结论"],
+            "answer": "这段成功原话不应进入主题卡",
+            "_libraries": {"07_01"},
+            "_source_record_ids": ["r1"],
+        },
+        {
+            "qaId": "q2",
+            "quality": "neutral",
+            "recordType": "客服对话",
+            "intent": "选购与推荐",
+            "result": {"conversion": False},
+            "reasonCategory": "选购匹配未完成",
+            "answer": "这段未转化原话不应进入主题卡",
+            "_libraries": {"07_02"},
+            "_source_record_ids": ["r2"],
+        },
+        {
+            "qaId": "q3",
+            "quality": "bad",
+            "recordType": "客服对话",
+            "intent": "选购与推荐",
+            "result": {"satisfaction": "不满意"},
+            "failureReason": "推荐依据不清",
+            "answer": "这段差评原话不应进入主题卡",
+            "_libraries": {"07_03"},
+            "_source_record_ids": ["r3"],
+        },
+    ]
+
+    card = build_topic_experience_card(
+        _product(),
+        "场景与选购匹配",
+        samples,
+    )
+
+    assert card["metadata"]["card_kind"] == "product_topic"
+    assert card["metadata"]["topic_label"] == "场景与选购匹配"
+    assert card["metadata"]["conversion_insights"]["outcome_sample_count"] == 3
+    assert card["metadata"]["conversion_insights"]["confirmed_conversion_samples"] == 1
+    assert card["metadata"]["conversion_insights"]["confirmed_non_conversion_samples"] == 1
+    assert "成功原话" not in card["content"]
+    assert "未转化原话" not in card["content"]
+    assert "差评原话" not in card["content"]
+    assert "当前 SKU 的事实证据" in card["content"]
+
+
+def test_build_all_cards_adds_narrow_cards_for_strict_and_inferred_products():
+    strict_samples = [
+        {
+            "qaId": f"strict-{index}",
+            "recordType": "客服对话",
+            "intent": "选购与推荐",
+            "_libraries": {"07_01" if index == 0 else "07_02"},
+            "result": {"conversion": index == 0},
+        }
+        for index in range(3)
+    ]
+    cards = build_all_cards(
+        [_product("CS-B14"), _product("NEW-1")],
+        {"CS-B14": strict_samples},
+        catalog_signals_by_sku={
+            "NEW-1": {
+                "qa_approved": 4,
+                "qa_topic_counts": {"规格与容量": 5, "使用与安全": 4},
+                "conversation_topic_counts": {},
+            }
+        },
+    )
+
+    topic_cards = [
+        card for card in cards
+        if card["metadata"].get("card_kind") == "product_topic"
+    ]
+    strict_topic = next(
+        card for card in topic_cards
+        if card["metadata"]["sku"] == "CS-B14"
+    )
+    inferred_topics = [
+        card for card in topic_cards
+        if card["metadata"]["sku"] == "NEW-1"
+    ]
+    assert strict_topic["metadata"]["coverage_status"] == "history_available"
+    assert strict_topic["metadata"]["topic_sample_count"] == 3
+    assert len(inferred_topics) == 2
+    assert all(
+        card["metadata"]["coverage_status"] == "inferred_from_catalog_and_global"
+        for card in inferred_topics
+    )

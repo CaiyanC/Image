@@ -71,6 +71,22 @@ def _vector_score(row: dict[str, Any]) -> float | None:
     return score
 
 
+def _guidance_quality_rank(row: dict[str, Any]) -> int:
+    """Prefer evidence-backed generated cards within an explicit SKU scope.
+
+    This rank is about the provenance of a communication signal, not the
+    customer's wording.  Semantic relevance still orders cards within the
+    same provenance tier, and product facts continue to come from the normal
+    evidence packet.
+    """
+    metadata = row.get("metadata") if isinstance(row.get("metadata"), dict) else {}
+    if str(metadata.get("insight_status") or "").strip() == "observed_strict":
+        return 2
+    if str(metadata.get("card_kind") or "").strip() == "product_topic":
+        return 1
+    return 0
+
+
 def _bounded_labels(value: Any, limit: int = 5) -> list[str]:
     if isinstance(value, str):
         values = [value]
@@ -301,8 +317,13 @@ async def retrieve_experience_guidance(
             if not str(item[2].get("sku") or "").strip()
         ]
         # An explicit SKU is a stronger scope signal than a small score
-        # difference against a generic global card. Put the best same-SKU
-        # guidance first, then use remaining slots for global strategy.
+        # difference against a generic global card. Within that same-SKU
+        # scope, evidence-backed generated cards are more useful than an old
+        # no-outcome card with similar wording; semantic score still decides
+        # the order within each provenance tier.
+        bound_ranked_rows.sort(
+            key=lambda item: (-_guidance_quality_rank(item[2]), -item[0], item[1])
+        )
         output_ranked_rows = [*bound_ranked_rows, *global_ranked_rows]
 
     for _score, _index, row in output_ranked_rows:

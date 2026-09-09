@@ -230,7 +230,13 @@ def keyword_retrieve(
     if not query_text:
         return []
     tokens = _query_tokens(query_text)
-    db_query = db.query(KnowledgeChunk)
+    # Inactive documents are retained for audit/recovery, but must not leak
+    # back into either semantic fallback or lexical retrieval after a corpus
+    # refresh retires a generated card.
+    db_query = db.query(KnowledgeChunk).join(
+        KnowledgeDocument,
+        KnowledgeDocument.id == KnowledgeChunk.document_id,
+    ).filter(KnowledgeDocument.is_active.is_(True))
     normalized_sections = tuple(dict.fromkeys(
         str(section or "").strip()
         for section in (sections or [])
@@ -265,10 +271,7 @@ def keyword_retrieve(
         else:
             section_filters.append(KnowledgeDocument.source_id.like(f"%:{section}"))
     if normalized_sections:
-        db_query = db_query.join(
-            KnowledgeDocument,
-            KnowledgeDocument.id == KnowledgeChunk.document_id,
-        ).filter(or_(*section_filters))
+        db_query = db_query.filter(or_(*section_filters))
     if sku:
         db_query = db_query.filter(_chunk_matches_sku_sql(sku))
     elif skus:
@@ -670,7 +673,10 @@ async def semantic_retrieve(
         if embedding is None:
             embedding, _model_id = await dmxapi_service.create_embedding(db, query)
             customer_cache_service.embedding_cache.set(embedding_key, embedding)
-        where = "c.embedding_status = 'synced' AND c.embedding IS NOT NULL"
+        where = (
+            "c.embedding_status = 'synced' AND c.embedding IS NOT NULL "
+            "AND d.is_active = TRUE"
+        )
         params = {"embedding": _vector_literal(embedding), "limit": limit}
         if normalized_source_types:
             source_type_placeholders = []
