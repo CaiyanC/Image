@@ -13,8 +13,9 @@ from sqlalchemy import create_engine, select, update
 from sqlalchemy.orm import sessionmaker
 
 from app.api import knowledge_base as kb_api
+from app.core import security
 from app.core.database import Base, get_db
-from app.core.security import get_current_super_admin
+from app.core.security import get_current_super_admin, get_current_user
 from app.main import app
 from app.models.knowledge_base import KnowledgeChunk, KnowledgeDocument, KnowledgeParseTask
 from app.models.product import Product
@@ -44,6 +45,11 @@ class FileIngestionStabilityTest(unittest.TestCase):
         self.original_task_session_local = parse_tasks.SessionLocal
         self.original_startup_handlers = list(app.router.on_startup)
         self.original_shutdown_handlers = list(app.router.on_shutdown)
+        self.auth_permission_patcher = patch.object(security, "has_permission", return_value=True)
+        self.auth_permission_patcher.start()
+        app.dependency_overrides[get_current_user] = lambda: SimpleNamespace(
+            id="super-admin", is_active=True, auth_version=0
+        )
         kb_api.KNOWLEDGE_FILE_DIR = str(self.upload_dir)
         kb_api.SessionLocal = self.SessionLocal
         parse_tasks.SessionLocal = self.SessionLocal
@@ -61,12 +67,14 @@ class FileIngestionStabilityTest(unittest.TestCase):
     def tearDown(self):
         app.dependency_overrides.pop(get_db, None)
         app.dependency_overrides.pop(get_current_super_admin, None)
+        app.dependency_overrides.pop(get_current_user, None)
         app.router.on_startup[:] = self.original_startup_handlers
         app.router.on_shutdown[:] = self.original_shutdown_handlers
         kb_api.KNOWLEDGE_FILE_DIR = self.original_upload_dir
         kb_api.SessionLocal = self.original_session_local
         parse_tasks.SessionLocal = self.original_task_session_local
         self.parse_delay_patcher.stop()
+        self.auth_permission_patcher.stop()
         self.client.close()
         self.db.close()
         self.engine.dispose()

@@ -25,7 +25,7 @@ def test_workbuddy_agent_pipeline_override_is_dev_only(monkeypatch):
     monkeypatch.setattr(settings, "APP_ENV", "prod")
     assert (
         customer_pipeline_service.resolve_customer_service_pipeline("workbuddy_agent_v2")
-        == "legacy"
+        == "workbuddy_rag_v1"
     )
 
 

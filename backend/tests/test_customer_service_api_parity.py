@@ -132,7 +132,7 @@ def _dedicated_agent_result(answer_delta_callback=None):
     return answer, None
 
 
-def test_dedicated_agent_endpoints_select_agent_in_prod(client_and_token, monkeypatch):
+def test_dedicated_agent_endpoints_are_closed_in_prod(client_and_token, monkeypatch):
     client, headers = client_and_token
     from app.api import customer_service as customer_service_api
     from app.core.config import settings
@@ -195,15 +195,8 @@ def test_dedicated_agent_endpoints_select_agent_in_prod(client_and_token, monkey
         headers=headers,
     )
 
-    assert normal.status_code == 200
-    assert normal.json()["pipeline_version"] == "workbuddy_agent_v2"
-    assert stream.status_code == 200
-    parsed = _parse_sse(stream.text)
-    assert parsed["answer"] == "Agent 独立入口已使用语义 RAG。"
-    assert parsed["meta"]["pipeline_version"] == "workbuddy_agent_v2"
-    assert len(calls) == 2
-    assert all(call["pipeline"] == "workbuddy_agent_v2" for call in calls)
-    assert all(call["server_selected_pipeline"] is True for call in calls)
+    assert normal.status_code == 404
+    assert stream.status_code == 404
 
 
 def test_customer_service_ask_and_stream_share_single_turn_public_shape(client_and_token, monkeypatch):

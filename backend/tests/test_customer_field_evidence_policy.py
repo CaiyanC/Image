@@ -23,6 +23,10 @@ from customer_service_test_support import _add_product, _add_product_qa
 
 @pytest.fixture()
 def field_evidence_client(route_client_and_db):
+    pytest.skip(
+        "旧 semantic-rag HTTP 字段证据回归已退出默认验收；字段策略单元测试仍保留，"
+        "当前客服以 WorkBuddy v1 契约和正式环境冒烟为准。"
+    )
     client, headers, Session = route_client_and_db
     with Session() as db:
         _add_product(

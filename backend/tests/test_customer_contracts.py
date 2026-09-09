@@ -3213,9 +3213,9 @@ def test_contract_observation_isolates_contract_exceptions(monkeypatch):
 def test_contract_is_not_injected_into_semantic_preplan_input_or_global_product_query():
     source = inspect.getsource(customer_service_service.ask_customer_service)
     assert "db.query(Product).all()" not in source
-    preplan_call = source.index("_maybe_run_semantic_preplan")
-    semantic_executor_call = source.index("_semantic_first_turn_result")
-    assert preplan_call < semantic_executor_call
+    assert "_maybe_run_semantic_preplan" not in source
+    assert "customer_service_workbuddy_rag_service" in source
+    assert "ask_customer_service_workbuddy_rag" in source
     # The semantic executor owns ordinary read turns.  The historical field
     # arbitration route may still exist as a reusable same-SKU adapter, but
     # the public entry point must not call it as a second interpretation vote.

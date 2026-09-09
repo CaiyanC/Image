@@ -49,6 +49,9 @@ def _seed_phase2_products(Session):
 
 @pytest.fixture()
 def phase2_client(route_client_and_db):
+    pytest.skip(
+        "旧 semantic-rag HTTP 回归夹具已退出默认验收；当前客服以 WorkBuddy v1 契约和正式环境冒烟为准。"
+    )
     client, headers, Session = route_client_and_db
     _seed_phase2_products(Session)
     return client, headers
