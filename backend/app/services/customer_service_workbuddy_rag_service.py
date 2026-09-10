@@ -81,6 +81,152 @@ _WORKBUDDY_REASONING_EFFORT = (
     .lower()
     or None
 )
+
+
+_PROVIDER_RETRYABLE_STATUS_CODES = {408, 409, 425, 429}
+
+
+def _provider_status_code(exc: Exception) -> int | None:
+    """Read an upstream HTTP status without coupling this path to httpx types."""
+    response = getattr(exc, "response", None)
+    value = getattr(response, "status_code", None)
+    try:
+        return int(value) if value is not None else None
+    except (TypeError, ValueError):
+        return None
+
+
+def _provider_failure_is_retryable(exc: Exception) -> bool:
+    """Allow one bounded retry for provider transport/rate-limit failures only.
+
+    This is deliberately not a customer-question route.  It only classifies
+    the failure of the already selected answer-model call, so a provider
+    hiccup cannot be mistaken for missing RAG evidence.
+    """
+    status_code = _provider_status_code(exc)
+    if status_code is not None:
+        return (
+            status_code in _PROVIDER_RETRYABLE_STATUS_CODES
+            or 500 <= status_code <= 599
+        )
+    error_name = type(exc).__name__.lower()
+    return (
+        isinstance(exc, TimeoutError)
+        or "timeout" in error_name
+        or error_name == "httpstatuserror"
+    )
+
+
+def _normalize_direct_qa_text(value: Any) -> str:
+    """Normalize only presentation noise for exact stored-Q alignment."""
+    text = str(value or "")
+    text = re.sub(
+        r"[（(]\s*[A-Za-z0-9]+(?:[-_][A-Za-z0-9]+)+\s*[）)]",
+        "",
+        text,
+    )
+    text = text.translate(str.maketrans("", "", "「」『』“”\"'"))
+    text = re.sub(r"\s+", "", text)
+    return re.sub(r"[?？。!！]+$", "", text).strip().casefold()
+
+
+def _direct_qa_pair(item: dict[str, Any]) -> tuple[str, str] | None:
+    """Extract a stored Q/A pair from one provenance-labelled evidence row."""
+    if not isinstance(item, dict):
+        return None
+    metadata = item.get("metadata") if isinstance(item.get("metadata"), dict) else {}
+    source_type = str(item.get("source_type") or "").strip().lower()
+    source_id = str(item.get("source_id") or "").strip().lower()
+    section = str(metadata.get("section") or "").strip().lower()
+    is_qa_source = (
+        source_type in {"product_qa", "qa"}
+        or ":qa:" in source_id
+        or section == "qa"
+        or section.startswith("qa:")
+    )
+    if not is_qa_source:
+        return None
+    content = item.get("content")
+    if isinstance(content, dict):
+        question = content.get("question") or content.get("q")
+        answer = content.get("answer") or content.get("a")
+    else:
+        text = str(content or "").strip()
+        match = re.search(
+            r"Q\s*[:：]\s*(.*?)\s*A\s*[:：]\s*(.*)$",
+            text,
+            flags=re.IGNORECASE | re.DOTALL,
+        )
+        if match is None:
+            match = re.search(
+                r"问\s*[:：]\s*(.*?)\s*答\s*[:：]\s*(.*)$",
+                text,
+                flags=re.DOTALL,
+            )
+        if match is None:
+            return None
+        question, answer = match.groups()
+    question_text = str(question or "").strip()
+    answer_text = str(answer or "").strip()
+    return (question_text, answer_text) if question_text and answer_text else None
+
+
+def _recover_exact_product_qa_answer(
+    *,
+    question: str,
+    evidence: list[dict[str, Any]],
+    candidate_skus: list[str],
+    identity_ambiguity: bool,
+) -> dict[str, Any] | None:
+    """Recover one exact approved Q/A when the answer model is unavailable.
+
+    The recovery is source-aligned, not intent- or keyword-routed: it needs
+    one unique SKU/answer whose stored question equals this turn after
+    presentation normalization.  Paraphrases and competing answers still go
+    through the model/fallback path.
+    """
+    if identity_ambiguity:
+        return None
+    normalized_question = _normalize_direct_qa_text(question)
+    if not normalized_question:
+        return None
+    candidate_set = {
+        str(sku or "").strip().upper()
+        for sku in candidate_skus
+        if str(sku or "").strip()
+    }
+    matches: list[tuple[str, str, str]] = []
+    for item in evidence:
+        pair = _direct_qa_pair(item)
+        if pair is None:
+            continue
+        stored_question, stored_answer = pair
+        if _normalize_direct_qa_text(stored_question) != normalized_question:
+            continue
+        sku = str(item.get("sku") or "").strip().upper()
+        if not sku or (candidate_set and sku not in candidate_set):
+            continue
+        evidence_id = str(item.get("evidence_id") or "").strip()
+        matches.append((sku, stored_answer, evidence_id))
+    unique_answers = {
+        (sku, _normalize_direct_qa_text(answer)): answer
+        for sku, answer, _evidence_id in matches
+    }
+    if len(unique_answers) != 1:
+        return None
+    (sku, _normalized_answer), answer = next(iter(unique_answers.items()))
+    evidence_ids = list(dict.fromkeys(
+        evidence_id
+        for matched_sku, _answer, evidence_id in matches
+        if matched_sku == sku and evidence_id
+    ))[:12]
+    return {
+        "answer": answer,
+        "sku": sku,
+        "evidence_ids": evidence_ids,
+    }
+
+
 _ANSWER_TYPES = frozenset({
     "product_detail",
     "recommendation",
@@ -788,6 +934,7 @@ async def _generate_answer(
     payload: dict[str, Any],
     answer_delta_callback: Callable[[str], Awaitable[None]] | None = None,
     _consistency_retry: bool = False,
+    _retry_attempted: bool = False,
 ) -> tuple[dict[str, Any] | None, dict[str, Any]]:
     system_prompt = (
         "输出协议：请返回一个 json object；answer 是其中唯一必填的顾客可见回复字段，其余字段按后文协议选择性返回。\n"
@@ -946,10 +1093,14 @@ async def _generate_answer(
                 "code": "invalid_answer_json",
                 "reason": "上游没有返回包含顾客可见 answer 的可解析 JSON 对象。",
             }]
-        if issues and not _consistency_retry:
-            repaired, retry_metadata = await _generate_answer(db,
+        if issues and not _retry_attempted:
+            repaired, retry_metadata = await _generate_answer(
+                db,
                 payload={**payload, "answer_consistency_repair": consistency_repair_instruction(issues)},
-                answer_delta_callback=answer_delta_callback, _consistency_retry=True)
+                answer_delta_callback=answer_delta_callback,
+                _consistency_retry=True,
+                _retry_attempted=True,
+            )
             return repaired, {**retry_metadata, "consistency_retry_count": 1,
                 "consistency_issues": issues, "dynamic_review": dynamic_review_metadata,
                 "elapsed_ms": round(customer_perf_service.perf_ms(start), 2)}
@@ -1002,6 +1153,28 @@ async def _generate_answer(
             "raw_valid": False,
             "error": type(exc).__name__,
         })
+        if not _retry_attempted and _provider_failure_is_retryable(exc):
+            repaired, retry_metadata = await _generate_answer(
+                db,
+                payload={
+                    **payload,
+                    "answer_consistency_repair": (
+                        "上一次回答模型请求未完成。请仍基于当前 question、conversation_history 和 evidence，"
+                        "直接返回一个合法 JSON object；answer 必须是顾客可直接看到的自然客服回复，"
+                        "不要改变证据中的商品事实，也不要提及本次重试。"
+                    ),
+                },
+                answer_delta_callback=answer_delta_callback,
+                _consistency_retry=True,
+                _retry_attempted=True,
+            )
+            return repaired, {
+                **retry_metadata,
+                "provider_retry_count": 1,
+                "provider_retry_error": type(exc).__name__,
+                "provider_retry_status_code": _provider_status_code(exc),
+                "elapsed_ms": round(customer_perf_service.perf_ms(start), 2),
+            }
         return None, metadata
 
 
@@ -1472,6 +1645,28 @@ async def ask_customer_service_workbuddy_rag(
         payload=payload,
         answer_delta_callback=buffer_until_validated if answer_delta_callback else None,
     )
+    if not str((answer_raw or {}).get("answer") or "").strip():
+        direct_qa_recovery = _recover_exact_product_qa_answer(
+            question=original_question,
+            evidence=evidence,
+            candidate_skus=candidate_skus,
+            identity_ambiguity=False,
+        )
+        if direct_qa_recovery:
+            answer_raw = {
+                "answer": direct_qa_recovery["answer"],
+                "answer_type": "faq",
+                "request_kind": "product_qa",
+                "selected_skus": [direct_qa_recovery["sku"]],
+                "evidence_ids": direct_qa_recovery["evidence_ids"],
+                "identity_resolution": "resolved",
+                "subject_scope": "product_specific",
+                "selection_state": "selected",
+                "needs_clarification": False,
+                "confidence": "high",
+                "uncertainty": "confirmed",
+            }
+            answer_metadata["answer_recovery"] = "exact_product_qa"
     answer_metadata["answer_streamed"] = False
 
     raw_answer_type = str((answer_raw or {}).get("answer_type") or "").strip().lower()
