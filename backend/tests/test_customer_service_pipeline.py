@@ -1,5 +1,6 @@
 import asyncio
 import json
+from types import SimpleNamespace
 
 import pytest
 
@@ -624,6 +625,70 @@ def test_workbuddy_path_uses_one_answer_llm_and_keeps_legacy_isolated(
     assert result["debug"]["skip_polish"] is True
     assert result["answer_metadata"]["retrieval_mode"] == "semantic_rag_single_pass"
     assert result["result_skus"] == ["SKU-WB"]
+
+
+def test_workbuddy_recovers_exact_qa_when_answer_provider_fails(
+    route_client_and_db,
+    monkeypatch,
+):
+    _client, _headers, Session = route_client_and_db
+    monkeypatch.setattr(settings, "APP_ENV", "dev")
+    monkeypatch.setattr(settings, "CUSTOMER_SERVICE_PIPELINE_OVERRIDE_ENABLED", True)
+
+    with Session() as db:
+        db.add(
+            Product(
+                id="workbuddy-provider-failure-product-id",
+                sku="SKU-WB-PROVIDER-FAILURE",
+                barcode="workbuddy-provider-failure-barcode",
+                product_name_cn="上游失败恢复测试筷",
+                brand="测试品牌",
+                category="餐具",
+            )
+        )
+        db.commit()
+
+    async def fake_retrieve(_db, _query, **_kwargs):
+        return [{
+            "source_type": "product_qa",
+            "sku": "SKU-WB-PROVIDER-FAILURE",
+            "content": "问：上游失败恢复测试筷适合什么场景使用？答：适合徒步、露营和短途出行用餐。",
+            "metadata": {"source_id": "product:SKU-WB-PROVIDER-FAILURE:qa:scene"},
+            "score": 0.99,
+        }]
+
+    async def fail_chat(*_args, **_kwargs):
+        error = RuntimeError("provider returned an error")
+        error.response = SimpleNamespace(status_code=503)
+        raise error
+
+    monkeypatch.setattr(
+        customer_service_workbuddy_rag_service.knowledge_service,
+        "semantic_retrieve",
+        fake_retrieve,
+    )
+    monkeypatch.setattr(
+        customer_service_workbuddy_rag_service.customer_llm_service,
+        "chat_completion",
+        fail_chat,
+    )
+
+    with Session() as db:
+        result = asyncio.run(
+            customer_service_service.ask_customer_service(
+                db,
+                user_id="workbuddy-provider-failure-user",
+                question="上游失败恢复测试筷适合什么场景使用？",
+                sku="SKU-WB-PROVIDER-FAILURE",
+                pipeline="workbuddy_rag_v1",
+            )
+        )
+
+    assert result["answer"] == "适合徒步、露营和短途出行用餐。"
+    assert result["answer_metadata"]["answer_recovery"] == "exact_product_qa"
+    assert result["answer_metadata"]["provider_retry_count"] == 1
+    assert result["result_skus"] == ["SKU-WB-PROVIDER-FAILURE"]
+    assert result["debug"]["no_legacy_route"] is True
 
 
 def test_workbuddy_accepts_minimal_answer_without_classification_metadata(

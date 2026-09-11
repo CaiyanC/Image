@@ -2,6 +2,7 @@ import copy
 import asyncio
 import json
 import pytest
+from types import SimpleNamespace
 from app.services.customer_answer_consistency_contract import (
     alcohol_stove_recommendation_skus,
     answer_consistency_issues,
@@ -246,3 +247,83 @@ def test_workbuddy_retries_when_provider_returns_invalid_json(monkeypatch):
     assert metadata['consistency_retry_count'] == 1
     assert metadata['consistency_issues'][0]['code'] == 'invalid_answer_json'
     assert '合法的 JSON object' in calls[1]['messages'][0]['content']
+
+
+def test_workbuddy_retries_transient_provider_error_once(monkeypatch):
+    from app.services import customer_service_workbuddy_rag_service as rag
+
+    calls = []
+
+    async def chat(*_args, **kwargs):
+        calls.append(kwargs)
+        if len(calls) == 1:
+            error = RuntimeError('upstream unavailable')
+            error.response = SimpleNamespace(status_code=503)
+            raise error
+        return json.dumps({
+            'answer': '便携式户外旅行筷适合露营、徒步和短途出行用餐。',
+            'answer_type': 'faq',
+        }, ensure_ascii=False)
+
+    monkeypatch.setattr(rag.customer_llm_service, 'chat_completion', chat)
+    result, metadata = asyncio.run(rag._generate_answer(
+        None,
+        payload={**packet(), 'current_question': '便携式户外旅行筷适合什么场景使用？'},
+    ))
+
+    assert result and result['answer'].startswith('便携式户外旅行筷')
+    assert len(calls) == 2
+    assert metadata['provider_retry_count'] == 1
+    assert metadata['provider_retry_error'] == 'RuntimeError'
+    assert metadata['provider_retry_status_code'] == 503
+    assert '上一次回答模型请求未完成' in calls[1]['messages'][0]['content']
+
+
+def test_workbuddy_exact_product_qa_recovery_is_source_aligned():
+    from app.services import customer_service_workbuddy_rag_service as rag
+
+    recovered = rag._recover_exact_product_qa_answer(
+        question='便携式户外旅行筷适合什么场景使用？',
+        candidate_skus=['TW-204-42'],
+        identity_ambiguity=False,
+        evidence=[{
+            'evidence_id': 'v2-e7',
+            'sku': 'TW-204-42',
+            'source_type': 'product_qa',
+            'source_id': 'product:TW-204-42:qa:scene',
+            'content': 'Q: 便携式户外旅行筷适合什么场景使用？\nA: 便携式户外旅行筷适用于轻量徒步、露营用餐、环保出行、户外用餐、短途出行。',
+            'metadata': {'section': 'qa'},
+        }],
+    )
+
+    assert recovered == {
+        'answer': '便携式户外旅行筷适用于轻量徒步、露营用餐、环保出行、户外用餐、短途出行。',
+        'sku': 'TW-204-42',
+        'evidence_ids': ['v2-e7'],
+    }
+
+
+def test_workbuddy_exact_product_qa_recovery_rejects_competing_answers():
+    from app.services import customer_service_workbuddy_rag_service as rag
+
+    evidence = [
+        {
+            'evidence_id': 'v2-e1',
+            'sku': 'SKU-A',
+            'source_type': 'product_qa',
+            'content': 'Q: 这款适合什么场景？ A: 适合露营。',
+        },
+        {
+            'evidence_id': 'v2-e2',
+            'sku': 'SKU-B',
+            'source_type': 'product_qa',
+            'content': 'Q: 这款适合什么场景？ A: 适合居家用餐。',
+        },
+    ]
+
+    assert rag._recover_exact_product_qa_answer(
+        question='这款适合什么场景？',
+        candidate_skus=['SKU-A', 'SKU-B'],
+        identity_ambiguity=False,
+        evidence=evidence,
+    ) is None

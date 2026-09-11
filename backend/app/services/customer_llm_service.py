@@ -357,6 +357,11 @@ async def chat_completion_stream(
                     "completion_tokens_est": None,
                     "timeout": isinstance(exc, TimeoutError),
                     "error": str(exc),
+                    "provider_status_code": getattr(
+                        getattr(exc, "response", None),
+                        "status_code",
+                        None,
+                    ),
                 }
             )
         is_timeout = isinstance(exc, (TimeoutError, dmxapi_service.httpx.TimeoutException))
