@@ -90,6 +90,34 @@ _MAX_SEMANTIC_CANDIDATE_SKUS = 8
 _MAX_SEMANTIC_RECOMMENDATION_SKUS = 12
 _MAX_SEMANTIC_PROFILE_RETRIEVAL_ROWS = 48
 
+_PROVIDER_RETRYABLE_STATUS_CODES = {408, 409, 425, 429}
+
+
+def _provider_status_code(exc: Exception) -> int | None:
+    """Read an upstream HTTP status without coupling this path to httpx."""
+    response = getattr(exc, "response", None)
+    value = getattr(response, "status_code", None)
+    try:
+        return int(value) if value is not None else None
+    except (TypeError, ValueError):
+        return None
+
+
+def _provider_failure_is_retryable(exc: Exception) -> bool:
+    """Retry transient answer-model transport failures once."""
+    status_code = _provider_status_code(exc)
+    if status_code is not None:
+        return (
+            status_code in _PROVIDER_RETRYABLE_STATUS_CODES
+            or 500 <= status_code <= 599
+        )
+    error_name = type(exc).__name__.lower()
+    return (
+        isinstance(exc, TimeoutError)
+        or "timeout" in error_name
+        or error_name == "httpstatuserror"
+    )
+
 
 def _clip_text(value: Any, limit: int = 1600) -> str:
     text = str(value or "").strip()
@@ -1278,6 +1306,7 @@ async def _generate_answer(
     *,
     payload: dict[str, Any],
     _consistency_retry: bool = False,
+    _provider_retry_attempted: bool = False,
 ) -> tuple[dict[str, Any] | None, dict[str, Any]]:
     system_prompt = build_customer_answer_prompt(
         retry_instruction=payload.get("answer_consistency_repair"),
@@ -1345,11 +1374,32 @@ async def _generate_answer(
             "customer_service_v2.answer_error",
             error=type(exc).__name__,
         )
-        return None, {
+        metadata = {
             "elapsed_ms": round(customer_perf_service.perf_ms(start), 2),
             "raw_valid": False,
             "error": type(exc).__name__,
         }
+        if not _provider_retry_attempted and _provider_failure_is_retryable(exc):
+            repaired, retry_metadata = await _generate_answer(
+                db,
+                payload={
+                    **payload,
+                    "answer_consistency_repair": (
+                        "上一次回答模型请求未完成。请仍基于当前问题、对话上下文和 evidence，"
+                        "直接返回完整、自然、可发送的 JSON 客服回复；不要提及本次重试。"
+                    ),
+                },
+                _consistency_retry=True,
+                _provider_retry_attempted=True,
+            )
+            return repaired, {
+                **retry_metadata,
+                "provider_retry_count": 1,
+                "provider_retry_error": type(exc).__name__,
+                "provider_retry_status_code": _provider_status_code(exc),
+                "elapsed_ms": round(customer_perf_service.perf_ms(start), 2),
+            }
+        return None, metadata
 
 
 def _safe_missing_answer(
