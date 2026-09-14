@@ -29,6 +29,7 @@ from .customer_answer_consistency_contract import (
     answer_consistency_issues,
     consistency_repair_instruction,
     safe_alcohol_stove_recommendation,
+    safe_specific_heat_source_answer,
 )
 from . import customer_followup_context_contract as followup_context
 from . import (
@@ -400,6 +401,7 @@ def _compact_evidence_for_prompt(
     evidence: list[dict[str, Any]],
     *,
     visible_product_skus: set[str],
+    inline_canonical_skus: set[str] | None = None,
 ) -> list[dict[str, Any]]:
     """Keep a small, provenance-labelled RAG packet for the answer model.
 
@@ -414,6 +416,11 @@ def _compact_evidence_for_prompt(
     # authoritative product fields.  Keep visible canonical records first,
     # then RAG rows, and finally any remaining records.  This is packet
     # ordering only; it does not classify the question or choose an answer.
+    inline_canonical_skus = {
+        str(sku or "").strip().upper()
+        for sku in (inline_canonical_skus or set())
+        if str(sku or "").strip()
+    }
     record_rows = [
         item for item in evidence
         if str(item.get("source_type") or "").strip() == "product_record"
@@ -453,7 +460,11 @@ def _compact_evidence_for_prompt(
         # provenance row and let the answer model use the same-SKU canonical
         # packet for its fields.  This is generic evidence packing; it does not
         # select a product or inspect question wording.
-        if source_type == "product_record" and sku in visible_product_skus:
+        if (
+            source_type == "product_record"
+            and sku in visible_product_skus
+            and sku not in inline_canonical_skus
+        ):
             compact_content: Any = {
                 "sku": sku,
                 "canonical_record_pointer": True,
@@ -824,6 +835,7 @@ def _answer_prompt(
     evidence: list[dict[str, Any]],
     experience_guidance: list[dict[str, Any]],
     active_context_products: list[dict[str, Any]] | None = None,
+    inline_canonical_skus: set[str] | None = None,
 ) -> dict[str, Any]:
     prompt_candidates = [
         item for item in candidates[:_MAX_PROMPT_CANDIDATE_PRODUCTS]
@@ -848,9 +860,28 @@ def _answer_prompt(
         for item in [*prompt_candidates, *previous_context_products]
         if isinstance(item, dict) and str(item.get("sku") or "").strip()
     }
+    anchored_skus = {
+        str(sku or "").strip().upper()
+        for sku in [
+            *(explicit_product_skus or []),
+            *(anchor_skus or []),
+            *(
+                [page_anchor.get("sku")]
+                if isinstance(page_anchor, dict) and page_anchor.get("sku")
+                else []
+            ),
+            *[
+                item.get("sku")
+                for item in (active_context_products or [])
+                if isinstance(item, dict)
+            ],
+        ]
+        if str(sku or "").strip()
+    }
     compact_evidence = _compact_evidence_for_prompt(
         [item for item in evidence if isinstance(item, dict)],
         visible_product_skus=visible_product_skus,
+        inline_canonical_skus=inline_canonical_skus or anchored_skus,
     )
     return {
         "current_question": question,
@@ -1122,6 +1153,30 @@ async def _generate_answer(
                     **metadata,
                     "raw_valid": True,
                     "consistency_fallback": "safe_alcohol_stove_recommendation",
+                    "consistency_rejected": issues,
+                    "elapsed_ms": round(customer_perf_service.perf_ms(start), 2),
+                }
+            safe_heat_answer = safe_specific_heat_source_answer(payload, issues)
+            if safe_heat_answer:
+                issue_skus = list(dict.fromkeys(
+                    str(item.get("sku") or "").strip().upper()
+                    for item in issues
+                    if str(item.get("sku") or "").strip()
+                ))
+                return {
+                    "answer": safe_heat_answer,
+                    "answer_type": "product_detail",
+                    "request_kind": "product_fact",
+                    "selected_skus": issue_skus[:8],
+                    "selection_state": "selected" if issue_skus else "unresolved",
+                    "identity_resolution": "resolved" if issue_skus else "unresolved",
+                    "needs_clarification": False,
+                    "confidence": "high",
+                    "uncertainty": "partial",
+                }, {
+                    **metadata,
+                    "raw_valid": True,
+                    "consistency_fallback": "safe_specific_heat_source_answer",
                     "consistency_rejected": issues,
                     "elapsed_ms": round(customer_perf_service.perf_ms(start), 2),
                 }

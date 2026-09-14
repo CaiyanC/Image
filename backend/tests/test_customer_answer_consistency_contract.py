@@ -8,6 +8,7 @@ from app.services.customer_answer_consistency_contract import (
     answer_consistency_issues,
     canonical_products,
     safe_alcohol_stove_recommendation,
+    safe_specific_heat_source_answer,
 )
 
 
@@ -215,6 +216,105 @@ def test_explicit_product_generic_fallback_is_repaired():
         payload,
     )
     assert issues[0]['code'] == 'generic_explicit_product_fallback'
+
+
+def test_specific_heat_positive_claim_requires_same_sku_support():
+    payload = {
+        'current_question': 'CW-C83 能不能用酒精炉？',
+        'explicit_product_skus': ['CW-C83'],
+        'candidate_products': [{
+            'sku': 'CW-C83',
+            'product_name_cn': '测试锅',
+            'specs': {'heat_source': '明火直烧、燃气炉、卡式炉、电磁炉'},
+        }],
+    }
+    issues = answer_consistency_issues(
+        {
+            'answer': 'CW-C83可以使用酒精炉。',
+            'answer_type': 'product_detail',
+            'selected_skus': ['CW-C83'],
+        },
+        payload,
+    )
+    assert issues[0]['code'] == 'unsupported_specific_heat_source'
+    assert not answer_consistency_issues(
+        {
+            'answer': 'CW-C83暂时不能确认支持酒精炉，已列出的热源包括明火直烧。',
+            'answer_type': 'product_detail',
+            'selected_skus': ['CW-C83'],
+        },
+        payload,
+    )
+    assert '暂时不能确认支持酒精炉' in safe_specific_heat_source_answer(payload, issues)
+
+
+def test_empty_canonical_heat_source_can_be_completed_by_same_sku_qa():
+    payload = {
+        'current_question': 'TEST-1 能不能用酒精炉？',
+        'explicit_product_skus': ['TEST-1'],
+        'candidate_products': [{
+            'sku': 'TEST-1',
+            'product_name_cn': '测试锅',
+            'specs': {'heat_source': ''},
+        }],
+        'evidence': [{
+            'sku': 'TEST-1',
+            'source_type': 'product_qa',
+            'fact_authority': True,
+            'content': '问：能用酒精炉吗？答：支持酒精炉。',
+        }],
+    }
+    assert not answer_consistency_issues(
+        {
+            'answer': '这款支持酒精炉。',
+            'answer_type': 'product_detail',
+            'selected_skus': ['TEST-1'],
+        },
+        payload,
+    )
+
+
+def test_bound_sku_generic_fallback_gets_product_safe_heat_answer():
+    payload = {
+        'current_question': 'CW-C83 能不能用酒精炉？',
+        'bound_product_skus': ['CW-C83'],
+        'candidate_products': [{
+            'sku': 'CW-C83',
+            'product_name_cn': '测试锅',
+            'specs': {'heat_source': '明火直烧、燃气炉、卡式炉'},
+        }],
+    }
+    issues = answer_consistency_issues(
+        {
+            'answer': '暂时无法确认这个问题的答案，建议下单前向店铺人工核实。',
+            'answer_type': 'clarification',
+        },
+        payload,
+    )
+    assert issues[0]['code'] == 'generic_explicit_product_fallback'
+    safe_answer = safe_specific_heat_source_answer(payload, issues)
+    assert '暂时不能确认支持酒精炉' in safe_answer
+    assert '明火直烧、燃气炉、卡式炉' in safe_answer
+
+
+def test_bound_sku_reidentification_request_is_not_customer_usable():
+    payload = {
+        'current_question': '天鹅壶4杯黑和9杯白有什么区别？',
+        'bound_product_skus': ['KW-K31-黑', 'KW-K32-白'],
+        'candidate_products': [
+            {'sku': 'KW-K31-黑', 'specs': {'capacity': '200ml'}},
+            {'sku': 'KW-K32-白', 'specs': {'capacity': '450ml'}},
+        ],
+    }
+    issues = answer_consistency_issues(
+        {
+            'answer': '目前无法确认这两个商品的具体差异，请提供这两款商品的链接或 SKU。',
+            'answer_type': 'clarification',
+        },
+        payload,
+    )
+    assert issues[0]['code'] == 'generic_explicit_product_fallback'
+    assert issues[0]['sku'] == 'KW-K31-黑,KW-K32-白'
 
 
 def test_workbuddy_retries_when_provider_returns_invalid_json(monkeypatch):

@@ -29,6 +29,7 @@ from .customer_answer_consistency_contract import (
     answer_consistency_issues,
     consistency_repair_instruction,
     safe_alcohol_stove_recommendation,
+    safe_specific_heat_source_answer,
 )
 from . import (
     customer_agent_service,
@@ -1789,6 +1790,30 @@ async def _generate_answer(
                 }, {
                     "raw_valid": True,
                     "consistency_fallback": "safe_alcohol_stove_recommendation",
+                    "consistency_rejected": issues,
+                    "dynamic_review": dynamic_review_metadata,
+                    "elapsed_ms": round(customer_perf_service.perf_ms(start), 2),
+                }
+            safe_heat_answer = safe_specific_heat_source_answer(payload, issues)
+            if safe_heat_answer:
+                issue_skus = list(dict.fromkeys(
+                    str(item.get("sku") or "").strip().upper()
+                    for item in issues
+                    if str(item.get("sku") or "").strip()
+                ))
+                return {
+                    "answer": safe_heat_answer,
+                    "answer_type": "product_detail",
+                    "request_kind": "product_fact",
+                    "selected_skus": issue_skus[:8],
+                    "selection_state": "selected" if issue_skus else "unresolved",
+                    "identity_resolution": "resolved" if issue_skus else "unresolved",
+                    "needs_clarification": False,
+                    "confidence": "high",
+                    "uncertainty": "partial",
+                }, {
+                    "raw_valid": True,
+                    "consistency_fallback": "safe_specific_heat_source_answer",
                     "consistency_rejected": issues,
                     "dynamic_review": dynamic_review_metadata,
                     "elapsed_ms": round(customer_perf_service.perf_ms(start), 2),

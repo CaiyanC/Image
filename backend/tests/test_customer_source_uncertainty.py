@@ -11,3 +11,12 @@ from app.services.customer_facing_answer_contract import render_customer_answer
 def test_source_uncertainty_preserves_the_following_proposition(text,expected):
     assert render_customer_answer(text)==expected
     assert render_customer_answer(expected)==expected
+
+
+@pytest.mark.parametrize('text,expected', [
+    ('容量是1L。标签: manual_history_review, rag_boundary, batch_2356_2395', '容量是1L。'),
+    ('这款支持液体酒精（manual_history_review）。', '这款支持液体酒精。'),
+    ('颜色标签：黑色，材质是铝合金。', '颜色标签：黑色，材质是铝合金。'),
+])
+def test_customer_answer_removes_internal_audit_markers_only(text, expected):
+    assert render_customer_answer(text) == expected
