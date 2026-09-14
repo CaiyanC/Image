@@ -78,6 +78,30 @@ def available_skus(payload: dict[str, Any]) -> set[str]:
     return values
 
 
+def needs_selection_metadata_repair(
+    response: dict[str, Any] | None,
+    payload: dict[str, Any],
+) -> bool:
+    """Detect a direct selection missing its redundant UI/provenance mirror.
+
+    ``answer`` remains the customer-facing source of meaning.  This helper
+    only asks for a second model pass when the model itself declared a
+    recommendation/comparison, gave a non-clarifying answer, and omitted the
+    selection mirror despite receiving bound evidence.  It never selects a
+    candidate in the runtime.
+    """
+    if not isinstance(response, dict):
+        return False
+    answer_type = str(response.get("answer_type") or "").strip().lower()
+    if answer_type not in {"recommendation", "comparison"}:
+        return False
+    if bool(response.get("needs_clarification")):
+        return False
+    if _normalised_strings(response.get("selected_skus")):
+        return False
+    return bool(available_evidence_ids(payload) and available_skus(payload))
+
+
 def _issue(code: str, reason: str, **extra: Any) -> dict[str, Any]:
     return {"code": code, "reason": reason, **extra}
 
@@ -192,9 +216,22 @@ def grounding_repair_instruction(issues: list[dict[str, Any]]) -> str:
     )
 
 
+def selection_metadata_repair_instruction() -> str:
+    """Ask the same model to mirror an already-made semantic selection."""
+    return (
+        "上一版 answer 已经给出了推荐或比较结论，但没有同步填写本轮答案协议中的选择信息。"
+        "请重新阅读 current_question、对话上下文和 evidence，保留能够被 evidence 支持的自然回答，"
+        "并补齐 selected_skus 以及实际使用的 evidence_ids；claims 只有在能准确归属时才填写。"
+        "如果当前证据不足以作出可靠选择，就把 needs_clarification 设为 true，不要从候选顺序猜选。"
+        "不要改变事实边界，不要提及本次复核或内部处理。"
+    )
+
+
 __all__ = [
     "answer_protocol_issues",
     "available_evidence_ids",
     "available_skus",
     "grounding_repair_instruction",
+    "needs_selection_metadata_repair",
+    "selection_metadata_repair_instruction",
 ]

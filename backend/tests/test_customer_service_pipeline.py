@@ -945,6 +945,9 @@ def test_workbuddy_result_cards_follow_llm_selection_not_candidate_recall(
                 "answer": "优先选卡片候选B，卡片候选A可以作为对照。",
                 "answer_type": "recommendation",
                 "request_kind": "recommendation",
+                # A conflicting redundant scope label must not erase the
+                # model-owned, evidence-backed recommendation.
+                "subject_scope": "general_guidance",
                 "needs_clarification": False,
                 "confidence": "medium",
                 "uncertainty": "partial",

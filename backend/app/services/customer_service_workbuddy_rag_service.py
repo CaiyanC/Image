@@ -26,6 +26,8 @@ from .customer_facing_answer_contract import render_customer_answer
 from .customer_answer_grounding_service import (
     answer_protocol_issues,
     grounding_repair_instruction,
+    needs_selection_metadata_repair,
+    selection_metadata_repair_instruction,
 )
 from .customer_answer_prompt import build_customer_answer_prompt
 from . import customer_followup_context_contract as followup_context
@@ -1469,6 +1471,24 @@ async def ask_customer_service_workbuddy_rag(
         payload=payload,
         answer_delta_callback=buffer_until_validated if answer_delta_callback else None,
     )
+    if needs_selection_metadata_repair(answer_raw, payload):
+        selection_repaired, selection_repair_metadata = await _generate_answer(
+            db,
+            payload={
+                **payload,
+                "answer_repair_request": selection_metadata_repair_instruction(),
+            },
+            answer_delta_callback=buffer_until_validated if answer_delta_callback else None,
+        )
+        if isinstance(selection_repaired, dict) and str(
+            selection_repaired.get("answer") or ""
+        ).strip():
+            answer_raw = selection_repaired
+            answer_metadata = {
+                **(answer_metadata or {}),
+                **(selection_repair_metadata or {}),
+                "selection_metadata_retry_count": 1,
+            }
     answer_metadata["answer_streamed"] = False
 
     raw_answer_type = str((answer_raw or {}).get("answer_type") or "").strip().lower()
@@ -1527,7 +1547,16 @@ async def ask_customer_service_workbuddy_rag(
         "comparison",
     }
     has_identity_anchor = bool(known_skus or anchor_skus)
-    general_guidance_request = raw_subject_scope == "general_guidance" and not has_identity_anchor
+    # A model-owned recommendation/comparison is a semantic product choice,
+    # even if the redundant subject_scope field is accidentally reported as
+    # general_guidance.  Do not let that conflicting label erase a validated
+    # selection; unanchored non-selection answers still keep the generic
+    # guidance boundary below.
+    general_guidance_request = (
+        raw_subject_scope == "general_guidance"
+        and not has_identity_anchor
+        and not semantic_selection_answer
+    )
     product_scoped_request = (
         not general_guidance_request
         and (

@@ -27,6 +27,8 @@ from .customer_product_interpretation_contract import product_interpretation_con
 from .customer_answer_grounding_service import (
     answer_protocol_issues,
     grounding_repair_instruction,
+    needs_selection_metadata_repair,
+    selection_metadata_repair_instruction,
 )
 from .customer_answer_prompt import build_customer_answer_prompt
 from . import (
@@ -1803,6 +1805,23 @@ async def ask_customer_service_semantic_rag_v2(
         bound_product_skus=target_skus,
     )
     answer_raw, answer_metadata = await _generate_answer(db, payload=payload)
+    if needs_selection_metadata_repair(answer_raw, payload):
+        selection_repaired, selection_repair_metadata = await _generate_answer(
+            db,
+            payload={
+                **payload,
+                "answer_repair_request": selection_metadata_repair_instruction(),
+            },
+        )
+        if isinstance(selection_repaired, dict) and str(
+            selection_repaired.get("answer") or ""
+        ).strip():
+            answer_raw = selection_repaired
+            answer_metadata = {
+                **(answer_metadata or {}),
+                **(selection_repair_metadata or {}),
+                "selection_metadata_retry_count": 1,
+            }
     answer_raw = _recover_selected_skus_from_evidence(
         answer_raw,
         evidence=evidence,

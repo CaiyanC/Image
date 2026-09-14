@@ -4,6 +4,8 @@ from app.services.customer_answer_grounding_service import (
     answer_protocol_issues,
     available_skus,
     grounding_repair_instruction,
+    needs_selection_metadata_repair,
+    selection_metadata_repair_instruction,
 )
 
 
@@ -85,3 +87,29 @@ def test_repair_instruction_is_topic_agnostic():
     assert "重新阅读" in text
     assert "evidence" in text
     assert "酒精炉" not in text
+
+
+def test_selection_metadata_repair_only_mirrors_a_model_owned_choice():
+    payload = _payload()
+    assert needs_selection_metadata_repair({
+        "answer": "推荐这款。",
+        "answer_type": "recommendation",
+        "needs_clarification": False,
+    }, payload)
+    assert needs_selection_metadata_repair({
+        "answer": "推荐这款。",
+        "answer_type": "recommendation",
+        "needs_clarification": False,
+        "evidence_ids": ["e1"],
+    }, payload)
+    assert not needs_selection_metadata_repair({
+        "answer": "我还不能确定是哪一款。",
+        "answer_type": "recommendation",
+        "needs_clarification": True,
+    }, payload)
+    assert not needs_selection_metadata_repair({
+        "answer": "这款参数是……",
+        "answer_type": "product_detail",
+        "needs_clarification": False,
+    }, payload)
+    assert "候选顺序" in selection_metadata_repair_instruction()
