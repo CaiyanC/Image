@@ -123,18 +123,21 @@ def _norm(value: Any) -> str:
     return re.sub(r"[^0-9a-z\u4e00-\u9fff]+", "", str(value or "").casefold())
 
 
-def _assert_dev_target() -> None:
-    if str(settings.APP_ENV or "").strip().lower() != "dev":
-        raise RuntimeError("solid alcohol QA apply is restricted to APP_ENV=dev")
-    database = database_name_from_url(str(settings.DATABASE_URL or ""))
-    if database != "product_knowledge_dev":
+def _assert_target(expected_env: str, expected_database: str) -> None:
+    actual_env = str(settings.APP_ENV or "").strip().lower()
+    if actual_env != expected_env:
         raise RuntimeError(
-            f"solid alcohol QA apply is restricted to product_knowledge_dev, got {database!r}"
+            f"solid alcohol QA apply is restricted to APP_ENV={expected_env}, got {actual_env!r}"
+        )
+    database = database_name_from_url(str(settings.DATABASE_URL or ""))
+    if database != expected_database:
+        raise RuntimeError(
+            f"solid alcohol QA apply is restricted to {expected_database}, got {database!r}"
         )
 
 
-def main() -> int:
-    _assert_dev_target()
+def apply_qa(expected_env: str, expected_database: str) -> int:
+    _assert_target(expected_env, expected_database)
     engine.echo = False
     now = datetime.now(timezone.utc)
     created: list[dict[str, str]] = []
@@ -237,6 +240,10 @@ def main() -> int:
         return 0
     finally:
         db.close()
+
+
+def main() -> int:
+    return apply_qa("dev", "product_knowledge_dev")
 
 
 if __name__ == "__main__":
