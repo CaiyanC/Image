@@ -1,10 +1,10 @@
-"""Model-mediated quality review for customer-service answers.
+"""Model-mediated, topic-agnostic review for customer-service answers.
 
-This module intentionally does not contain customer-facing templates or a
-keyword answer router. The answer model decides when a second look is useful;
-the reviewer compares the draft with the current evidence and historical case
-signals, then either keeps it or writes a more natural draft. Product facts,
-SKU selection, and provenance stay owned by the original answer contract.
+The reviewer is a second semantic read of the same turn packet.  It does not
+contain product-topic rules, keyword routes, or canned replies.  It checks
+whether the draft answered the customer's meaning and whether its claims stay
+attached to the supplied evidence; any rewrite is produced by the model from
+that same packet.
 """
 
 from __future__ import annotations
@@ -173,20 +173,21 @@ def _review_packet(
 def _review_system_prompt() -> str:
     return (
         "你是商品客服回答的内部质量复核员，不直接向客户说话。"
-        "请结合当前问题、同轮商品资料和历史案例信号，判断这份草稿是否真正可直接发给客户。"
-        "重点看：是否回答了客户真正的问题，事实是否只来自当前资料，推荐或比较是否说清取舍，"
-        "表达是否自然、简洁、可执行，是否把内部处理过程说给了客户听。"
-        "历史案例只代表沟通经验，不能新增商品事实、选择 SKU 或替换当前资料。"
-        "experience_outcome_signals 中的样本只帮助判断哪些表达动作可能减少顾虑；没有分母时不能声称提高了真实转化率。"
-        "如果草稿已经可用，返回 keep；只有确实能改善时才返回 revise。"
-        "revise 时只重写客户可见的 answer，保留原草稿已经确认的事实、SKU 和不确定边界，"
-        "不要编造资料，也不要使用固定客服腔或提及资料库、检索、证据、经验卡、模型、流程。"
+        "请把草稿当作一个需要验证的自然语言答案，结合当前问题、对话上下文和本轮 evidence 做完整语义复核。"
+        "逐句检查：是否真正回答了客户的请求，商品事实是否能由对应 evidence 支持，是否把不同商品或不同来源的内容混在一起，"
+        "是否把缺少依据的推测写成确定结论，推荐/比较是否符合客户完整需求，表达是否自然、简洁、可执行。"
+        "不要要求证据必须逐字重复问题；语义等价的事实可以保留，但不能添加证据没有的前提、程度、保证或结果。"
+        "历史案例和 outcome signals 只能帮助判断沟通方式，不能新增事实、选择商品或覆盖当前 evidence。"
+        "如果草稿已经可用，返回 keep；只有确实能改善事实依据、问题覆盖或自然表达时才返回 revise。"
+        "revise 时只重写客户可见的 answer，保留原草稿中仍被 evidence 支持的内容、SKU 和不确定边界。"
+        "不要编造资料，不要输出固定客服腔，不要提及资料库、检索、证据、经验卡、模型、流程或本次复核。"
         "优先尊重 conversation_history、previous_turn_memory 和 active_context_products 中已经确认的商品指代；"
         "不要因为候选资料里出现更多商品就覆盖上一轮上下文。"
         "只返回 JSON："
         '{"decision":"keep|revise",'
         '"answer":"仅在 revise 时填写自然客服回复",'
         '"issues":["可选的内部问题摘要"],'
+        '"unsupported_claims":["可选的未经当前 evidence 支持的最小事实片段"],'
         '"confidence":"high|medium|low"}'
     )
 
@@ -249,9 +250,15 @@ async def review_answer(
             for item in (reviewed.get("issues") or [])
             if _clip(item, 180)
         ][:6]
+        unsupported_claims = [
+            _clip(item, 180)
+            for item in (reviewed.get("unsupported_claims") or [])
+            if _clip(item, 180)
+        ][:6]
         metadata.update({
             "decision": decision if decision in _DECISIONS else "invalid",
             "issues": issues,
+            "unsupported_claims": unsupported_claims,
             "elapsed_ms": round(customer_perf_service.perf_ms(start), 2),
         })
         if decision == "revise":

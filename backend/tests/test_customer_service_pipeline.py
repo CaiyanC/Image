@@ -432,7 +432,7 @@ def test_v2_provider_failure_returns_v2_safe_answer_without_legacy_fallback(
     assert "商品资料" not in result["answer"]
 
 
-def test_v2_repairs_generic_clarification_for_bound_product(
+def test_v2_repairs_unknown_provenance_reference_with_same_evidence(
     route_client_and_db,
     monkeypatch,
 ):
@@ -475,21 +475,23 @@ def test_v2_repairs_generic_clarification_for_bound_product(
         if len(answer_calls) == 1:
             return json.dumps(
                 {
-                    "answer": "我查看了当前商品资料，但没有找到能直接确认这个问题的依据。你可以补充具体商品名称或 SKU，我再继续核对。",
-                    "answer_type": "clarification",
-                    "needs_clarification": True,
+                    "answer": "这款商品目前可以核对到相关资料。",
+                    "answer_type": "faq",
+                    "evidence_ids": ["stale-evidence-id"],
                 },
                 ensure_ascii=False,
             )
+        evidence_id = payload["evidence"][0]["evidence_id"]
         return json.dumps(
             {
-                "answer": "这款资料明确标注搭建简单，但没有登记抗风等级，因此常规露营可以考虑，强风场景不建议仅凭现有资料下单。",
-                "answer_type": "recommendation",
-                "request_kind": "recommendation",
+                "answer": "根据当前资料，这款商品有明确记录的使用特点；其中未登记的条件，暂时不能据此做出更强判断。",
+                "answer_type": "faq",
+                "request_kind": "product_qa",
                 "needs_clarification": False,
                 "confidence": "medium",
                 "uncertainty": "partial",
                 "selected_skus": ["SKU-REPAIR"],
+                "evidence_ids": [evidence_id],
             },
             ensure_ascii=False,
         )
@@ -526,16 +528,123 @@ def test_v2_repairs_generic_clarification_for_bound_product(
             )
         )
 
-    assert result["answer"].startswith("这款已确认搭建简单")
-    assert "尚未确认抗风等级" in result["answer"]
-    assert result["answer_type"] == "recommendation"
+    assert result["answer"].startswith("根据当前资料")
+    assert result["answer_type"] == "faq"
     assert result["result_skus"] == ["SKU-REPAIR"]
     assert len(answer_calls) == 2
     assert answer_calls[0]["payload"]["bound_product_skus"] == ["SKU-REPAIR"]
+    assert answer_calls[1]["payload"]["answer_consistency_repair"]
+    assert not answer_calls[1]["payload"].get("answer_repair_request")
+    assert answer_calls[1]["temperature"] == 0
+    assert result["answer_metadata"]["consistency_retry_count"] == 1
+
+
+def test_v2_repairs_unsupported_identifier_in_grounded_answer(
+    route_client_and_db,
+    monkeypatch,
+):
+    _client, _headers, Session = route_client_and_db
+    monkeypatch.setattr(settings, "APP_ENV", "dev")
+    monkeypatch.setattr(settings, "CUSTOMER_SERVICE_PIPELINE_OVERRIDE_ENABLED", True)
+
+    with Session() as db:
+        db.add(
+            Product(
+                id="v2-identifier-repair-product-id",
+                sku="SKU-REPAIR-2",
+                barcode="v2-identifier-repair-barcode",
+                product_name_cn="标识复核测试锅",
+                brand="测试品牌",
+                category="锅具",
+            )
+        )
+        db.commit()
+
+    answer_calls: list[dict] = []
+
+    async def fake_chat(_db, messages, **kwargs):
+        purpose = kwargs.get("purpose")
+        if purpose == "customer_service_v2_semantic_plan":
+            return json.dumps(
+                {
+                    "request_kind": "product_fact",
+                    "subject_scope": "named_product",
+                    "product_subjects": ["SKU-REPAIR-2"],
+                    "search_queries": ["SKU-REPAIR-2容量"],
+                    "requested_dimensions": ["容量"],
+                    "response_focus": "直接回答当前商品的容量",
+                },
+                ensure_ascii=False,
+            )
+        assert purpose == "customer_service_v2_answer"
+        payload = json.loads(messages[-1]["content"])
+        answer_calls.append({"payload": payload, "temperature": kwargs.get("temperature")})
+        if len(answer_calls) == 1:
+            return json.dumps(
+                {
+                    "answer": "SKU-REPAIR-2 的容量是 2L；补充型号 SKU-NOT-IN-EVIDENCE-9 也一样。",
+                    "answer_type": "product_detail",
+                    "request_kind": "product_fact",
+                    "needs_clarification": False,
+                    "confidence": "high",
+                    "uncertainty": "confirmed",
+                    "selected_skus": ["SKU-REPAIR-2"],
+                },
+                ensure_ascii=False,
+            )
+        assert payload["answer_repair_request"]
+        return json.dumps(
+            {
+                "answer": "SKU-REPAIR-2 的容量是 2L。",
+                "answer_type": "product_detail",
+                "request_kind": "product_fact",
+                "needs_clarification": False,
+                "confidence": "high",
+                "uncertainty": "confirmed",
+                "selected_skus": ["SKU-REPAIR-2"],
+            },
+            ensure_ascii=False,
+        )
+
+    async def fake_retrieve(_db, _query, *, sku=None, **_kwargs):
+        return [
+            {
+                "source_type": "product_qa",
+                "sku": sku or "SKU-REPAIR-2",
+                "content": "问：容量是多少？答：2L。",
+                "metadata": {"source_id": "product:SKU-REPAIR-2:qa:capacity"},
+                "score": 0.99,
+            }
+        ]
+
+    monkeypatch.setattr(
+        customer_service_semantic_rag_v2_service.customer_llm_service,
+        "chat_completion",
+        fake_chat,
+    )
+    monkeypatch.setattr(
+        customer_service_semantic_rag_v2_service.knowledge_service,
+        "semantic_retrieve",
+        fake_retrieve,
+    )
+
+    with Session() as db:
+        result = asyncio.run(
+            customer_service_service.ask_customer_service(
+                db,
+                user_id="v2-identifier-repair-user",
+                question="SKU-REPAIR-2 的容量是多少？",
+                pipeline="semantic_rag_v2",
+            )
+        )
+
+    assert result["answer"] == "SKU-REPAIR-2 的容量是 2L。"
+    assert result["result_skus"] == ["SKU-REPAIR-2"]
+    assert len(answer_calls) == 2
     assert answer_calls[1]["payload"]["answer_repair_request"]
     assert answer_calls[1]["temperature"] == 0
-    assert result["answer_metadata"]["repair_attempted"] is True
-    assert result["answer_metadata"]["repair_applied"] is True
+    assert result["answer_metadata"]["answer_validation_retry_count"] == 1
+    assert result["answer_metadata"]["validation"]["unknown_sku_tokens"] == []
 
 
 def test_workbuddy_path_uses_one_answer_llm_and_keeps_legacy_isolated(
@@ -627,7 +736,7 @@ def test_workbuddy_path_uses_one_answer_llm_and_keeps_legacy_isolated(
     assert result["result_skus"] == ["SKU-WB"]
 
 
-def test_workbuddy_recovers_exact_qa_when_answer_provider_fails(
+def test_workbuddy_does_not_bypass_the_answer_model_with_exact_qa_recovery(
     route_client_and_db,
     monkeypatch,
 ):
@@ -684,10 +793,9 @@ def test_workbuddy_recovers_exact_qa_when_answer_provider_fails(
             )
         )
 
-    assert result["answer"] == "适合徒步、露营和短途出行用餐。"
-    assert result["answer_metadata"]["answer_recovery"] == "exact_product_qa"
+    assert "暂时无法确认" in result["answer"]
     assert result["answer_metadata"]["provider_retry_count"] == 1
-    assert result["result_skus"] == ["SKU-WB-PROVIDER-FAILURE"]
+    assert result["result_skus"] == []
     assert result["debug"]["no_legacy_route"] is True
 
 
@@ -837,6 +945,9 @@ def test_workbuddy_result_cards_follow_llm_selection_not_candidate_recall(
                 "answer": "优先选卡片候选B，卡片候选A可以作为对照。",
                 "answer_type": "recommendation",
                 "request_kind": "recommendation",
+                # A conflicting redundant scope label must not erase the
+                # model-owned, evidence-backed recommendation.
+                "subject_scope": "general_guidance",
                 "needs_clarification": False,
                 "confidence": "medium",
                 "uncertainty": "partial",
@@ -1663,7 +1774,7 @@ def test_workbuddy_keeps_answer_when_optional_identity_metadata_is_missing(
         assert payload["explicit_product_skus"] == []
         return json.dumps(
             {
-                "answer": "如果你指的是木柄候选锅A，资料未确认木柄是否可拆。",
+                "answer": "如果你指的是木柄候选锅A，目前无法确认木柄是否可拆。",
                 "answer_type": "product_detail",
                 "request_kind": "product_qa",
                 "needs_clarification": False,
@@ -1699,7 +1810,7 @@ def test_workbuddy_keeps_answer_when_optional_identity_metadata_is_missing(
             )
         )
 
-    assert result["answer"] == "如果你指的是木柄候选锅A，暂时无法确认木柄是否可拆。"
+    assert result["answer"] == "如果你指的是木柄候选锅A，目前无法确认木柄是否可拆。"
     assert result["needs_clarification"] is False
     assert result["result_skus"] == []
     assert result["results"] == []
@@ -2137,7 +2248,7 @@ def test_workbuddy_streams_one_structured_llm_response_without_duplicate_answer(
         assert kwargs["response_format"] == {"type": "json_object"}
         response = json.dumps(
             {
-                "answer": "资料显示流式测试锅容量是 1L。",
+                "answer": "流式测试锅容量是 1L。",
                 "answer_type": "product_detail",
                 "request_kind": "product_fact",
                 "needs_clarification": False,
@@ -2186,7 +2297,7 @@ def test_workbuddy_streams_one_structured_llm_response_without_duplicate_answer(
 
     assert provider_calls == ["customer_service_workbuddy_answer"]
     assert "".join(emitted) == result["answer"]
-    assert result["answer"] == "已确认流式测试锅容量是 1L。"
+    assert result["answer"] == "流式测试锅容量是 1L。"
     assert all("资料" not in delta for delta in emitted)
 
 

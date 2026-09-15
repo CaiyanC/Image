@@ -163,6 +163,35 @@ class CustomerExperienceRagServiceTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(rows), 1)
         self.assertEqual(rows[0]["guidance"], "高相关向量卡，先承接顾虑再解释取舍。")
 
+    async def test_weak_configured_threshold_cannot_inject_low_score_experience(self):
+        metadata = {
+            "source_id": "customer_experience:pilot:CF-PG19:weak",
+            "review_status": "approved_pilot",
+            "production_use": "experience_guidance_only",
+            "authority_level": "candidate_only",
+            "fact_authority": False,
+        }
+        retrieve = AsyncMock(return_value=[{
+            "source_type": knowledge_service.CUSTOMER_EXPERIENCE_SOURCE_TYPE,
+            "sku": "CF-PG19",
+            "content": "低相关卡不应进入事实问题上下文。",
+            "metadata": metadata,
+            "score": 0.49,
+            "_retrieval_signal": "vector",
+        }])
+        with (
+            patch.object(settings, "CUSTOMER_SERVICE_EXPERIENCE_RAG_ENABLED", True),
+            patch.object(settings, "CUSTOMER_SERVICE_EXPERIENCE_RAG_MIN_SCORE", 0.25),
+            patch.object(knowledge_service, "semantic_retrieve", retrieve),
+        ):
+            rows = await customer_experience_rag_service.retrieve_experience_guidance(
+                object(),
+                question="这个商品的尺寸是多少？",
+                skus=["CF-PG19"],
+            )
+
+        self.assertEqual(rows, [])
+
     async def test_product_bound_query_also_considers_global_guidance(self):
         bound_metadata = {
             "source_id": "customer_experience:pilot:CF-PG19:value",

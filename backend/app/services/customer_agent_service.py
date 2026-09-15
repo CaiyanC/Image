@@ -14,6 +14,22 @@ from . import agent_action_service, product_service
 
 
 PRODUCT_COLOR_TERMS = ("黑色", "白色", "蓝色", "绿色", "粉色", "红色", "灰色", "银色", "金色")
+PRODUCT_COLOR_SHORT_NAMES = {
+    color: color[:-1] if color.endswith("色") else color
+    for color in PRODUCT_COLOR_TERMS
+}
+PRODUCT_COLOR_CANONICAL_BY_TOKEN = {
+    token: color
+    for color, short_name in PRODUCT_COLOR_SHORT_NAMES.items()
+    for token in (color, short_name)
+}
+_VARIANT_CUP_RE = re.compile(r"(?P<count>\d+)\s*杯")
+_VARIANT_TOKEN_RE = re.compile(
+    r"(?P<cup>\d+\s*杯)|(?P<color>"
+    + "|".join(sorted(PRODUCT_COLOR_CANONICAL_BY_TOKEN, key=len, reverse=True))
+    + r")"
+)
+_VARIANT_PAIR_BOUNDARY_RE = re.compile(r"(?:和|与|及|、|,|，|/|＆|&|比较|区别)")
 
 
 SKU_RE = re.compile(
@@ -200,6 +216,102 @@ def product_name_family_aliases(value: Any) -> list[str]:
     return family_aliases
 
 
+def _compact_product_reference(value: Any) -> str:
+    """Normalize a product reference while retaining its meaningful tokens."""
+    return re.sub(r"[\s\-_—–－]+", "", normalize_search_text(value or "")).lower()
+
+
+def product_name_variant_aliases(value: Any) -> list[str]:
+    """Return full-name and color-order variants for a named catalogue item.
+
+    Product names commonly store a color as ``-黑色`` while customers say
+    ``4杯黑`` or put the color before the name.  These aliases are generated
+    from the catalogue name itself; they do not inspect question intent or
+    select a product by field.
+    """
+    text = normalize_search_text(value or "")
+    compact = _compact_product_reference(text)
+    if not compact:
+        return []
+    aliases = {compact}
+    for full_color, short_color in PRODUCT_COLOR_SHORT_NAMES.items():
+        if full_color not in text and short_color not in text:
+            continue
+        base = re.sub(re.escape(full_color), "", text, flags=re.I)
+        base = re.sub(re.escape(short_color), "", base, flags=re.I)
+        compact_base = _compact_product_reference(base)
+        if not compact_base:
+            continue
+        for color in (full_color, short_color):
+            compact_color = _compact_product_reference(color)
+            aliases.add(compact_base + compact_color)
+            aliases.add(compact_color + compact_base)
+    return sorted((alias for alias in aliases if len(alias) >= 3), key=len, reverse=True)
+
+
+def _product_variant_signature(value: Any) -> tuple[str, str] | None:
+    text = normalize_search_text(value or "")
+    cup_match = _VARIANT_CUP_RE.search(text)
+    if not cup_match:
+        return None
+    color_match = next(
+        (
+            match
+            for match in re.finditer(
+                "|".join(sorted(PRODUCT_COLOR_CANONICAL_BY_TOKEN, key=len, reverse=True)),
+                text,
+                flags=re.I,
+            )
+        ),
+        None,
+    )
+    if not color_match:
+        return None
+    return (
+        f"{cup_match.group('count')}杯",
+        PRODUCT_COLOR_CANONICAL_BY_TOKEN.get(color_match.group(0).lower(), color_match.group(0)),
+    )
+
+
+def _question_variant_signatures(value: Any) -> set[tuple[str, str]]:
+    """Pair adjacent cup/color tokens, including shared-family shorthand.
+
+    In a comparison such as “天鹅壶4杯黑和9杯白”, the family name is only
+    written once.  Pairing the adjacent variant tokens lets the resolver bind
+    the second shorthand to the right catalogue sibling without broadening
+    all four color/cup combinations.
+    """
+    tokens = list(_VARIANT_TOKEN_RE.finditer(normalize_search_text(value or "")))
+    signatures: set[tuple[str, str]] = set()
+    for left, right in zip(tokens, tokens[1:]):
+        if _VARIANT_PAIR_BOUNDARY_RE.search(
+            normalize_search_text(value or "")[left.end():right.start()]
+        ):
+            continue
+        left_kind = "cup" if left.group("cup") else "color"
+        right_kind = "cup" if right.group("cup") else "color"
+        if left_kind == right_kind:
+            continue
+        cup = left.group("cup") or right.group("cup") or ""
+        color = left.group("color") or right.group("color") or ""
+        cup_match = _VARIANT_CUP_RE.search(cup)
+        canonical_color = PRODUCT_COLOR_CANONICAL_BY_TOKEN.get(color.lower(), color)
+        if cup_match and canonical_color:
+            signatures.add((f"{cup_match.group('count')}杯", canonical_color))
+    return signatures
+
+
+def _product_variant_family_aliases(value: Any) -> list[str]:
+    """Generate family anchors after removing the variant dimensions."""
+    text = normalize_search_text(value or "")
+    text = _VARIANT_CUP_RE.sub("", text)
+    for color, short_name in PRODUCT_COLOR_SHORT_NAMES.items():
+        text = re.sub(re.escape(color), "", text, flags=re.I)
+        text = re.sub(re.escape(short_name), "", text, flags=re.I)
+    compact = _compact_product_reference(text)
+    return [alias for alias in {compact, *(_compact_product_reference(item) for item in product_name_aliases(text))} if len(alias) >= 2]
+
+
 def product_name_version_tokens(value: Any) -> set[str]:
     text = normalize_search_text(value or "").lower()
     return {token for token in VERSION_TOKENS if token in text}
@@ -208,6 +320,12 @@ def product_name_version_tokens(value: Any) -> set[str]:
 def resolve_named_product_candidates(question: str, products: list[Product], *, subject: str | None = None) -> list[Product]:
     normalized_question = normalize_search_text(question or "").lower()
     normalized_subject = normalize_search_text(subject or question or "").lower()
+    compact_question = _compact_product_reference(normalized_question)
+    question_variant_signatures = _question_variant_signatures(question)
+    question_cup_counts = {
+        f"{match.group('count')}杯"
+        for match in _VARIANT_CUP_RE.finditer(normalize_search_text(question or ""))
+    }
     subject_versions = product_name_version_tokens(normalized_subject)
     matches: list[tuple[int, int, Product, dict[str, bool]]] = []
 
@@ -221,6 +339,8 @@ def resolve_named_product_candidates(question: str, products: list[Product], *, 
         subject_exact_alias = False
         subject_family_alias = False
         subject_in_name = False
+        variant_exact = False
+        best_variant_len = 0
         best_len = 0
         product_versions = set()
 
@@ -229,7 +349,22 @@ def resolve_named_product_candidates(question: str, products: list[Product], *, 
                 continue
             strong_aliases = product_name_aliases(name)
             family_aliases = product_name_family_aliases(name)
+            variant_aliases = product_name_variant_aliases(name)
             product_versions.update(product_name_version_tokens(name))
+            for alias in variant_aliases:
+                if alias and alias in compact_question:
+                    variant_exact = True
+                    best_variant_len = max(best_variant_len, len(alias))
+            if not variant_exact:
+                signature = _product_variant_signature(name)
+                family_anchors = _product_variant_family_aliases(name)
+                if (
+                    signature
+                    and signature in question_variant_signatures
+                    and any(anchor in compact_question for anchor in family_anchors)
+                ):
+                    variant_exact = True
+                    best_variant_len = max(best_variant_len, len(signature[0]) + len(signature[1]))
             for alias in strong_aliases:
                 alias_lower = alias.lower()
                 if normalized_subject and alias_lower == normalized_subject:
@@ -260,7 +395,10 @@ def resolve_named_product_candidates(question: str, products: list[Product], *, 
                 best_len = max(best_len, len(normalized_subject))
 
         score = 0
-        if strong_exact:
+        if variant_exact:
+            score = 500 + best_variant_len
+            best_len = max(best_len, best_variant_len)
+        elif strong_exact:
             score = 400 + best_len
         elif strong_contains:
             score = 300 + best_len
@@ -285,14 +423,51 @@ def resolve_named_product_candidates(question: str, products: list[Product], *, 
                         "subject_exact_alias": subject_exact_alias,
                         "subject_family_alias": subject_family_alias,
                         "subject_in_name": subject_in_name,
+                        "variant_exact": variant_exact,
                     },
                 )
             )
+
+    # If the customer gave a family and cup count but no color, recover all
+    # catalog siblings for that exact structural variant.  This prevents a
+    # color suffix spelling difference in one product name from hiding its
+    # sibling; a query that supplied a color remains governed by the paired
+    # variant signatures above.
+    if question_cup_counts and not question_variant_signatures:
+        family_variant_matches: list[Product] = []
+        seen_variant_skus: set[str] = set()
+        for product in products:
+            for name in (
+                getattr(product, "product_name_cn", "") or "",
+                getattr(product, "product_name_en", "") or "",
+            ):
+                signature = _product_variant_signature(name)
+                if not signature or signature[0] not in question_cup_counts:
+                    continue
+                if not any(
+                    anchor in compact_question
+                    for anchor in _product_variant_family_aliases(name)
+                ):
+                    continue
+                sku = str(getattr(product, "sku", "") or "").strip().upper()
+                if sku and sku not in seen_variant_skus:
+                    family_variant_matches.append(product)
+                    seen_variant_skus.add(sku)
+                break
+        if family_variant_matches:
+            return family_variant_matches[:5]
 
     if not matches:
         return []
 
     matches.sort(key=lambda item: (-item[0], -item[1], len(str(getattr(item[2], "product_name_cn", "") or "")), str(getattr(item[2], "sku", "") or "")))
+
+    # When the customer supplied a complete variant reference, discard the
+    # broader family siblings.  Without a complete variant reference the
+    # existing family ambiguity behavior remains unchanged.
+    exact_variants = [item[2] for item in matches if item[3]["variant_exact"]]
+    if exact_variants:
+        return exact_variants[:5]
 
     if subject_versions:
         top_score = matches[0][0]

@@ -215,7 +215,12 @@ async def retrieve_experience_guidance(
         min_score = 0.50
     if not math.isfinite(min_score):
         min_score = 0.50
-    min_score = max(-1.0, min(1.0, min_score))
+    # The experience channel is optional communication context, not the fact
+    # lookup.  A stale environment value of 0.25 admitted weakly related cards
+    # into every product turn and made the answer prompt noisier.  Keep the
+    # configured value when it is stricter, but never allow this soft channel
+    # below the semantic confidence used by the service's default contract.
+    min_score = max(0.50, min(1.0, min_score))
     try:
         min_margin = float(
             getattr(settings, "CUSTOMER_SERVICE_EXPERIENCE_RAG_MIN_MARGIN", 0.02)
@@ -327,6 +332,11 @@ async def retrieve_experience_guidance(
             item for item in approved_ranked_rows
             if not str(item[2].get("sku") or "").strip()
         ]
+        if (
+            len(bound_ranked_rows) >= 2
+            and bound_ranked_rows[0][0] - bound_ranked_rows[1][0] < min_margin
+        ):
+            bound_ranked_rows = []
         # An explicit SKU is a stronger scope signal than a small score
         # difference against a generic global card. Within that same-SKU
         # scope, evidence-backed generated cards are more useful than an old

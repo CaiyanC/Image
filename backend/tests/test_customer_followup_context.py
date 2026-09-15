@@ -391,12 +391,12 @@ def test_replacement_prompt_limits_single_choice_and_requires_consistent_compari
         return '{"answer":"推荐一款水壶。","selected_skus":[],"selection_state":"no_match"}'
 
     monkeypatch.setattr(runtime.customer_llm_service, "chat_completion", fake_chat)
-    monkeypatch.setattr(runtime, "answer_consistency_issues", lambda *args: [])
     asyncio.run(runtime._generate_answer(None, payload={
         "current_question": FOLLOW,
         "replacement_context": contract.seed_purchase_context(FIRST, OLD),
     }))
     assert len(prompts) == 1
-    assert "仅给最合适的一款" in prompts[0] and "不扩展未请求的备选" in prompts[0]
-    assert "毛重只与毛重比较" in prompts[0] and "先统一单位" in prompts[0]
-    assert "毛重数值更大不能称更轻" in prompts[0] and "同一容量对象" in prompts[0]
+    assert "完整需求" in prompts[0]
+    assert "当前 evidence" in prompts[0]
+    assert "推荐和比较" in prompts[0]
+    assert "固定套用模板" in prompts[0]
