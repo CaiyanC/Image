@@ -6,7 +6,7 @@ from datetime import datetime
 from typing import Any
 
 from fastapi import HTTPException
-from sqlalchemy import func
+from sqlalchemy import func, or_
 from sqlalchemy.orm import Session
 
 from ..core.config import settings
@@ -225,6 +225,77 @@ def list_assets(
         ProductAsset.seq.asc(),
         ProductAsset.created_at.asc(),
     ).all()
+
+
+def list_product_asset_overview(
+    db: Session,
+    *,
+    q: str | None = None,
+    limit: int = 500,
+) -> dict[str, Any]:
+    """Return one lightweight asset summary per product for the library home.
+
+    The detail page already loads a single SKU's complete asset list.  The
+    overview must not repeat that request once per SKU, so this intentionally
+    uses one product query plus one ordered asset query and groups the result
+    in memory.  The cover follows the same stable ordering as ``list_assets``
+    and is always the first image, even when a product also has videos.
+    """
+    limit = min(max(int(limit or 500), 1), 500)
+    query = db.query(Product).order_by(Product.sku.asc())
+    keyword = str(q or "").strip()
+    if keyword:
+        like = f"%{keyword}%"
+        query = query.filter(or_(
+            Product.sku.ilike(like),
+            Product.product_name_cn.ilike(like),
+            Product.product_name_en.ilike(like),
+            Product.brand.ilike(like),
+        ))
+
+    total = query.count()
+    products = query.limit(limit).all()
+    if not products:
+        return {"items": [], "total": total}
+
+    skus = [product.sku for product in products]
+    assets = db.query(ProductAsset).filter(
+        ProductAsset.sku.in_(skus),
+    ).order_by(
+        ProductAsset.sku.asc(),
+        ProductAsset.category_code.asc(),
+        ProductAsset.sub_category.asc(),
+        ProductAsset.material_type.asc(),
+        ProductAsset.seq.asc(),
+        ProductAsset.created_at.asc(),
+        ProductAsset.id.asc(),
+    ).all()
+    assets_by_sku: dict[str, list[ProductAsset]] = {}
+    for asset in assets:
+        assets_by_sku.setdefault(asset.sku, []).append(asset)
+
+    items: list[dict[str, Any]] = []
+    for product in products:
+        product_assets = assets_by_sku.get(product.sku, [])
+        images = [asset for asset in product_assets if asset.asset_type == "image"]
+        videos = [asset for asset in product_assets if asset.asset_type == "video"]
+        cover = images[0] if images else None
+        items.append({
+            "id": product.id,
+            "sku": product.sku,
+            "product_name_cn": product.product_name_cn,
+            "product_name_en": product.product_name_en,
+            "brand": product.brand,
+            "asset_count": len(product_assets),
+            "image_count": len(images),
+            "video_count": len(videos),
+            "cover_asset_id": cover.id if cover else None,
+            "cover_url": cover.url if cover else None,
+            "cover_thumbnail_url": cover.thumbnail_url if cover else None,
+            "cover_category_name": cover.category_name if cover else None,
+            "cover_sub_category": cover.sub_category if cover else None,
+        })
+    return {"items": items, "total": total}
 
 
 def search_assets(

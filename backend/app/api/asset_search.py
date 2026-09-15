@@ -17,6 +17,18 @@ def get_asset_taxonomy(
     return asset_taxonomy.dictionary_payload()
 
 
+@router.get("/overview")
+def get_asset_overview(
+    q: str = Query("", max_length=200),
+    limit: int = Query(default=500, ge=1, le=500),
+    current_user: User = Depends(require_permission("media.read")),
+    db: Session = Depends(get_db),
+):
+    """Return product cards with the first image and asset counts."""
+    del current_user
+    return asset_service.list_product_asset_overview(db, q=q, limit=limit)
+
+
 @router.get("/search")
 def search_assets(
     sku: str | None = None,

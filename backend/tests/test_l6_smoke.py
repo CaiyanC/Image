@@ -148,6 +148,24 @@ def test_list_assets_returns_created_record(client: TestClient):
     assert any(item["id"] == created["id"] for item in payload)
 
 
+def test_asset_overview_returns_first_image_and_counts(client: TestClient):
+    first = _create_asset(client, url=f"/uploads/assets/{TEST_SKU}/first.jpg")
+    _create_asset(client, url=f"/uploads/assets/{TEST_SKU}/second.jpg")
+
+    response = client.get("/api/assets/overview?limit=500")
+
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    assert payload["total"] == 1
+    overview = payload["items"][0]
+    assert overview["sku"] == TEST_SKU
+    assert overview["asset_count"] == 2
+    assert overview["image_count"] == 2
+    assert overview["video_count"] == 0
+    assert overview["cover_asset_id"] == first["id"]
+    assert overview["cover_url"] == first["url"]
+
+
 def test_upload_asset_accepts_image_and_video(client: TestClient):
     image_buffer = io.BytesIO()
     Image.new("RGB", (2, 2), color="blue").save(image_buffer, format="PNG")
