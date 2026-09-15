@@ -326,6 +326,22 @@ export interface ProductAsset {
   updated_at: string
 }
 
+export interface ProductAssetOverview {
+  id: string
+  sku: string
+  product_name_cn?: string | null
+  product_name_en?: string | null
+  brand?: string | null
+  asset_count: number
+  image_count: number
+  video_count: number
+  cover_asset_id?: string | null
+  cover_url?: string | null
+  cover_thumbnail_url?: string | null
+  cover_category_name?: string | null
+  cover_sub_category?: string | null
+}
+
 export interface AssetGrouped {
   category_code: string
   category_name: string

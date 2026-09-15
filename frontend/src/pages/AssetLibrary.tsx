@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { api } from '../services/api'
 import { SecureImage, SecureVideo } from '../components/SecureFile'
 import { hasPermission, useAuthStore } from '../store/authStore'
-import type { AssetTags, AssetTaxonomy, ProductAsset } from '../types'
+import type { AssetTags, AssetTaxonomy, ProductAsset, ProductAssetOverview } from '../types'
 import {
   AMAZON_SLOTS,
   ASSET_CATEGORIES,
@@ -25,15 +25,15 @@ import {
 } from './assetLibraryHelpers'
 
 type EditForm = Partial<ProductAsset>
-type ProductCandidate = Awaited<ReturnType<typeof api.products.candidates>>['items'][number]
-
 export default function AssetLibrary() {
   const { user } = useAuthStore()
   const canManageAssets = hasPermission(user, 'product.edit') && hasPermission(user, 'media.upload')
   const canEditTags = canManageAssets && hasPermission(user, 'tag.edit')
   const canReviewAssets = hasPermission(user, 'media.review')
-  const [products, setProducts] = useState<ProductCandidate[]>([])
-  const [searchResults, setSearchResults] = useState<ProductCandidate[]>([])
+  const [products, setProducts] = useState<ProductAssetOverview[]>([])
+  const [catalogTotal, setCatalogTotal] = useState(0)
+  const [catalogLoading, setCatalogLoading] = useState(false)
+  const [catalogError, setCatalogError] = useState('')
   const initialSku = new URLSearchParams(window.location.search).get('sku') || ''
   const [searchSku, setSearchSku] = useState(initialSku)
   const [selectedSku, setSelectedSku] = useState(initialSku)
@@ -58,11 +58,25 @@ export default function AssetLibrary() {
   const [taxonomy, setTaxonomy] = useState<AssetTaxonomy | null>(null)
   const [tagPresets, setTagPresets] = useState(TAG_PRESETS)
 
-  useEffect(() => {
-    let active = true
-    api.products.candidates('media').then(result => { if (active) setProducts(result.items) }).catch(() => { if (active) setProducts([]) })
-    return () => { active = false }
+  const loadProductOverview = useCallback(async () => {
+    setCatalogLoading(true)
+    setCatalogError('')
+    try {
+      const result = await api.assets.overview()
+      setProducts(result.items)
+      setCatalogTotal(result.total)
+    } catch {
+      setProducts([])
+      setCatalogTotal(0)
+      setCatalogError('产品素材总览加载失败，请刷新后重试')
+    } finally {
+      setCatalogLoading(false)
+    }
   }, [])
+
+  useEffect(() => {
+    void loadProductOverview()
+  }, [loadProductOverview])
 
   useEffect(() => {
     if (!selectedSku) {
@@ -70,26 +84,13 @@ export default function AssetLibrary() {
       return
     }
     const localProduct = products.find(product => product.sku === selectedSku)
-    if (localProduct) {
-      setSelectedProductName(localProduct.product_name_cn || localProduct.product_name_en || '')
-      return
-    }
-    let cancelled = false
-    api.products.candidates('media', selectedSku)
-      .then(({ items }) => {
-        const product = items.find((item) => item.sku === selectedSku)
-        if (!cancelled) setSelectedProductName(product?.product_name_cn || product?.product_name_en || '')
-      })
-      .catch(() => {
-        if (!cancelled) setSelectedProductName('')
-      })
-    return () => {
-      cancelled = true
-    }
+    setSelectedProductName(localProduct?.product_name_cn || localProduct?.product_name_en || '')
   }, [products, selectedSku])
 
   useEffect(() => {
+    let active = true
     api.assets.taxonomy().then(data => {
+      if (!active) return
       setTaxonomy(data)
       setTagPresets(current => {
         const next = { ...current }
@@ -99,22 +100,8 @@ export default function AssetLibrary() {
     }).catch(() => {
       // Keep bundled presets as a safe UI fallback if the API is unavailable.
     })
+    return () => { active = false }
   }, [])
-
-  useEffect(() => {
-    const keyword = searchSku.trim()
-    if (!keyword) {
-      setSearchResults([])
-      return
-    }
-    let active = true
-    const timer = window.setTimeout(() => {
-      api.products.candidates('media', keyword)
-        .then(result => { if (active) setSearchResults(result.items) })
-        .catch(() => { if (active) setSearchResults([]) })
-    }, 200)
-    return () => { active = false; window.clearTimeout(timer) }
-  }, [searchSku])
 
   const loadAssets = useCallback(async () => {
     if (!selectedSku) {
@@ -139,16 +126,32 @@ export default function AssetLibrary() {
 
   const filteredProducts = useMemo(() => {
     const keyword = searchSku.trim().toLowerCase()
-    const source = searchResults.length > 0 ? searchResults : products
-    if (!keyword) return source.slice(0, 20)
-    return source.filter(product => {
-      return (
-        product.sku.toLowerCase().includes(keyword) ||
-        (product.product_name_cn || '').toLowerCase().includes(keyword) ||
-        (product.product_name_en || '').toLowerCase().includes(keyword)
-      )
-    }).slice(0, 30)
-  }, [products, searchResults, searchSku])
+    if (!keyword) return []
+    return products.filter(product => (
+      product.sku.toLowerCase().includes(keyword) ||
+      (product.product_name_cn || '').toLowerCase().includes(keyword) ||
+      (product.product_name_en || '').toLowerCase().includes(keyword) ||
+      (product.brand || '').toLowerCase().includes(keyword)
+    )).slice(0, 30)
+  }, [products, searchSku])
+
+  const overviewProducts = useMemo(() => {
+    const keyword = searchSku.trim().toLowerCase()
+    if (!keyword) return products
+    return products.filter(product => (
+      product.sku.toLowerCase().includes(keyword) ||
+      (product.product_name_cn || '').toLowerCase().includes(keyword) ||
+      (product.product_name_en || '').toLowerCase().includes(keyword) ||
+      (product.brand || '').toLowerCase().includes(keyword)
+    ))
+  }, [products, searchSku])
+
+  const overviewStats = useMemo(() => ({
+    totalProducts: catalogTotal || products.length,
+    coveredProducts: products.filter(product => product.image_count > 0).length,
+    imageCount: products.reduce((sum, product) => sum + product.image_count, 0),
+    videoCount: products.reduce((sum, product) => sum + product.video_count, 0),
+  }), [catalogTotal, products])
 
   const categoryAssets = useMemo(() => {
     const filtered = assets.filter(asset => {
@@ -172,7 +175,6 @@ export default function AssetLibrary() {
   const handleSkuSelect = (sku: string) => {
     setSelectedSku(sku)
     setSearchSku(sku)
-    setSearchResults([])
     setAssets([])
     setSelectedAssetIds(new Set())
     setUploadError('')
@@ -196,6 +198,7 @@ export default function AssetLibrary() {
         notes: notesOverride || undefined,
       })
       setAssets(prev => [...prev, ...response.items])
+      void loadProductOverview()
       setPromptText('')
     } catch (error) {
       // Upload failures used to become unhandled promise rejections while
@@ -224,6 +227,7 @@ export default function AssetLibrary() {
     if (!window.confirm(`删除素材 ${buildNamingFormat(asset)}？`)) return
     await api.assets.delete(selectedSku, asset.id)
     setAssets(prev => prev.filter(item => item.id !== asset.id))
+    void loadProductOverview()
     setSelectedAssetIds(prev => {
       const next = new Set(prev)
       next.delete(asset.id)
@@ -341,7 +345,7 @@ export default function AssetLibrary() {
             />
             {searchSku && (
               <div className="mt-2 max-h-48 overflow-auto rounded-xl border border-black/5 bg-white/80 p-1 shadow-lg">
-                {filteredProducts.map(product => (
+                {filteredProducts.length > 0 ? filteredProducts.map(product => (
                   <button
                     key={product.sku}
                     onClick={() => handleSkuSelect(product.sku)}
@@ -352,7 +356,7 @@ export default function AssetLibrary() {
                     <span className="font-black">{product.sku}</span>
                     <span className="ml-2 text-apple-gray-medium">{product.product_name_cn || product.product_name_en}</span>
                   </button>
-                ))}
+                )) : <div className="px-3 py-2 text-sm text-apple-gray-medium">未找到匹配产品</div>}
               </div>
             )}
           </div>
@@ -382,12 +386,14 @@ export default function AssetLibrary() {
       </section>
 
       {!selectedSku ? (
-        <section className="glass flex min-h-[360px] items-center justify-center p-8 text-center">
-          <div>
-            <div className="text-4xl">📦</div>
-            <h2 className="mt-3 text-lg font-black">选择一个 SKU 开始管理素材</h2>
-          </div>
-        </section>
+        <ProductOverview
+          products={overviewProducts}
+          loading={catalogLoading}
+          error={catalogError}
+          stats={overviewStats}
+          onSelect={handleSkuSelect}
+          onRetry={() => void loadProductOverview()}
+        />
       ) : (
         <>
           <section className="glass p-3">
@@ -537,6 +543,108 @@ export default function AssetLibrary() {
       {lightboxAsset && (
         <Lightbox asset={lightboxAsset} assets={categoryAssets} onClose={() => setLightboxAsset(null)} onChange={setLightboxAsset} />
       )}
+    </div>
+  )
+}
+
+function ProductOverview({ products, loading, error, stats, onSelect, onRetry }: {
+  products: ProductAssetOverview[]
+  loading: boolean
+  error: string
+  stats: {
+    totalProducts: number
+    coveredProducts: number
+    imageCount: number
+    videoCount: number
+  }
+  onSelect: (sku: string) => void
+  onRetry: () => void
+}) {
+  return (
+    <section className="glass p-5">
+      <div className="flex flex-col gap-4 border-b border-black/5 pb-5 lg:flex-row lg:items-end lg:justify-between">
+        <div>
+          <p className="eyebrow">PRODUCT COVERAGE</p>
+          <h2 className="mt-1 text-xl font-black text-apple-text">按产品查看素材</h2>
+          <p className="mt-2 text-sm leading-6 text-apple-gray-medium">
+            先看每个 SKU 的首张图片和覆盖数量，再进入对应产品继续上传、分类或审核。
+          </p>
+        </div>
+        <div className="grid grid-cols-2 gap-2 text-xs sm:grid-cols-4">
+          <OverviewMetric label="产品 SKU" value={stats.totalProducts} />
+          <OverviewMetric label="已覆盖 SKU" value={stats.coveredProducts} suffix="个" />
+          <OverviewMetric label="图片总数" value={stats.imageCount} suffix="张" />
+          <OverviewMetric label="视频总数" value={stats.videoCount} suffix="个" />
+        </div>
+      </div>
+
+      {loading ? (
+        <div className="grid grid-cols-1 gap-4 pt-5 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5">
+          {Array.from({ length: 8 }).map((_, index) => <div key={index} className="h-72 animate-pulse rounded-2xl bg-white/55" />)}
+        </div>
+      ) : error ? (
+        <div className="py-16 text-center">
+          <div className="text-sm font-bold text-red-700">{error}</div>
+          <button type="button" className="mt-4 rounded-full bg-teal-600 px-4 py-2 text-sm font-bold text-white" onClick={onRetry}>重新加载</button>
+        </div>
+      ) : products.length === 0 ? (
+        <div className="py-16 text-center text-sm font-bold text-apple-gray-medium">没有匹配的产品 SKU</div>
+      ) : (
+        <div className="grid grid-cols-1 gap-4 pt-5 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5">
+          {products.map(product => {
+            const cover = product.cover_thumbnail_url || product.cover_url
+            return (
+              <article key={product.sku} className="group overflow-hidden rounded-2xl border border-black/5 bg-white/70 shadow-sm transition hover:-translate-y-0.5 hover:shadow-lg">
+                <button
+                  type="button"
+                  className="block w-full text-left"
+                  data-testid={`asset-product-card-${product.sku}`}
+                  onClick={() => onSelect(product.sku)}
+                >
+                  <div className="relative aspect-[4/3] overflow-hidden bg-gradient-to-br from-stone-100 to-stone-200">
+                    {cover ? (
+                      <SecureImage src={cover} alt={`${product.sku} 首张图片`} className="h-full w-full object-cover transition duration-300 group-hover:scale-[1.02]" />
+                    ) : (
+                      <div className="flex h-full flex-col items-center justify-center text-center text-stone-500">
+                        <div className="text-4xl">{product.video_count > 0 ? '🎬' : '📦'}</div>
+                        <div className="mt-2 text-xs font-bold">{product.video_count > 0 ? '暂无图片，仅有视频素材' : '暂无图片'}</div>
+                      </div>
+                    )}
+                    <div className="absolute inset-x-0 bottom-0 flex items-end justify-between gap-2 bg-gradient-to-t from-black/65 via-black/20 to-transparent px-3 pb-3 pt-8 text-white">
+                      <span className="text-xs font-black">{product.image_count} 张图片</span>
+                      {product.video_count > 0 && <span className="text-[11px] font-bold">另有 {product.video_count} 个视频</span>}
+                    </div>
+                  </div>
+                  <div className="p-4">
+                    <div className="flex items-start justify-between gap-2">
+                      <div className="min-w-0">
+                        <div className="truncate text-sm font-black text-apple-text" title={product.product_name_cn || product.product_name_en || ''}>
+                          {product.product_name_cn || product.product_name_en || '未命名产品'}
+                        </div>
+                        <div className="mt-1 truncate text-xs font-bold text-teal-700">{product.sku}</div>
+                      </div>
+                      <span className="shrink-0 rounded-full bg-teal-50 px-2 py-1 text-[11px] font-black text-teal-700">进入管理 →</span>
+                    </div>
+                    <div className="mt-3 flex flex-wrap gap-2 text-[11px] font-bold text-apple-gray-medium">
+                      <span className="rounded-full bg-stone-100 px-2 py-1">共 {product.asset_count} 个素材</span>
+                      {product.cover_sub_category && <span className="rounded-full bg-stone-100 px-2 py-1">首图 · {product.cover_sub_category}</span>}
+                    </div>
+                  </div>
+                </button>
+              </article>
+            )
+          })}
+        </div>
+      )}
+    </section>
+  )
+}
+
+function OverviewMetric({ label, value, suffix }: { label: string; value: number; suffix?: string }) {
+  return (
+    <div className="rounded-xl border border-black/5 bg-white/60 px-3 py-2">
+      <div className="text-[11px] font-bold text-apple-gray-medium">{label}</div>
+      <div className="mt-1 text-base font-black text-apple-text">{value}{suffix && <span className="ml-0.5 text-xs">{suffix}</span>}</div>
     </div>
   )
 }

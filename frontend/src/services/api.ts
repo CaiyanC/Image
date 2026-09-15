@@ -2,7 +2,7 @@ const API_BASE_ENV = import.meta.env.VITE_API_BASE_URL || '/api'
 const BASE_URL = resolveApiBaseUrl(API_BASE_ENV)
 const TRACE_CUSTOMER_AGENT = import.meta.env.VITE_TRACE_CUSTOMER_AGENT === 'true'
 
-import type { AssetGrouped, AssetTags, AssetTaxonomy, AssetUploadResponse, AuthResponse, Product, ProductAsset, ProductListResponse, ProductDraft, User } from '../types'
+import type { AssetGrouped, AssetTags, AssetTaxonomy, AssetUploadResponse, AuthResponse, Product, ProductAsset, ProductAssetOverview, ProductListResponse, ProductDraft, User } from '../types'
 import { NO_PERMISSION_MESSAGE, showNoPermissionToast } from './permissionFeedback'
 
 const ERROR_MESSAGES: Record<string, string> = {
@@ -1213,6 +1213,11 @@ export const api = {
 
   assets: {
     taxonomy: () => request<AssetTaxonomy>('/assets/taxonomy'),
+    overview: (q = '') => {
+      const query = new URLSearchParams({ limit: '500' })
+      if (q.trim()) query.set('q', q.trim())
+      return request<{ items: ProductAssetOverview[]; total: number }>(`/assets/overview?${query.toString()}`)
+    },
     search: (params: {
       sku?: string
       category?: string
