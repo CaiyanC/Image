@@ -6,6 +6,28 @@ from .common import UuidStr
 
 # ── Product 主表 ──
 
+class ProductSupplyChainBase(BaseModel):
+    barcode_69: Optional[str] = None
+    cost_price: Optional[float] = Field(default=None, ge=0)
+    cost_currency: Optional[str] = None
+    supplier_name: Optional[str] = None
+    outer_carton_length_cm: Optional[float] = Field(default=None, gt=0)
+    outer_carton_width_cm: Optional[float] = Field(default=None, gt=0)
+    outer_carton_height_cm: Optional[float] = Field(default=None, gt=0)
+    outer_carton_pcs: Optional[int] = Field(default=None, ge=1)
+
+
+class ProductSupplyChainResponse(ProductSupplyChainBase):
+    id: str
+    product_id: UuidStr
+    # Derived per-carton value. This is deliberately not the shipment-level
+    # loading rate; that value belongs to /api/loading-rates/calculate.
+    outer_carton_volume_m3: Optional[float] = Field(default=None, ge=0)
+    created_at: Optional[datetime] = None
+    updated_at: Optional[datetime] = None
+
+    model_config = {"from_attributes": True}
+
 class ProductBase(BaseModel):
     sku: str
     barcode: Optional[str] = None
@@ -23,6 +45,7 @@ class ProductBase(BaseModel):
     sync_flag: bool = False
     quality_note: Optional[str] = None
     status_note: Optional[str] = None
+    supply_chain: Optional[ProductSupplyChainBase] = None
 
 
 class ProductCreate(ProductBase):
@@ -46,6 +69,7 @@ class ProductUpdate(BaseModel):
     sync_flag: Optional[bool] = None
     quality_note: Optional[str] = None
     status_note: Optional[str] = None
+    supply_chain: Optional[ProductSupplyChainBase] = None
 
 
 class ProductResponse(ProductBase):
@@ -84,6 +108,12 @@ class ProductAdvancedSearchRequest(BaseModel):
     lifecycle_status: Optional[str] = None
     person_in_charge: Optional[str] = None
     quality_note: Optional[str] = None
+    barcode_69: Optional[str] = None
+    supplier_name: Optional[str] = None
+    cost_price_min: Optional[float] = None
+    cost_price_max: Optional[float] = None
+    outer_carton_pcs_min: Optional[int] = Field(default=None, ge=1)
+    outer_carton_pcs_max: Optional[int] = Field(default=None, ge=1)
     active_flag: Optional[bool] = None
     launch_date_from: Optional[str] = None
     launch_date_to: Optional[str] = None
@@ -139,6 +169,9 @@ class ProductSpecsResponse(ProductSpecsBase):
 class ProductBusinessBase(BaseModel):
     top_selling_points: Optional[Any] = None
     target_audience: Optional[str] = None
+    suitable_people: Optional[str] = Field(default=None, max_length=100)
+    audience_tags: Optional[list[str]] = None
+    value_positioning: Optional[str] = Field(default=None, max_length=100)
     positioning: Optional[str] = None
     price_positioning: Optional[str] = None
     emotional_value: Optional[str] = None
@@ -345,6 +378,7 @@ class ProductDetailResponse(BaseModel):
     sync_flag: bool = False
     quality_note: Optional[str] = None
     status_note: Optional[str] = None
+    supply_chain: Optional[ProductSupplyChainResponse] = None
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
     specs: Optional[ProductSpecsResponse] = None

@@ -380,6 +380,35 @@ async def update_product_full(
     return after_data
 
 
+@router.put("/{sku}/supply-chain")
+async def update_product_supply_chain(
+    sku: str,
+    body: dict,
+    request: Request,
+    current_user: User = Depends(require_product_permission("update")),
+    db: Session = Depends(get_db),
+):
+    before_data = _snapshot_product_detail(db, sku)
+    result = product_service.update_product_supply_chain(db, sku, body)
+    product = product_service.get_product_by_sku(db, sku)
+    after_data = _snapshot_product_detail(db, sku)
+    log = operation_log_service.log_operation(
+        db,
+        operator_id=current_user.id,
+        action_type="update",
+        action_name="更新产品采购与装箱信息",
+        target_type="product_supply_chain",
+        target_id=product.id if product else sku,
+        target_name=sku,
+        request_data=body,
+        response_data={"sku": sku},
+        request=request,
+    )
+    _record_product_snapshot(db, log, current_user.id, sku, "update", before_data, after_data)
+    product_service.sync_product_to_vector_db(db, sku)
+    return result
+
+
 @router.delete("/{sku}")
 def delete_product(
     sku: str,

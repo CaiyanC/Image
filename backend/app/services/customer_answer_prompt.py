@@ -8,6 +8,31 @@ not enumerate product fields, fuels, variants, or canned customer replies.
 from __future__ import annotations
 
 from typing import Any
+from .customer_service_triage import training_prompt
+
+
+def _customer_tone_prompt() -> str:
+    from ..core.config import settings
+    if not settings.CUSTOMER_SERVICE_PLAN_ENABLED:
+        return ""
+    return (
+        "\n接待表达规范 customer-tone-20261008-v1：耐心、专业、亲切，不做参数播报员。"
+        "客户明确表达担心、失望、着急或不安时，先用一句贴合其具体处境的话承接，再回答当前问题或给下一步；"
+        "不要每轮重复‘理解您的心情’，不要无依据判断客户情绪或承诺事情一定能解决。"
+        "简单问题通常1—3句话；客户要求一个重点时只突出一个重点，不重念整张参数表。"
+        "客户怕选错时先回应选择顾虑，用已知需求解释取舍；毛重/净重等必要限定仍须保留。"
+        "使用自然口语，可适度用‘明白’‘您先…’或‘呢、呀’，不要每句加语气词、堆表情或称‘亲、宝’。"
+        "‘可以、放心’不能用来肯定未确认的兼容、安全、库存或到货结论。"
+        "追问只回应新增诉求；问如何联系店铺时给一段简短的可复述问法，不重复整段权限限制。"
+        "感谢或明确表示暂时不用再推荐时，简短收尾并停止推荐，不新增候选、替代购买需求或下一步追问。"
+        "危险场景先给安全行动，严肃关怀，不使用轻佻语气词，不猜测故障或扩大操作细节。"
+        "不能为亲切新增商品事实、削弱证据限定，或虚构查单、申请优惠、补发、退款、转人工等已执行操作；"
+        "也不要虚构平台具体按钮名称。下列示例仅示范表达，不能当商品、活动或平台事实：\n"
+        "- 犹豫选购：‘第一次挑选怕买错很正常，咱们先看您最在意的用途，再确认合适的选择。’\n"
+        "- 急用受影响：‘这会影响您的出行安排，确实让人着急。先联系购买平台人工，说明问题和急用时间，请对方核实处理方式。’\n"
+        "- 未知边界：‘这个暂时还不能确认，咱们先核对具体型号，避免买到不适配的。’\n"
+        "- 感谢结束：‘不客气呀，有需要再来问我就好。’不要在这句话后继续推荐。\n"
+    )
 
 
 def build_customer_answer_prompt(
@@ -28,7 +53,7 @@ def build_customer_answer_prompt(
         "不要把未知扩大成否定，也不要凭常识、相邻属性、其他商品或历史话术补出更强结论。"
         "推荐和比较要基于客户的完整需求、当前候选和各自证据，说明必要的依据与取舍；不能按检索顺序机械选择。"
         "历史经验只帮助理解顾虑和组织表达，不能新增商品事实或替代当前证据。\n"
-        "表达要像真实客服：先给结论，再给必要的依据或下一步；简单问题短答，复杂问题再展开。"
+        "表达要像真实客服：无明显情绪时先给结论；客户明确着急、担心或失望时先简短回应具体处境，再给结论和下一步；简单问题短答，复杂问题再展开。"
         "如果问题包含多个子问题、条件或对立判断，要逐项覆盖客户明确提出的每个目标，不能用一段商品概述代替完整回答；"
         "回答类型按客户真正想解决的事情判断，不要把检索或工具结果的形态当成回答类型。"
         "客户追问能否保证、是否一定等承诺时，直接回答能否保证和下一步，不要以‘刚才的说明未能完成核验’等处理过程话术开场。"
@@ -70,6 +95,17 @@ def build_customer_answer_prompt(
         '"quality_review":{"recommended":true或false,"focus":["可选的复核重点"]}}。'
         "结构化字段只是内部归因和上下文承接，不要把它们写进 answer。"
     )
+    prompt += training_prompt()
+    prompt += _customer_tone_prompt()
+    from ..core.config import settings
+    if settings.CUSTOMER_SERVICE_PLAN_ENABLED:
+        from .customer_purchase_urgency import purchase_reply_guidance
+        prompt += purchase_reply_guidance()
+        prompt += (
+            "\n表达补充 customer-tone-20261008-v2：不要逐字重复上一轮安慰开头；回应本轮新增顾虑即可。"
+            "客户说两套商品不等于两笔订单，不补出客户未提供的订单数量、付款状态或使用期限。"
+            "先给客户所要的结论和一个最有用的下一步，不因存在大量使用说明就整段复述。"
+        )
     if repair_request:
         prompt += (
             "\n本轮是一次质量复核。请保留当前证据能够支持的事实，只修正复核指出的问题；"

@@ -591,6 +591,12 @@ def _build_task_payload(task: KnowledgeParseTask) -> dict:
 
 
 def _build_file_document_payload(db: Session, document: KnowledgeDocument) -> dict:
+    try:
+        source_meta = json.loads(document.metadata_json or '{}')
+    except (TypeError, ValueError):
+        source_meta = {}
+    if not isinstance(source_meta, dict):
+        source_meta = {}
     related_skus = _load_related_skus(document.related_skus_json)
     products = _related_product_payloads(db, related_skus)
     chunks = db.query(KnowledgeChunk).filter(KnowledgeChunk.document_id == document.id).all()
@@ -600,6 +606,9 @@ def _build_file_document_payload(db: Session, document: KnowledgeDocument) -> di
     task = _find_latest_parse_task(db, document.id)
     return {
         "document_id": document.id,
+        "is_active": document.is_active,
+        "source_review_status": source_meta.get('review_status'),
+        "source_qa_count": len(source_meta.get('qa_rows') or []) if isinstance(source_meta.get('qa_rows'), list) else 0,
         "file_name": document.file_name or document.title,
         "file_type": document.file_type,
         "parse_status": document.parse_status,

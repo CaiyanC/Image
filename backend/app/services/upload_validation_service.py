@@ -118,7 +118,17 @@ def validate_knowledge_file_content(path: str | Path, suffix: str) -> None:
     _validate_office_archive(candidate, expected_prefix)
 
 
-def _validate_office_archive(path: Path, expected_prefix: str) -> None:
+def validate_docx_content(content: bytes) -> None:
+    if not content:
+        raise ValueError("Word file is empty")
+    _validate_office_archive(BytesIO(content), 'word/')
+    with zipfile.ZipFile(BytesIO(content)) as archive:
+        names = {entry.filename.replace('\\', '/').lower() for entry in archive.infolist()}
+        if 'word/document.xml' not in names or any('vbaproject' in name or '/embeddings/' in name or '/activex/' in name for name in names):
+            raise ValueError('Word file contains unsupported active content or lacks its main document')
+
+
+def _validate_office_archive(path: Path | BytesIO, expected_prefix: str) -> None:
     try:
         with zipfile.ZipFile(path) as archive:
             entries = archive.infolist()

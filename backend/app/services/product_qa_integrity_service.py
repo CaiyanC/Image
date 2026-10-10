@@ -109,6 +109,8 @@ def _product_evidence(db: Session, product: Product) -> dict[str, Any]:
                 "usage_instruction": getattr(specs, "usage_instruction", None),
             },
             "business": {
+                "suitable_people": getattr(business, "suitable_people", None),
+                "audience_tags": getattr(business, "audience_tags", None),
                 "selling_points": getattr(business, "top_selling_points", None),
                 "positioning": getattr(business, "positioning", None),
                 "usage_scenarios": getattr(business, "usage_scenarios", None),
@@ -137,6 +139,8 @@ def _product_evidence(db: Session, product: Product) -> dict[str, Any]:
         },
         "authoritative_formal_facts": authoritative_formal_facts,
         "business": {
+            "suitable_people": getattr(business, "suitable_people", None),
+            "audience_tags": getattr(business, "audience_tags", None),
             "selling_points": getattr(business, "top_selling_points", None),
             "positioning": getattr(business, "positioning", None),
             "usage_scenarios": getattr(business, "usage_scenarios", None),

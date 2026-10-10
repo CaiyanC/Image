@@ -8,13 +8,14 @@ export default function SectionNavigation() {
   const has = (key: string) => hasPermission(user, key)
   const section = visibleSections(has).find(item => item.key === sectionForPath(pathname))
   const back = backEntry(pathname, has)
-  if (!back) return null
+  if (!back && (!section || section.items.length < 2)) return null
   const maintenance = section?.key === 'products'
     ? section.items.filter(item => ['/products/audit', '/products/drafts', '/products/qa/new'].includes(item.path)) : []
-  const items = !section || section.key === 'tools' || section.items.length < 2 ? [] : section.items.filter(item =>
+  const items = !section || section.items.length < 2 ? [] : section.items.filter(item =>
     item.path !== '/products/create' && !maintenance.includes(item))
   return <nav aria-label={`${section?.label || '页面'}内导航`} className="mx-auto flex max-w-7xl flex-wrap items-center gap-2 border-b border-slate-200 px-4 py-4 md:px-6">
-    <Link to={back.path} className="mr-auto rounded-md px-2 py-2 text-sm font-semibold text-slate-600 hover:bg-slate-100 hover:text-teal-800">← {back.label}</Link>
+    {back ? <Link to={back.path} className="mr-auto rounded-md px-2 py-2 text-sm font-semibold text-slate-600 hover:bg-slate-100 hover:text-teal-800">← {back.label}</Link>
+      : <span className="mr-auto px-2 py-2 text-sm font-semibold text-slate-600">{section?.label}</span>}
     {items.map(item => <Link key={item.path} to={item.path} aria-current={pathname === item.path ? 'page' : undefined}
       className={`rounded-md px-3 py-2 text-sm font-medium ${pathname === item.path ? 'bg-teal-50 text-teal-800' : 'text-slate-600 hover:bg-slate-100'}`}>{item.label}</Link>)}
     {maintenance.length > 0 && <details key={pathname} className="relative">

@@ -40,6 +40,7 @@ from app.models import (  # noqa: E402
     ProductQaNegative,
     ProductSalesRegion,
     ProductSpecs,
+    ProductSupplyChain,
     SalesRegion,
     SystemConfig,
     Tool,
@@ -52,6 +53,7 @@ def _customer_service_test_tables():
     return [
         Product.__table__,
         ProductSpecs.__table__,
+        ProductSupplyChain.__table__,
         ProductBusiness.__table__,
         ProductContent.__table__,
         ProductMedia.__table__,

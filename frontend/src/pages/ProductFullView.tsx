@@ -3,6 +3,7 @@ import { useNavigate, useSearchParams } from 'react-router-dom'
 import { api } from '../services/api'
 import type { Product } from '../types'
 import { useAuthStore } from '../store/authStore'
+import { getTagDisplayName } from './assetLibraryConfig'
 
 const BASE_FIELDS = [
   'sku', 'barcode', 'product_name_cn', 'product_name_en', 'brand', 'series',
@@ -15,7 +16,14 @@ const SPEC_FIELDS = [
   'surface_finish', 'heat_source', 'power', 'technical_advantages', 'usage_instruction',
 ]
 
+const SUPPLY_CHAIN_FIELDS = [
+  'barcode_69', 'cost_price', 'cost_currency', 'supplier_name',
+  'outer_carton_length_cm', 'outer_carton_width_cm', 'outer_carton_height_cm',
+  'outer_carton_pcs', 'outer_carton_volume_m3',
+]
+
 const BUSINESS_FIELDS = [
+  'suitable_people', 'audience_tags', 'value_positioning',
   'top_selling_points', 'target_audience', 'positioning', 'price_positioning',
   'emotional_value', 'usage_scenarios', 'competitor_benchmark',
 ]
@@ -58,10 +66,15 @@ const FIELD_LABELS: Record<string, string> = {
   brand: '品牌', series: '系列', category: '品类', sub_category: '子品类', product_level: '产品等级',
   launch_date: '上市时间', lifecycle_status: '生命周期', person_in_charge: '负责人',
   active_flag: '启用状态', sync_flag: '知识库同步', quality_note: '质量备注', status_note: '状态备注',
+  barcode_69: '69码 / 商品识别码', cost_price: '成本价', cost_currency: '成本币种',
+  supplier_name: '供应商名称', outer_carton_length_cm: '外箱长（cm）',
+  outer_carton_width_cm: '外箱宽（cm）', outer_carton_height_cm: '外箱高（cm）',
+  outer_carton_pcs: '每箱装箱数（箱规）', outer_carton_volume_m3: '外箱体积（m³）',
   size_info: '尺寸信息', capacity: '容量信息', gross_weight_g: '毛重（g）', body_material: '主体材质',
   color: '主色系', surface_finish: '表面处理', heat_source: '适用热源', power: '功率',
   technical_advantages: '技术优势', usage_instruction: '使用说明', top_selling_points: '核心卖点',
-  target_audience: '目标人群', positioning: '差异化定位', price_positioning: '价格定位',
+  suitable_people: '适用人数', audience_tags: '人群标签', value_positioning: '价值定位',
+  target_audience: '目标人群原文', positioning: '差异化定位', price_positioning: '价格定位',
   emotional_value: '情感价值', usage_scenarios: '使用场景', competitor_benchmark: '竞品对标',
   title_en: '英文标题', title_cn: '中文标题', long_description_en: '英文长描述',
   long_description_cn: '中文长描述', long_description_ja: '日文长描述', amazon_title: 'Amazon 标题',
@@ -77,6 +90,10 @@ const FIELD_LABELS: Record<string, string> = {
   is_public: '公开可用', ai_customer_usable: '客服可用', ai_marketing_usable: '营销可用',
   ai_reference_usable: '参考可用', editable_flag: '允许编辑', review_status: '审核状态',
   authorization_status: '授权状态', forbidden_usage: '禁止用途', language: '语言', tag_list: '标签',
+  subject_tags: '拍摄对象', composition_tags: '人物构成', view_tags: '多角度子标签 / 拍摄视角',
+  expression_tags: '表达标签', selling_point_tags: '卖点标签', scene_tags: '场景标签', mood_tags: '氛围标签',
+  product_tags: '产品标签', material_type_tags: '素材形式标签', usage_tags: '用途标签', version_tags: '版本标签',
+  risk_tags: '风险标签', channel_tags: '渠道标签', language_tags: '语言标签',
   category_name: '素材分类', asset_type: '素材类型', url: '素材链接', material_type: '素材类型标签',
   angle_scene: '角度/场景', channel: '渠道', language_tag: '语言标签', version_tag: '版本标签',
   product_version: '产品版本', market_version: '市场版本', status_tag: '状态标签', quality_status: '质量状态',
@@ -107,7 +124,7 @@ function formatText(key: string, value: unknown): string {
   if (Array.isArray(value)) {
     if (!value.length) return '暂无'
     if (key === 'bullet_points') return value.map((item, index) => `${index + 1}. ${formatText(key, item)}`).join('\n')
-    return value.map((item) => formatText(key, item)).filter((item) => item !== '暂无').join('、') || '暂无'
+    return value.map((item) => typeof item === 'string' ? getTagDisplayName(item) : formatText(key, item)).filter((item) => item !== '暂无').join('、') || '暂无'
   }
   if (typeof value === 'object') {
     const entries = Object.entries(value).filter(([nestedKey]) => !HIDDEN_NESTED_FIELDS.has(nestedKey))
@@ -269,11 +286,12 @@ export default function ProductFullView() {
       {loadingProduct && <div className="mt-6 rounded-2xl bg-white/70 px-4 py-12 text-center text-sm text-apple-gray-medium">正在加载该产品的全部业务字段…</div>}
       {!loadingProduct && !product && <div className="mt-6 rounded-3xl border border-dashed border-black/10 bg-white/60 px-4 py-16 text-center text-sm text-apple-gray-medium">请先选择一个产品；选择后页面会向下展开完整业务字段。</div>}
 
-      {product && !loadingProduct && (
+        {product && !loadingProduct && (
         <div className="mt-6 space-y-4">
           <Section title="基础身份与管理信息" hint="系统内部 ID、时间戳等技术字段默认不展示"><FieldGrid data={product as unknown as Record<string, unknown>} fields={BASE_FIELDS} /></Section>
+          <Section title="采购与装箱信息" hint="每箱装箱数是箱规；装载率需在装柜/出货场景按实际货物体积÷集装箱可用体积计算；外箱尺寸单位为厘米"><FieldGrid data={product.supply_chain as unknown as Record<string, unknown> | null | undefined} fields={SUPPLY_CHAIN_FIELDS} /></Section>
           <Section title="物理规格与使用说明"><FieldGrid data={product.specs as unknown as Record<string, unknown> | null | undefined} fields={SPEC_FIELDS} /></Section>
-          <Section title="业务定位与卖点"><FieldGrid data={product.business as unknown as Record<string, unknown> | null | undefined} fields={BUSINESS_FIELDS} /></Section>
+          <Section title="开发定位"><FieldGrid data={product.business as unknown as Record<string, unknown> | null | undefined} fields={BUSINESS_FIELDS} /></Section>
           <Section title="内容与 Listing 文案"><FieldGrid data={product.content as unknown as Record<string, unknown> | null | undefined} fields={CONTENT_FIELDS} /></Section>
           <CollectionSection title="知识库 QA" items={product.qa_items} fields={QA_FIELDS} emptyText="暂无 QA" />
           <Section title="负面评价与应对话术"><FieldGrid data={product.qa_negative as unknown as Record<string, unknown> | null | undefined} fields={NEGATIVE_QA_FIELDS} /></Section>

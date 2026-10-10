@@ -1240,17 +1240,31 @@ function skuCandidatesFromMessage(message: ChatMessage): string[] {
 }
 
 function DebugPanel({ message }: { message: ChatMessage }) {
+  const triage = message.answer_metadata?.triage as { urgency?: string; question_kind?: string; policy_version?: string; handoff?: { required?: boolean; status?: string; followup_status?: string } } | undefined
+  const [outcome, setOutcome] = useState(triage?.handoff?.followup_status || 'pending')
+  const [handoffError, setHandoffError] = useState('')
+  const reportOutcome = async (value: 'contacted' | 'resolved' | 'unresolved') => {
+    const id = message.message_id || message.id
+    if (!id) return
+    try { await api.customerService.reportHandoffOutcome(id, value); setOutcome(value); setHandoffError('') }
+    catch (error) { setHandoffError(error instanceof Error ? error.message : '跟进状态保存失败') }
+  }
+  const urgencyLabels: Record<string, string> = { immediate: '立即处理', urgent: '紧急', normal: '正常', general: '一般' }
   return (
     <div className="rounded-xl border border-emerald-100 bg-emerald-50/70 overflow-hidden">
       <div className="px-3 py-2 text-xs font-semibold text-emerald-700 border-b border-emerald-100">管理员调试</div>
       <div className="space-y-2 p-3 text-xs text-apple-text">
         <div className="flex flex-wrap gap-2">
+          {triage?.urgency && <Badge label={`紧急程度：${urgencyLabels[triage.urgency] || triage.urgency}`} />}
+          {triage?.handoff?.required && <Badge label="建议人工处理（尚未接通）" />}
+          {triage?.policy_version && <Badge label={`规则：${triage.policy_version}`} />}
           {message.intent && <Badge label={`意图：${message.intent}`} />}
           {message.answer_type && <Badge label={`类型：${message.answer_type}`} />}
           {message.confidence && <Badge label={`置信度：${message.confidence}`} />}
           {message.uncertainty && <Badge label={`不确定性：${message.uncertainty}`} />}
         </div>
         {Boolean(message.warnings?.length) && <HintList title="异常提示" tone="warning" items={message.warnings || []} />}
+        {triage?.handoff?.required && <div className="space-y-2"><p>人工跟进：{({ pending: '待跟进', contacted: '已联系', resolved: '已解决', unresolved: '未解决' } as Record<string, string>)[outcome] || outcome}（操作人登记，不代表系统已接通人工）</p><div className="flex gap-2"><button onClick={() => reportOutcome('contacted')}>登记已联系人工</button><button onClick={() => reportOutcome('resolved')}>登记已解决</button><button onClick={() => reportOutcome('unresolved')}>登记未解决</button></div>{handoffError && <p role="alert">{handoffError}</p>}</div>}
         {Boolean(message.steps?.length) && (
           <div>
             <div className="font-semibold text-emerald-700 mb-1">Agent 执行过程</div>

@@ -57,7 +57,7 @@ export default function Register() {
           <div className="eyebrow mb-3">Account Access</div>
           <h1 className="text-4xl font-black tracking-[-0.04em] text-apple-text">创建账号</h1>
           <p className="mt-2 text-apple-gray-medium">
-            {allowPublicRegistration ? '注册以开始使用 AI 创作平台' : '公开注册已关闭，请联系管理员创建账号'}
+            {allowPublicRegistration ? '注册以开始使用智能客服与知识平台' : '公开注册已关闭，请联系管理员创建账号'}
           </p>
         </div>
 

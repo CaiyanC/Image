@@ -6,6 +6,7 @@ from fastapi import HTTPException, status
 from sqlalchemy.orm import Session
 
 from ..core.permission_constants import DEFAULT_TOOL_DEFS, FULL_ACCESS_GROUP_NAMES
+from ..core.business_scope import BUSINESS_TOOL_KEYS
 from ..models.group import Group
 from ..models.permissions import GroupPermission, Permission
 from ..models.tool import Tool
@@ -16,7 +17,7 @@ ALLOWED_TOOL_ENTRIES = {
         "route_path": definition["route_path"],
         "permission_key": definition["permission_key"],
     }
-    for definition in DEFAULT_TOOL_DEFS
+    for definition in DEFAULT_TOOL_DEFS if definition['tool_key'] in BUSINESS_TOOL_KEYS
 }
 
 TOOL_KEY_PATTERN = re.compile(r"^[a-z][a-z0-9_]{1,63}$")
@@ -33,7 +34,7 @@ def list_visible_tools(db: Session, permission_keys: Iterable[str]) -> list[Tool
     return [
         tool
         for tool in list_tools(db)
-        if tool.is_enabled and tool.permission_key in allowed
+        if tool.is_enabled and tool.permission_key in allowed and tool.tool_key in BUSINESS_TOOL_KEYS
     ]
 
 

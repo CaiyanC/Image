@@ -13,6 +13,7 @@ from app.core.permission_constants import MANAGEMENT_GROUP_NAME
 from app.core.security import get_current_user
 from app.main import app
 from app.models.group import Group
+from app.models.operation_logs import OperationLog
 from app.models.product import Product
 from app.models.product_asset import ProductAsset
 from app.models.user import User
@@ -23,7 +24,8 @@ TEST_SKU = "L6-SMOKE-1"
 IMAGE_CATEGORY_NAME = "产品标准图"
 IMAGE_SUB_CATEGORY = "白底图"
 VIDEO_CATEGORY_NAME = "视频素材"
-VIDEO_SUB_CATEGORY = "视频"
+VIDEO_SUB_CATEGORY = "白底视频"
+VIDEO_MATERIAL_TYPE = "whiteBackgroundVideo"
 DEFAULT_STATUS = "待审核"
 BANNED_STATUS = "禁用"
 ARCHIVE_CATEGORY_CODE = "08"
@@ -46,6 +48,7 @@ def client():
             User.__table__,
             Group.__table__,
             UserGroup.__table__,
+            OperationLog.__table__,
         ],
     )
     Session = sessionmaker(bind=engine)
@@ -190,7 +193,7 @@ def test_upload_asset_accepts_image_and_video(client: TestClient):
             "category_code": "06",
             "category_name": VIDEO_CATEGORY_NAME,
             "sub_category": VIDEO_SUB_CATEGORY,
-            "material_type": "video",
+            "material_type": VIDEO_MATERIAL_TYPE,
         },
         files={"files": ("clip.mp4", io.BytesIO(b"\x00\x00\x00\x18ftypisom" + b"x" * 20), "video/mp4")},
     )
@@ -199,6 +202,7 @@ def test_upload_asset_accepts_image_and_video(client: TestClient):
     assert video_payload["count"] == 1
     assert video_payload["items"][0]["asset_type"] == "video"
     assert video_payload["items"][0]["sub_category"] == VIDEO_SUB_CATEGORY
+    assert video_payload["items"][0]["material_type"] == VIDEO_MATERIAL_TYPE
 
 
 def test_tags_patch_only_updates_tags(client: TestClient):

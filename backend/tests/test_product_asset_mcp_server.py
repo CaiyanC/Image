@@ -33,7 +33,8 @@ class ProductAssetMcpServerTest(unittest.TestCase):
             connect_args={"check_same_thread": False},
             poolclass=StaticPool,
         )
-        Base.metadata.create_all(self.engine, tables=[Product.__table__, ProductAsset.__table__])
+        from app.models.product_asset import ProductAssetLink
+        Base.metadata.create_all(self.engine, tables=[Product.__table__, ProductAsset.__table__, ProductAssetLink.__table__])
         self.Session = sessionmaker(bind=self.engine)
         self.db = self.Session()
         self.db.add(Product(
@@ -73,7 +74,7 @@ class ProductAssetMcpServerTest(unittest.TestCase):
             review_status=review_status,
             quality_status=quality_status,
             duplicate_status=duplicate_status,
-            authorization_status="internal_test",
+            authorization_status="authorized",
             is_public=True,
             ai_reference_usable=True,
             seq=seq,
@@ -158,6 +159,26 @@ class ProductAssetMcpServerTest(unittest.TestCase):
         listed = service.list_assets({"sku": "MCP-1", "limit": 1})
 
         self.assertEqual([item["id"] for item in listed], [approved.id])
+
+    def test_all_use_restrictions_apply_before_limit_and_direct_reads(self):
+        restrictions = [
+            ("authorization_status", status) for status in ("internal_test", "pending", "rejected", "denied", "revoked", "unapproved", " UNKNOWN ", "legacy_custom_grant")
+        ] + [("is_competitor", True), ("is_latest_version", False), ("is_public", False),
+             ("ai_reference_usable", False), ("duplicate_status", "cross_sku_reuse"), ("category_code", "08")]
+        blocked_ids = []
+        for index, (field, value) in enumerate(restrictions):
+            asset = self._add_asset(asset_id=f"restricted-{index}", file_name=f"restricted-{index}.png", seq=index + 1)
+            setattr(asset, field, value)
+            self.db.commit()
+            blocked_ids.append(asset.id)
+        ready = self._add_asset(asset_id="fully-ready", file_name="fully-ready.png", seq=100)
+        service = ProductAssetMcpService(self.db, upload_dir=self.temp_dir.name)
+        self.assertEqual([item["id"] for item in service.list_assets({"sku": "MCP-1", "limit": 1})], [ready.id])
+        from app.services.product_asset_mcp_service import ProductAssetMcpError
+        for asset_id in blocked_ids:
+            with self.assertRaises(ProductAssetMcpError):
+                service.read_asset("MCP-1", asset_id, include_image=False)
+        self.assertEqual(self.db.query(ProductAsset).count(), len(restrictions) + 1)
 
     def test_resource_read_and_path_escape_are_bounded(self):
         asset = self._add_asset(asset_id="resource", file_name="resource.png")

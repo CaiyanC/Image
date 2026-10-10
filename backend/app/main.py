@@ -22,11 +22,13 @@ from .core.config import (
     validate_security_settings,
 )
 from .core.database import init_db, SessionLocal
+from .core.business_scope import is_retired_api
 from .core.permission_constants import MANAGEMENT_GROUP_NAME, PRODUCT_TEAM_GROUP_NAME
 from .core.security import get_current_super_admin, get_password_hash
 from .models.user import User
 from .api import auth, users, generation, history, admin, products, groups, categories, drafts, customer_service, knowledge_base, files, assets, asset_search, tools, admin_tools, model_governance
 from .services import knowledge_service
+from .api import competitor_assets, loading_rates
 
 def _configure_error_logging() -> None:
     logs_dir = resolve_project_path(settings.LOG_DIR)
@@ -75,6 +77,13 @@ app.add_middleware(
 
 
 @app.middleware("http")
+async def enforce_business_scope(request: Request, call_next):
+    if is_retired_api(request.url.path):
+        return JSONResponse(status_code=410, content={"detail": "该功能已停用；系统仅保留智能客服、知识库和素材库。"})
+    return await call_next(request)
+
+
+@app.middleware("http")
 async def enforce_cookie_origin(request: Request, call_next):
     if (
         request.method.upper() not in {"GET", "HEAD", "OPTIONS"}
@@ -116,6 +125,8 @@ app.include_router(drafts.router)
 app.include_router(products.router)
 app.include_router(assets.router)
 app.include_router(asset_search.router)
+app.include_router(competitor_assets.router)
+app.include_router(loading_rates.router)
 app.include_router(groups.router)
 app.include_router(categories.router)
 app.include_router(customer_service.router)

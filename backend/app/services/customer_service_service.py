@@ -30486,6 +30486,30 @@ def save_message_feedback(
     return {"message_id": message.id, "feedback": feedback}
 
 
+def report_handoff_outcome(db: Session, *, user_id: str, message_id: str, outcome: str) -> dict:
+    if outcome not in {"pending", "contacted", "resolved", "unresolved"}:
+        raise HTTPException(status_code=400, detail="不支持的人工跟进状态")
+    message = db.query(CustomerServiceMessage).join(CustomerServiceConversation).filter(
+        CustomerServiceMessage.id == message_id, CustomerServiceMessage.role == "assistant",
+        CustomerServiceConversation.user_id == str(user_id),
+    ).first()
+    if not message:
+        raise HTTPException(status_code=404, detail="客服消息不存在")
+    sources = _safe_json(message.sources_json, [])
+    meta = next((entry for entry in sources if isinstance(entry, dict) and entry.get("type") == "agent_meta"), {})
+    metadata = meta.get("answer_metadata") or {}
+    handoff = (metadata.get("triage") or {}).get("handoff") or {}
+    if not handoff.get("required"):
+        raise HTTPException(status_code=400, detail="该回复没有待跟进的人工处理建议")
+    # This is a human-reported outcome, never proof of provider connection.
+    audit = {"outcome": outcome, "reported_by": str(user_id), "reported_at": datetime.now(timezone.utc).isoformat(), "verification": "user_reported"}
+    handoff["followup_status"] = outcome
+    handoff.setdefault("history", []).append(audit)
+    message.sources_json = json.dumps(sources, ensure_ascii=False, default=str)
+    db.commit()
+    return {"message_id": message.id, "handoff": handoff}
+
+
 async def _try_explicit_customer_mutation_result(
     db: Session,
     *,
@@ -35775,7 +35799,7 @@ async def _ask_customer_service_legacy(
     )
 
 
-async def ask_customer_service(
+async def _dispatch_customer_service(
     db: Session,
     *,
     user_id: str,
@@ -35839,6 +35863,82 @@ async def ask_customer_service(
         conversation_id=conversation_id,
         answer_delta_callback=answer_delta_callback,
     )
+
+
+async def ask_customer_service(
+    db: Session, *, user_id: str, question: str, sku: str | None = None,
+    conversation_id: str | None = None,
+    answer_delta_callback: Callable[[str], Awaitable[None]] | None = None,
+    pipeline: str | None = None, server_selected_pipeline: bool = False,
+) -> dict:
+    from .customer_service_triage import classify, safe_reply
+    from .customer_service_workbuddy_rag_service import _persist_result
+
+    selected = customer_pipeline_service.resolve_customer_service_pipeline(pipeline, server_selected=server_selected_pipeline)
+    if not settings.CUSTOMER_SERVICE_PLAN_ENABLED:
+        return await _dispatch_customer_service(db, user_id=user_id, question=question, sku=sku,
+            conversation_id=conversation_id, answer_delta_callback=answer_delta_callback,
+            pipeline=selected, server_selected_pipeline=True)
+    previous_question = None
+    previous_purchase = None
+    product_context = bool(sku)
+    if conversation_id:
+        existing_conversation = _get_or_create_conversation(db, str(user_id), question, sku, conversation_id, pipeline=selected)
+        product_context = product_context or bool(existing_conversation.sku)
+        previous_message = db.query(CustomerServiceMessage).filter(
+            CustomerServiceMessage.conversation_id == conversation_id, CustomerServiceMessage.role == "user"
+        ).order_by(CustomerServiceMessage.created_at.desc(), CustomerServiceMessage.id.desc()).first()
+        previous_question = previous_message.content if previous_message else None
+        previous_answer = db.query(CustomerServiceMessage).filter(
+            CustomerServiceMessage.conversation_id == conversation_id, CustomerServiceMessage.role == "assistant"
+        ).order_by(CustomerServiceMessage.created_at.desc(), CustomerServiceMessage.id.desc()).first()
+        for item in _safe_json(previous_answer.sources_json if previous_answer else None, []):
+            if isinstance(item, dict) and item.get("type") == "agent_meta":
+                prior_triage = (item.get("answer_metadata") or {}).get("triage") or {}
+                previous_purchase = prior_triage.get("purchase")
+                break
+    triage = classify(question, previous_question=previous_question, product_context=product_context, purchase_context=previous_purchase)
+    reply = safe_reply(triage, question=question)
+    if reply:
+        clarification = triage["question_kind"] in {"ambiguous_request", "ambiguous_product"}
+        # Owner and pipeline are verified by the shared persistence contract,
+        # including for a deterministic safety response.
+        return await _persist_result(
+            db, user_id=str(user_id), question=question,
+            conversation_id=conversation_id, pipeline_version=selected,
+            agent_result={"answer": reply, "answer_type": "clarification" if clarification else "faq", "intent": triage["question_kind"],
+                          "needs_clarification": clarification,
+                          "confidence": "low" if clarification else "high", "uncertainty": "partial", "result_skus": [],
+                          "answer_metadata": {"triage": triage, "evidence_ids": [], "review_checks": {"safety_first": triage["urgency"] == "immediate", "no_live_promise": True}},
+                          "sources": [], "skip_polish": True},
+            answer_delta_callback=answer_delta_callback,
+        )
+    from .customer_purchase_urgency import purchase_turn_context
+    purchase_token = purchase_turn_context.set(triage["purchase"])
+    try:
+        result = await _dispatch_customer_service(
+            db, user_id=user_id, question=question, sku=sku, conversation_id=conversation_id,
+            answer_delta_callback=answer_delta_callback, pipeline=selected, server_selected_pipeline=True,
+        )
+    finally:
+        purchase_turn_context.reset(purchase_token)
+    metadata = dict(result.get("answer_metadata") or {})
+    metadata["triage"] = triage
+    metadata["review_checks"] = {"intent_checked": True, "product_binding": result.get("result_skus") or [],
+                                 "evidence_ids": metadata.get("evidence_ids") or [], "human_review_pending": True}
+    result["answer_metadata"] = metadata
+    # Store the same audit returned by the API; do not leave it only in logs.
+    message = db.query(CustomerServiceMessage).join(CustomerServiceConversation).filter(
+        CustomerServiceMessage.id == result.get("message_id"), CustomerServiceConversation.user_id == str(user_id)
+    ).first()
+    if message:
+        sources = _safe_json(message.sources_json, [])
+        for source in sources:
+            if isinstance(source, dict) and source.get("type") == "agent_meta":
+                source["answer_metadata"] = metadata
+        message.sources_json = json.dumps(sources, ensure_ascii=False, default=str)
+        db.commit()
+    return result
 
 
 def _finalize_answer(agent_result: dict) -> dict:
@@ -35909,6 +36009,7 @@ def review_samples(db: Session, user_id: str, limit: int = 100) -> dict:
             "intent": meta.get("intent"),
             "confidence": meta.get("confidence"),
             "agent_quality": meta.get("agent_quality", {}),
+            "answer_metadata": meta.get("answer_metadata", {}),
             "needs_clarification": meta.get("needs_clarification", False),
             "anomalies": meta.get("anomalies", []),
             "warnings": meta.get("warnings", []),

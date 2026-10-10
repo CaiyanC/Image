@@ -16,6 +16,18 @@ from ..models.user import User
 from ..services import agent_action_service, customer_cache_service, customer_llm_service, customer_perf_service, customer_pipeline_service, customer_service_service, operation_log_service
 
 router = APIRouter(prefix="/api/customer-service", tags=["customer-service"])
+class HandoffOutcomeRequest(BaseModel):
+    outcome: str = Field(..., pattern="^(pending|contacted|resolved|unresolved)$")
+
+
+@router.post("/messages/{message_id}/handoff-outcome")
+def report_handoff_outcome(
+    message_id: str, body: HandoffOutcomeRequest,
+    current_user: User = Depends(require_permission("ai.customer_service")),
+    db: Session = Depends(get_db),
+):
+    return customer_service_service.report_handoff_outcome(db, user_id=current_user.id, message_id=message_id, outcome=body.outcome)
+
 logger = logging.getLogger("uvicorn")
 
 _PARITY_CANONICAL_FIELDS = (

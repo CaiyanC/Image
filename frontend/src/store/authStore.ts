@@ -1,6 +1,7 @@
 import { create } from 'zustand'
 import { api, ApiRequestError } from '../services/api'
 import type { User } from '../types'
+import { businessLandingPath } from '../components/layout/navigation'
 
 export function isManagement(user: User | null): boolean {
   return !!user?.groups?.some((group) =>
@@ -15,7 +16,7 @@ export function hasPermission(user: User | null, permissionKey: string): boolean
 }
 
 export function getLandingPath(user: User | null): string {
-  return user ? '/tools' : '/login'
+  return user ? businessLandingPath(key => hasPermission(user, key)) : '/login'
 }
 
 interface AuthState {

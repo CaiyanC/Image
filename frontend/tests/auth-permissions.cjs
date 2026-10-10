@@ -8,6 +8,10 @@ const compiled = ts.transpileModule(fs.readFileSync(path.join(__dirname, '../src
   compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
 }).outputText;
 const exported = {};
+const navigation = {};
+vm.runInNewContext(ts.transpileModule(fs.readFileSync(path.join(__dirname, '../src/components/layout/navigation.ts'), 'utf8'), {
+  compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
+}).outputText, { exports: navigation });
 vm.runInNewContext(compiled, {
   exports: exported,
   require: (name) => {
@@ -17,6 +21,7 @@ vm.runInNewContext(compiled, {
       return { getState: () => state };
     } };
     if (name === '../services/api') return { api: {}, ApiRequestError: class extends Error {} };
+    if (name === '../components/layout/navigation') return navigation;
     throw Error(`Unexpected dependency: ${name}`);
   },
 });
@@ -32,13 +37,13 @@ for (const group_name of ['总经办', 'IT部', '产品部']) {
   }
 }
 const paths = {
-  'ai.generate': '/', 'ai.customer_service': '/customer-service', 'tools.view': '/tools',
-  'finance.ecommerce_data_fill': '/tools/ecommerce-data-fill', 'product.read': '/products',
-  'product.qa.manage': '/products/qa/new', 'product.edit': '/products/qa/new',
-  'product.create': '/products/create', 'product.audit.view': '/products/audit',
+  'ai.generate': '/no-access', 'ai.customer_service': '/customer-service', 'tools.view': '/no-access',
+  'finance.ecommerce_data_fill': '/no-access', 'product.read': '/products',
+  'product.qa.manage': '/products/qa/new', 'product.edit': '/products/drafts',
+  'product.create': '/products/drafts', 'product.audit.view': '/products/audit',
   'product.full.view': '/products/full-view', 'media.read': '/assets', 'media.search': '/assets/search',
   'knowledge.manage': '/knowledge-base', 'knowledge.files.manage': '/file-knowledge',
-  'history.view': '/history', 'profile.view': '/profile',
+  'history.view': '/no-access', 'profile.view': '/no-access',
 };
 for (const [permission, route] of Object.entries(paths)) assert.equal(exported.getLandingPath(user([permission])), route);
 assert.equal(exported.getLandingPath(user()), '/no-access');

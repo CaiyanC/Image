@@ -36,7 +36,6 @@ export default function Header() {
   const superAdminItems = [
     ...(isSuperAdmin ? [
     { path: '/admin/department-workbench', label: '部门工作台' },
-    { path: '/admin/tools', label: '工具管理' },
     { path: '/admin/access-control', label: '组织与权限' },
     { path: '/admin/model-governance', label: '模型治理' },
     { path: '/admin/settings', label: '设置' },
@@ -56,10 +55,10 @@ export default function Header() {
             </span>
             <span className="min-w-0">
               <span className="block truncate text-base font-black tracking-tight text-apple-text sm:text-lg">
-                AI 创作平台
+                智能客服与知识平台
               </span>
               <span className="hidden text-[10px] font-bold uppercase tracking-[0.2em] text-teal-700/60 sm:block">
-                Enterprise Studio
+                Customer Knowledge
               </span>
             </span>
           </Link>

@@ -30,9 +30,15 @@ from app.models.product_media import ProductMedia
 from app.models.product_prompts import ProductPrompts
 from app.models.product_qa import ProductQa, ProductQaNegative
 from app.models.product_specs import ProductSpecs
+from app.models.product_supply_chain import ProductSupplyChain
 from app.services import customer_cache_service
 from app.services import draft_service, product_service
 from app.services.product_service import _normalize_size_info
+from app.services.loading_rate_service import (
+    calculate_carton_cargo_volume,
+    calculate_loading_rate,
+    outer_carton_volume_m3,
+)
 
 
 class ProductServiceSizeInfoTest(unittest.TestCase):
@@ -277,6 +283,7 @@ class ProductServiceSpecsUpdateTest(unittest.TestCase):
             tables=[
                 Product.__table__,
                 ProductSpecs.__table__,
+                ProductSupplyChain.__table__,
                 ProductBusiness.__table__,
                 ProductContent.__table__,
                 ProductMedia.__table__,
@@ -372,6 +379,69 @@ class ProductServiceSpecsUpdateTest(unittest.TestCase):
         self.db.refresh(self.qa)
         self.assertEqual(self.qa.integrity_status, "approved")
 
+    def test_supply_chain_fields_round_trip_to_product_detail(self):
+        result = product_service.update_product_supply_chain(
+            self.db,
+            "SPECS-JSON-1",
+            {
+                "barcode_69": "0691234567890",
+                "cost_price": "12.3456",
+                "cost_currency": "CNY",
+                "supplier_name": "测试供应商",
+                "outer_carton_length_cm": "35.5",
+                "outer_carton_width_cm": 24,
+                "outer_carton_height_cm": 18.25,
+                "outer_carton_pcs": 12,
+            },
+        )
+
+        supply_chain = result["supply_chain"]
+        self.assertEqual(supply_chain["barcode_69"], "0691234567890")
+        self.assertEqual(supply_chain["cost_price"], 12.3456)
+        self.assertEqual(supply_chain["supplier_name"], "测试供应商")
+        self.assertEqual(supply_chain["outer_carton_length_cm"], 35.5)
+        self.assertEqual(supply_chain["outer_carton_pcs"], 12)
+        self.assertAlmostEqual(supply_chain["outer_carton_volume_m3"], 0.015549)
+
+    def test_advanced_search_can_filter_supply_chain_fields(self):
+        product_service.update_product_supply_chain(
+            self.db,
+            "SPECS-JSON-1",
+            {
+                "barcode_69": "0691234567890",
+                "cost_price": 12.3456,
+                "supplier_name": "测试供应商",
+                "outer_carton_pcs": 12,
+            },
+        )
+
+        items, total = product_service.advanced_search_products(
+            self.db,
+            {
+                "barcode_69": "069123",
+                "supplier_name": "供应商",
+                "cost_price_min": 12,
+                "cost_price_max": 13,
+                "outer_carton_pcs_min": 10,
+                "outer_carton_pcs_max": 20,
+                "limit": 20,
+            },
+        )
+
+        self.assertEqual(total, 1)
+        self.assertEqual(items[0]["sku"], "SPECS-JSON-1")
+
+    def test_loading_rate_uses_cargo_volume_and_usable_container_volume(self):
+        carton_volume = outer_carton_volume_m3(35.5, 24, 18.25)
+        cargo_volume = calculate_carton_cargo_volume(carton_volume_m3=carton_volume, carton_count=10)
+        result = calculate_loading_rate(
+            actual_cargo_volume_m3=cargo_volume,
+            container_usable_volume_m3=1,
+        )
+        self.assertAlmostEqual(float(result["actual_cargo_volume_m3"]), 0.15549, places=5)
+        self.assertAlmostEqual(float(result["loading_rate_pct"]), 15.549, places=3)
+        self.assertFalse(result["over_capacity"])
+
     def test_identity_update_reopens_qa_against_new_same_sku_evidence(self):
         product_service.update_product(
             self.db,
@@ -399,6 +469,7 @@ class ProductImportSafetyTest(unittest.TestCase):
                 ProductQaNegative.__table__,
                 ProductPrompts.__table__,
                 ProductSpecs.__table__,
+                ProductSupplyChain.__table__,
                 ProductBusiness.__table__,
                 ProductContent.__table__,
                 ProductMedia.__table__,

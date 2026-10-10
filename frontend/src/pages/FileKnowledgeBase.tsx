@@ -506,6 +506,8 @@ export default function FileKnowledgeBase() {
                 <span className={`rounded-full px-2.5 py-1 text-xs font-bold ${recordStatusClass(record.parse_status)}`}>
                   {recordStatusText(record.parse_status)}
                 </span>
+                {record.is_active === false && <p className="mt-2 text-xs font-semibold text-amber-700">仅归档 / 待复核，未用于客服</p>}
+                {!!record.source_qa_count && <p className="mt-1 text-xs text-slate-500">原文含{record.source_qa_count}条FAQ</p>}
                 {record.task_status && (
                   <p className="mt-2 text-xs text-apple-gray-medium">任务：{record.task_status}</p>
                 )}

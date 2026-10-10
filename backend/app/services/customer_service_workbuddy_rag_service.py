@@ -217,6 +217,8 @@ def _compact_product_for_prompt(detail: dict[str, Any]) -> dict[str, Any]:
         "business": {
             "top_selling_points": business.get("top_selling_points"),
             "target_audience": business.get("target_audience"),
+            "suitable_people": business.get("suitable_people"),
+            "audience_tags": business.get("audience_tags"),
             "usage_scenarios": business.get("usage_scenarios"),
         },
     }, string_limit=120, list_limit=8, dict_limit=20)
@@ -863,6 +865,8 @@ async def _generate_answer(
     start = perf_counter()
     metadata: dict[str, Any] = {}
     try:
+        from .customer_purchase_urgency import purchase_turn_context
+        payload = {**payload, "purchase_service_context": purchase_turn_context.get() or {}}
         messages = [
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": json.dumps(payload, ensure_ascii=False, default=str)},
@@ -1946,6 +1950,7 @@ async def _persist_result(
     agent_result: dict[str, Any],
     answer_delta_callback: Callable[[str], Awaitable[None]] | None,
     answer_already_streamed: bool = False,
+    pipeline_version: str = PIPELINE_VERSION,
 ) -> dict[str, Any]:
     """Persist using the shared conversation contract, scoped to this path."""
     from . import customer_service_service as shared_service
@@ -1962,7 +1967,7 @@ async def _persist_result(
         question,
         result_skus[0] if len(result_skus) == 1 else None,
         conversation_id,
-        pipeline=PIPELINE_VERSION,
+        pipeline=pipeline_version,
     )
     if (agent_result.get("answer_metadata") or {}).get("purchase_identity_reset") and not result_skus:
         conversation.sku = None
@@ -2024,7 +2029,7 @@ async def _persist_result(
         answer_metadata=dict(agent_result.get("answer_metadata") or {}),
         debug=dict(agent_result.get("debug") or {}),
         results=list(agent_result.get("results") or []),
-        pipeline_version=PIPELINE_VERSION,
+        pipeline_version=pipeline_version,
         intent_override=str(agent_result.get("intent") or "").strip() or None,
         anomalies=list(agent_result.get("anomalies") or []),
         warnings=list(agent_result.get("warnings") or []),

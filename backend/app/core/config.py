@@ -154,6 +154,8 @@ class Settings:
         "CUSTOMER_SERVICE_PIPELINE",
         "semantic_rag_v2" if APP_ENV == "dev" else "legacy",
     ).strip().lower()
+    # Rollback/control switch for matched before/after service-plan tests.
+    CUSTOMER_SERVICE_PLAN_ENABLED: bool = os.getenv("CUSTOMER_SERVICE_PLAN_ENABLED", "true").lower() == "true"
     CUSTOMER_SERVICE_PIPELINE_OVERRIDE_ENABLED: bool = os.getenv(
         "CUSTOMER_SERVICE_PIPELINE_OVERRIDE_ENABLED",
         "true" if APP_ENV == "dev" else "false",

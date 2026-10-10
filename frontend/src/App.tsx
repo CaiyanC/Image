@@ -7,8 +7,6 @@ import PermissionToast from './components/PermissionToast'
 
 const Login = lazy(() => import('./pages/Login'))
 const Register = lazy(() => import('./pages/Register'))
-const Workspace = lazy(() => import('./pages/Workspace'))
-const History = lazy(() => import('./pages/History'))
 const AdminSettings = lazy(() => import('./pages/AdminSettings'))
 const AdminAccessControl = lazy(() => import('./pages/AdminAccessControl'))
 const AdminLogs = lazy(() => import('./pages/AdminLogs'))
@@ -17,6 +15,7 @@ const ProductAuditOverview = lazy(() => import('./pages/ProductAuditOverview'))
 const ProductFullView = lazy(() => import('./pages/ProductFullView'))
 const AssetLibrary = lazy(() => import('./pages/AssetLibrary'))
 const AssetSearch = lazy(() => import('./pages/AssetSearch'))
+const CompetitorLibrary = lazy(() => import('./pages/CompetitorLibrary'))
 const CustomerService = lazy(() => import('./pages/CustomerService'))
 const WorkbuddyCustomerService = lazy(() => import('./pages/WorkbuddyCustomerService'))
 const AgentCustomerService = lazy(() => import('./pages/AgentCustomerService'))
@@ -26,9 +25,6 @@ const FileKnowledgeBase = lazy(() => import('./pages/FileKnowledgeBase'))
 const ProductCreate = lazy(() => import('./pages/ProductCreate'))
 const DraftBox = lazy(() => import('./pages/DraftBox'))
 const Profile = lazy(() => import('./pages/Profile'))
-const ToolCenter = lazy(() => import('./pages/ToolCenter'))
-const EcommerceDataFill = lazy(() => import('./pages/EcommerceDataFill'))
-const AdminTools = lazy(() => import('./pages/AdminTools'))
 const AdminDepartmentWorkbench = lazy(() => import('./pages/AdminDepartmentWorkbench'))
 const AdminModelGovernance = lazy(() => import('./pages/AdminModelGovernance'))
 
@@ -120,41 +116,25 @@ export default function App() {
         <Route
           path="/"
           element={
-            <PermissionRoute permissionKey="ai.generate">
-              <Layout>
-                <Workspace />
-              </Layout>
-            </PermissionRoute>
+            <Navigate to={getLandingPath(user)} replace />
           }
         />
         <Route
           path="/tools"
           element={
-            <ProtectedRoute>
-              <Layout>
-                <ToolCenter />
-              </Layout>
-            </ProtectedRoute>
+            <Navigate to={getLandingPath(user)} replace />
           }
         />
         <Route
           path="/tools/ecommerce-data-fill"
           element={
-            <PermissionRoute permissionKey="finance.ecommerce_data_fill">
-              <Layout>
-                <EcommerceDataFill />
-              </Layout>
-            </PermissionRoute>
+            <Navigate to={getLandingPath(user)} replace />
           }
         />
         <Route
           path="/history"
           element={
-            <PermissionRoute permissionKey="history.view">
-              <Layout>
-                <History />
-              </Layout>
-            </PermissionRoute>
+            <Navigate to={getLandingPath(user)} replace />
           }
         />
         <Route
@@ -197,6 +177,7 @@ export default function App() {
             </PermissionRoute>
           }
         />
+        <Route path="/assets/competitors" element={<AnyPermissionRoute permissionKeys={['competitor.view', 'media.upload']}><Layout><CompetitorLibrary /></Layout></AnyPermissionRoute>} />
         <Route
           path="/assets/search"
           element={
@@ -235,6 +216,12 @@ export default function App() {
                 <ProductFullView />
               </Layout>
             </PermissionRoute>
+          }
+        />
+        <Route
+          path="/products/loading-rate"
+          element={
+            <Navigate to={getLandingPath(user)} replace />
           }
         />
         {import.meta.env.MODE === 'dev' && (
@@ -344,11 +331,7 @@ export default function App() {
         <Route
           path="/admin/tools"
           element={
-            <SuperAdminRoute>
-              <Layout>
-                <AdminTools />
-              </Layout>
-            </SuperAdminRoute>
+            <Navigate to={getLandingPath(user)} replace />
           }
         />
         <Route

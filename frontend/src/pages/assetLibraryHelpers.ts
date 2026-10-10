@@ -1,5 +1,5 @@
 import type { AssetTags, ProductAsset } from '../types'
-import { ASSET_SUB_CATEGORIES, STATUS_TO_EN } from './assetLibraryConfig'
+import { ASSET_SUB_CATEGORIES, STATUS_TO_EN, getCategoryTagValue } from './assetLibraryConfig'
 
 const API_BASE_ENV = import.meta.env.VITE_API_BASE_URL || '/api'
 const API_BASE_URL = resolveApiBaseUrl(API_BASE_ENV)
@@ -61,15 +61,80 @@ export function cloneTags(tags?: AssetTags | null): AssetTags {
   return result
 }
 
+/**
+ * Fill the tag view for historical rows that predate the structured tag
+ * fields.  We deliberately keep this derived: the stored tags remain the
+ * source of truth, while old rows can still participate in the same filters
+ * and display the same labels as newly uploaded assets.
+ */
+export function getEffectiveAssetTags(asset: Partial<ProductAsset>): AssetTags {
+  const result = cloneTags(asset.tags)
+  const add = (key: string, value?: string | null) => {
+    const clean = String(value || '').trim()
+    if (!clean) return
+    const values = (result as Record<string, string[]>)[key] || []
+    if (!values.includes(clean)) (result as Record<string, string[]>)[key] = [...values, clean]
+  }
+
+  const category = String(asset.category_code || '').trim()
+  const subCategory = String(asset.sub_category || '').trim()
+  const materialType = String(asset.material_type || '').trim()
+  const subDefinition = ASSET_SUB_CATEGORIES.find(item => item.categoryCode === category && item.name === subCategory)
+  const materialDefinition = ASSET_SUB_CATEGORIES.find(item => item.categoryCode === category && item.materialType === materialType)
+
+  add('category_tags', getCategoryTagValue(category, subCategory))
+
+  // New rows usually already contain this label.  Derive it only for legacy
+  // rows so a white-background/accessory/multi-angle image remains searchable.
+  if (['01', '02', '03', '06'].includes(category)) {
+    add('material_type_tags', subDefinition?.name || materialDefinition?.name)
+  }
+
+  if (category === '01') {
+    const subjectBySubCategory: Record<string, string> = {
+      主体图: '主体', 配件图: '配件', 收纳袋图: '收纳袋', 套装图: '套装',
+    }
+    add('subject_tags', subjectBySubCategory[subCategory])
+    if (subCategory === '多角度图' && !result.view_tags?.length) {
+      const viewByMaterial: Record<string, string> = { front: '正视', side: '侧视', back: '背视', detail: '特写' }
+      add('view_tags', viewByMaterial[materialType])
+    }
+  }
+  if (category === '03') {
+    const languageBySubCategory: Record<string, string> = { 中文说明: '中文', 英文说明: '英文' }
+    add('language_tags', languageBySubCategory[subCategory])
+  }
+  if (category === '04') {
+    add('scene_tags', subCategory === '车露营' ? '车露' : subCategory)
+  }
+  add('channel_tags', asset.channel)
+  const languageByCode: Record<string, string> = { CN: '中文', EN: '英文', JA: '日文' }
+  add('language_tags', languageByCode[String(asset.language_tag || '').trim().toUpperCase()])
+  return result
+}
+
 export function addTag(tags: AssetTags | undefined, key: string, tag: string) {
   const clean = tag.trim()
   const next = cloneTags(tags)
   if (!clean) return next
-  const current = (next as Record<string, string[]>)[key] || []
-  if (!current.includes(clean)) {
-    ;(next as Record<string, string[]>)[key] = [...current, clean]
-  }
+  const current = ((next as Record<string, string[]>)[key] || [])
+    .filter(value => !areExclusiveTags(key, value, clean))
+  ;(next as Record<string, string[]>)[key] = current.includes(clean) ? current : [...current, clean]
   return next
+}
+
+export function areExclusiveTags(key: string, first: string, second: string) {
+  if (first === second) return false
+  const groups: Record<string, string[][]> = {
+    quality_check_tags: [
+      ['完整性通过', '完整性需修改'], ['瑕疵检查通过', '瑕疵检查需修改'],
+      ['质感通过', '质感需修改'], ['复用性通过', '复用性需修改'],
+    ],
+    composition_tags: [['带人物', '纯产品']],
+    view_tags: [['正视', '侧视', '背视', '特写']],
+    expression_tags: [['人物场景图', '纯产品场景图']],
+  }
+  return (groups[key] || []).some(group => group.includes(first) && group.includes(second))
 }
 
 export function removeTag(tags: AssetTags | undefined, key: string, tag: string) {
@@ -158,4 +223,10 @@ export function sortAssets(assets: ProductAsset[], activeSubCategory: string | n
     if (a.seq !== b.seq) return a.seq - b.seq
     return String(a.created_at).localeCompare(String(b.created_at))
   })
+}
+export function changedAssetFields<T extends object>(original: T, edited: Partial<T>): Partial<T> {
+  const originalRecord = original as Record<string, unknown>
+  return Object.fromEntries(
+    Object.entries(edited).filter(([key, value]) => JSON.stringify(value) !== JSON.stringify(originalRecord[key])),
+  ) as Partial<T>
 }

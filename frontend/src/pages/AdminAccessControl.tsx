@@ -94,12 +94,12 @@ const PERMISSION_PURPOSES: Record<string, string> = {
   'history.view': '进入生成历史记录页面，查看当前账号可见的任务记录。',
   'profile.view': '进入个人资料页；没有此权限仍可登录并使用其他已授权功能。',
   'category.read': '读取产品品类候选数据；不授予产品编辑权限。',
-  'competitor.view': '预留权限：尚无独立竞品查看执行链，不生效且暂不可配置。',
+  'competitor.view': '查看独立竞品中心的品牌、图片/视频及内部预览；上传另需素材上传权限，原文件下载另需下载权限。不授予发布或 AI 使用权限。',
   'new_product.view': '预留权限：尚无独立新品查看执行链，不生效且暂不可配置。',
   'export.approved': '预留权限：尚无独立导出审批执行链，不生效且暂不可配置。',
 }
 
-const RESERVED_PERMISSIONS = new Set(['system.admin', 'product.review', 'competitor.view', 'new_product.view', 'export.approved', 'ai.authorize', 'tool.manage'])
+const RESERVED_PERMISSIONS = new Set(['system.admin', 'product.review', 'new_product.view', 'export.approved', 'ai.authorize', 'tool.manage'])
 
 function purposeForPermission(permission: Permission) {
   return PERMISSION_PURPOSES[permission.permission_key] || permission.description || `授予“${labelForPermission(permission)}”能力；具体操作以服务端权限校验为准。`

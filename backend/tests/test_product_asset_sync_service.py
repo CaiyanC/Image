@@ -16,7 +16,8 @@ from app.services import product_asset_sync_service
 class ProductAssetSyncServiceTest(unittest.TestCase):
     def setUp(self):
         engine = create_engine("sqlite:///:memory:")
-        Base.metadata.create_all(engine, tables=[Product.__table__, ProductAsset.__table__])
+        from app.models.product_asset import ProductAssetLink
+        Base.metadata.create_all(engine, tables=[Product.__table__, ProductAsset.__table__, ProductAssetLink.__table__])
         self.db = sessionmaker(bind=engine)()
         self.product = Product(
             id="sync-product",

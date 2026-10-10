@@ -3,6 +3,7 @@ const BASE_URL = resolveApiBaseUrl(API_BASE_ENV)
 const TRACE_CUSTOMER_AGENT = import.meta.env.VITE_TRACE_CUSTOMER_AGENT === 'true'
 
 import type { AssetGrouped, AssetTags, AssetTaxonomy, AssetUploadResponse, AuthResponse, Product, ProductAsset, ProductAssetOverview, ProductListResponse, ProductDraft, User } from '../types'
+import type { CompetitorAsset, CompetitorBrandCount } from '../types'
 import { NO_PERMISSION_MESSAGE, showNoPermissionToast } from './permissionFeedback'
 
 const ERROR_MESSAGES: Record<string, string> = {
@@ -41,7 +42,29 @@ export class ApiRequestError extends Error {
 }
 
 function normalizeErrorMessage(detail: unknown, status?: number) {
-  const raw = typeof detail === 'string' ? detail : JSON.stringify(detail || '')
+  let raw = ''
+  if (typeof detail === 'string') {
+    raw = detail
+  } else if (Array.isArray(detail)) {
+    raw = detail.map(item => {
+      if (item && typeof item === 'object') {
+        const record = item as Record<string, unknown>
+        return String(record.msg || record.message || JSON.stringify(item))
+      }
+      return String(item)
+    }).filter(Boolean).join('；')
+  } else if (detail && typeof detail === 'object') {
+    const record = detail as Record<string, unknown>
+    const message = record.message || record.detail
+    if (typeof message === 'string') {
+      const missingSkus = Array.isArray(record.missing_skus) ? record.missing_skus.join('、') : ''
+      raw = missingSkus ? `${message}：${missingSkus}` : message
+    } else {
+      raw = JSON.stringify(detail)
+    }
+  } else {
+    raw = String(detail || '')
+  }
   if (ERROR_MESSAGES[raw]) return ERROR_MESSAGES[raw]
   if (status === 404) return '接口或数据不存在，请刷新页面后重试'
   if (status === 403) return NO_PERMISSION_MESSAGE
@@ -124,6 +147,22 @@ export interface PlatformTool {
   sort_order: number
   created_at: string
   updated_at: string
+}
+
+export interface LoadingRateCalculation {
+  actual_cargo_volume_m3: number
+  container_usable_volume_m3: number
+  loading_rate_pct: number
+  over_capacity: boolean
+  formula: string
+  items: Array<{
+    sku: string
+    carton_count: number
+    carton_volume_m3: number
+    cargo_volume_m3: number
+  }>
+  calculation_scope: string
+  source_note: string
 }
 
 export interface GenerationModel {
@@ -552,6 +591,9 @@ export interface KnowledgeFileUploadResponse {
 
 export interface KnowledgeFileRecord {
   document_id: string
+  is_active?: boolean
+  source_review_status?: string | null
+  source_qa_count?: number
   file_name: string
   file_type?: string | null
   parse_status: string
@@ -803,6 +845,10 @@ function parseStreamEvent(rawEvent: string): CustomerServiceStreamEvent | null {
 }
 
 export const api = {
+  loadingRates: {
+    calculate: (data: { actual_cargo_volume_m3?: number; container_usable_volume_m3: number; items?: Array<{ sku: string; carton_count: number }> }) =>
+      request<LoadingRateCalculation>('/loading-rates/calculate', { method: 'POST', body: JSON.stringify(data) }),
+  },
   tools: {
     list: () => request<PlatformTool[]>('/tools'),
     listManaged: () => request<PlatformTool[]>('/admin/tools'),
@@ -1143,6 +1189,9 @@ export const api = {
     updateSpecs: (sku: string, data: Record<string, unknown>) =>
       request(`/products/${sku}/specs`, { method: 'PUT', body: JSON.stringify(data) }),
 
+    updateSupplyChain: (sku: string, data: Record<string, unknown>) =>
+      request(`/products/${sku}/supply-chain`, { method: 'PUT', body: JSON.stringify(data) }),
+
     updateBusiness: (sku: string, data: Record<string, unknown>) =>
       request(`/products/${sku}/business`, { method: 'PUT', body: JSON.stringify(data) }),
 
@@ -1222,11 +1271,21 @@ export const api = {
       sku?: string
       category?: string
       channel?: string
+      maintainer?: string
       review_status?: string
       authorization_status?: string
+      is_public?: boolean
+      ai_customer_usable?: boolean
+      ai_marketing_usable?: boolean
+      ai_reference_usable?: boolean
       quality_status?: string
       duplicate_status?: string
+      category_tags?: string[]
+      quality_check_tags?: string[]
       expression_tags?: string[]
+      subject_tags?: string[]
+      composition_tags?: string[]
+      view_tags?: string[]
       selling_point_tags?: string[]
       scene_tags?: string[]
       mood_tags?: string[]
@@ -1241,7 +1300,7 @@ export const api = {
       const query = new URLSearchParams()
       for (const [key, value] of Object.entries(params)) {
         if (Array.isArray(value)) value.forEach(item => query.append(key, item))
-        else if (value) query.set(key, value)
+        else if (value !== undefined && value !== null && value !== '') query.set(key, String(value))
       }
       const suffix = query.toString() ? `?${query.toString()}` : ''
       return request<{ items: ProductAsset[] }>(`/assets/search${suffix}`)
@@ -1293,9 +1352,21 @@ export const api = {
         method: 'DELETE',
       }),
     upload: (sku: string, data: {
+      related_skus?: string[]
       files: File[]
       category_code: string
       category_name: string
+      maintainer?: string | null
+      category_tags?: string[]
+      material_type_tags?: string[]
+      subject_tags?: string[]
+      expression_tags?: string[]
+      selling_point_tags?: string[]
+      composition_tags?: string[]
+      view_tags?: string[]
+      scene_tags?: string[]
+      mood_tags?: string[]
+      channel_tags?: string[]
       sub_category?: string | null
       material_type?: string | null
       angle_scene?: string | null
@@ -1309,6 +1380,18 @@ export const api = {
       for (const file of data.files) formData.append('files', file)
       formData.append('category_code', data.category_code)
       formData.append('category_name', data.category_name)
+      data.related_skus?.forEach(sku => formData.append('related_skus', sku))
+      if (data.maintainer) formData.append('maintainer', data.maintainer)
+      data.category_tags?.forEach(tag => formData.append('category_tags', tag))
+      data.material_type_tags?.forEach(tag => formData.append('material_type_tags', tag))
+      data.subject_tags?.forEach(tag => formData.append('subject_tags', tag))
+      data.expression_tags?.forEach(tag => formData.append('expression_tags', tag))
+      data.selling_point_tags?.forEach(tag => formData.append('selling_point_tags', tag))
+      data.composition_tags?.forEach(tag => formData.append('composition_tags', tag))
+      data.view_tags?.forEach(tag => formData.append('view_tags', tag))
+      data.scene_tags?.forEach(tag => formData.append('scene_tags', tag))
+      data.mood_tags?.forEach(tag => formData.append('mood_tags', tag))
+      data.channel_tags?.forEach(tag => formData.append('channel_tags', tag))
       if (data.sub_category) formData.append('sub_category', data.sub_category)
       if (data.material_type) formData.append('material_type', data.material_type)
       if (data.angle_scene) formData.append('angle_scene', data.angle_scene)
@@ -1369,6 +1452,10 @@ export const api = {
       request<{ items: Array<Record<string, unknown>>; summary: Record<string, unknown> }>(
         `/customer-service/review-samples?limit=${limit}`
       ),
+    reportHandoffOutcome: (messageId: string, outcome: 'pending' | 'contacted' | 'resolved' | 'unresolved') =>
+      request<{ message_id: string; handoff: Record<string, unknown> }>(`/customer-service/messages/${encodeURIComponent(messageId)}/handoff-outcome`, {
+        method: 'POST', body: JSON.stringify({ outcome }),
+      }),
     deleteConversation: (id: string, pipeline?: CustomerServicePipeline) =>
       request<{ deleted: boolean; id: string }>(
         `/customer-service/conversations/${id}${pipeline ? `?pipeline=${encodeURIComponent(pipeline)}` : ''}`,
@@ -1427,6 +1514,24 @@ export const api = {
     job: (id: string) => request<KnowledgeJob>(`/knowledge-base/jobs/${id}`),
   },
 
+  competitors: {
+    update: (id: string, changes: Pick<CompetitorAsset, 'brand' | 'maintainer' | 'source_note' | 'notes'>) =>
+      request<CompetitorAsset>(`/competitor-assets/${encodeURIComponent(id)}`, { method: 'PATCH', body: JSON.stringify(changes) }),
+    brands: () => request<{ items: CompetitorBrandCount[] }>('/competitor-assets/brands'),
+    list: (brand: string, assetType: 'image' | 'video', offset = 0) => {
+      const query = new URLSearchParams({ brand, asset_type: assetType, offset: String(offset), limit: '100' })
+      return request<{ items: CompetitorAsset[] }>(`/competitor-assets?${query}`)
+    },
+    upload: (data: { brand: string; asset_type: 'image' | 'video'; maintainer: string; source_note: string; files: File[] }) => {
+      const body = new FormData()
+      body.append('brand', data.brand)
+      body.append('asset_type', data.asset_type)
+      body.append('maintainer', data.maintainer)
+      body.append('source_note', data.source_note)
+      data.files.forEach(file => body.append('files', file))
+      return request<{ count: number; items: CompetitorAsset[] }>('/competitor-assets/upload', { method: 'POST', body }, 300000)
+    },
+  },
   files: {
     sign: async (path: string, purpose: 'preview' | 'download' = 'preview') => {
       const response = await request<{ url: string; expires_in: number }>(

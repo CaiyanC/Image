@@ -1,12 +1,13 @@
 import { useState, useEffect } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import { api, type CategoryItem } from '../services/api'
-import type { Product, ProductAsset } from '../types'
+import type { Product, ProductAsset, ProductSupplyChain } from '../types'
 import L1L4Importer from '../components/ProductImport/L1L4Importer'
 import L5Importer from '../components/ProductImport/L5Importer'
 import { SecureImage, SecureVideo } from '../components/SecureFile'
 import { hasPermission, useAuthStore } from '../store/authStore'
 import { canUsePermission, showNoPermissionToast } from '../services/permissionFeedback'
+import { getTagDisplayName } from './assetLibraryConfig'
 
 export default function ProductManagement() {
   const navigate = useNavigate()
@@ -40,6 +41,12 @@ export default function ProductManagement() {
     product_level: '',
     lifecycle_status: '',
     person_in_charge: '',
+    barcode_69: '',
+    supplier_name: '',
+    cost_price_min: '',
+    cost_price_max: '',
+    outer_carton_pcs_min: '',
+    outer_carton_pcs_max: '',
     capacity: '',
     body_material: '',
     color: '',
@@ -227,6 +234,9 @@ export default function ProductManagement() {
       })
       if (payload.gross_weight_min) payload.gross_weight_min = Number(payload.gross_weight_min)
       if (payload.gross_weight_max) payload.gross_weight_max = Number(payload.gross_weight_max)
+      for (const key of ['cost_price_min', 'cost_price_max', 'outer_carton_pcs_min', 'outer_carton_pcs_max']) {
+        if (payload[key] !== undefined && payload[key] !== '') payload[key] = Number(payload[key])
+      }
       const result = await api.products.advancedSearch(payload)
       setProducts(result.items as Product[])
       setTotalProducts(result.total)
@@ -256,6 +266,12 @@ export default function ProductManagement() {
       product_level: '',
       lifecycle_status: '',
       person_in_charge: '',
+      barcode_69: '',
+      supplier_name: '',
+      cost_price_min: '',
+      cost_price_max: '',
+      outer_carton_pcs_min: '',
+      outer_carton_pcs_max: '',
       capacity: '',
       body_material: '',
       color: '',
@@ -366,6 +382,12 @@ export default function ProductManagement() {
             <FilterSelect label="产品等级" value={advancedFilters.product_level} options={advancedOptions.product_level} onChange={(v) => updateAdvancedFilter('product_level', v)} />
             <FilterSelect label="生命周期" value={advancedFilters.lifecycle_status} options={advancedOptions.lifecycle_status} onChange={(v) => updateAdvancedFilter('lifecycle_status', v)} />
             <FilterSelect label="负责人" value={advancedFilters.person_in_charge} options={advancedOptions.person_in_charge} onChange={(v) => updateAdvancedFilter('person_in_charge', v)} />
+            <SearchField label="69码" value={advancedFilters.barcode_69} onChange={(v) => updateAdvancedFilter('barcode_69', v)} />
+            <SearchField label="供应商" value={advancedFilters.supplier_name} onChange={(v) => updateAdvancedFilter('supplier_name', v)} />
+            <SearchField label="最低成本价" value={advancedFilters.cost_price_min} onChange={(v) => updateAdvancedFilter('cost_price_min', v)} />
+            <SearchField label="最高成本价" value={advancedFilters.cost_price_max} onChange={(v) => updateAdvancedFilter('cost_price_max', v)} />
+            <SearchField label="最小箱规" value={advancedFilters.outer_carton_pcs_min} onChange={(v) => updateAdvancedFilter('outer_carton_pcs_min', v)} />
+            <SearchField label="最大箱规" value={advancedFilters.outer_carton_pcs_max} onChange={(v) => updateAdvancedFilter('outer_carton_pcs_max', v)} />
             <SearchField label="容量" value={advancedFilters.capacity} onChange={(v) => updateAdvancedFilter('capacity', v)} />
             <FilterSelect label="材质" value={advancedFilters.body_material} options={advancedOptions.body_material} onChange={(v) => updateAdvancedFilter('body_material', v)} />
             <FilterSelect label="颜色" value={advancedFilters.color} options={advancedOptions.color} onChange={(v) => updateAdvancedFilter('color', v)} />
@@ -530,7 +552,7 @@ export default function ProductManagement() {
                 {[
                   { id: 'L1', icon: '🏷️', label: '产品身份' },
                   { id: 'L2', icon: '📐', label: '物理规格' },
-                  { id: 'L3', icon: '💼', label: '商业价值' },
+                  { id: 'L3', icon: '💼', label: '开发定位' },
                   { id: 'L4', icon: '📝', label: '内容素材' },
                   { id: 'L5', icon: '📚', label: '知识库' },
                   { id: 'L6', icon: '🖼️', label: '多媒体' },
@@ -620,6 +642,10 @@ export default function ProductManagement() {
                         <div className="text-sm font-medium text-apple-text mt-1">{selected.person_in_charge || '-'}</div>
                       </div>
                     </div>
+                    <SupplyChainSummary
+                      supply={selected.supply_chain}
+                      onOpenFullView={() => navigate(`/products/full-view?sku=${encodeURIComponent(selected.sku)}`)}
+                    />
                   </div>
                 )}
 
@@ -691,7 +717,7 @@ export default function ProductManagement() {
 
                 {activeLayer === 'L3' && (
                   <div>
-                    <h3 className="text-sm font-semibold text-apple-text mb-3">💼 L3 - 商业价值</h3>
+                    <h3 className="text-sm font-semibold text-apple-text mb-3">💼 L3 - 开发定位</h3>
                     <div className="space-y-3">
                       {(selected.business?.top_selling_points != null) && (
                         <div className="bg-white/50 rounded-lg p-3">
@@ -701,11 +727,13 @@ export default function ProductManagement() {
                       )}
                       <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
                         <div className="bg-white/50 rounded-lg p-3">
-                          <div className="text-xs text-apple-text">目标人群</div>
+                          <div className="text-xs text-apple-text">目标人群原文</div>
                           <div className="text-sm font-medium text-apple-text mt-1">{(selected.business?.target_audience || '').split(',').filter(Boolean).join(', ') || '-'}</div>
                         </div>
                         <div className="bg-white/50 rounded-lg p-3">
-                          <div className="text-xs text-apple-text">差异化定位</div>
+                          <div className="text-xs text-apple-text">人数 / 人群标签 / 价值定位</div>
+                          <div className="text-sm mt-1">{selected.business?.suitable_people || '-'} / {selected.business?.audience_tags?.join('、') || '-'} / {selected.business?.value_positioning || '-'}</div>
+                          <div className="text-xs text-apple-text mt-2">差异化定位</div>
                           <div className="text-sm font-medium text-apple-text mt-1">{selected.business?.positioning || '-'}</div>
                         </div>
                         <div className="bg-white/50 rounded-lg p-3">
@@ -845,6 +873,9 @@ export default function ProductManagement() {
                                     <div className="absolute bottom-0 left-0 right-0 bg-black/50 text-white text-[10px] px-1 py-0.5 rounded-b-lg truncate">
                                       {asset.sub_category || '未分类'}{asset.status_tag ? ` · ${asset.status_tag}` : ''}
                                     </div>
+                                    <div className="mt-1 flex flex-wrap gap-1">
+                                      {(Object.entries(asset.tags || {}) as Array<[string, string[]]>).flatMap(([key, values]) => values.map((tag: string) => <span key={`${asset.id}-${key}-${tag}`} className="rounded-full bg-teal-50 px-1.5 py-0.5 text-[10px] text-teal-700">{getTagDisplayName(tag)}</span>))}
+                                    </div>
                                   </div>
                                 ))}
                               </div>
@@ -915,6 +946,46 @@ export default function ProductManagement() {
 
     </div>
   )
+}
+
+function SupplyChainSummary({ supply, onOpenFullView }: {
+  supply?: ProductSupplyChain | null
+  onOpenFullView: () => void
+}) {
+  const value = (field: keyof ProductSupplyChain) => {
+    const current = supply?.[field]
+    return current === null || current === undefined || current === '' ? '-' : String(current)
+  }
+  const cost = supply?.cost_price == null ? '-' : `${supply.cost_price}${supply.cost_currency ? ` ${supply.cost_currency}` : ''}`
+  const cartonDimensions = [supply?.outer_carton_length_cm, supply?.outer_carton_width_cm, supply?.outer_carton_height_cm]
+    .every(item => item != null && item > 0)
+    ? `${supply?.outer_carton_length_cm} × ${supply?.outer_carton_width_cm} × ${supply?.outer_carton_height_cm} cm`
+    : '-'
+  return (
+    <div className="mt-4 rounded-lg border border-amber-100 bg-amber-50/55 p-3">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <div>
+          <h4 className="text-sm font-semibold text-apple-text">📦 采购与装箱信息</h4>
+          <p className="mt-1 text-[11px] text-apple-gray-medium">这些字段已写入产品数据库；装载率不是固定产品字段，需要按本次装柜计划计算。</p>
+        </div>
+        <div className="flex gap-2">
+          <button type="button" onClick={onOpenFullView} className="rounded-lg bg-white px-2.5 py-1.5 text-xs font-bold text-teal-700">打开完整字段</button>
+        </div>
+      </div>
+      <div className="mt-3 grid grid-cols-2 gap-2 md:grid-cols-4">
+        <SupplyMetric label="69码" value={value('barcode_69')} />
+        <SupplyMetric label="成本价" value={cost} />
+        <SupplyMetric label="供应商" value={value('supplier_name')} />
+        <SupplyMetric label="外箱尺寸" value={cartonDimensions} />
+        <SupplyMetric label="箱规" value={supply?.outer_carton_pcs == null ? '-' : `${supply.outer_carton_pcs} 件/箱`} />
+        <SupplyMetric label="外箱体积" value={supply?.outer_carton_volume_m3 == null ? '-' : `${supply.outer_carton_volume_m3.toFixed(6)} m³`} />
+      </div>
+    </div>
+  )
+}
+
+function SupplyMetric({ label, value }: { label: string; value: string }) {
+  return <div className="rounded-lg bg-white/70 p-2.5"><div className="text-[11px] text-apple-gray-medium">{label}</div><div className="mt-1 break-words text-xs font-semibold text-apple-text">{value}</div></div>
 }
 
 function SearchField({ label, value, onChange }: { label: string; value: string; onChange: (value: string) => void }) {

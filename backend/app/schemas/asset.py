@@ -5,6 +5,11 @@ from pydantic import BaseModel, Field
 
 
 class ProductAssetBase(BaseModel):
+    related_skus: list[str] = Field(default_factory=list, max_length=100)
+    reference_only: bool = False
+    availability_status: Optional[str] = None
+    material_layer: Optional[str] = None
+    video_duration_seconds: Optional[float] = Field(default=None, gt=0)
     category_code: str
     category_name: str
     sub_category: Optional[str] = None
@@ -61,6 +66,10 @@ class ProductAssetCreate(ProductAssetBase):
 
 
 class ProductAssetUpdate(BaseModel):
+    related_skus: Optional[list[str]] = Field(default=None, max_length=100)
+    reference_only: Optional[bool] = None
+    availability_status: Optional[str] = None
+    material_layer: Optional[str] = None
     category_code: Optional[str] = None
     category_name: Optional[str] = None
     sub_category: Optional[str] = None
@@ -136,6 +145,11 @@ class AssetUploadResponse(BaseModel):
 
 
 class AssetTagsUpdate(BaseModel):
+    category_tags: Optional[list[str]] = None
+    quality_check_tags: Optional[list[str]] = None
+    subject_tags: Optional[list[str]] = None
+    composition_tags: Optional[list[str]] = None
+    view_tags: Optional[list[str]] = None
     expression_tags: Optional[list[str]] = None
     selling_point_tags: Optional[list[str]] = None
     scene_tags: Optional[list[str]] = None

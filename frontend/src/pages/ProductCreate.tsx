@@ -27,7 +27,29 @@ interface Specs {
   usage_instruction?: string
 }
 
+interface SupplyChain {
+  barcode_69: string
+  cost_price: string
+  cost_currency: string
+  supplier_name: string
+  outer_carton_length_cm: string
+  outer_carton_width_cm: string
+  outer_carton_height_cm: string
+  outer_carton_pcs: string
+}
+
+function cartonVolumePreview(supply: SupplyChain) {
+  const length = Number(supply.outer_carton_length_cm)
+  const width = Number(supply.outer_carton_width_cm)
+  const height = Number(supply.outer_carton_height_cm)
+  if (![length, width, height].every(value => Number.isFinite(value) && value > 0)) return null
+  return (length * width * height) / 1_000_000
+}
+
 interface BusinessInfo {
+  suitable_people?: string
+  audience_tags?: string[]
+  value_positioning?: string
   top_selling_points?: string[]
   target_audience?: string
   positioning?: string
@@ -64,7 +86,6 @@ interface MediaAssets {
   source_bundle?: string[]
   source_3d?: string[]
   source_outdoor?: string[]
-  ai_generated?: string[]
   channel_versions?: Record<string, { version: string; label: string; ecommerce_main?: string[]; detail_module?: string[] }[]>
   social_media?: string[]
   social_ads?: string[]
@@ -107,6 +128,16 @@ export default function ProductCreate() {
   const [lifecycle, setLifecycle] = useState('')
   const [qualityNote, setQualityNote] = useState('')
   const [launchDate, setLaunchDate] = useState('')
+  const [supplyChain, setSupplyChain] = useState<SupplyChain>({
+    barcode_69: '',
+    cost_price: '',
+    cost_currency: 'CNY',
+    supplier_name: '',
+    outer_carton_length_cm: '',
+    outer_carton_width_cm: '',
+    outer_carton_height_cm: '',
+    outer_carton_pcs: '',
+  })
 
   const [specs, setSpecs] = useState<Specs>({
     size_info: [{ label: '', value: '', unit: '厘米' }],
@@ -192,6 +223,17 @@ export default function ProductCreate() {
       setLifecycle(draft.lifecycle_status || '')
       setQualityNote((draft as any).quality_note || '')
       setLaunchDate(draft.launch_date || '')
+      const draftSupply = (draft as any).supply_chain_data || (draft as any).supply_chain || {}
+      setSupplyChain({
+        barcode_69: String(draftSupply.barcode_69 || ''),
+        cost_price: draftSupply.cost_price == null ? '' : String(draftSupply.cost_price),
+        cost_currency: String(draftSupply.cost_currency || 'CNY'),
+        supplier_name: String(draftSupply.supplier_name || ''),
+        outer_carton_length_cm: draftSupply.outer_carton_length_cm == null ? '' : String(draftSupply.outer_carton_length_cm),
+        outer_carton_width_cm: draftSupply.outer_carton_width_cm == null ? '' : String(draftSupply.outer_carton_width_cm),
+        outer_carton_height_cm: draftSupply.outer_carton_height_cm == null ? '' : String(draftSupply.outer_carton_height_cm),
+        outer_carton_pcs: draftSupply.outer_carton_pcs == null ? '' : String(draftSupply.outer_carton_pcs),
+      })
       
       const specData = draft.specs_data || draft.specs || {}
       const busData = draft.business_data || draft.business || {}
@@ -212,6 +254,9 @@ export default function ProductCreate() {
       setBusiness({
         top_selling_points: (busData as any).top_selling_points || (busData as any).core_selling_points || ['', '', '', '', ''],
         target_audience: (busData as any).target_audience || '',
+        suitable_people: (busData as any).suitable_people || '',
+        audience_tags: (busData as any).audience_tags || [],
+        value_positioning: (busData as any).value_positioning || '',
         positioning: (busData as any).positioning || (busData as any).differentiation || '',
         price_positioning: (busData as any).price_positioning || '',
         emotional_value: (busData as any).emotional_value || '',
@@ -274,6 +319,17 @@ export default function ProductCreate() {
       setLifecycle(product.lifecycle_status || '')
       setQualityNote((product as any).quality_note || '')
       setLaunchDate(product.launch_date || '')
+      const productSupply = (product as any).supply_chain || {}
+      setSupplyChain({
+        barcode_69: String(productSupply.barcode_69 || ''),
+        cost_price: productSupply.cost_price == null ? '' : String(productSupply.cost_price),
+        cost_currency: String(productSupply.cost_currency || 'CNY'),
+        supplier_name: String(productSupply.supplier_name || ''),
+        outer_carton_length_cm: productSupply.outer_carton_length_cm == null ? '' : String(productSupply.outer_carton_length_cm),
+        outer_carton_width_cm: productSupply.outer_carton_width_cm == null ? '' : String(productSupply.outer_carton_width_cm),
+        outer_carton_height_cm: productSupply.outer_carton_height_cm == null ? '' : String(productSupply.outer_carton_height_cm),
+        outer_carton_pcs: productSupply.outer_carton_pcs == null ? '' : String(productSupply.outer_carton_pcs),
+      })
 
       const specData = product.specs || {}
       const busData = product.business || {}
@@ -296,6 +352,9 @@ export default function ProductCreate() {
       setBusiness({
         top_selling_points: (busData as any).top_selling_points || (busData as any).core_selling_points || ['', '', '', '', ''],
         target_audience: (busData as any).target_audience || '',
+        suitable_people: (busData as any).suitable_people || '',
+        audience_tags: (busData as any).audience_tags || [],
+        value_positioning: (busData as any).value_positioning || '',
         positioning: (busData as any).positioning || (busData as any).differentiation || '',
         price_positioning: (busData as any).price_positioning || '',
         emotional_value: (busData as any).emotional_value || '',
@@ -435,15 +494,15 @@ export default function ProductCreate() {
   function addAudienceTag() {
     const tag = tagAudienceInput.trim()
     if (!tag) return
-    const current = (business.target_audience || '').split(',').filter(Boolean)
+    const current = business.audience_tags || []
     if (current.includes(tag)) { setTagAudienceInput(''); return }
-    setBusiness({ ...business, target_audience: [...current, tag].join(',') })
+    setBusiness({ ...business, audience_tags: [...current, tag] })
     setTagAudienceInput('')
   }
 
   function removeAudienceTag(index: number) {
-    const current = (business.target_audience || '').split(',').filter(Boolean)
-    setBusiness({ ...business, target_audience: current.filter((_, i) => i !== index).join(',') })
+    const current = business.audience_tags || []
+    setBusiness({ ...business, audience_tags: current.filter((_, i) => i !== index) })
   }
 
   function addScenarioTag() {
@@ -688,6 +747,8 @@ export default function ProductCreate() {
                        content.a_plus_content || keywords.length > 0
     const hasMedia = Object.keys(media).filter(k => k !== 'channel_versions' || Object.keys(media.channel_versions || {}).length > 0).length > 0
     const hasPrompt = (prompt.prompts || []).length > 0
+    const optionalNumber = (value: string) => value.trim() ? Number(value) : undefined
+    const optionalInteger = (value: string) => value.trim() ? Number.parseInt(value, 10) : undefined
 
     return {
       sku,
@@ -702,6 +763,16 @@ export default function ProductCreate() {
       lifecycle_status: lifecycle || undefined,
       quality_note: qualityNote || undefined,
       launch_date: launchDate || undefined,
+      supply_chain_data: {
+        barcode_69: supplyChain.barcode_69.trim() || undefined,
+        cost_price: optionalNumber(supplyChain.cost_price),
+        cost_currency: supplyChain.cost_currency.trim() || undefined,
+        supplier_name: supplyChain.supplier_name.trim() || undefined,
+        outer_carton_length_cm: optionalNumber(supplyChain.outer_carton_length_cm),
+        outer_carton_width_cm: optionalNumber(supplyChain.outer_carton_width_cm),
+        outer_carton_height_cm: optionalNumber(supplyChain.outer_carton_height_cm),
+        outer_carton_pcs: optionalInteger(supplyChain.outer_carton_pcs),
+      },
       specs_data: {
         ...specs,
         sales_region: salesRegion,
@@ -786,6 +857,10 @@ export default function ProductCreate() {
   function validateRequired(): string[] {
     const missing: string[] = []
     if (!sku.trim()) missing.push('sku')
+    if (lifecycle === '未上市新品') {
+      if (!nameZh.trim()) missing.push('nameZh')
+      return missing
+    }
     if (!barcode.trim()) missing.push('barcode')
     if (!nameZh.trim()) missing.push('nameZh')
     if (!brand.trim()) missing.push('brand')
@@ -907,6 +982,7 @@ export default function ProductCreate() {
       <div className="space-y-6">
         <div className="glass rounded-xl p-6">
           <h2 className="text-lg font-semibold text-apple-text mb-4">📋 L1 - 产品身份层</h2>
+          {lifecycle === '未上市新品' && <p className="mb-4 rounded-lg bg-amber-50 p-3 text-sm text-amber-800">未上市新品：SKU和中文名必填，其余未知资料可留空。上市前须补齐条码、品牌、规格和说明；待审QA不作为客服依据。</p>}
 
           <div className="grid grid-cols-2 gap-3 mb-4">
             <div>
@@ -916,7 +992,7 @@ export default function ProductCreate() {
                 placeholder="产品唯一标识" />
             </div>
             <div>
-              <label className="block text-sm text-apple-text mb-1">条形码 *</label>
+              <label className="block text-sm text-apple-text mb-1">条形码 {lifecycle === '未上市新品' ? '（可暂留空）' : '*'}</label>
               <input id="field-barcode" type="text" value={barcode} onChange={(e) => { setBarcode(e.target.value); clearFieldError('barcode') }}
                 className={`w-full px-3 py-2 bg-white/50 border rounded-lg text-sm focus:outline-none focus:border-blue-400 ${fieldErrors.barcode ? 'border-red-400 bg-red-50' : 'border-gray-200'}`} />
             </div>
@@ -968,7 +1044,7 @@ export default function ProductCreate() {
 
           <div className="grid grid-cols-2 gap-3 mb-4">
             <div>
-              <label className="block text-sm text-apple-text mb-1">品牌 *</label>
+              <label className="block text-sm text-apple-text mb-1">品牌 {lifecycle === '未上市新品' ? '（可暂留空）' : '*'}</label>
               <input id="field-brand" type="text" value={brand} onChange={(e) => { setBrand(e.target.value); clearFieldError('brand') }}
                 className={`w-full px-3 py-2 bg-white/50 border rounded-lg text-sm focus:outline-none focus:border-blue-400 ${fieldErrors.brand ? 'border-red-400 bg-red-50' : 'border-gray-200'}`} />
             </div>
@@ -1043,6 +1119,62 @@ export default function ProductCreate() {
               rows={3}
               placeholder="例如：外箱轻微坏损、锅体划痕、配件缺失、抽检正常"
             />
+          </div>
+        </div>
+
+        <div className="glass rounded-xl p-6">
+          <h2 className="text-lg font-semibold text-apple-text mb-1">📦 采购与装箱信息</h2>
+          <p className="mb-4 text-xs leading-5 text-apple-gray-medium">用于产品数据库和后续领星/聚水潭对接；每箱装箱数是“箱规”，不是装载率。装载率需在装柜/出货场景按“实际货物体积 ÷ 集装箱可用体积 × 100%”计算；外箱尺寸单位为厘米。</p>
+
+          <div className="grid grid-cols-2 gap-3 mb-4">
+            <div>
+              <label className="block text-sm text-apple-text mb-1">69码 / 商品识别码</label>
+              <input type="text" value={supplyChain.barcode_69} onChange={(e) => setSupplyChain({ ...supplyChain, barcode_69: e.target.value })}
+                className="w-full px-3 py-2 bg-white/50 border border-gray-200 rounded-lg text-sm focus:outline-none focus:border-blue-400"
+                placeholder="EAN/69码" />
+            </div>
+            <div>
+              <label className="block text-sm text-apple-text mb-1">供应商名称</label>
+              <input type="text" value={supplyChain.supplier_name} onChange={(e) => setSupplyChain({ ...supplyChain, supplier_name: e.target.value })}
+                className="w-full px-3 py-2 bg-white/50 border border-gray-200 rounded-lg text-sm focus:outline-none focus:border-blue-400"
+                placeholder="供应商全称" />
+            </div>
+          </div>
+
+          <div className="grid grid-cols-2 gap-3 mb-4">
+            <div>
+              <label className="block text-sm text-apple-text mb-1">成本价</label>
+              <input type="number" min="0" step="0.0001" value={supplyChain.cost_price} onChange={(e) => setSupplyChain({ ...supplyChain, cost_price: e.target.value })}
+                className="w-full px-3 py-2 bg-white/50 border border-gray-200 rounded-lg text-sm focus:outline-none focus:border-blue-400"
+                placeholder="采购成本" />
+            </div>
+            <div>
+              <label className="block text-sm text-apple-text mb-1">成本币种</label>
+              <input type="text" maxLength={8} value={supplyChain.cost_currency} onChange={(e) => setSupplyChain({ ...supplyChain, cost_currency: e.target.value.toUpperCase() })}
+                className="w-full px-3 py-2 bg-white/50 border border-gray-200 rounded-lg text-sm focus:outline-none focus:border-blue-400"
+                placeholder="CNY" />
+            </div>
+          </div>
+
+          <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
+            {([
+              ['outer_carton_length_cm', '外箱长（cm）'],
+              ['outer_carton_width_cm', '外箱宽（cm）'],
+              ['outer_carton_height_cm', '外箱高（cm）'],
+              ['outer_carton_pcs', '每箱装箱数（箱规）'],
+            ] as const).map(([field, label]) => (
+              <div key={field}>
+                <label className="block text-sm text-apple-text mb-1">{label}</label>
+                <input type="number" min="0" step={field === 'outer_carton_pcs' ? '1' : '0.001'} value={supplyChain[field]}
+                  onChange={(e) => setSupplyChain({ ...supplyChain, [field]: e.target.value })}
+                  className="w-full px-3 py-2 bg-white/50 border border-gray-200 rounded-lg text-sm focus:outline-none focus:border-blue-400"
+                  placeholder={field === 'outer_carton_pcs' ? '例如 12' : '例如 35.5'} />
+              </div>
+            ))}
+          </div>
+          <div className="mt-4 rounded-xl border border-teal-100 bg-teal-50/60 px-3 py-2 text-xs text-teal-950">
+            <span className="font-bold">外箱体积（自动计算）</span>
+            <span className="ml-2">{cartonVolumePreview(supplyChain) == null ? '填写完整的外箱长、宽、高后显示' : `${cartonVolumePreview(supplyChain)!.toFixed(6)} m³ / 箱`}</span>
           </div>
         </div>
 
@@ -1183,11 +1315,16 @@ export default function ProductCreate() {
         </div>
 
         <div className="glass rounded-xl p-6">
-          <h2 className="text-lg font-semibold text-apple-text mb-4">💼 L3 - 商业价值层</h2>
+          <h2 className="text-lg font-semibold text-apple-text mb-4">💼 L3 - 开发定位</h2>
+          <div className="grid grid-cols-2 gap-4 mb-4">
+            <label className="text-sm">适用人数<input value={business.suitable_people || ''} onChange={e => setBusiness({ ...business, suitable_people: e.target.value })} placeholder="例如1–2人；与人群标签分开" className="w-full mt-1 px-3 py-2 border rounded-lg" /></label>
+            <label className="text-sm">价值定位<input value={business.value_positioning || ''} onChange={e => setBusiness({ ...business, value_positioning: e.target.value })} placeholder="例如利润款、引流款" className="w-full mt-1 px-3 py-2 border rounded-lg" /></label>
+          </div>
+          <label className="block text-sm mb-4">目标人群原文<textarea value={business.target_audience || ''} onChange={e => setBusiness({ ...business, target_audience: e.target.value })} className="w-full mt-1 px-3 py-2 border rounded-lg" /></label>
           
           <div className="mb-4">
             <div className="flex items-center justify-between mb-3">
-              <span className="text-sm font-medium text-apple-text">核心卖点 TOP5</span>
+              <span className="text-sm font-medium text-apple-text">核心卖点（按重要性排序，不限条数）</span>
               <button onClick={addCoreSellingPoint} className="text-sm text-blue-600 hover:text-blue-700">+ 添加</button>
             </div>
             <div className="space-y-2">
@@ -1204,7 +1341,7 @@ export default function ProductCreate() {
           </div>
 
           <div className="mb-4">
-            <label className="block text-sm text-apple-text mb-1">目标人群</label>
+            <label className="block text-sm text-apple-text mb-1">人群标签（例如房车人群，不作为活动场景）</label>
             <div className="flex gap-2">
               <input type="text" value={tagAudienceInput} onChange={(e) => setTagAudienceInput(e.target.value)}
                 onKeyDown={(e) => e.key === 'Enter' && (e.preventDefault(), addAudienceTag())}
@@ -1212,9 +1349,9 @@ export default function ProductCreate() {
                 placeholder="输入后回车或点击添加" />
               <button onClick={addAudienceTag} className="px-4 py-2 bg-blue-600 text-white rounded-lg text-sm hover:bg-blue-700">添加</button>
             </div>
-            {(business.target_audience || '').split(',').filter(Boolean).length > 0 && (
+            {(business.audience_tags || []).length > 0 && (
               <div className="flex flex-wrap gap-1.5 mt-2">
-                {(business.target_audience || '').split(',').filter(Boolean).map((tag, i) => (
+                {(business.audience_tags || []).map((tag, i) => (
                   <span key={i} className="inline-flex items-center gap-1 px-2.5 py-1 bg-blue-50 text-blue-700 rounded-full text-xs">
                     {tag}
                     <button onClick={() => removeAudienceTag(i)} className="text-blue-400 hover:text-blue-600 ml-0.5">✕</button>
@@ -1446,9 +1583,6 @@ export default function ProductCreate() {
               { key: 'source_bundle', label: '套装图' },
               { key: 'source_3d', label: '3D 渲染图' },
               { key: 'source_outdoor', label: '户外场景图' },
-            ]},
-            { id: 'ai', icon: '🤖', title: 'AI层', fields: [
-              { key: 'ai_generated', label: 'AI 生成图' },
             ]},
             { id: 'channel', icon: '🏪', title: '渠道层', isChannel: true },
             { id: 'social', icon: '📱', title: '社媒层', fields: [

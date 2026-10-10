@@ -3,6 +3,7 @@ from . import product_vector_index_service
 from collections import defaultdict
 import uuid
 from datetime import date
+from decimal import Decimal, InvalidOperation
 from pathlib import Path
 import re
 from typing import Optional, List
@@ -14,6 +15,7 @@ from sqlalchemy.inspection import inspect
 
 from ..models.product import Product
 from ..models.product_specs import ProductSpecs
+from ..models.product_supply_chain import ProductSupplyChain
 from ..models.product_business import ProductBusiness
 from ..models.product_content import ProductContent
 from ..models.product_media import ProductMedia
@@ -222,6 +224,107 @@ def _to_json_str(value):
     return json.dumps(value, ensure_ascii=False)
 
 
+SUPPLY_CHAIN_NUMERIC_FIELDS = (
+    "cost_price",
+    "outer_carton_length_cm",
+    "outer_carton_width_cm",
+    "outer_carton_height_cm",
+)
+SUPPLY_CHAIN_FIELDS = (
+    "barcode_69",
+    "cost_price",
+    "cost_currency",
+    "supplier_name",
+    "outer_carton_length_cm",
+    "outer_carton_width_cm",
+    "outer_carton_height_cm",
+    "outer_carton_pcs",
+)
+
+
+def _normalize_supply_chain_data(data: dict | None) -> dict:
+    if data is None:
+        return {}
+    if not isinstance(data, dict):
+        raise HTTPException(status_code=400, detail="supply_chain 必须是对象")
+
+    normalized: dict = {}
+    for field in ("barcode_69", "cost_currency", "supplier_name"):
+        if field not in data:
+            continue
+        value = data.get(field)
+        normalized[field] = None if value is None else str(value).strip() or None
+
+    for field in SUPPLY_CHAIN_NUMERIC_FIELDS:
+        if field not in data:
+            continue
+        value = data.get(field)
+        if value is None or (isinstance(value, str) and not value.strip()):
+            normalized[field] = None
+            continue
+        try:
+            number = Decimal(str(value))
+        except (InvalidOperation, TypeError, ValueError) as exc:
+            raise HTTPException(status_code=400, detail=f"{field} 必须是数字") from exc
+        if number < 0:
+            raise HTTPException(status_code=400, detail=f"{field} 不能小于 0")
+        if field.startswith("outer_carton_") and number <= 0:
+            raise HTTPException(status_code=400, detail=f"{field} 必须大于 0")
+        normalized[field] = number
+
+    if "outer_carton_pcs" in data:
+        value = data.get("outer_carton_pcs")
+        if value is None or (isinstance(value, str) and not value.strip()):
+            normalized["outer_carton_pcs"] = None
+        else:
+            try:
+                number = int(value)
+            except (TypeError, ValueError) as exc:
+                raise HTTPException(status_code=400, detail="outer_carton_pcs 必须是整数") from exc
+            if number < 1:
+                raise HTTPException(status_code=400, detail="outer_carton_pcs 必须大于 0")
+            normalized["outer_carton_pcs"] = number
+    return normalized
+
+
+def _supply_chain_to_dict(supply_chain: ProductSupplyChain | None) -> dict | None:
+    if supply_chain is None:
+        return None
+    def number(value):
+        return float(value) if value is not None else None
+
+    carton_dimensions = (
+        supply_chain.outer_carton_length_cm,
+        supply_chain.outer_carton_width_cm,
+        supply_chain.outer_carton_height_cm,
+    )
+    outer_carton_volume_m3 = None
+    if all(value is not None and value > 0 for value in carton_dimensions):
+        # The stored dimensions are centimetres; expose a derived cubic-metre
+        # value without pretending it is the shipment/container loading rate.
+        outer_carton_volume_m3 = float(
+            carton_dimensions[0]
+            * carton_dimensions[1]
+            * carton_dimensions[2]
+            / Decimal("1000000")
+        )
+    return {
+        "id": supply_chain.id,
+        "product_id": supply_chain.product_id,
+        "barcode_69": supply_chain.barcode_69,
+        "cost_price": number(supply_chain.cost_price),
+        "cost_currency": supply_chain.cost_currency,
+        "supplier_name": supply_chain.supplier_name,
+        "outer_carton_length_cm": number(supply_chain.outer_carton_length_cm),
+        "outer_carton_width_cm": number(supply_chain.outer_carton_width_cm),
+        "outer_carton_height_cm": number(supply_chain.outer_carton_height_cm),
+        "outer_carton_pcs": supply_chain.outer_carton_pcs,
+        "outer_carton_volume_m3": outer_carton_volume_m3,
+        "created_at": str(supply_chain.created_at) if supply_chain.created_at else None,
+        "updated_at": str(supply_chain.updated_at) if supply_chain.updated_at else None,
+    }
+
+
 _SIZE_UNIT_ALIASES = {
     "mm": "mm",
     "毫米": "mm",
@@ -304,6 +407,7 @@ def _build_detail(product: Product, db: Session) -> dict:
     pid = product.id
 
     specs = db.query(ProductSpecs).filter(ProductSpecs.product_id == pid).first()
+    supply_chain = db.query(ProductSupplyChain).filter(ProductSupplyChain.product_id == pid).first()
     business = db.query(ProductBusiness).filter(ProductBusiness.product_id == pid).first()
     content = db.query(ProductContent).filter(ProductContent.product_id == pid).first()
     media_list = db.query(ProductMedia).filter(ProductMedia.product_id == pid).all()
@@ -363,6 +467,7 @@ def _build_detail(product: Product, db: Session) -> dict:
         "status_note": product.status_note,
         "created_at": str(product.created_at) if product.created_at else None,
         "updated_at": str(product.updated_at) if product.updated_at else None,
+        "supply_chain": _supply_chain_to_dict(supply_chain),
         "specs": {
             "id": specs.id,
             "size_info": _normalize_size_info(specs.size_info),
@@ -381,6 +486,9 @@ def _build_detail(product: Product, db: Session) -> dict:
             "id": business.id,
             "top_selling_points": _serialize_json(business.top_selling_points),
             "target_audience": business.target_audience,
+            "suitable_people": business.suitable_people,
+            "audience_tags": _serialize_json(business.audience_tags),
+            "value_positioning": business.value_positioning,
             "positioning": business.positioning,
             "price_positioning": business.price_positioning,
             "emotional_value": business.emotional_value,
@@ -824,6 +932,13 @@ def advanced_search_products(db: Session, filters: dict):
         .outerjoin(ProductContent, ProductContent.product_id == Product.id)
     )
 
+    supply_filter_keys = (
+        "barcode_69", "supplier_name", "cost_price_min", "cost_price_max",
+        "outer_carton_pcs_min", "outer_carton_pcs_max",
+    )
+    if any(filters.get(key) not in (None, "") for key in supply_filter_keys):
+        query = query.outerjoin(ProductSupplyChain, ProductSupplyChain.product_id == Product.id)
+
     def ilike(column, value):
         if value is None or str(value).strip() == "":
             return
@@ -893,6 +1008,17 @@ def advanced_search_products(db: Session, filters: dict):
     ilike(Product.lifecycle_status, filters.get("lifecycle_status"))
     ilike(Product.person_in_charge, filters.get("person_in_charge"))
     ilike(Product.quality_note, filters.get("quality_note"))
+    ilike(ProductSupplyChain.barcode_69, filters.get("barcode_69"))
+    ilike(ProductSupplyChain.supplier_name, filters.get("supplier_name"))
+
+    if filters.get("cost_price_min") is not None:
+        query_filters.append(ProductSupplyChain.cost_price >= filters["cost_price_min"])
+    if filters.get("cost_price_max") is not None:
+        query_filters.append(ProductSupplyChain.cost_price <= filters["cost_price_max"])
+    if filters.get("outer_carton_pcs_min") is not None:
+        query_filters.append(ProductSupplyChain.outer_carton_pcs >= filters["outer_carton_pcs_min"])
+    if filters.get("outer_carton_pcs_max") is not None:
+        query_filters.append(ProductSupplyChain.outer_carton_pcs <= filters["outer_carton_pcs_max"])
 
     if filters.get("active_flag") is not None:
         query_filters.append(Product.active_flag == bool(filters["active_flag"]))
@@ -1035,6 +1161,12 @@ def get_product_detail(db: Session, sku: str) -> dict:
 
 def _validate_product_data(data: dict):
     """Validate required fields across L1, L2."""
+    # Pre-launch records are explicitly incomplete identities, not made-up
+    # sellable specifications. Regular/on-sale products retain every check.
+    if data.get('lifecycle_status') == '未上市新品':
+        if not str(data.get('sku') or '').strip() or not str(data.get('product_name_cn') or '').strip():
+            raise HTTPException(status_code=400, detail='未上市新品仍需填写SKU和中文产品名')
+        return
     # L1 required fields
     required_fields = {
         "barcode": "条形码",
@@ -1125,10 +1257,10 @@ def create_product(
     product = Product(
         id=product_id,
         sku=sku,
-        barcode=data["barcode"],
+        barcode=data.get("barcode") or "",
         product_name_cn=data["product_name_cn"],
         product_name_en=data.get("product_name_en"),
-        brand=data["brand"],
+        brand=data.get("brand") or "",
         series=data.get("series"),
         category=data.get("category"),
         sub_category=data.get("sub_category"),
@@ -1142,6 +1274,12 @@ def create_product(
         status_note=data.get("status_note"),
     )
     db.add(product)
+
+    supply_chain_data = data.get("supply_chain_data")
+    if supply_chain_data is None:
+        supply_chain_data = data.get("supply_chain")
+    if isinstance(supply_chain_data, dict):
+        _upsert_product_supply_chain(db, product_id, supply_chain_data)
 
     # Specs — accept both flat (specs_data) and nested (specs) formats
     specs_data = data.get("specs_data") or data.get("specs") or {}
@@ -1165,6 +1303,9 @@ def create_product(
         product_id=product_id,
         top_selling_points=_to_json_str(biz_data.get("top_selling_points")),
         target_audience=biz_data.get("target_audience"),
+        suitable_people=biz_data.get("suitable_people"),
+        audience_tags=_to_json_str(biz_data.get("audience_tags")),
+        value_positioning=biz_data.get("value_positioning"),
         positioning=biz_data.get("positioning"),
         price_positioning=biz_data.get("price_positioning"),
         emotional_value=biz_data.get("emotional_value"),
@@ -1305,6 +1446,9 @@ def update_product(db: Session, sku: str, update_data: dict) -> Product:
                 product.launch_date = parsed
                 evidence_changed = True
 
+    if "supply_chain" in update_data and update_data["supply_chain"] is not None:
+        _upsert_product_supply_chain(db, product.id, update_data["supply_chain"])
+
     if evidence_changed:
         invalidate_product_qa_integrity(db, product.id)
 
@@ -1339,7 +1483,7 @@ def delete_product(db: Session, sku: str, *, commit: bool = True) -> list[str]:
         db.query(ProductAsset).filter(ProductAsset.sku == sku).delete(synchronize_session=False)
     for model in [
         ProductQa, ProductQaNegative, ProductPrompts, ProductMedia,
-        ProductContent, ProductBusiness, ProductSpecs,
+        ProductContent, ProductBusiness, ProductSpecs, ProductSupplyChain,
         ProductListingChannel, ProductSalesRegion,
         ProductCertification, ProductKeyword,
     ]:
@@ -1457,6 +1601,35 @@ def _upsert_sub(db: Session, model_class, product_id: str, fields: dict):
     return obj
 
 
+def _upsert_product_supply_chain(db: Session, product_id: str, data: dict) -> ProductSupplyChain:
+    fields = _normalize_supply_chain_data(data)
+    existing = db.query(ProductSupplyChain).filter(
+        ProductSupplyChain.product_id == product_id,
+    ).first()
+    if existing is None:
+        existing = ProductSupplyChain(
+            id=str(uuid.uuid4()),
+            product_id=product_id,
+            **fields,
+        )
+        db.add(existing)
+    else:
+        for field, value in fields.items():
+            if field in SUPPLY_CHAIN_FIELDS:
+                setattr(existing, field, value)
+    return existing
+
+
+def update_product_supply_chain(db: Session, sku: str, data: dict) -> dict:
+    product = get_product_by_sku(db, sku)
+    if not product:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Product not found")
+    _upsert_product_supply_chain(db, product.id, data)
+    db.commit()
+    invalidate_product_detail_cache(db, sku)
+    return get_product_detail(db, sku)
+
+
 def update_product_specs(db: Session, sku: str, data: dict) -> dict:
     product = get_product_by_sku(db, sku)
     if not product:
@@ -1499,8 +1672,8 @@ def update_product_business(db: Session, sku: str, data: dict) -> dict:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Product not found")
 
     fields = {}
-    json_fields = {"top_selling_points", "usage_scenarios", "competitor_benchmark"}
-    text_fields = {"target_audience", "positioning", "price_positioning", "emotional_value"}
+    json_fields = {"top_selling_points", "usage_scenarios", "competitor_benchmark", "audience_tags"}
+    text_fields = {"target_audience", "positioning", "price_positioning", "emotional_value", "suitable_people", "value_positioning"}
 
     for k in json_fields:
         if k in data and data[k] is not None:

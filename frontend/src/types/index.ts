@@ -90,6 +90,7 @@ export interface Product {
   active_flag?: boolean
   sync_flag?: boolean
   status_note?: string | null
+  supply_chain?: ProductSupplyChain | null
   specs?: ProductSpecs | null
   business?: ProductBusiness | null
   content?: ProductContent | null
@@ -125,6 +126,9 @@ export interface ProductSpecs {
 }
 
 export interface ProductBusiness {
+  suitable_people?: string | null
+  audience_tags?: string[] | null
+  value_positioning?: string | null
   id: string
   product_id: string
   top_selling_points?: unknown
@@ -247,7 +251,47 @@ export interface ProductKeyword {
   keyword_level?: string | null
 }
 
+export interface CompetitorAsset {
+  id: string
+  brand: string
+  asset_type: 'image' | 'video'
+  url: string
+  thumbnail_url: string | null
+  original_file_name: string | null
+  file_size_bytes: number | null
+  maintainer: string | null
+  uploaded_by: string
+  source_note: string | null
+  notes: string | null
+  created_at: string
+}
+
+export interface ProductSupplyChain {
+  id?: string
+  product_id?: string
+  barcode_69?: string | null
+  cost_price?: number | null
+  cost_currency?: string | null
+  supplier_name?: string | null
+  outer_carton_length_cm?: number | null
+  outer_carton_width_cm?: number | null
+  outer_carton_height_cm?: number | null
+  outer_carton_pcs?: number | null
+  outer_carton_volume_m3?: number | null
+  created_at?: string
+  updated_at?: string
+}
+
+export interface CompetitorBrandCount { brand: string; image_count: number; video_count: number }
+
 export interface AssetTags {
+  video_duration_seconds?: string[]
+  video_duration_status?: string[]
+  category_tags?: string[]
+  quality_check_tags?: string[]
+  subject_tags?: string[]
+  composition_tags?: string[]
+  view_tags?: string[]
   expression_tags?: string[]
   selling_point_tags?: string[]
   scene_tags?: string[]
@@ -262,21 +306,36 @@ export interface AssetTags {
 }
 
 export interface AssetTaxonomy {
+  categories: AssetCategoryDefinition[]
   dimensions: Record<string, { values: string[] }>
   expression_requirements: Record<string, string>
   quality_statuses: string[]
   duplicate_statuses: string[]
+  review_statuses: string[]
+  authorization_statuses: string[]
   legacy_tag_keys: string[]
   pilot_required_fields: Record<string, string[]>
 }
 
+export interface AssetCategoryDefinition {
+  code: string
+  name: string
+  hidden?: boolean
+  sub_categories: Array<{ name: string; material_type: string }>
+}
+
 export interface ProductAsset {
+  related_skus?: string[]
+  reference_only?: boolean
+  availability_status?: string | null
+  material_layer?: string | null
+  video_duration_seconds?: number | null
   id: string
   sku: string
   category_code: string
   category_name: string
   sub_category?: string | null
-  asset_type: 'image' | 'video'
+  asset_type: 'image' | 'video' | 'document'
   url: string
   thumbnail_url?: string | null
   brand?: string | null
@@ -335,6 +394,7 @@ export interface ProductAssetOverview {
   asset_count: number
   image_count: number
   video_count: number
+  total_size_bytes: number
   cover_asset_id?: string | null
   cover_url?: string | null
   cover_thumbnail_url?: string | null

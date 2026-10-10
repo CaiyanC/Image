@@ -20,10 +20,12 @@ from .product_prompts import ProductPrompts
 from .product import Product
 from .product_operation_snapshot import ProductOperationSnapshot
 from .product_specs import ProductSpecs
+from .product_supply_chain import ProductSupplyChain
 from .product_business import ProductBusiness
 from .product_content import ProductContent
 from .product_media import ProductMedia
 from .product_asset import ProductAsset
+from .competitor_asset import CompetitorAsset
 from .product_qa import ProductQa, ProductQaNegative
 from .product_qa_answer import ProductQaAnswer
 from .qa_tags import QaTag, QaTagRelation
@@ -44,12 +46,13 @@ from .knowledge_base import (
 )
 
 __all__ = [
+    "CompetitorAsset",
     "User", "Generation", "SystemConfig", "Group", "UserGroup",
     "Permission", "GroupPermission",
     "Route", "PermissionRoute",
     "OperationLog", "AgentAction", "AgentTrace", "FieldConfig", "EntityFieldValue", "AiTask", "Tool", "ToolRun", "KnowledgeJob",
     "ProductDraft", "ProductCategory", "ProductPrompts",
-    "Product", "ProductOperationSnapshot", "ProductSpecs", "ProductBusiness", "ProductContent", "ProductMedia", "ProductAsset",
+    "Product", "ProductOperationSnapshot", "ProductSpecs", "ProductSupplyChain", "ProductBusiness", "ProductContent", "ProductMedia", "ProductAsset",
     "ProductQa", "ProductQaNegative", "ProductQaAnswer",
     "QaTag", "QaTagRelation", "AiGeneratedAsset",
     "AIProviderCredential", "AIModel", "AIFeatureModel", "AIModelAccessRule",

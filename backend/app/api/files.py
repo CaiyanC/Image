@@ -137,6 +137,12 @@ def _authorize_sign_request(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Knowledge files must be downloaded through the knowledge base API",
         )
+    if normalized_path.startswith("/uploads/competitors/"):
+        if not any(has_permission(db, user.id, key) for key in ("competitor.view", "media.upload")):
+            raise HTTPException(status_code=403, detail="Permission required: competitor.view or media.upload")
+        if purpose == "download" and not has_permission(db, user.id, "media.download"):
+            raise HTTPException(status_code=403, detail="Permission required: media.download")
+        return
     if normalized_path.startswith("/uploads/reference-images/"):
         owner_id = normalized_path.removeprefix("/uploads/reference-images/").split("/", 1)[0]
         if owner_id == str(user.id) or is_management_user(db, user.id):
@@ -162,6 +168,9 @@ def _authorize_sign_batch(
     media_download_allowed: bool | None = None
     management_allowed: bool | None = None
     for normalized_path in normalized_paths:
+        if normalized_path.startswith("/uploads/competitors/"):
+            _authorize_sign_request(db, user, normalized_path, purpose)
+            continue
         if normalized_path.startswith("/uploads/knowledge-files/"):
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,

@@ -87,6 +87,14 @@ SELLING_POINT_CORRECTIONS: dict[str, tuple[str, str]] = {
 }
 
 
+# The formal CW-C96-B capacity is 0.8L.  Its technical-advantages list was
+# copied from the 1.4L water-kettle template and must agree with the same-SKU
+# capacity field before the catalogue is embedded again.
+TECHNICAL_ADVANTAGE_CORRECTIONS: dict[str, tuple[str, str]] = {
+    "CW-C96-B": ("1.4L 双人容量", "0.8L 双人容量"),
+}
+
+
 WEIGHT_CORRECTIONS: dict[str, tuple[Decimal, Decimal]] = {
     # Excel stores this cell as the text "1.74kg" although the column is g.
     "AC-Z14": (Decimal("1.74"), Decimal("1740")),
@@ -123,6 +131,24 @@ QA_ANSWER_CORRECTIONS: tuple[dict[str, str], ...] = (
         "question": "京享水壶有什么核心卖点？",
         "old_answer": "京享水壶的核心卖点包括：高性价比、1.4L 双人容量、快速沸腾、硬质氧化工艺。",
         "new_answer": "京享水壶的核心卖点包括：高性价比、0.8L 容量、快速沸腾、硬质氧化工艺。",
+    },
+    {
+        "sku": "CW-C96-B",
+        "question": "这款京享水壶的核心卖点是什么？",
+        "old_answer": "产品库中，京享水壶（SKU：CW-C96-B）记录为：核心卖点：高性价比；1.4L 双人容量；快速沸腾；硬质氧化工艺；提手硅胶防烫。",
+        "new_answer": "产品库中，京享水壶（SKU：CW-C96-B）记录为：核心卖点：高性价比；0.8L 双人容量；快速沸腾；硬质氧化工艺；提手硅胶防烫。",
+    },
+    {
+        "sku": "CW-C96-B",
+        "question": "这款京享水壶有哪些技术优势？",
+        "old_answer": "产品库中，京享水壶（SKU：CW-C96-B）记录为：技术优势：1.高性价比；2.1.4L 双人容量；3.快速沸腾。",
+        "new_answer": "产品库中，京享水壶（SKU：CW-C96-B）记录为：技术优势：1.高性价比；2.0.8L 双人容量；3.快速沸腾。",
+    },
+    {
+        "sku": "CS-G25",
+        "question": "小青炉是酒精炉吗？",
+        "old_answer": "不是。小青炉是分体式燃气炉，当前资料标注适配高山气罐和卡式气罐，不要使用液体酒精或自行改装。",
+        "new_answer": "不是。小青炉是分体式燃气炉，当前资料标注适配高山气罐和卡式气罐；资料未标注液体酒精适配，暂不能确认可用，请按商品说明使用。",
     },
     {
         "sku": "CW-C97",
@@ -860,6 +886,31 @@ SUPPLEMENTAL_QA: tuple[dict[str, Any], ...] = (
 )
 
 
+# Natural questions confirmed by the 2026-09-12—20 replay.  Keep this small
+# and separate from the historical bulk supplement so a later maintenance run
+# can add only these reviewed rows without touching unrelated legacy entries.
+NEW_CHAT_SUPPLEMENTAL_QA: tuple[dict[str, Any], ...] = (
+    {
+        "sku": "CW-C96-B",
+        "question": "京享水壶是自带加热的吗？",
+        "answer": "不是。这款是单独水壶，当前资料只标注明火直烧，需要加水后放在炉具上用中小火加热，未标注电加热功能。",
+        "tags": ["2026-09-12—20新聊天", "自然问法", "配置边界"],
+    },
+    {
+        "sku": "CS-G25",
+        "question": "小青炉是酒精炉吗？",
+        "answer": "不是。小青炉是分体式燃气炉，当前资料标注适配高山气罐和卡式气罐；资料未标注液体酒精适配，暂不能确认可用，请按商品说明使用。",
+        "tags": ["2026-09-12—20新聊天", "自然问法", "燃料"],
+    },
+    {
+        "sku": "CW-K04PRO-37",
+        "question": "时光煮水套装包含酒精吗？",
+        "answer": "套装包含水壶和配套酒精炉；当前资料未标注随附酒精燃料，燃料需要另行确认或购买，使用时按说明选用95%液体工业酒精。",
+        "tags": ["2026-09-12—20新聊天", "自然问法", "包装清单"],
+    },
+)
+
+
 def ensure_development_target() -> None:
     if str(settings.APP_ENV or "").lower() != "dev":
         raise RuntimeError("Product catalog reconciliation requires APP_ENV=dev.")
@@ -948,6 +999,15 @@ def apply_product_field_corrections(db) -> set[str]:
             business.top_selling_points = _json_string(raw)
             changed_skus.add(sku)
 
+    for sku, (old, new) in TECHNICAL_ADVANTAGE_CORRECTIONS.items():
+        _, specs = _product_and(ProductSpecs, db, sku)
+        raw = _json_value(specs.technical_advantages, field="technical_advantages", sku=sku)
+        if not isinstance(raw, list) or not all(isinstance(item, str) for item in raw):
+            raise ValueError(f"{sku} technical_advantages must be a JSON list of strings: {raw!r}")
+        if _replace_once_or_confirmed_new(raw, old, new, sku=sku, field="technical_advantages"):
+            specs.technical_advantages = _json_string(raw)
+            changed_skus.add(sku)
+
     for sku, (old, new) in WEIGHT_CORRECTIONS.items():
         _, specs = _product_and(ProductSpecs, db, sku)
         current = Decimal(str(specs.gross_weight_g))
@@ -1018,13 +1078,16 @@ def apply_existing_qa_corrections(db) -> tuple[set[str], set[Any]]:
     return changed_skus, changed_qa_ids
 
 
-def add_supplemental_qa(db) -> tuple[set[str], set[Any], int, int, int]:
+def add_supplemental_qa(
+    db,
+    items: tuple[dict[str, Any], ...] = SUPPLEMENTAL_QA,
+) -> tuple[set[str], set[Any], int, int, int]:
     changed_skus: set[str] = set()
     changed_rows: list[ProductQa] = []
     created = 0
     tag_updates = 0
     skipped = 0
-    for item in SUPPLEMENTAL_QA:
+    for item in items:
         product = db.query(Product).filter(Product.sku == item["sku"]).first()
         if product is None:
             raise ValueError(f"Product not found for supplemental QA: {item['sku']}")
@@ -1124,16 +1187,36 @@ def sync_affected_products(db, skus: set[str]) -> dict[str, Any]:
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--apply", action="store_true", help="Persist corrections and supplemental QA.")
+    parser.add_argument(
+        "--corrections-only",
+        action="store_true",
+        help="Apply only exact catalogue/QA corrections; do not add the historical supplemental QA set.",
+    )
+    parser.add_argument(
+        "--new-chat-qa-only",
+        action="store_true",
+        help="Apply only the three QA rows confirmed by the 2026-09-12—20 chat replay.",
+    )
     parser.add_argument("--no-audit", action="store_true", help="Do not run the semantic QA audit after applying.")
     parser.add_argument("--no-sync", action="store_true", help="Do not reindex/embed affected SKUs after auditing.")
     args = parser.parse_args()
+    if args.corrections_only and args.new_chat_qa_only:
+        parser.error("--corrections-only and --new-chat-qa-only cannot be combined")
     ensure_development_target()
 
     db = SessionLocal()
     try:
         product_changed_skus = apply_product_field_corrections(db)
         corrected_qa_skus, corrected_qa_ids = apply_existing_qa_corrections(db)
-        qa_skus, changed_qa_ids, created, tag_updates, skipped = add_supplemental_qa(db)
+        if args.corrections_only:
+            qa_skus, changed_qa_ids, created, tag_updates, skipped = set(), set(), 0, 0, 0
+        elif args.new_chat_qa_only:
+            qa_skus, changed_qa_ids, created, tag_updates, skipped = add_supplemental_qa(
+                db,
+                NEW_CHAT_SUPPLEMENTAL_QA,
+            )
+        else:
+            qa_skus, changed_qa_ids, created, tag_updates, skipped = add_supplemental_qa(db)
         changed_skus = set(product_changed_skus)
         changed_skus.update(corrected_qa_skus)
         changed_skus.update(qa_skus)
@@ -1142,6 +1225,8 @@ def main() -> int:
             "source_metadata": SOURCE_METADATA,
             "source_history": SOURCE_HISTORY,
             "apply": args.apply,
+            "corrections_only": args.corrections_only,
+            "new_chat_qa_only": args.new_chat_qa_only,
             "affected_skus": sorted(changed_skus),
             "supplemental_qa_created": created,
             "supplemental_qa_tag_updates": tag_updates,

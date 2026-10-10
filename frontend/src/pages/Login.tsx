@@ -45,7 +45,7 @@ export default function Login() {
               让产品、内容和客服在同一个工作台协同。
             </h1>
             <p className="mt-5 max-w-md text-base leading-7 text-apple-gray-dark">
-              面向团队的 AI 创作平台，统一生成、产品库、历史记录和智能客服能力。
+              面向团队的智能客服与知识平台，集中管理产品知识、客服问答和业务素材。
             </p>
           </div>
           <div className="relative z-10 grid grid-cols-3 gap-3">

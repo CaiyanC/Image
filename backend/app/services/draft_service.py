@@ -66,7 +66,7 @@ def _draft_to_dict(draft: ProductDraft) -> dict:
             result[key] = dd[key]
     # Sub-objects: stored as "specs"/"business"/"content" in draft_data
     for stored_key, flat_key in (("specs", "specs_data"), ("business", "business_data"),
-                                  ("content", "content_data"), ("media", "media_data"),
+                                  ("content", "content_data"), ("supply_chain", "supply_chain_data"), ("media", "media_data"),
                                   ("prompts", "prompts_data")):
         if stored_key in dd:
             result[flat_key] = dd[stored_key]
@@ -88,11 +88,11 @@ def _build_draft_data(data: dict) -> dict:
                 "person_in_charge"):
         if key in data and data[key] is not None:
             dd[key] = data[key]
-    for key in ("specs", "business", "content", "media", "assets", "prompts"):
+    for key in ("specs", "business", "content", "supply_chain", "media", "assets", "prompts"):
         if key in data and data[key] is not None:
             dd[key] = data[key]
     for flat_key, stored_key in (("specs_data", "specs"), ("business_data", "business"),
-                                  ("content_data", "content"), ("media_data", "media"),
+                                  ("content_data", "content"), ("supply_chain_data", "supply_chain"), ("media_data", "media"),
                                   ("prompts_data", "prompts")):
         if flat_key in data and data[flat_key] is not None:
             dd[stored_key] = data[flat_key]
@@ -206,7 +206,7 @@ def _publish_draft(db: Session, draft_id: str, *, acting_user: User) -> dict:
     # Accept the same aliases as product creation, while updating canonical
     # sections below. Do not modify the persisted draft before authorization.
     for flat, nested in (("specs_data", "specs"), ("business_data", "business"),
-                         ("content_data", "content"), ("prompts_data", "prompts")):
+                         ("content_data", "content"), ("supply_chain_data", "supply_chain"), ("prompts_data", "prompts")):
         if flat in draft_data:
             draft_data[nested] = draft_data.pop(flat)
     asset_section_supplied = (
@@ -319,6 +319,10 @@ def _publish_draft(db: Session, draft_id: str, *, acting_user: User) -> dict:
                     listing_cn=cd.get("listing_cn"), listing_en=cd.get("listing_en"),
                     listing_ja=cd.get("listing_ja"),
                 ))
+
+        if "supply_chain" in draft_data:
+            from .product_service import _upsert_product_supply_chain
+            _upsert_product_supply_chain(db, pid, draft_data["supply_chain"])
 
         # A partial draft must not erase L4 relations it did not carry.  An
         # explicit section still replaces that section atomically, preserving

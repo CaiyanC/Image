@@ -1,6 +1,6 @@
 from datetime import datetime, timezone
-from sqlalchemy import BigInteger, Boolean, DateTime, ForeignKey, Integer, String, Text, Index
-from sqlalchemy.orm import Mapped, mapped_column
+from sqlalchemy import BigInteger, Boolean, DateTime, ForeignKey, Integer, String, Text, Index, Float
+from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from ..core.database import Base
 
@@ -52,6 +52,15 @@ class ProductAsset(Base):
     checksum_sha256: Mapped[str | None] = mapped_column(String(64), nullable=True)
     width: Mapped[int | None] = mapped_column(Integer, nullable=True)
     height: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    video_duration_seconds: Mapped[float | None] = mapped_column(Float, nullable=True)
+    reference_only: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default="false")
+    availability_status: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    material_layer: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    product_links: Mapped[list["ProductAssetLink"]] = relationship(cascade="all, delete-orphan", lazy="selectin")
+
+    @property
+    def related_skus(self) -> list[str]:
+        return list(dict.fromkeys([self.sku, *(link.sku for link in self.product_links)]))
     quality_status: Mapped[str] = mapped_column(
         String(32), nullable=False, default="usable", server_default="usable"
     )
@@ -86,3 +95,9 @@ class ProductAsset(Base):
         default=lambda: datetime.now(timezone.utc),
         onupdate=lambda: datetime.now(timezone.utc),
     )
+
+
+class ProductAssetLink(Base):
+    __tablename__ = "product_asset_links"
+    asset_id: Mapped[str] = mapped_column(String(36), ForeignKey("product_assets.id", ondelete="CASCADE"), primary_key=True)
+    sku: Mapped[str] = mapped_column(String(100), ForeignKey("products.sku", ondelete="CASCADE", onupdate="CASCADE"), primary_key=True, index=True)

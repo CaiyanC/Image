@@ -68,6 +68,7 @@ def log_operation(
     status: str = "success",
     error_message: str | None = None,
     request: Request | None = None,
+    commit: bool = True,
 ) -> OperationLog:
     operator_name = str(operator_id)
     # Some bounded service transactions (and a number of lightweight tools)
@@ -101,8 +102,11 @@ def log_operation(
         user_agent=request.headers.get("user-agent") if request else None,
     )
     db.add(log)
-    db.commit()
-    db.refresh(log)
+    if commit:
+        db.commit()
+        db.refresh(log)
+    else:
+        db.flush()
     return log
 
 

@@ -57,6 +57,7 @@ class ProductAssetMcpService:
             scene_tags=_string_list(arguments.get("scene_tags")),
             mood_tags=_string_list(arguments.get("mood_tags")),
             limit=limit,
+            ai_reference_ready_only=not self.include_unreviewed,
         )
         return [
             self._metadata(asset)
@@ -105,7 +106,7 @@ class ProductAssetMcpService:
         clean_asset_id = _required_text(asset_id, "asset_id")
         asset = (
             self.db.query(ProductAsset)
-            .filter(ProductAsset.sku == clean_sku, ProductAsset.id == clean_asset_id)
+            .filter(asset_service._sku_filter(clean_sku), ProductAsset.id == clean_asset_id)
             .first()
         )
         if not asset or not self._is_readable(asset):
@@ -123,14 +124,7 @@ class ProductAssetMcpService:
         # publication grant. Keep the three independent release decisions
         # explicit: the asset must be reviewed, authorized for use, publicly
         # published, and marked safe as an AI reference.
-        authorization_status = str(asset.authorization_status or "").strip().lower()
-        return (
-            asset.review_status == "approved"
-            and asset.quality_status == "usable"
-            and authorization_status not in {"", "unknown", "denied", "revoked"}
-            and bool(asset.is_public)
-            and bool(asset.ai_reference_usable)
-        )
+        return asset_service.is_ai_reference_ready(asset)
 
     def _metadata(self, asset: ProductAsset) -> dict[str, Any]:
         payload = asset_service.model_to_dict(asset)

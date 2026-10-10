@@ -240,6 +240,9 @@ def _compact_product_detail(detail: dict[str, Any]) -> dict[str, Any]:
         "business": {
             "top_selling_points": business.get("top_selling_points"),
             "target_audience": business.get("target_audience"),
+            "suitable_people": business.get("suitable_people"),
+            "audience_tags": business.get("audience_tags"),
+            "value_positioning": business.get("value_positioning"),
             "positioning": business.get("positioning"),
             "price_positioning": business.get("price_positioning"),
             "emotional_value": business.get("emotional_value"),
@@ -602,6 +605,8 @@ async def _semantic_plan(
     metadata: dict[str, Any] = {}
     start = perf_counter()
     try:
+        from .customer_purchase_urgency import purchase_turn_context
+        payload = {**payload, "purchase_service_context": purchase_turn_context.get() or {}}
         raw = await customer_llm_service.chat_completion(
             db,
             messages=[
