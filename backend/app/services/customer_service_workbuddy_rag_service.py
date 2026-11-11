@@ -1343,6 +1343,13 @@ async def ask_customer_service_workbuddy_rag(
         skus=scoped_skus if len(scoped_skus) > 1 else None,
     )
     retrieval_rows = list(question_rows)
+    if conversation_id and len(anchor_skus) == 1 and not catalogue_subject_skus and not replacement_turn:
+        # Keep global recall for follow-ups while reserving evidence slots for
+        # relevant QA on the product already confirmed in the conversation.
+        followup_rows = await _retrieve_once(
+            db, query=original_question, sku=anchor_skus[0], sections=["qa"], limit=2,
+        )
+        retrieval_rows[:0] = [row for row in followup_rows if row.get("sku") == anchor_skus[0]]
     profile_rows: list[dict[str, Any]] = []
     if not known_skus or replacement_turn:
         # A single live-profile pass complements the narrow question page.
