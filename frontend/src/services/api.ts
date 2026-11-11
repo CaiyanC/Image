@@ -1199,11 +1199,11 @@ export const api = {
       request(`/products/${sku}/content`, { method: 'PUT', body: JSON.stringify(data) }),
 
     // QA
-    listQa: (sku: string) => request(`/products/${sku}/qa`),
+    listQa: (sku: string) => request<Array<{ id: string; question: string; answer: string; integrity_status: string }>>(`/products/${encodeURIComponent(sku)}/qa`),
     addQa: (sku: string, data: { question: string; answer: string; tags?: unknown; priority?: number }) =>
       request<ProductQaCreateResponse>(`/products/${sku}/qa`, { method: 'POST', body: JSON.stringify(data) }),
     updateQa: (sku: string, qaId: string, data: Record<string, unknown>) =>
-      request(`/products/${sku}/qa/${qaId}`, { method: 'PUT', body: JSON.stringify(data) }),
+      request<ProductQaCreateResponse>(`/products/${encodeURIComponent(sku)}/qa/${encodeURIComponent(qaId)}`, { method: 'PUT', body: JSON.stringify(data) }),
     deleteQa: (sku: string, qaId: string) =>
       request(`/products/${sku}/qa/${qaId}`, { method: 'DELETE' }),
     importQaBatch: (data: {
@@ -1408,6 +1408,27 @@ export const api = {
   },
 
   customerService: {
+    setProductLink: (data: { sku: string; url: string; enabled: boolean; snapshot_text?: string }) =>
+      request<{ sku: string; platform: string; item_id: string; changed: boolean }>(
+        '/workbuddy/customer-service/product-links',
+        { method: 'PUT', body: JSON.stringify(data) },
+      ),
+    previewProductLink: (url: string) =>
+      request<{ status: 'preview' | 'unavailable'; url: string; text?: string; message?: string }>(
+        '/workbuddy/customer-service/product-links/preview',
+        { method: 'POST', body: JSON.stringify({ url }) },
+      ),
+    createWorkbuddyToken: (data: { name?: string; expires_in_days?: number; allow_qa_write?: boolean }) =>
+      request<{ id: string; name: string; token_prefix: string; token: string; created_at: string; expires_at: string }>(
+        '/workbuddy/customer-service/tokens',
+        { method: 'POST', body: JSON.stringify(data) },
+      ),
+    workbuddyTokens: () =>
+      request<{ items: Array<{ id: string; name: string; token_prefix: string; created_at: string; expires_at: string; last_used_at?: string | null; revoked_at?: string | null; allow_qa_write?: boolean }> }>(
+        '/workbuddy/customer-service/tokens',
+      ),
+    revokeWorkbuddyToken: (tokenId: string) =>
+      request<{ id: string; revoked: boolean }>(`/workbuddy/customer-service/tokens/${encodeURIComponent(tokenId)}`, { method: 'DELETE' }),
     ask: (
       data: { question: string; conversation_id?: string | null },
       pipeline?: CustomerServicePipeline,

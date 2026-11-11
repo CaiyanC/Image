@@ -6,6 +6,8 @@ import { getLandingPath, hasPermission, useAuthStore } from '../store/authStore'
 
 export default function ProductQaCreate() {
   const [searchParams] = useSearchParams()
+  const qaId = searchParams.get('qa_id')
+  const reviewSku = searchParams.get('sku')?.trim() || ''
   const [sku, setSku] = useState(() => searchParams.get('sku') || '')
   const [question, setQuestion] = useState(() => searchParams.get('question') || '')
   const [answer, setAnswer] = useState('')
@@ -18,6 +20,35 @@ export default function ProductQaCreate() {
   const [candidateQuery, setCandidateQuery] = useState('')
   const [candidatesLoading, setCandidatesLoading] = useState(true)
   const [candidatesError, setCandidatesError] = useState('')
+  const [loadedReview, setLoadedReview] = useState<string | null>(null)
+  const [productUrl, setProductUrl] = useState('')
+  const [listingText, setListingText] = useState('')
+  const [linkBusy, setLinkBusy] = useState(false)
+  const [linkStatus, setLinkStatus] = useState('')
+
+  useEffect(() => {
+    if (!qaId) return
+    let active = true
+    setLoadedReview(null)
+    setResult(null)
+    setError('')
+    if (!reviewSku) {
+      setError('审核链接缺少 SKU')
+      return
+    }
+    setSku(reviewSku)
+    api.products.listQa(reviewSku).then((items) => {
+      if (!active) return
+      const qa = items.find((item) => item.id === qaId)
+      if (!qa) { setError('这条 QA 不存在'); return }
+      setQuestion(qa.question)
+      setAnswer(qa.answer)
+      setLoadedReview(qaId)
+    }).catch((err: unknown) => {
+      if (active) setError(err instanceof Error ? err.message : '读取 QA 失败')
+    })
+    return () => { active = false }
+  }, [qaId, reviewSku])
 
   useEffect(() => {
     let active = true
@@ -38,6 +69,7 @@ export default function ProductQaCreate() {
 
   async function handleSubmit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault()
+    if (qaId && loadedReview !== qaId) return
     const normalizedSku = sku.trim().toUpperCase()
     const normalizedQuestion = question.trim()
     const normalizedAnswer = answer.trim()
@@ -50,18 +82,52 @@ export default function ProductQaCreate() {
     setError('')
     setResult(null)
     try {
-      const response = await api.products.addQa(normalizedSku, {
-        question: normalizedQuestion,
-        answer: normalizedAnswer,
-      })
+      const data = { question: normalizedQuestion, answer: normalizedAnswer }
+      const response = qaId
+        ? await api.products.updateQa(reviewSku, qaId, data)
+        : await api.products.addQa(normalizedSku, data)
       setResult(response)
-      if (response.ready_for_rag) {
+      if (response.ready_for_rag && !qaId) {
         setAnswer('')
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : 'QA 保存失败')
     } finally {
       setSaving(false)
+    }
+  }
+
+  async function updateLink(enabled: boolean, saveSnapshot = false) {
+    const url = productUrl.trim()
+    if (!sku.trim() || !url || linkBusy) return
+    setLinkBusy(true)
+    setLinkStatus('')
+    try {
+      const item = await api.customerService.setProductLink({
+        sku: sku.trim(), url, enabled, ...(saveSnapshot ? { snapshot_text: listingText.trim() } : {}),
+      })
+      setLinkStatus(enabled
+        ? `已关联 ${item.sku}（${item.platform} 商品 ${item.item_id}）${saveSnapshot ? '，商品页资料已保存' : ''}`
+        : `已解除 ${item.sku} 的商品链接关联`)
+    } catch (err) {
+      setLinkStatus(err instanceof Error ? err.message : '商品链接更新失败')
+    } finally {
+      setLinkBusy(false)
+    }
+  }
+
+  async function readListing() {
+    if (!productUrl.trim() || linkBusy) return
+    setLinkBusy(true)
+    setLinkStatus('')
+    try {
+      const result = await api.customerService.previewProductLink(productUrl.trim())
+      if (result.text) setListingText(result.text)
+      setLinkStatus(result.text ? '已读取预览。请核对 SKU 和内容后保存。' : result.message || '网页未返回可读取的资料')
+    } catch (err) {
+      setLinkStatus(err instanceof Error ? err.message : '商品页读取失败')
+    } finally {
+      setLinkBusy(false)
     }
   }
 
@@ -78,7 +144,7 @@ export default function ProductQaCreate() {
       <div className="mb-5 flex flex-wrap items-start justify-between gap-3">
         <div>
           <div className="text-xs font-semibold text-teal-700">L5 · 产品知识 QA</div>
-          <h1 className="mt-1 text-2xl font-black text-apple-text">添加产品 QA</h1>
+          <h1 className="mt-1 text-2xl font-black text-apple-text">{qaId ? '核对产品 QA' : '添加产品 QA'}</h1>
           <p className="mt-1 text-sm text-apple-gray-medium">
             问题来自客服现场，答案保存后会先做同 SKU 语义审核，再同步到 RAG。
           </p>
@@ -95,7 +161,7 @@ export default function ProductQaCreate() {
         <div>
           <label htmlFor="qa-product-search" className="mb-1.5 block text-sm font-semibold text-apple-text">查找产品</label>
           <input id="qa-product-search" value={candidateQuery} onChange={(event) => setCandidateQuery(event.target.value)} placeholder="按 SKU、产品名搜索" className="glass-input mb-2 w-full px-3 py-2.5 text-sm" />
-          <select aria-label="选择 QA 所属产品" value={candidates.some((item) => item.sku === sku) ? sku : ''} onChange={(event) => { if (event.target.value) setSku(event.target.value) }} disabled={candidatesLoading} className="glass-input mb-3 w-full px-3 py-2.5 text-sm">
+          <select aria-label="选择 QA 所属产品" value={candidates.some((item) => item.sku === sku) ? sku : ''} onChange={(event) => { if (event.target.value) setSku(event.target.value) }} disabled={Boolean(qaId) || candidatesLoading} className="glass-input mb-3 w-full px-3 py-2.5 text-sm">
             <option value="">{candidatesLoading ? '正在加载产品…' : candidates.length ? '选择产品，自动填写下方 SKU' : '没有匹配产品，可直接填写已知 SKU'}</option>
             {candidates.map((item) => <option key={item.sku} value={item.sku}>{item.sku} · {item.product_name_cn || item.product_name_en || '未命名'}</option>)}
           </select>
@@ -107,6 +173,7 @@ export default function ProductQaCreate() {
             id="qa-sku"
             value={sku}
             onChange={(event) => setSku(event.target.value)}
+            readOnly={Boolean(qaId)}
             placeholder="例如：CS-G25"
             className="glass-input w-full px-3 py-2.5 text-sm uppercase"
             autoComplete="off"
@@ -183,13 +250,28 @@ export default function ProductQaCreate() {
           </Link>}
           <button
             type="submit"
-            disabled={saving}
+            disabled={saving || Boolean(qaId && loadedReview !== qaId)}
             className="btn-primary px-5 py-2.5 text-sm disabled:cursor-not-allowed disabled:opacity-50"
           >
-            {saving ? '审核并同步中…' : '保存并同步到 RAG'}
+            {saving ? '审核并同步中…' : qaId ? '提交审核' : '保存并同步到 RAG'}
           </button>
         </div>
       </form>
+      {hasPermission(user, 'product.edit') && <details className="glass mt-5 rounded-2xl p-5">
+        <summary className="cursor-pointer font-semibold">维护平台商品链接</summary>
+        <p className="mt-2 text-sm text-apple-gray-medium">将平台商品详情页关联到上方选定的 SKU。一个商品页面有多个规格时，可分别关联各规格的 SKU。</p>
+        <label htmlFor="qa-platform-link" className="mt-3 block text-sm font-semibold">平台商品链接</label>
+        <input id="qa-platform-link" type="url" maxLength={2000} disabled={linkBusy} value={productUrl} onChange={(event) => { setProductUrl(event.target.value); setListingText(''); setLinkStatus('') }} className="glass-input mt-1 w-full px-3 py-2.5 text-sm" />
+        <div className="mt-3 flex flex-wrap gap-3">
+          <button type="button" disabled={linkBusy || !sku.trim() || !productUrl.trim()} onClick={() => void updateLink(true)} className="btn-primary px-4 py-2 text-sm disabled:opacity-50">关联到当前 SKU</button>
+          <button type="button" disabled={linkBusy || !sku.trim() || !productUrl.trim()} onClick={() => void updateLink(false)} className="rounded-xl border px-4 py-2 text-sm disabled:opacity-50">解除当前 SKU 的关联</button>
+          <button type="button" disabled={linkBusy || !productUrl.trim()} onClick={() => void readListing()} className="rounded-xl border px-4 py-2 text-sm disabled:opacity-50">读取商品页预览</button>
+        </div>
+        <label htmlFor="qa-platform-listing-text" className="mt-3 block text-sm font-semibold">供客服查阅的商品页资料</label>
+        <textarea id="qa-platform-listing-text" disabled={linkBusy} rows={5} maxLength={6000} value={listingText} onChange={(event) => setListingText(event.target.value)} placeholder="核对预览内容，或粘贴商品页上的规格、配置和使用说明" className="glass-input mt-1 w-full px-3 py-2.5 text-sm" />
+        <button type="button" disabled={linkBusy || !sku.trim() || !productUrl.trim() || !listingText.trim()} onClick={() => void updateLink(true, true)} className="btn-primary mt-2 px-4 py-2 text-sm disabled:opacity-50">保存商品页资料</button>
+        {linkStatus && <p role="status" className="mt-2 text-sm">{linkStatus}</p>}
+      </details>}
     </div>
   )
 }

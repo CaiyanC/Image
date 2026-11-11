@@ -21,6 +21,11 @@ class TriageTest(unittest.TestCase):
             self.assertIn('人工', safe_reply(triage))
             self.assertNotIn('已转', safe_reply(triage))
 
+    def test_ignition_question_does_not_mask_a_separate_emergency(self):
+        assert classify('酒精放哪里，怎么就让它烧起来了呀？', product_context=True)['urgency'] != 'immediate'
+        assert classify('怎么突然烧起来了？', product_context=True)['urgency'] == 'immediate'
+        assert classify('怎么让它烧起来？我现在闻到燃气味', product_context=True)['urgency'] == 'immediate'
+
     def test_discount_followup_is_not_refund(self):
         self.assertEqual(classify('不能申请一下吗？')['question_kind'], 'ambiguous_request')
         reply = safe_reply(classify('不能申请一下吗？', previous_question='买15套可以优惠吗'))

@@ -44,6 +44,8 @@ from .knowledge_base import (
     KnowledgeDocument, KnowledgeChunk, KnowledgeParseTask,
     CustomerServiceConversation, CustomerServiceMessage,
 )
+from .workbuddy_customer_service_token import WorkBuddyCustomerServiceToken
+from .customer_product_link import CustomerProductLink
 
 __all__ = [
     "CompetitorAsset",
@@ -63,4 +65,6 @@ __all__ = [
     "Keyword", "ProductKeyword",
     "KnowledgeDocument", "KnowledgeChunk", "KnowledgeParseTask",
     "CustomerServiceConversation", "CustomerServiceMessage",
+    "WorkBuddyCustomerServiceToken",
+    "CustomerProductLink",
 ]

@@ -65,6 +65,17 @@ interface ConversationListItem {
   deleting: boolean
 }
 
+interface WorkBuddyConnectorToken {
+  id: string
+  name: string
+  token_prefix: string
+  created_at: string
+  expires_at: string
+  last_used_at?: string | null
+  revoked_at?: string | null
+  allow_qa_write?: boolean
+}
+
 const CUSTOMER_SERVICE_DRAFT_VERSION = 2
 
 interface InFlightCustomerServiceRequest {
@@ -177,6 +188,11 @@ export default function CustomerService({
   const [actionLoadingId, setActionLoadingId] = useState<string | null>(null)
   const [debugMode, setDebugMode] = useState(false)
   const [feedbackLoadingId, setFeedbackLoadingId] = useState<string | null>(null)
+  const [workbuddyDialogOpen, setWorkbuddyDialogOpen] = useState(false)
+  const [workbuddyTokens, setWorkbuddyTokens] = useState<WorkBuddyConnectorToken[]>([])
+  const [workbuddyTokenOnce, setWorkbuddyTokenOnce] = useState<string | null>(null)
+  const [workbuddyBusy, setWorkbuddyBusy] = useState(false)
+  const [workbuddyError, setWorkbuddyError] = useState('')
   const [now, setNow] = useState(() => Date.now())
   const bottomRef = useRef<HTMLDivElement | null>(null)
   const chatContainerRef = useRef<HTMLDivElement | null>(null)
@@ -688,7 +704,54 @@ export default function CustomerService({
     }
   }
 
+  async function openWorkbuddyConnector() {
+    setWorkbuddyDialogOpen(true)
+    setWorkbuddyTokenOnce(null)
+    setWorkbuddyError('')
+    try {
+      const result = await api.customerService.workbuddyTokens()
+      setWorkbuddyTokens(result.items || [])
+    } catch (err) {
+      setWorkbuddyError(err instanceof Error ? err.message : '读取 WorkBuddy 连接状态失败')
+    }
+  }
+
+  async function createWorkbuddyConnectorToken(allowQaWrite = false) {
+    setWorkbuddyBusy(true)
+    setWorkbuddyError('')
+    try {
+      const result = await api.customerService.createWorkbuddyToken({
+        name: allowQaWrite ? '客服 MCP（QA 录入）' : 'WorkBuddy 智能客服',
+        expires_in_days: 90,
+        allow_qa_write: allowQaWrite,
+      })
+      setWorkbuddyTokenOnce(result.token)
+      const list = await api.customerService.workbuddyTokens()
+      setWorkbuddyTokens(list.items || [])
+    } catch (err) {
+      setWorkbuddyError(err instanceof Error ? err.message : '创建连接令牌失败')
+    } finally {
+      setWorkbuddyBusy(false)
+    }
+  }
+
+  async function revokeWorkbuddyConnectorToken(tokenId: string) {
+    setWorkbuddyBusy(true)
+    setWorkbuddyError('')
+    try {
+      await api.customerService.revokeWorkbuddyToken(tokenId)
+      const list = await api.customerService.workbuddyTokens()
+      setWorkbuddyTokens(list.items || [])
+      setWorkbuddyTokenOnce(null)
+    } catch (err) {
+      setWorkbuddyError(err instanceof Error ? err.message : '撤销连接令牌失败')
+    } finally {
+      setWorkbuddyBusy(false)
+    }
+  }
+
   return (
+    <>
     <div className="p-4 max-w-[1600px] mx-auto lg:h-[calc(100dvh-144px)] min-h-[560px]">
       <div className="grid grid-cols-12 gap-4 h-full">
         <aside className="col-span-12 lg:col-span-3 glass rounded-2xl overflow-hidden flex flex-col max-h-48 lg:max-h-none min-h-0">
@@ -740,8 +803,17 @@ export default function CustomerService({
 
         <main className="col-span-12 lg:col-span-6 glass rounded-2xl overflow-hidden flex flex-col min-h-[420px] lg:min-h-0">
           <div className="p-4 border-b border-black/5">
-            {canManageKnowledge && (
-              <div className="flex justify-end">
+            <div className="flex justify-end gap-2">
+              {pipeline !== 'workbuddy_agent_v2' && (
+                <button
+                  type="button"
+                  onClick={() => void openWorkbuddyConnector()}
+                  className="px-3 py-2 rounded-xl text-xs border border-blue-200 bg-blue-50 text-blue-700 hover:bg-blue-100 transition-colors"
+                >
+                  WorkBuddy 接入
+                </button>
+              )}
+              {canManageKnowledge && (
                 <button
                   type="button"
                   onClick={() => setDebugMode((value) => !value)}
@@ -751,8 +823,8 @@ export default function CustomerService({
                 >
                   {debugMode ? '调试开启' : '调试模式'}
                 </button>
-              </div>
-            )}
+              )}
+            </div>
           </div>
 
           <div ref={chatContainerRef} className="flex-1 overflow-y-auto p-4 space-y-3">
@@ -927,6 +999,82 @@ export default function CustomerService({
         </aside>
     </div>
     </div>
+    {workbuddyDialogOpen && (
+      <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" onMouseDown={(event) => {
+        if (event.target === event.currentTarget) {
+          setWorkbuddyDialogOpen(false)
+          setWorkbuddyTokenOnce(null)
+        }
+      }}>
+        <section role="dialog" aria-modal="true" aria-labelledby="workbuddy-connector-title" className="w-full max-w-xl max-h-[90dvh] overflow-y-auto rounded-2xl bg-white p-5 shadow-2xl">
+          <div className="flex items-start justify-between gap-3">
+            <div>
+              <h2 id="workbuddy-connector-title" className="text-lg font-semibold text-apple-text">WorkBuddy 智能客服接入</h2>
+              <p className="mt-1 text-sm text-apple-gray-medium">让 WorkBuddy 调用现有客服规则，并由客服后端检索当前商品资料与知识库。</p>
+            </div>
+            <button type="button" aria-label="关闭" onClick={() => { setWorkbuddyDialogOpen(false); setWorkbuddyTokenOnce(null) }} className="rounded-lg px-2 py-1 text-apple-gray-medium hover:bg-black/5">关闭</button>
+          </div>
+          <div className="mt-4 rounded-xl border border-sky-100 bg-sky-50 p-3 text-sm text-sky-900">
+            问答令牌可查询商品和客服知识。QA 录入令牌还可保存待审核问答。令牌仅显示一次，可随时撤销，默认有效期 90 天。
+          </div>
+          {workbuddyTokenOnce ? (
+            <div className="mt-4 rounded-xl border border-emerald-200 bg-emerald-50 p-4">
+              <div className="text-sm font-semibold text-emerald-900">新令牌已创建，请立即复制并保管</div>
+              <code className="mt-2 block break-all rounded-lg bg-white p-3 text-xs text-apple-text">{workbuddyTokenOnce}</code>
+              <button
+                type="button"
+                onClick={() => void navigator.clipboard.writeText(workbuddyTokenOnce).catch(() => setWorkbuddyError('复制失败，请手动复制令牌'))}
+                className="mt-3 rounded-lg bg-emerald-700 px-3 py-2 text-xs text-white hover:bg-emerald-800"
+              >复制令牌</button>
+              <p className="mt-2 text-xs text-emerald-900">WorkBuddy 配置中的 API 地址：开发版本机通常填 http://127.0.0.1:8001；若客服后端在内网服务器，请填写该服务器可访问的地址。只填主机和端口，不要在地址后再加 /api。</p>
+              <p className="mt-1 text-xs text-emerald-900">不要把这个令牌发到群聊或提交到代码仓库。关闭窗口后不会再次显示。</p>
+            </div>
+          ) : (
+            <div className="mt-4 flex flex-wrap gap-2">
+              <button
+                type="button"
+                disabled={workbuddyBusy}
+                onClick={() => void createWorkbuddyConnectorToken()}
+                className="rounded-xl bg-blue-600 px-4 py-2.5 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-50"
+              >{workbuddyBusy ? '处理中…' : '生成问答令牌'}</button>
+              {canManageQa && <button
+                type="button"
+                disabled={workbuddyBusy}
+                onClick={() => void createWorkbuddyConnectorToken(true)}
+                className="rounded-xl border border-blue-200 px-4 py-2.5 text-sm font-medium text-blue-700 hover:bg-blue-50 disabled:opacity-50"
+              >生成 QA 录入令牌</button>}
+            </div>
+          )}
+          {workbuddyError && <div role="alert" className="mt-3 rounded-lg bg-red-50 p-3 text-sm text-red-700">{workbuddyError}</div>}
+          <div className="mt-5 border-t border-black/5 pt-4">
+            <h3 className="text-sm font-semibold text-apple-text">已有连接令牌</h3>
+            {workbuddyTokens.length ? (
+              <ul className="mt-2 space-y-2">
+                {workbuddyTokens.map((token) => {
+                  const expired = new Date(token.expires_at).getTime() <= Date.now()
+                  const revoked = Boolean(token.revoked_at)
+                  return (
+                    <li key={token.id} className="flex items-center justify-between gap-3 rounded-xl border border-black/10 p-3">
+                      <div className="min-w-0 text-xs">
+                        <div className="font-medium text-apple-text">{token.name} · {token.token_prefix}•••</div>
+                        <div className="mt-1 text-apple-gray-medium">{token.allow_qa_write ? '问答与 QA 录入' : '问答'} · {revoked ? '已撤销' : expired ? '已过期' : '有效'} · 到期 {new Date(token.expires_at).toLocaleString()}</div>
+                      </div>
+                      {!revoked && !expired && (
+                        <button type="button" disabled={workbuddyBusy} onClick={() => void revokeWorkbuddyConnectorToken(token.id)} className="shrink-0 rounded-lg border border-red-200 px-2.5 py-1.5 text-xs text-red-600 hover:bg-red-50 disabled:opacity-50">撤销</button>
+                      )}
+                    </li>
+                  )
+                })}
+              </ul>
+            ) : <p className="mt-2 text-xs text-apple-gray-medium">还没有创建连接令牌。</p>}
+          </div>
+          <div className="mt-4 text-xs leading-5 text-apple-gray-medium">
+            在 WorkBuddy「专家·技能·连接器 → 连接器 → 自定义连接器」导入本项目生成的客服连接器包；添加时填入 API 地址和刚复制的令牌。连接器返回答案及其资料来源，并支持用 conversation_id 接续上下文。
+          </div>
+        </section>
+      </div>
+    )}
+    </>
   )
 }
 

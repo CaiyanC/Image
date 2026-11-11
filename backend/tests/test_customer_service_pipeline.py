@@ -20,6 +20,7 @@ def test_customer_service_defaults_to_legacy_pipeline(monkeypatch):
     monkeypatch.setattr(settings, "APP_ENV", "dev")
     monkeypatch.setattr(settings, "CUSTOMER_SERVICE_PIPELINE", "legacy")
     monkeypatch.setattr(settings, "CUSTOMER_SERVICE_PIPELINE_OVERRIDE_ENABLED", True)
+    monkeypatch.setattr(settings, "CUSTOMER_SERVICE_PLAN_ENABLED", False)
 
     async def fake_legacy(*_args, **_kwargs):
         return {"pipeline": "legacy"}
@@ -206,6 +207,12 @@ def test_catalog_validated_short_sku_binds_unique_suffix_and_keeps_variant_ambig
             db,
             "C79\u7684\u5bb9\u91cf\u662f\u591a\u5c11\uff1f",
         ) == []
+        assert customer_service_semantic_rag_v2_service._explicit_skus(
+            db, "C78 可以搭配吗？", allow_suffix=False,
+        ) == []
+        assert customer_service_semantic_rag_v2_service._explicit_skus(
+            db, "CW-C78 可以搭配吗？", allow_suffix=False,
+        ) == ["CW-C78"]
 
 
 def test_semantic_rag_accepts_model_selected_sku_when_recall_was_ambiguous():

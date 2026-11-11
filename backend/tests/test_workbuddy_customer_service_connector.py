@@ -1,0 +1,341 @@
+import sys
+from pathlib import Path
+
+import pytest
+from fastapi.testclient import TestClient
+from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker
+from sqlalchemy.pool import StaticPool
+
+
+BACKEND_ROOT = Path(__file__).resolve().parents[1]
+if str(BACKEND_ROOT) not in sys.path:
+    sys.path.insert(0, str(BACKEND_ROOT))
+
+from app.core.database import Base, get_db  # noqa: E402
+from app.core.permission_constants import MANAGEMENT_GROUP_NAME  # noqa: E402
+from app.core.security import create_access_token  # noqa: E402
+from app.main import app  # noqa: E402
+from app.models import (  # noqa: E402
+    CustomerProductLink, CustomerServiceConversation, CustomerServiceMessage, Group,
+    OperationLog, Product, ProductQa, User, UserGroup, WorkBuddyCustomerServiceToken,
+)
+
+
+CONNECTOR_PATH = "/api/workbuddy/customer-service"
+
+
+def _connector_headers(client, user_headers, *, write=False):
+    response = client.post(
+        CONNECTOR_PATH + "/tokens", headers=user_headers, json={"allow_qa_write": write},
+    )
+    assert response.status_code == 200, response.text
+    return {"Authorization": "Bearer " + response.json()["token"]}
+
+
+@pytest.fixture()
+def connector_client(monkeypatch):
+    engine = create_engine(
+        "sqlite:///:memory:",
+        connect_args={"check_same_thread": False},
+        poolclass=StaticPool,
+    )
+    Base.metadata.create_all(
+        engine,
+        tables=[
+            User.__table__,
+            Group.__table__,
+            UserGroup.__table__,
+            WorkBuddyCustomerServiceToken.__table__,
+            Product.__table__,
+            ProductQa.__table__,
+            CustomerProductLink.__table__,
+            CustomerServiceConversation.__table__,
+            CustomerServiceMessage.__table__,
+            OperationLog.__table__,
+        ],
+    )
+    Session = sessionmaker(bind=engine, expire_on_commit=False)
+    with Session() as db:
+        db.add_all([
+            Product(id="product-a", sku="TEST-SKU-A", product_name_cn="测试炉", barcode="1", brand="测试"),
+            Product(id="product-b", sku="TEST-SKU-B", product_name_cn="测试炉组合装", barcode="2", brand="测试"),
+        ])
+        db.add(User(
+            id="wb-connector-user",
+            username="wb-connector-user",
+            password_hash="unused",
+            user_type="human",
+            display_name="WorkBuddy Connector User",
+            is_active=True,
+        ))
+        db.add(Group(
+            id="wb-connector-admin-group",
+            group_name=MANAGEMENT_GROUP_NAME,
+            description="test management access",
+        ))
+        db.add(UserGroup(
+            user_id="wb-connector-user",
+            group_id="wb-connector-admin-group",
+            group_role="admin",
+        ))
+        db.commit()
+
+    def override_db():
+        session = Session()
+        try:
+            yield session
+        finally:
+            session.close()
+
+    app.dependency_overrides[get_db] = override_db
+    from app.api import workbuddy_customer_service as connector_api
+
+    monkeypatch.setattr(connector_api, "enforce_rate_limit", lambda **kwargs: None)
+    monkeypatch.setattr(connector_api.operation_log_service, "log_operation", lambda *args, **kwargs: None)
+    app_client = TestClient(app)
+    jwt = create_access_token({"sub": "wb-connector-user"})
+    try:
+        yield app_client, Session, {"Authorization": f"Bearer {jwt}"}
+    finally:
+        app.dependency_overrides.clear()
+        engine.dispose()
+
+
+def test_workbuddy_token_is_one_time_user_scoped_and_revocable(connector_client):
+    client, Session, user_headers = connector_client
+    created = client.post(
+        "/api/workbuddy/customer-service/tokens",
+        headers=user_headers,
+        json={"name": "WorkBuddy 客服", "expires_in_days": 30},
+    )
+    assert created.status_code == 200
+    payload = created.json()
+    token = payload["token"]
+    assert token.startswith("cscwb_")
+
+    listed = client.get("/api/workbuddy/customer-service/tokens", headers=user_headers)
+    assert listed.status_code == 200
+    assert len(listed.json()["items"]) == 1
+    assert "token" not in listed.json()["items"][0]
+
+    with Session() as db:
+        stored = db.query(WorkBuddyCustomerServiceToken).one()
+        assert stored.token_hash != token
+        assert stored.token_hash
+
+    revoked = client.delete(
+        f"/api/workbuddy/customer-service/tokens/{payload['id']}",
+        headers=user_headers,
+    )
+    assert revoked.status_code == 200
+    rejected = client.post(
+        "/api/workbuddy/customer-service/ask",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"question": "测试"},
+    )
+    assert rejected.status_code == 401
+
+
+def test_workbuddy_ask_runs_rag_pipeline_and_returns_sanitized_sources(connector_client, monkeypatch):
+    client, _, user_headers = connector_client
+    from app.api import workbuddy_customer_service as connector_api
+
+    created = client.post(
+        "/api/workbuddy/customer-service/tokens",
+        headers=user_headers,
+        json={},
+    )
+    token = created.json()["token"]
+    calls = []
+
+    async def fake_ask_customer_service(db, **kwargs):
+        calls.append(kwargs)
+        return {
+            "answer": "小青炉的燃料请按说明书要求使用。",
+            "conversation_id": "conversation-1",
+            "message_id": "message-1",
+            "answer_type": "faq",
+            "intent": "customer_faq",
+            "confidence": "high",
+            "uncertainty": "confirmed",
+            "needs_clarification": False,
+            "suggested_followups": ["还想了解点火步骤吗？"],
+            "sku": "CS-G25-A",
+            "result_skus": ["CS-G25-A"],
+            "sources": [
+                {
+                    "type": "rag_evidence",
+                    "source_type": "knowledge_chunk",
+                    "source_id": "doc-1",
+                    "source_title": "小青炉升级版 FAQ",
+                    "source_section": "使用与燃料",
+                    "evidence_id": "evidence-1",
+                    "content": "private source content is not exposed by this connector",
+                },
+                {"type": "agent_meta", "source_type": "internal", "answer_metadata": {"secret": "omit"}},
+            ],
+            "debug": {"internal": "omit"},
+            "answer_metadata": {"internal": "omit"},
+        }
+
+    monkeypatch.setattr(connector_api.customer_service_service, "ask_customer_service", fake_ask_customer_service)
+    monkeypatch.setattr(connector_api.customer_llm_service, "set_governed_customer_user", lambda user: object())
+    monkeypatch.setattr(connector_api.customer_llm_service, "reset_governed_customer_user", lambda token: None)
+
+    response = client.post(
+        "/api/workbuddy/customer-service/ask",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"question": "客户问燃料", "sku": "CS-G25-A", "conversation_id": "conversation-0"},
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["answer"].startswith("小青炉")
+    assert payload["conversation_id"] == "conversation-1"
+    assert payload["message_id"] == "message-1"
+    assert payload["sources"] == [{
+        "source_type": "knowledge_chunk",
+        "sku": None,
+        "source_id": "doc-1",
+        "evidence_id": "evidence-1",
+        "title": "小青炉升级版 FAQ",
+        "section": "使用与燃料",
+    }]
+    assert "debug" not in payload
+    assert "content" not in payload["sources"][0]
+    assert calls[0]["user_id"] == "wb-connector-user"
+    assert calls[0]["question"] == "客户问燃料"
+    assert calls[0]["conversation_id"] == "conversation-0"
+    assert calls[0]["pipeline"] == connector_api.customer_pipeline_service.WORKBUDDY_RAG_PIPELINE
+    assert calls[0]["server_selected_pipeline"] is True
+
+
+def test_product_link_uses_existing_skus_and_preserves_variants(connector_client):
+    client, _, user_headers = connector_client
+    reader = _connector_headers(client, user_headers)
+    url = "https://detail.tmall.com/item.htm?id=123456&spm=share"
+    search = CONNECTOR_PATH + "/products/search"
+    mapping = CONNECTOR_PATH + "/product-links"
+    assert client.post(search, headers=reader, json={"query": url}).json()["status"] == "link_mapping_missing"
+    assert client.put(mapping, headers=reader, json={"url": url, "sku": "TEST-SKU-A"}).status_code == 401
+    assert client.put(mapping, headers=user_headers, json={"url": url, "sku": "NOT-IN-CATALOG"}).status_code == 404
+    for sku in ("TEST-SKU-A", "TEST-SKU-B"):
+        saved = client.put(mapping, headers=user_headers, json={"url": url, "sku": sku})
+        assert saved.status_code == 200
+        assert saved.json()["changed"]
+    mobile = "https://h5.m.taobao.com/awp/core/detail.htm?id=123456&track=other"
+    result = client.post(search, headers=reader, json={"query": mobile}).json()
+    assert result["status"] == "choose_variant"
+    assert {item["sku"] for item in result["items"]} == {"TEST-SKU-A", "TEST-SKU-B"}
+    listing = CONNECTOR_PATH + "/listings/search"
+    lookup = {"sku": "TEST-SKU-A", "query": "收纳配置"}
+    assert client.post(listing, headers=reader, json=lookup).json()["status"] == "no_snapshot"
+    saved = client.put(mapping, headers=user_headers, json={
+        "url": url, "sku": "TEST-SKU-A", "snapshot_text": "配置：附收纳袋",
+    })
+    assert saved.json()["changed"]
+    evidence = client.post(listing, headers=reader, json=lookup).json()["items"]
+    assert evidence[0]["excerpt"] == "配置：附收纳袋"
+    assert evidence[0]["url"] == "https://item.taobao.com/item.htm?id=123456"
+    assert client.post(listing, headers=reader, json={**lookup, "sku": "TEST-SKU-B"}).json()["items"] == []
+    assert client.put(mapping, headers=user_headers, json={
+        "url": url, "sku": "TEST-SKU-B", "enabled": False,
+    }).status_code == 200
+    assert client.post(search, headers=reader, json={"query": mobile}).json()["status"] == "mapped_link"
+
+
+def test_exact_sku_search_returns_only_the_selected_variant(connector_client):
+    client, sessions, user_headers = connector_client
+    with sessions() as db:
+        db.add(Product(id="product-a-pro", sku="TEST-SKU-A-PRO", product_name_cn="测试炉专业版", barcode="3", brand="测试"))
+        db.commit()
+    reader = _connector_headers(client, user_headers)
+    payload = client.post(CONNECTOR_PATH + "/products/search", headers=reader, json={"query": "test-sku-a"}).json()
+    assert payload == {"status": "exact_sku", "items": [{"sku": "TEST-SKU-A", "name": "测试炉"}]}
+
+
+def test_qa_semantic_search_accepts_postgresql_uuid_ids(connector_client, monkeypatch):
+    from types import SimpleNamespace
+    from uuid import uuid4
+
+    from app.services import workbuddy_customer_knowledge_service as service
+
+    client, _, user_headers = connector_client
+    reader = _connector_headers(client, user_headers)
+    qa = SimpleNamespace(id=uuid4(), question="原配软管多长？", answer="37 cm")
+    monkeypatch.setattr(service.product_service, "customer_visible_product_qas", lambda *args: [qa])
+
+    async def semantic_hits(db, query, **kwargs):
+        assert query == "炉子连罐子的那根气管大概多少厘米"
+        return [{"metadata": {"source_id": f"product:TEST-SKU-A:qa:{qa.id}"}}]
+
+    monkeypatch.setattr(service.knowledge_service, "semantic_retrieve", semantic_hits)
+    result = client.post(CONNECTOR_PATH + "/knowledge/search", headers=reader, json={
+        "sku": "TEST-SKU-A", "query": "炉子连罐子的那根软管大概多少厘米", "limit": 1,
+    })
+    assert result.status_code == 200
+    assert result.json()["items"] == [{"qa_id": str(qa.id), "question": qa.question, "answer": qa.answer, "match": "candidate"}]
+
+
+def test_confirmed_qa_capture_is_deduplicated_and_hidden_until_approved(connector_client):
+    client, sessions, user_headers = connector_client
+    reader = _connector_headers(client, user_headers)
+    writer = _connector_headers(client, user_headers, write=True)
+    draft_path = CONNECTOR_PATH + "/qa-drafts"
+    body = {"sku": "TEST-SKU-A", "question": "锅盖可以单独买？", "answer": "可单独购买。", "confirmed": True}
+    assert client.post(draft_path, headers=reader, json=body).status_code == 403
+    assert client.post(draft_path, headers=writer, json={**body, "confirmed": False}).status_code == 422
+    assert client.post(draft_path, headers=writer, json={**body, "answer": "联系 test@example.com"}).status_code == 422
+    assert client.post(draft_path, headers=writer, json={**body, "message_id": "unknown"}).status_code == 404
+    result = client.post(draft_path, headers=writer, json=body)
+    assert result.status_code == 200, result.text
+    draft = result.json()
+    assert draft["integrity_status"] == "review"
+    assert draft["qa_id"] in draft["review_path"]
+    repeat = client.post(draft_path, headers=writer, json=body).json()
+    assert repeat["status"] == "existing"
+    assert repeat["qa_id"] == draft["qa_id"]
+    assert client.post(draft_path, headers=writer, json={**body, "answer": "无法单独购买"}).status_code == 409
+    search = CONNECTOR_PATH + "/knowledge/search"
+    lookup = {"sku": "TEST-SKU-A", "query": "锅盖可以单独买", "limit": 1}
+    assert client.post(search, headers=reader, json=lookup).json()["items"] == []
+    with sessions() as db:
+        qa = db.get(ProductQa, draft["qa_id"])
+        qa.integrity_status = "approved"
+        db.commit()
+    assert client.post(search, headers=reader, json=lookup).json()["items"][0]["qa_id"] == draft["qa_id"]
+
+
+def test_qa_draft_can_reference_an_answer_owned_by_a_postgresql_uuid_user(connector_client):
+    from uuid import uuid4
+
+    from app.services import workbuddy_customer_knowledge_service as service
+
+    _, sessions, _ = connector_client
+    user_id = uuid4()
+    with sessions() as db:
+        db.add(CustomerServiceConversation(id="qa-source-conversation", user_id=str(user_id), sku="TEST-SKU-A"))
+        db.add(CustomerServiceMessage(id="qa-source-answer", conversation_id="qa-source-conversation", role="assistant",
+                                      sku="TEST-SKU-A", content="原装软管长37厘米。"))
+        db.commit()
+        receipt = service.save_qa_draft(db, user_id=user_id, sku="TEST-SKU-A", question="软管长度？", answer="37 cm",
+                                        message_id="qa-source-answer", request=None)
+        assert receipt["status"] == "saved"
+        assert receipt["integrity_status"] == "review"
+
+
+def test_workbuddy_token_cannot_be_used_as_a_normal_user_access_token(connector_client):
+    client, _, user_headers = connector_client
+    created = client.post(
+        "/api/workbuddy/customer-service/tokens",
+        headers=user_headers,
+        json={},
+    )
+    token = created.json()["token"]
+
+    response = client.post(
+        "/api/workbuddy/customer-service/tokens",
+        headers={"Authorization": f"Bearer {token}"},
+        json={},
+    )
+    assert response.status_code == 401

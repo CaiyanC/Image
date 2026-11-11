@@ -8,7 +8,7 @@ from __future__ import annotations
 import re
 from typing import Any
 
-POLICY_VERSION = "service-plan-20261008-v6"
+POLICY_VERSION = "service-plan-20261008-v7"
 TRAINING_EXAMPLES = (
     ("连接处漏气了，还要尝试点火吗？", "先停止使用，不要点火，远离火源并离开危险区域。请联系购买平台人工客服；有持续危险时联系当地应急服务。不要猜测故障原因。"),
     ("收到时支架坏了，下午就要带出门", "按紧急售后处理：先停止使用损坏商品，建议联系订单平台人工客服核实破损和出行时间；不承诺补发或赔付时间。"),
@@ -25,6 +25,9 @@ def classify(question: str, *, previous_question: str | None = None, product_con
     q = re.sub(r"\s+", "", str(question))
     # Negated or preventative mentions must not bypass the product RAG.
     risk = re.sub(r"(?:没有|不存在|未发生|避免|防止|预防|如何防止|如何避免)(?:发生)?(?:漏气|触电|起火|冒烟)", "", q)
+    # Suppress only the how-to phrase. A separate report of smoke, gas odor,
+    # or uncontrolled fire in the same message must still trigger triage.
+    risk = re.sub(r"(?:怎么|怎样|如何)(?:就|才能)?让(?:这[款台个]?)?(?:它|他|酒精炉|炉子|炉具|酒精)烧起来(?:了)?", "", risk)
     kind = "general"
     elliptical_application = bool(re.fullmatch(r"(?:能|不能|可以|可不可以|不可以)?(?:申请|办理|安排)(?:一下|下)?(?:吗|么)?[？?]*", q))
     if previous_question and re.fullmatch(r"(?:那)?(?:现在|然后|接下来)?(?:怎么办|怎么处理|怎么做|还能用吗|能继续吗)[？?]*", q):

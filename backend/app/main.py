@@ -26,7 +26,7 @@ from .core.business_scope import is_retired_api
 from .core.permission_constants import MANAGEMENT_GROUP_NAME, PRODUCT_TEAM_GROUP_NAME
 from .core.security import get_current_super_admin, get_password_hash
 from .models.user import User
-from .api import auth, users, generation, history, admin, products, groups, categories, drafts, customer_service, knowledge_base, files, assets, asset_search, tools, admin_tools, model_governance
+from .api import auth, users, generation, history, admin, products, groups, categories, drafts, customer_service, knowledge_base, files, assets, asset_search, tools, admin_tools, model_governance, workbuddy_customer_service
 from .services import knowledge_service
 from .api import competitor_assets, loading_rates
 
@@ -130,6 +130,7 @@ app.include_router(loading_rates.router)
 app.include_router(groups.router)
 app.include_router(categories.router)
 app.include_router(customer_service.router)
+app.include_router(workbuddy_customer_service.router)
 app.include_router(knowledge_base.router)
 app.include_router(files.router)
 app.include_router(tools.router)

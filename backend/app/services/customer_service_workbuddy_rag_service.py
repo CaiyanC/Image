@@ -1291,7 +1291,9 @@ async def ask_customer_service_workbuddy_rag(
         user_id=str(user_id),
         conversation_id=conversation_id,
     )
-    explicit_skus = _explicit_skus(db, original_question)
+    # A catalogue suffix can also be a fuel or accessory name. Once a SKU is
+    # selected, only a complete SKU in the question can change the subject.
+    explicit_skus = _explicit_skus(db, original_question, allow_suffix=not page_sku)
     known_skus = explicit_skus or ([page_sku] if page_sku else [])
     catalogue_subject_skus = (
         []

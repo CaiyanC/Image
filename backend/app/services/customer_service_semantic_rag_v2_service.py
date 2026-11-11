@@ -374,7 +374,7 @@ def _sku_tokens_with_catalogue(text: str, catalogue_skus: list[str]) -> list[str
     return result
 
 
-def _explicit_skus(db: Session, question: str) -> list[str]:
+def _explicit_skus(db: Session, question: str, *, allow_suffix: bool = True) -> list[str]:
     """Resolve explicit SKU-like tokens against the live product catalogue.
 
     Customers often use the meaningful suffix of a catalogue SKU (``C78``
@@ -405,6 +405,8 @@ def _explicit_skus(db: Session, question: str) -> list[str]:
         ]
         if exact_skus:
             return list(dict.fromkeys(exact_skus))
+        if not allow_suffix:
+            return []
 
         if products is None:
             products = db.query(Product).all()
