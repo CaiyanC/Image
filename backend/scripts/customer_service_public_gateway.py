@@ -12,7 +12,7 @@ from fastapi.responses import JSONResponse
 
 
 CONNECTOR_PREFIX = "/api/workbuddy/customer-service"
-MCP_OPERATIONS = {"products/search", "knowledge/search", "knowledge/export", "listings/search", "ask", "qa-drafts", "qa-revisions"}
+MCP_OPERATIONS = {"products/search", "products/profile", "products/export", "knowledge/search", "knowledge/export", "listings/search", "ask", "qa-drafts", "qa-revisions"}
 DOCX_MEDIA_TYPE = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
 MAX_REQUEST_BYTES = 24_000
 CONNECTOR_CREDENTIAL = re.compile(r"Bearer cscwb(?:qa)?_[A-Za-z0-9_-]{48}", re.IGNORECASE)
@@ -100,7 +100,7 @@ async def relay(operation: str, request: Request) -> Response:
     if upstream.status_code >= 500 or upstream.is_redirect:
         return error(502, "客服接口暂时不可用")
     upstream_type = upstream.headers.get("content-type", "").partition(";")[0].strip().lower()
-    if operation == "knowledge/export" and upstream.status_code == 200 and upstream_type == DOCX_MEDIA_TYPE:
+    if operation in {"knowledge/export", "products/export"} and upstream.status_code == 200 and upstream_type == DOCX_MEDIA_TYPE:
         headers = {"Cache-Control": "no-store"}
         for name in ("Content-Disposition", "X-CaiYan-SKU", "X-CaiYan-QA-Count"):
             if name in upstream.headers:

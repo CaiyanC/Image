@@ -67,6 +67,10 @@ class ConnectorQaExportRequest(BaseModel):
     include_unapproved: bool = Field(default=False, strict=True)
 
 
+class ConnectorProductProfileRequest(BaseModel):
+    sku: SkuText
+
+
 class ConnectorQaRevisionRequest(BaseModel):
     sku: SkuText
     qa_id: UUID
@@ -388,6 +392,36 @@ def export_customer_qa(
         headers={
             "Cache-Control": "no-store",
             "Content-Disposition": f"attachment; filename*=UTF-8''{quote(sku + '-QA.docx', safe='')}",
+            "X-CaiYan-SKU": quote(sku, safe=""),
+            "X-CaiYan-QA-Count": str(count),
+        },
+    )
+
+
+@router.post("/products/profile")
+def get_customer_product_profile(
+    body: ConnectorProductProfileRequest,
+    current_user: User = Depends(_current_connector_user),
+    db: Session = Depends(get_db),
+):
+    enforce_rate_limit(user_id=current_user.id, scope="workbuddy_customer_service.product_profile", limit=30, window_seconds=60)
+    return workbuddy_customer_knowledge_service.get_customer_product_profile(db, body.sku)
+
+
+@router.post("/products/export")
+def export_customer_product_profile(
+    body: ConnectorProductProfileRequest,
+    current_user: User = Depends(_current_connector_user),
+    db: Session = Depends(get_db),
+):
+    enforce_rate_limit(user_id=current_user.id, scope="workbuddy_customer_service.product_export", limit=15, window_seconds=60)
+    sku, count, document = workbuddy_customer_knowledge_service.export_customer_product_profile(db, body.sku)
+    return Response(
+        content=document,
+        media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        headers={
+            "Cache-Control": "no-store",
+            "Content-Disposition": f"attachment; filename*=UTF-8''{quote(sku + '-profile.docx', safe='')}",
             "X-CaiYan-SKU": quote(sku, safe=""),
             "X-CaiYan-QA-Count": str(count),
         },

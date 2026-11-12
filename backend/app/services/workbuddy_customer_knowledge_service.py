@@ -118,6 +118,75 @@ def _active_product(db: Session, sku: str, *, lock: bool = False) -> Product:
     return product
 
 
+def get_customer_product_profile(db: Session, sku: str) -> dict:
+    product = _active_product(db, sku)
+    detail = product_service.get_product_detail(db, product.sku)
+    specs = detail.get("specs") or {}
+    content = detail.get("content") or {}
+    return {
+        "sku": product.sku,
+        "product_name": product.product_name_cn,
+        "product_updated_at": product.updated_at.isoformat() if product.updated_at else None,
+        "specs": {key: specs.get(key) for key in (
+            "size_info", "capacity", "gross_weight_g", "body_material", "color", "surface_finish",
+            "heat_source", "power", "technical_advantages", "usage_instruction", "updated_at",
+        )},
+        "content": {key: content.get(key) for key in (
+            "title_cn", "long_description_cn", "listing_cn", "updated_at",
+        )},
+    }
+
+
+def export_customer_product_profile(db: Session, sku: str) -> tuple[str, int, bytes]:
+    from docx import Document
+    from docx.oxml.ns import qn
+    from docx.shared import Pt
+
+    profile = get_customer_product_profile(db, sku)
+    document = Document()
+    for name in ("Normal", "Title", "Heading 1"):
+        style = document.styles[name]
+        style.font.name = "Microsoft YaHei"
+        style.element.get_or_add_rPr().rFonts.set(qn("w:eastAsia"), "Microsoft YaHei")
+    document.styles["Normal"].font.size = Pt(11)
+    for border in document.styles["Title"].element.xpath(".//w:pBdr"):
+        border.getparent().remove(border)
+    document.add_paragraph("商品资料", style="Title")
+    document.add_paragraph(f'{profile["sku"]}  {profile["product_name"]}')
+    document.add_paragraph("以下为当前商品主档记录，更新日期为系统记录时间。")
+    fields = {
+        "size_info": "尺寸", "capacity": "容量", "gross_weight_g": "毛重（克）", "body_material": "材质",
+        "color": "颜色", "surface_finish": "表面处理", "heat_source": "适用热源", "power": "功率",
+        "technical_advantages": "技术优势", "usage_instruction": "使用说明",
+        "title_cn": "中文标题", "long_description_cn": "中文商品描述", "listing_cn": "中文商品详情",
+    }
+    count = 0
+    for section, heading in (("specs", "规格与使用"), ("content", "商品描述")):
+        document.add_heading(heading, level=1)
+        values = profile[section]
+        if values.get("updated_at"):
+            document.add_paragraph(f'资料更新时间  {values["updated_at"]}')
+        for key, label in fields.items():
+            if key not in values:
+                continue
+            value = values[key]
+            if isinstance(value, list):
+                value = "；".join(
+                    " ".join(str(item.get(part) or "").strip() for part in ("label", "value", "unit")).strip()
+                    if isinstance(item, dict) else str(item)
+                    for item in value
+                )
+            elif isinstance(value, dict):
+                value = "；".join(f"{k}：{v}" for k, v in value.items())
+            paragraph = document.add_paragraph()
+            paragraph.add_run(label + "  ").bold = True
+            paragraph.add_run(str(value) if value not in (None, "") else "未填写")
+            count += 1
+    output = BytesIO()
+    document.save(output)
+    return profile["sku"], count, output.getvalue()
+
+
 def set_product_link(
     db: Session, *, url: str, sku: str, enabled: bool, user_id: str, request: Request,
     snapshot_text: str | None = None,

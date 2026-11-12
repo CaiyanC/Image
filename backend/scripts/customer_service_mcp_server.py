@@ -19,6 +19,14 @@ TOOLS = {
         {"query": {"type": "string", "maxLength": 2000}, "limit": {"type": "integer", "minimum": 1, "maximum": 10}},
         ["query"], True,
     ),
+    "get_customer_product_profile": (
+        "/products/profile", "按 SKU 列出商品主档、规格、使用说明和中文商品描述，包含资料更新时间。",
+        {"sku": {"type": "string", "minLength": 1, "maxLength": 100}}, ["sku"], True,
+    ),
+    "export_customer_product_profile": (
+        "/products/export", "按 SKU 将商品主档、规格、使用说明和中文商品描述导出为 Word，返回文件路径。",
+        {"sku": {"type": "string", "minLength": 1, "maxLength": 100}}, ["sku"], True,
+    ),
     "search_customer_qa": (
         "/knowledge/search", "查询已选 SKU 的已审核 QA。相似候选只供参考，先核对问题和适用条件。",
         {"sku": {"type": "string"}, "query": {"type": "string", "maxLength": 200},
@@ -112,7 +120,7 @@ class CustomerServiceMcp:
     def _send(self, name: str, arguments: dict, request: Request, *, timeout: int) -> dict:
         try:
             with self.opener.open(request, timeout=timeout) as response:
-                if name == "export_customer_qa":
+                if name in {"export_customer_qa", "export_customer_product_profile"}:
                     if response.headers.get_content_type() != DOCX_MEDIA_TYPE:
                         return tool_result({"message": "客服服务没有返回 Word 文件。"}, error=True)
                     sku = unquote(response.headers["X-CaiYan-SKU"] or "")
@@ -120,7 +128,8 @@ class CustomerServiceMcp:
                     data = response.read()
                     if not sku or count < 0 or not data.startswith(b"PK\x03\x04"):
                         return tool_result({"message": "客服服务返回的导出文件不完整。"}, error=True)
-                    return _save_export(sku, count, data, include_unapproved=arguments.get("include_unapproved") is True)
+                    return _save_export(sku, count, data, include_unapproved=arguments.get("include_unapproved") is True,
+                                        product_profile=name == "export_customer_product_profile")
                 return tool_result(json.load(response))
         except HTTPError as error:
             detail = None
@@ -181,13 +190,14 @@ def tool_result(payload: dict, *, error: bool = False) -> dict:
             "structuredContent": payload, "isError": error}
 
 
-def _save_export(sku: str, count: int, data: bytes, *, include_unapproved: bool) -> dict:
+def _save_export(sku: str, count: int, data: bytes, *, include_unapproved: bool, product_profile: bool = False) -> dict:
     directory = Path.home() / "Downloads" / "CaiYan-QA"
     safe_sku = re.sub(r"[^\w-]", "_", sku)[:60]
     path = None
     try:
         directory.mkdir(parents=True, exist_ok=True)
-        with NamedTemporaryFile(mode="wb", prefix=f"CaiYan-{safe_sku}-QA-", suffix=".docx",
+        kind = "资料" if product_profile else "QA"
+        with NamedTemporaryFile(mode="wb", prefix=f"CaiYan-{safe_sku}-{kind}-", suffix=".docx",
                                 dir=directory, delete=False) as output:
             path = Path(output.name)
             output.write(data)
@@ -199,8 +209,9 @@ def _save_export(sku: str, count: int, data: bytes, *, include_unapproved: bool)
                 pass
         return tool_result({"message": f"无法把 Word 文件保存到 {directory}，请检查目录权限。"}, error=True)
     return tool_result({
-        "sku": sku, "count": count, "scope": "all" if include_unapproved else "approved",
-        "file_path": str(path), "file_uri": path.as_uri(), "message": f"已导出 {count} 条问答到 Word。",
+        "sku": sku, "count": count, "scope": "product_profile" if product_profile else ("all" if include_unapproved else "approved"),
+        "file_path": str(path), "file_uri": path.as_uri(),
+        "message": f"已导出商品资料，共 {count} 个字段。" if product_profile else f"已导出 {count} 条问答到 Word。",
     })
 
 

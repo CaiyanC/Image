@@ -267,6 +267,32 @@ def test_product_search_ignores_spacing_in_product_names(connector_client):
     assert [item["sku"] for item in result["items"]] == ["TEST-PLUS"]
 
 
+def test_product_profile_and_export_show_only_selected_product(connector_client, monkeypatch):
+    client, _, user_headers = connector_client
+    from app.services import workbuddy_customer_knowledge_service as service
+
+    monkeypatch.setattr(service.product_service, "get_product_detail", lambda db, sku: {
+        "specs": {"capacity": [{"value": "2.3", "unit": "L"}], "body_material": "铝合金"},
+        "content": {"long_description_cn": "商品描述"},
+        "business": {"price_positioning": "内部信息"},
+    })
+    headers = _connector_headers(client, user_headers)
+    prefix = CONNECTOR_PATH + "/products/"
+    profile = client.post(prefix + "profile", headers=headers, json={"sku": "test-sku-a"})
+    assert profile.status_code == 200
+    assert profile.json()["sku"] == "TEST-SKU-A"
+    assert profile.json()["specs"]["body_material"] == "铝合金"
+    assert "business" not in profile.json()
+    response = client.post(prefix + "export", headers=headers, json={"sku": "TEST-SKU-A"})
+    assert response.status_code == 200
+    paragraphs = [p.text for p in Document(BytesIO(response.content)).paragraphs]
+    assert any("2.3 L" in p for p in paragraphs)
+    assert any("铝合金" in p for p in paragraphs)
+    assert any("商品描述" in p for p in paragraphs)
+    assert all("内部信息" not in p for p in paragraphs)
+    assert client.post(prefix + "profile", headers=headers, json={"sku": "missing"}).status_code == 404
+
+
 def test_stdio_retries_reads_but_not_stateful_calls(monkeypatch):
     from urllib.error import URLError
     from scripts.customer_service_mcp_server import CustomerServiceMcp

@@ -28,6 +28,7 @@
 | 员工操作 | MCP 工具 | 返回内容 |
 |---|---|---|
 | 粘贴商品链接或输入商品名、SKU | `find_customer_products` | 已关联的 SKU 或商品名称候选。多规格由员工选定 |
+| 查看或导出商品资料 | `get_customer_product_profile` / `export_customer_product_profile` | 该 SKU 的主档规格、使用说明及中文商品描述，可导出 Word |
 | 查这个商品有没有相同问题 | `search_customer_qa` | 同 SKU 的已审核 QA 和来源 ID。相似候选需要核对适用条件 |
 | 导出这个 SKU 的全部问答 | `export_customer_qa` | 逐条问答的 Word 文件、保存路径和总数 |
 | 让 AI 参考该 SKU 的平台商品页 | `search_product_listing` | 已核对的页面摘录、来源链接及保存时间 |
