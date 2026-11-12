@@ -1,7 +1,9 @@
 import sys
+from io import BytesIO
 from pathlib import Path
 
 import pytest
+from docx import Document
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
@@ -252,6 +254,48 @@ def test_exact_sku_search_returns_only_the_selected_variant(connector_client):
     reader = _connector_headers(client, user_headers)
     payload = client.post(CONNECTOR_PATH + "/products/search", headers=reader, json={"query": "test-sku-a"}).json()
     assert payload == {"status": "exact_sku", "items": [{"sku": "TEST-SKU-A", "name": "测试炉"}]}
+
+
+def test_qa_export_contains_all_matching_rows_and_protects_unapproved(connector_client):
+    client, sessions, user_headers = connector_client
+    read_headers = _connector_headers(client, user_headers)
+    qa_headers = _connector_headers(client, user_headers, write=True)
+    path = CONNECTOR_PATH + "/knowledge/export"
+    with sessions() as db:
+        db.add_all([
+            ProductQa(product_id="product-a", question=f"问题 {i}", answer=f"答案 {i}\n补充说明",
+                      integrity_status="approved")
+            for i in range(12)
+        ])
+        db.add_all([
+            ProductQa(product_id="product-a", question="未审问题", answer="未审答案", integrity_status="review"),
+            ProductQa(product_id="product-a", question="拒绝问题", answer="拒绝答案", integrity_status="rejected"),
+            ProductQa(product_id="product-b", question="另一规格问题", answer="另一规格答案", integrity_status="approved"),
+        ])
+        db.commit()
+
+    response = client.post(path, headers=read_headers, json={"sku": " test-sku-a "})
+    assert response.status_code == 200
+    assert response.headers["X-CaiYan-SKU"] == "TEST-SKU-A"
+    assert response.headers["X-CaiYan-QA-Count"] == "12"
+    assert response.headers["Cache-Control"] == "no-store"
+    paragraphs = {p.text for p in Document(BytesIO(response.content)).paragraphs}
+    assert {f"问  问题 {i}" for i in range(12)} <= paragraphs
+    assert {f"答  答案 {i}\n补充说明" for i in range(12)} <= paragraphs
+    assert {"问  未审问题", "问  拒绝问题", "问  另一规格问题"}.isdisjoint(paragraphs)
+
+    all_states = {"sku": "TEST-SKU-A", "include_unapproved": True}
+    assert client.post(path, json=all_states).status_code == 401
+    assert client.post(path, headers=read_headers, json=all_states).status_code == 403
+    all_response = client.post(path, headers=qa_headers, json=all_states)
+    assert all_response.status_code == 200
+    assert all_response.headers["X-CaiYan-QA-Count"] == "14"
+    paragraphs = [p.text for p in Document(BytesIO(all_response.content)).paragraphs]
+    assert {"问  未审问题", "问  拒绝问题"} <= set(paragraphs)
+    assert "问  另一规格问题" not in paragraphs
+    assert any(text.endswith("  待审核") for text in paragraphs)
+    assert any(text.endswith("  未通过") for text in paragraphs)
+    assert client.post(path, headers=read_headers, json={"sku": "TEST-NOT-FOUND"}).status_code == 404
 
 
 def test_qa_semantic_search_accepts_postgresql_uuid_ids(connector_client, monkeypatch):

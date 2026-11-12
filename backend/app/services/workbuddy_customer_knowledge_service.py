@@ -3,6 +3,7 @@
 import re
 import unicodedata
 from datetime import datetime, timezone
+from io import BytesIO
 from urllib.parse import parse_qs, urlencode, urlsplit
 
 from fastapi import HTTPException, Request
@@ -176,6 +177,55 @@ def _qa_receipt(qa: ProductQa, sku: str, status: str) -> dict:
     qa_id = str(qa.id)
     return {"status": status, "sku": sku, "qa_id": qa_id, "integrity_status": qa.integrity_status,
             "review_path": "/products/qa/new?" + urlencode({"sku": sku, "qa_id": qa_id})}
+
+
+def export_product_qa(db: Session, sku: str, *, include_unapproved: bool) -> tuple[str, int, bytes]:
+    from docx import Document
+    from docx.oxml.ns import qn
+    from docx.shared import Pt, RGBColor
+
+    product = _active_product(db, sku)
+    if include_unapproved:
+        rows = sorted(
+            product_service.get_qa_items(db, product.sku),
+            key=lambda qa: (qa.priority is not None, qa.priority or 0, str(qa.updated_at or ""), str(qa.id)),
+            reverse=True,
+        )
+    else:
+        rows = product_service.customer_visible_product_qas(db, product.id)
+
+    document = Document()
+    for style_name in ("Normal", "Title", "Heading 1"):
+        style = document.styles[style_name]
+        style.font.name = "Microsoft YaHei"
+        style.font.color.rgb = RGBColor(0, 0, 0)
+        style.element.get_or_add_rPr().rFonts.set(qn("w:eastAsia"), "Microsoft YaHei")
+    document.styles["Normal"].font.size = Pt(11)
+    document.styles["Heading 1"].font.size = Pt(12)
+    title = document.styles["Title"]
+    for border in title.element.xpath(".//w:pBdr"):
+        border.getparent().remove(border)
+
+    document.add_paragraph("商品客服问答", style="Title")
+    document.add_paragraph(f"{product.sku}  {product.product_name_cn or ''}".rstrip())
+    scope = "全部审核状态" if include_unapproved else "已审核"
+    document.add_paragraph(f"{scope} · 共 {len(rows)} 条")
+    status_labels = {"approved": "已审核", "review": "待审核", "rejected": "未通过"}
+    for index, qa in enumerate(rows, 1):
+        heading = f"第 {index} 条"
+        if include_unapproved:
+            heading += "  " + status_labels.get(qa.integrity_status, qa.integrity_status or "未标注")
+        document.add_heading(heading, level=1)
+        question = document.add_paragraph()
+        question.paragraph_format.keep_with_next = True
+        question.add_run("问  ").bold = True
+        question.add_run(qa.question)
+        answer = document.add_paragraph()
+        answer.add_run("答  ").bold = True
+        answer.add_run(qa.answer)
+    output = BytesIO()
+    document.save(output)
+    return product.sku, len(rows), output.getvalue()
 
 
 async def search_approved_qa(db: Session, sku: str, query: str, limit: int) -> dict:

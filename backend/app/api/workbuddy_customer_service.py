@@ -1,5 +1,6 @@
 from datetime import datetime, timezone
 from typing import Annotated
+from urllib.parse import quote
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from fastapi.security import HTTPAuthorizationCredentials
@@ -58,6 +59,11 @@ class ConnectorQaDraftRequest(BaseModel):
     answer: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=4000)]
     message_id: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=36)] | None = None
     confirmed: bool = Field(strict=True)
+
+
+class ConnectorQaExportRequest(BaseModel):
+    sku: SkuText
+    include_unapproved: bool = Field(default=False, strict=True)
 
 
 class ProductLinkRequest(BaseModel):
@@ -348,4 +354,32 @@ def save_customer_qa_draft(
     return workbuddy_customer_knowledge_service.save_qa_draft(
         db, user_id=current_user.id, sku=body.sku, question=body.question,
         answer=body.answer, message_id=body.message_id, request=request,
+    )
+
+
+@router.post("/knowledge/export")
+def export_customer_qa(
+    body: ConnectorQaExportRequest,
+    credentials: HTTPAuthorizationCredentials = Depends(security),
+    current_user: User = Depends(_current_connector_user),
+    db: Session = Depends(get_db),
+):
+    if body.include_unapproved and (
+        not credentials.credentials.startswith(workbuddy_customer_service_connector.QA_TOKEN_PREFIX)
+        or not _can_write_qa(db, current_user)
+    ):
+        raise HTTPException(status_code=403, detail="导出待审核和未通过的问答须使用 QA 管理连接")
+    enforce_rate_limit(user_id=current_user.id, scope="workbuddy_customer_service.qa_export", limit=15, window_seconds=60)
+    sku, count, document = workbuddy_customer_knowledge_service.export_product_qa(
+        db, body.sku, include_unapproved=body.include_unapproved,
+    )
+    return Response(
+        content=document,
+        media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        headers={
+            "Cache-Control": "no-store",
+            "Content-Disposition": f"attachment; filename*=UTF-8''{quote(sku + '-QA.docx', safe='')}",
+            "X-CaiYan-SKU": quote(sku, safe=""),
+            "X-CaiYan-QA-Count": str(count),
+        },
     )

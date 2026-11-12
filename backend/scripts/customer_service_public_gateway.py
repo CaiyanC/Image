@@ -12,7 +12,8 @@ from fastapi.responses import JSONResponse
 
 
 CONNECTOR_PREFIX = "/api/workbuddy/customer-service"
-MCP_OPERATIONS = {"products/search", "knowledge/search", "listings/search", "ask", "qa-drafts"}
+MCP_OPERATIONS = {"products/search", "knowledge/search", "knowledge/export", "listings/search", "ask", "qa-drafts"}
+DOCX_MEDIA_TYPE = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
 MAX_REQUEST_BYTES = 24_000
 CONNECTOR_CREDENTIAL = re.compile(r"Bearer cscwb(?:qa)?_[A-Za-z0-9_-]{48}", re.IGNORECASE)
 
@@ -64,7 +65,8 @@ async def relay(operation: str, request: Request) -> Response:
     if operation not in MCP_OPERATIONS or request.url.query:
         return error(404, "接口不存在")
     authorization = request.headers.get("authorization", "")
-    if not authorization:
+    shared_connection = not authorization
+    if shared_connection:
         authorization = public_service_authorization()
     if not CONNECTOR_CREDENTIAL.fullmatch(authorization):
         return error(401, "请提供个人客服连接令牌", authenticate=True)
@@ -76,6 +78,14 @@ async def relay(operation: str, request: Request) -> Response:
         if len(body) + len(chunk) > MAX_REQUEST_BYTES:
             return error(413, "请求内容过长")
         body.extend(chunk)
+
+    if operation == "knowledge/export" and shared_connection:
+        try:
+            payload = json.loads(body)
+        except ValueError:
+            return error(422, "请求参数校验失败，请检查必填项和长度")
+        if isinstance(payload, dict) and payload.get("include_unapproved") is True:
+            return error(403, "导出待审核和未通过的问答须使用 QA 管理连接")
 
     try:
         upstream = await request.app.state.upstream.post(
@@ -89,7 +99,14 @@ async def relay(operation: str, request: Request) -> Response:
         return error(502, "客服接口暂时不可用")
     if upstream.status_code >= 500 or upstream.is_redirect:
         return error(502, "客服接口暂时不可用")
-    if "application/json" not in upstream.headers.get("content-type", "").lower():
+    upstream_type = upstream.headers.get("content-type", "").partition(";")[0].strip().lower()
+    if operation == "knowledge/export" and upstream.status_code == 200 and upstream_type == DOCX_MEDIA_TYPE:
+        headers = {"Cache-Control": "no-store"}
+        for name in ("Content-Disposition", "X-CaiYan-SKU", "X-CaiYan-QA-Count"):
+            if name in upstream.headers:
+                headers[name] = upstream.headers[name]
+        return Response(upstream.content, media_type=DOCX_MEDIA_TYPE, headers=headers)
+    if upstream_type != "application/json":
         return error(502, "客服接口返回格式异常")
     if upstream.status_code == 422:
         # Pydantic validation details can include the caller's raw payload.

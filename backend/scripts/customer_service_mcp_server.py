@@ -2,12 +2,16 @@
 
 import json
 import os
+import re
 import sys
+from pathlib import Path
+from tempfile import NamedTemporaryFile
 from urllib.error import HTTPError, URLError
-from urllib.parse import urlsplit
+from urllib.parse import unquote, urlsplit
 from urllib.request import HTTPRedirectHandler, ProxyHandler, Request, build_opener
 
 
+DOCX_MEDIA_TYPE = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
 TOOLS = {
     "find_customer_products": (
         "/products/search", "按商品链接、名称或 SKU 查商品。多个候选时由员工选择，链接未匹配时请用商品名称。",
@@ -19,6 +23,14 @@ TOOLS = {
         {"sku": {"type": "string"}, "query": {"type": "string", "maxLength": 200},
          "limit": {"type": "integer", "minimum": 1, "maximum": 10}},
         ["sku", "query"], True,
+    ),
+    "export_customer_qa": (
+        "/knowledge/export", "按一个确切 SKU 导出全部已审核问答到本机下载目录的 Word 文件，返回文件路径和条数。"
+        "仅当员工明确要求包含待审核及未通过的记录时，设置 include_unapproved；这需要个人 QA 管理连接。"
+        "如果只有商品名称，请先用 find_customer_products 确认 SKU。",
+        {"sku": {"type": "string", "minLength": 1, "maxLength": 100},
+         "include_unapproved": {"type": "boolean", "default": False}},
+        ["sku"], True,
     ),
     "search_product_listing": (
         "/listings/search", "按已有 SKU 查询员工核对后保存的商品页资料，返回摘要、链接及保存时间。用于补充配置与说明，避免把页面快照用于实时价格、库存或订单判断。",
@@ -77,6 +89,15 @@ class CustomerServiceMcp:
         )
         try:
             with self.opener.open(request, timeout=120) as response:
+                if name == "export_customer_qa":
+                    if response.headers.get_content_type() != DOCX_MEDIA_TYPE:
+                        return tool_result({"message": "客服服务没有返回 Word 文件。"}, error=True)
+                    sku = unquote(response.headers["X-CaiYan-SKU"] or "")
+                    count = int(response.headers["X-CaiYan-QA-Count"] or "")
+                    data = response.read()
+                    if not sku or count < 0 or not data.startswith(b"PK\x03\x04"):
+                        return tool_result({"message": "客服服务返回的导出文件不完整。"}, error=True)
+                    return _save_export(sku, count, data, include_unapproved=arguments.get("include_unapproved") is True)
                 return tool_result(json.load(response))
         except HTTPError as error:
             detail = None
@@ -137,6 +158,29 @@ class CustomerServiceMcp:
 def tool_result(payload: dict, *, error: bool = False) -> dict:
     return {"content": [{"type": "text", "text": json.dumps(payload, ensure_ascii=False)}],
             "structuredContent": payload, "isError": error}
+
+
+def _save_export(sku: str, count: int, data: bytes, *, include_unapproved: bool) -> dict:
+    directory = Path.home() / "Downloads" / "CaiYan-QA"
+    safe_sku = re.sub(r"[^\w-]", "_", sku)[:60]
+    path = None
+    try:
+        directory.mkdir(parents=True, exist_ok=True)
+        with NamedTemporaryFile(mode="wb", prefix=f"CaiYan-{safe_sku}-QA-", suffix=".docx",
+                                dir=directory, delete=False) as output:
+            path = Path(output.name)
+            output.write(data)
+    except OSError:
+        if path is not None:
+            try:
+                path.unlink(missing_ok=True)
+            except OSError:
+                pass
+        return tool_result({"message": f"无法把 Word 文件保存到 {directory}，请检查目录权限。"}, error=True)
+    return tool_result({
+        "sku": sku, "count": count, "scope": "all" if include_unapproved else "approved",
+        "file_path": str(path), "file_uri": path.as_uri(), "message": f"已导出 {count} 条问答到 Word。",
+    })
 
 
 def main() -> int:
