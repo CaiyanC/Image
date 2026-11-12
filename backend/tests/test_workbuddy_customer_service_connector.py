@@ -141,8 +141,11 @@ def test_workbuddy_token_is_one_time_user_scoped_and_revocable(connector_client)
 
 
 def test_workbuddy_ask_runs_rag_pipeline_and_returns_sanitized_sources(connector_client, monkeypatch):
-    client, _, user_headers = connector_client
+    client, sessions, user_headers = connector_client
     from app.api import workbuddy_customer_service as connector_api
+    with sessions() as db:
+        db.add(Product(id="product-cs", sku="CS-G25-A", product_name_cn="小青炉升级版", barcode="3", brand="测试"))
+        db.commit()
 
     created = client.post(
         "/api/workbuddy/customer-service/tokens",
@@ -262,9 +265,19 @@ def test_product_search_ignores_spacing_in_product_names(connector_client):
     reader = _connector_headers(client, user_headers)
     with sessions() as db:
         db.add(Product(id="product-plus", sku="TEST-PLUS", product_name_cn="享膳Plus水壶", barcode="3", brand="测试"))
+        db.add(Product(id="product-time", sku="TEST-TIME", product_name_cn="时光煮水户外水壶套装", barcode="4", brand="测试"))
         db.commit()
     result = client.post(CONNECTOR_PATH + "/products/search", headers=reader, json={"query": "享膳 Plus"}).json()
     assert [item["sku"] for item in result["items"]] == ["TEST-PLUS"]
+    result = client.post(CONNECTOR_PATH + "/products/search", headers=reader, json={"query": "时光煮水套装"}).json()
+    assert [item["sku"] for item in result["items"]] == ["TEST-TIME"]
+
+
+def test_ask_rejects_unknown_explicit_sku(connector_client):
+    client, _, user_headers = connector_client
+    reader = _connector_headers(client, user_headers)
+    response = client.post(CONNECTOR_PATH + "/ask", headers=reader, json={"question": "带锅盖吗？", "sku": "MISSING-SKU"})
+    assert response.status_code == 404
 
 
 def test_product_profile_and_export_show_only_selected_product(connector_client, monkeypatch):

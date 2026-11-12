@@ -263,6 +263,8 @@ async def ask_customer_service(
     current_user: User = Depends(_current_connector_user),
     db: Session = Depends(get_db),
 ):
+    if body.sku and body.sku.strip():
+        workbuddy_customer_knowledge_service._active_product(db, body.sku.strip())
     enforce_rate_limit(
         user_id=current_user.id,
         scope="workbuddy_customer_service.ask",

@@ -1764,11 +1764,22 @@ async def ask_customer_service_workbuddy_rag(
         identity_ambiguity=identity_ambiguity,
     )
     if (
-        needs_clarification and not result_skus and not known_skus and not anchor_skus
+        (needs_clarification or (confidence == "low" and uncertainty == "unconfirmed"))
+        and not result_skus and not known_skus and not anchor_skus
         and raw_subject_scope == "product_specific" and not semantic_selection_answer
     ):
         answer = "麻烦提供您咨询商品的具体型号或商品链接，我再帮您核对。"
         selected_evidence_ids = []
+        needs_clarification = True
+        answer_type = "clarification"
+    if (
+        page_sku and known_skus == [page_sku] and not result_skus
+        and isinstance(answer_raw, dict) and bool(str(answer_raw.get("answer") or "").strip())
+        and not replacement_turn and not semantic_selection_answer and not general_guidance_request
+        and not selection_provenance_conflict
+        and (not raw_selected_skus or raw_selected_skus == {page_sku})
+    ):
+        result_skus = [page_sku]
     replacement_rejections: dict[str, list[str]] = {}
     if replacement_turn:
         # Check textual SKU references as well as optional selection metadata:

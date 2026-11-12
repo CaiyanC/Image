@@ -100,6 +100,10 @@ def find_products(db: Session, query: str, limit: int) -> dict:
             if len(name) >= 3 and len(title) >= 3 and (name in title or title in name):
                 rank = (name != title, abs(len(name) - len(title)), row.sku)
                 candidates.append((rank, row))
+            elif len(title) >= 4 and len(title) * 2 >= len(name):
+                positions = iter(name)
+                if all(any(char == match for match in positions) for char in title):
+                    candidates.append(((True, abs(len(name) - len(title)), row.sku), row))
         rows = [row for _, row in sorted(candidates, key=lambda item: item[0])[:limit + 1]]
     if rows and rows[0].sku.upper() == query.upper():
         return {"status": "exact_sku", "items": [{"sku": rows[0].sku, "name": rows[0].product_name_cn}]}
