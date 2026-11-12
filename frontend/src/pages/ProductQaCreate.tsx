@@ -21,6 +21,7 @@ export default function ProductQaCreate() {
   const [candidatesLoading, setCandidatesLoading] = useState(true)
   const [candidatesError, setCandidatesError] = useState('')
   const [loadedReview, setLoadedReview] = useState<string | null>(null)
+  const [revision, setRevision] = useState<{ targetId: string; originalAnswer: string | null } | null>(null)
   const [productUrl, setProductUrl] = useState('')
   const [listingText, setListingText] = useState('')
   const [linkBusy, setLinkBusy] = useState(false)
@@ -30,6 +31,7 @@ export default function ProductQaCreate() {
     if (!qaId) return
     let active = true
     setLoadedReview(null)
+    setRevision(null)
     setResult(null)
     setError('')
     if (!reviewSku) {
@@ -43,6 +45,10 @@ export default function ProductQaCreate() {
       if (!qa) { setError('这条 QA 不存在'); return }
       setQuestion(qa.question)
       setAnswer(qa.answer)
+      if ('revision_of_qa_id' in qa && typeof qa.revision_of_qa_id === 'string') {
+        const targetId = qa.revision_of_qa_id
+        setRevision({ targetId, originalAnswer: items.find((item) => item.id === targetId)?.answer ?? null })
+      }
       setLoadedReview(qaId)
     }).catch((err: unknown) => {
       if (active) setError(err instanceof Error ? err.message : '读取 QA 失败')
@@ -132,6 +138,7 @@ export default function ProductQaCreate() {
   }
 
   const audit = result?.integrity_audit || {}
+  const appliedRevision = Boolean(revision && result?.id === revision.targetId)
   const vectorSync = result?.vector_sync && typeof result.vector_sync === 'object'
     ? result.vector_sync
     : {}
@@ -191,6 +198,7 @@ export default function ProductQaCreate() {
             id="qa-question"
             value={question}
             onChange={(event) => setQuestion(event.target.value)}
+            readOnly={Boolean(revision)}
             maxLength={2000}
             rows={4}
             placeholder="填写客户实际会问的问题"
@@ -199,14 +207,18 @@ export default function ProductQaCreate() {
         </div>
 
         <div>
+          {revision && <div className="mb-3 rounded-xl border border-black/10 p-3 text-sm">
+            <div className="font-semibold">原答案</div>
+            <p className="mt-1 whitespace-pre-wrap">{revision.originalAnswer ?? '原 QA 已删除，请重新核对。'}</p>
+          </div>}
           <label htmlFor="qa-answer" className="mb-1.5 block text-sm font-semibold text-apple-text">
-            A · 标准答案 <span className="text-red-500">*</span>
+            A · {revision ? '建议答案' : '标准答案'} <span className="text-red-500">*</span>
           </label>
           <textarea
             id="qa-answer"
             value={answer}
             onChange={(event) => setAnswer(event.target.value)}
-            maxLength={5000}
+            maxLength={revision ? 4000 : 5000}
             rows={7}
             placeholder="填写可直接给客户的标准答案，只写你确认过的同 SKU 事实"
             className="glass-input w-full resize-y px-3 py-2.5 text-sm"
@@ -250,7 +262,7 @@ export default function ProductQaCreate() {
           </Link>}
           <button
             type="submit"
-            disabled={saving || Boolean(qaId && loadedReview !== qaId)}
+            disabled={saving || appliedRevision || Boolean(qaId && loadedReview !== qaId)}
             className="btn-primary px-5 py-2.5 text-sm disabled:cursor-not-allowed disabled:opacity-50"
           >
             {saving ? '审核并同步中…' : qaId ? '提交审核' : '保存并同步到 RAG'}

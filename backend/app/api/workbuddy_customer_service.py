@@ -1,6 +1,7 @@
 from datetime import datetime, timezone
 from typing import Annotated
 from urllib.parse import quote
+from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from fastapi.security import HTTPAuthorizationCredentials
@@ -64,6 +65,14 @@ class ConnectorQaDraftRequest(BaseModel):
 class ConnectorQaExportRequest(BaseModel):
     sku: SkuText
     include_unapproved: bool = Field(default=False, strict=True)
+
+
+class ConnectorQaRevisionRequest(BaseModel):
+    sku: SkuText
+    qa_id: UUID
+    answer: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=4000)]
+    reason: Annotated[str, StringConstraints(strip_whitespace=True, max_length=500)] | None = None
+    confirmed: bool = Field(strict=True)
 
 
 class ProductLinkRequest(BaseModel):
@@ -382,4 +391,23 @@ def export_customer_qa(
             "X-CaiYan-SKU": quote(sku, safe=""),
             "X-CaiYan-QA-Count": str(count),
         },
+    )
+
+
+@router.post("/qa-revisions")
+def submit_customer_qa_revision(
+    body: ConnectorQaRevisionRequest,
+    request: Request,
+    credentials: HTTPAuthorizationCredentials = Depends(security),
+    current_user: User = Depends(_current_connector_user),
+    db: Session = Depends(get_db),
+):
+    if not credentials.credentials.startswith(workbuddy_customer_service_connector.QA_TOKEN_PREFIX) or not _can_write_qa(db, current_user):
+        raise HTTPException(status_code=403, detail="当前连接没有提交 QA 修订的权限")
+    if not body.confirmed:
+        raise HTTPException(status_code=422, detail="请先确认要修订的 SKU、原问答和新答案")
+    enforce_rate_limit(user_id=current_user.id, scope="workbuddy_customer_service.qa_revision", limit=20, window_seconds=60)
+    return workbuddy_customer_knowledge_service.propose_qa_revision(
+        db, user_id=current_user.id, sku=body.sku, qa_id=str(body.qa_id),
+        answer=body.answer, reason=body.reason or None, request=request,
     )

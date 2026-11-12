@@ -27,6 +27,7 @@ from ..services import (
     product_service,
     product_vector_index_service,
     product_write_authorization,
+    workbuddy_customer_knowledge_service,
 )
 from ..services.upload_validation_service import validate_image_content, validate_video_content
 
@@ -660,8 +661,22 @@ async def update_qa(
     db: Session = Depends(get_db),
 ):
     product = product_service.get_product_by_sku(db, sku)
-    if product is None or not any(str(item.id) == str(qa_id) for item in product_service.get_qa_items(db, sku)):
+    selected = (
+        next((item for item in product_service.get_qa_items(db, sku) if str(item.id) == qa_id), None)
+        if product is not None else None
+    )
+    if selected is None:
         raise HTTPException(status_code=404, detail="QA item not found for product")
+    if selected.revision_of_qa_id:
+        qa, integrity_audit = await workbuddy_customer_knowledge_service.review_qa_revision(
+            db, product=product, revision_id=qa_id, data=body, user=current_user, request=request,
+        )
+        product_service.invalidate_product_detail_cache(db, sku)
+        vector_sync = (
+            product_service.sync_product_to_vector_db(db, sku)
+            if integrity_audit["status"] == "approved" else {}
+        )
+        return _qa_write_response(qa, integrity_audit, vector_sync)
     qa = product_service.update_qa_item(db, qa_id, body)
     integrity_audit = await product_qa_integrity_service.audit_product_qa_item(
         db,

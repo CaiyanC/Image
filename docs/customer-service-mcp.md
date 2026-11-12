@@ -33,10 +33,13 @@
 | 让 AI 参考该 SKU 的平台商品页 | `search_product_listing` | 已核对的页面摘录、来源链接及保存时间 |
 | 用现有商品知识起草回复 | `ask_customer_service` | 答复、来源、会话 ID 和答复 ID。追问沿用会话 ID |
 | 把当前问答存成 QA | `save_customer_qa_draft` | QA 编号和审核入口。重复提交返回原记录 |
+| 修改已有 QA 的答案 | `revise_customer_qa` | 修订编号、原 QA 编号和审核入口 |
 
 例如，员工可以说「把这条保存为 SKU CS-G25 的 QA，问题和答案按我刚才确认的版本」。客户端提交已确认的通用问题和标准答案，有答复 ID 时一并提交。审核人打开返回的 `review_path`，核对规格、渠道和来源，点击「提交审核」。通过现有同 SKU 审核并完成索引后，客服问答即可复用这条记录。客户姓名、地址、订单号等内容应在收录前去掉。
 
 员工可以说「把 CW-K32 的全部 QA 导出成 Word」。新版 MCP 脚本会把该 SKU 的全部已审核问答保存到运行 MCP 的电脑上的 `Downloads/CaiYan-QA`，并返回文件路径。SKU 存在但没有符合范围的 QA 时，Word 会显示 0 条。使用个人 QA 管理连接时，可以要求同时导出待审核及未通过的问答，文档会标出每条记录的审核状态。已接入的客户端更新脚本后需重连 MCP，以加载新工具。
+
+发现现有答案有误时，可以说「把 CW-K32 关于收纳袋的 QA 改为……，原因是……」。客户端先查询并展示同 SKU 的原问答，经员工确认后提交修订。将返回的审核入口交给 QA 管理员，核对原答案和建议答案后提交审核。审核通过时更新原 QA 并同步索引。原 QA 已被修改或删除时，需基于当前版本重新提交。
 
 ## 数据存储
 
@@ -69,7 +72,7 @@
 .\venv\Scripts\python.exe -m uvicorn customer_service_public_gateway:app --app-dir scripts --host 127.0.0.1 --port 18101 --limit-concurrency 24 --no-access-log
 ```
 
-公网 HTTPS 的上游设为 `http://127.0.0.1:18101`。网关只接受客服查询、问答和 QA 草稿接口，登录、令牌管理及审核界面继续通过公司的管理入口访问。正式使用时，给网关配置公司域名和稳定运行的隧道或 HTTPS 反向代理。[Cloudflare Tunnel 官方说明](https://developers.cloudflare.com/tunnel/)
+公网 HTTPS 的上游设为 `http://127.0.0.1:18101`。网关接受客服查询、问答、QA 导出、草稿和修订提交。登录、令牌管理及审核界面通过公司的管理入口访问。正式使用时，给网关配置公司域名和稳定运行的隧道或 HTTPS 反向代理。[Cloudflare Tunnel 官方说明](https://developers.cloudflare.com/tunnel/)
 
 ## 团队试用优先检查
 

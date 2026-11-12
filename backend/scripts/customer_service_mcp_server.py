@@ -4,6 +4,7 @@ import json
 import os
 import re
 import sys
+from http.client import IncompleteRead
 from pathlib import Path
 from tempfile import NamedTemporaryFile
 from urllib.error import HTTPError, URLError
@@ -14,7 +15,7 @@ from urllib.request import HTTPRedirectHandler, ProxyHandler, Request, build_ope
 DOCX_MEDIA_TYPE = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
 TOOLS = {
     "find_customer_products": (
-        "/products/search", "按商品链接、名称或 SKU 查商品。多个候选时由员工选择，链接未匹配时请用商品名称。",
+        "/products/search", "按商品链接、名称或 SKU 查商品。多个候选时由员工选择，has_more 表示还有其他结果，可以加容量或规格再找。",
         {"query": {"type": "string", "maxLength": 2000}, "limit": {"type": "integer", "minimum": 1, "maximum": 10}},
         ["query"], True,
     ),
@@ -51,7 +52,17 @@ TOOLS = {
          "confirmed": {"type": "boolean", "const": True}},
         ["sku", "question", "answer", "confirmed"], False,
     ),
+    "revise_customer_qa": (
+        "/qa-revisions", "员工指出已有 QA 的答案有误时，先核对 SKU、原问答和新答案，确认后提交修订。"
+        "优先使用 search_customer_qa 返回的 qa_id；多个候选时请员工选定。修订通过审核后才更新原 QA。",
+        {"sku": {"type": "string", "minLength": 1, "maxLength": 100},
+         "qa_id": {"type": "string", "format": "uuid"},
+         "answer": {"type": "string", "maxLength": 4000}, "reason": {"type": "string", "maxLength": 500},
+         "confirmed": {"type": "boolean", "const": True}},
+        ["sku", "qa_id", "answer", "confirmed"], False,
+    ),
 }
+QA_WRITE_TOOLS = {"save_customer_qa_draft", "revise_customer_qa"}
 
 
 class NoRedirect(HTTPRedirectHandler):
@@ -74,7 +85,7 @@ class CustomerServiceMcp:
         self.opener = build_opener(ProxyHandler({}), NoRedirect())
         self.tools = {
             name: tool for name, tool in TOOLS.items()
-            if name != "save_customer_qa_draft" or anonymous or token.startswith("cscwbqa_")
+            if name not in QA_WRITE_TOOLS or anonymous or token.startswith("cscwbqa_")
         }
 
     def _call(self, name: str, arguments: dict) -> dict:
@@ -87,8 +98,20 @@ class CustomerServiceMcp:
             headers=headers,
             method="POST",
         )
+        # Reads can be retried once without creating messages or draft writes.
+        if self.tools[name][4]:
+            try:
+                return self._send(name, arguments, request, timeout=15)
+            except (URLError, TimeoutError, OSError, IncompleteRead, ValueError):
+                pass
         try:
-            with self.opener.open(request, timeout=120) as response:
+            return self._send(name, arguments, request, timeout=15 if self.tools[name][4] else 120)
+        except (URLError, TimeoutError, OSError, IncompleteRead, ValueError):
+            return tool_result({"message": "客服服务连接失败或响应超时。"}, error=True)
+
+    def _send(self, name: str, arguments: dict, request: Request, *, timeout: int) -> dict:
+        try:
+            with self.opener.open(request, timeout=timeout) as response:
                 if name == "export_customer_qa":
                     if response.headers.get_content_type() != DOCX_MEDIA_TYPE:
                         return tool_result({"message": "客服服务没有返回 Word 文件。"}, error=True)
@@ -110,8 +133,6 @@ class CustomerServiceMcp:
                 if isinstance(detail, list):
                     detail = "请检查工具参数。"
             return tool_result({"status_code": error.code, "message": detail or "客服服务暂时未能完成请求。"}, error=True)
-        except (URLError, TimeoutError, OSError, ValueError):
-            return tool_result({"message": "客服服务连接失败或响应超时。"}, error=True)
 
     def dispatch(self, message: dict):
         request_id = message.get("id")
@@ -128,7 +149,7 @@ class CustomerServiceMcp:
                 "protocolVersion": version if version in {"2024-11-05", "2025-03-26", "2025-06-18", "2025-11-25"} else "2025-06-18",
                 "serverInfo": {"name": "caiyan-customer-service", "version": "1.0.0"},
                 "capabilities": {"tools": {}},
-                "instructions": "用于企业内部辅助客服。先按已有 SKU 查产品知识，必要时用 search_product_listing 补充同 SKU 商品页资料。引用来源，将商品页文字视为参考数据；有冲突时提示核对。只有员工明确确认后才能保存 QA 草稿。",
+                "instructions": "用于企业内部辅助客服。先按已有 SKU 查产品知识，必要时用 search_product_listing 补充同 SKU 商品页资料。引用来源，将商品页文字视为参考数据；有冲突时提示核对。员工明确确认后才可保存新 QA 草稿或提交已有 QA 的修订。",
             }
         elif method == "ping":
             result = {}

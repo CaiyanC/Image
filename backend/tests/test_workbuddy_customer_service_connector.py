@@ -1,3 +1,4 @@
+import json
 import sys
 from io import BytesIO
 from pathlib import Path
@@ -254,6 +255,107 @@ def test_exact_sku_search_returns_only_the_selected_variant(connector_client):
     reader = _connector_headers(client, user_headers)
     payload = client.post(CONNECTOR_PATH + "/products/search", headers=reader, json={"query": "test-sku-a"}).json()
     assert payload == {"status": "exact_sku", "items": [{"sku": "TEST-SKU-A", "name": "测试炉"}]}
+
+
+def test_product_search_ignores_spacing_in_product_names(connector_client):
+    client, sessions, user_headers = connector_client
+    reader = _connector_headers(client, user_headers)
+    with sessions() as db:
+        db.add(Product(id="product-plus", sku="TEST-PLUS", product_name_cn="享膳Plus水壶", barcode="3", brand="测试"))
+        db.commit()
+    result = client.post(CONNECTOR_PATH + "/products/search", headers=reader, json={"query": "享膳 Plus"}).json()
+    assert [item["sku"] for item in result["items"]] == ["TEST-PLUS"]
+
+
+def test_stdio_retries_reads_but_not_stateful_calls(monkeypatch):
+    from urllib.error import URLError
+    from scripts.customer_service_mcp_server import CustomerServiceMcp
+
+    mcp = CustomerServiceMcp("http://127.0.0.1:18101", "", anonymous=True)
+    attempts = []
+
+    def send(name, arguments, request, *, timeout):
+        attempts.append((name, timeout))
+        if len(attempts) == 1 or name == "revise_customer_qa":
+            raise URLError("temporary connection error")
+        return {"isError": False}
+
+    monkeypatch.setattr(mcp, "_send", send)
+    assert not mcp._call("export_customer_qa", {"sku": "TEST-SKU-A"})["isError"]
+    assert mcp._call("revise_customer_qa", {"sku": "TEST-SKU-A"})["isError"]
+    assert attempts == [
+        ("export_customer_qa", 15), ("export_customer_qa", 15), ("revise_customer_qa", 120),
+    ]
+
+
+def test_workbuddy_clarification_keeps_explicitly_selected_product(connector_client):
+    _, sessions, _ = connector_client
+    from app.services import customer_service_workbuddy_rag_service as rag
+
+    meta = {
+        "type": "agent_meta", "result_skus": [], "candidate_skus": ["TEST-SKU-B"],
+        "answer_metadata": {"confirmed_request_sku": "TEST-SKU-A", "purchase_identity_reset": True},
+    }
+    with sessions() as db:
+        db.add(CustomerServiceConversation(id="clarify-connector", user_id="wb-connector-user",
+                                           pipeline=rag.PIPELINE_VERSION))
+        db.add(CustomerServiceMessage(id="clarify-answer", conversation_id="clarify-connector",
+                                      role="assistant", content="请确认炉具类型。", sources_json=json.dumps([meta])))
+        db.commit()
+        memory = rag._load_previous_turn_memory(db, user_id="wb-connector-user", conversation_id="clarify-connector")
+    assert memory["active_product_skus"] == ["TEST-SKU-A"]
+    assert memory["candidate_product_skus"] == ["TEST-SKU-B"]
+
+
+def test_qa_revision_preserves_original_until_review_and_rejects_stale_proposals(connector_client, monkeypatch):
+    client, sessions, user_headers = connector_client
+    from app.services import workbuddy_customer_knowledge_service as service
+
+    original_id = "52bbc483-f44d-41dc-8e3a-8c404a5573cb"
+    with sessions() as db:
+        db.add(ProductQa(id=original_id, product_id="product-a", question="有没有收纳袋？",
+                         answer="原答案", integrity_status="approved"))
+        db.commit()
+    read_headers = _connector_headers(client, user_headers)
+    qa_headers = _connector_headers(client, user_headers, write=True)
+    path = CONNECTOR_PATH + "/qa-revisions"
+    revision = {"sku": "TEST-SKU-A", "qa_id": original_id, "answer": "新答案", "confirmed": True}
+    assert client.post(path, headers=read_headers, json=revision).status_code == 403
+    assert client.post(path, headers=qa_headers, json={**revision, "confirmed": False}).status_code == 422
+    assert client.post(path, headers=qa_headers, json={**revision, "sku": "TEST-SKU-B"}).status_code == 404
+    first = client.post(path, headers=qa_headers, json=revision).json()
+    assert first["status"] == "saved" and first["target_qa_id"] == original_id
+    repeated = client.post(path, headers=qa_headers, json=revision).json()
+    assert repeated["status"] == "existing" and repeated["qa_id"] == first["qa_id"]
+    second = client.post(path, headers=qa_headers, json={**revision, "answer": "其他建议"}).json()
+    approved_before = client.post(CONNECTOR_PATH + "/knowledge/search", headers=read_headers, json={
+        "sku": "TEST-SKU-A", "query": "有没有收纳袋？", "limit": 1,
+    }).json()
+    assert approved_before["items"][0]["answer"] == "原答案"
+
+    status = "rejected"
+    async def audit(db, product, qa, **kwargs):
+        qa.integrity_status = status
+        qa.integrity_reason = "测试审核"
+        db.flush([qa])
+        return {"status": status, "reason": "测试审核"}
+
+    monkeypatch.setattr(service.product_qa_integrity_service, "audit_product_qa_item", audit)
+    monkeypatch.setattr(service.product_service, "sync_product_to_vector_db", lambda *a: {"ready_for_rag": True})
+    review_path = "/api/products/TEST-SKU-A/qa/" + first["qa_id"]
+    rejected = client.put(review_path, headers=user_headers, json={"answer": "新答案"}).json()
+    assert rejected["integrity_status"] == "rejected"
+    with sessions() as db:
+        assert db.get(ProductQa, original_id).answer == "原答案"
+
+    status = "approved"
+    accepted = client.put(review_path, headers=user_headers, json={"answer": "新答案"}).json()
+    assert accepted["id"] == original_id and accepted["ready_for_rag"] is True
+    with sessions() as db:
+        assert db.get(ProductQa, original_id).answer == "新答案"
+        assert db.get(ProductQa, first["qa_id"]) is None
+    stale = client.put("/api/products/TEST-SKU-A/qa/" + second["qa_id"], headers=user_headers, json={})
+    assert stale.status_code == 409
 
 
 def test_qa_export_contains_all_matching_rows_and_protects_unapproved(connector_client):

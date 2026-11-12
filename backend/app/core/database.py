@@ -280,6 +280,8 @@ def _ensure_product_qa_integrity_compat():
             "integrity_reason": "TEXT",
             "integrity_model": "VARCHAR(100)",
             "integrity_audited_at": audited_at_type,
+            "revision_of_qa_id": "VARCHAR(36)",
+            "revision_base_hash": "VARCHAR(64)",
         }
         with engine.begin() as conn:
             for name, definition in expected_columns.items():

@@ -18,6 +18,8 @@ class ProductQa(Base):
     integrity_reason: Mapped[str] = mapped_column(Text, nullable=True)
     integrity_model: Mapped[str] = mapped_column(String(100), nullable=True)
     integrity_audited_at: Mapped[datetime] = mapped_column(DateTime, nullable=True)
+    revision_of_qa_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    revision_base_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(timezone.utc))
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
 

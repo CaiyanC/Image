@@ -12,7 +12,7 @@ from fastapi.responses import JSONResponse
 
 
 CONNECTOR_PREFIX = "/api/workbuddy/customer-service"
-MCP_OPERATIONS = {"products/search", "knowledge/search", "knowledge/export", "listings/search", "ask", "qa-drafts"}
+MCP_OPERATIONS = {"products/search", "knowledge/search", "knowledge/export", "listings/search", "ask", "qa-drafts", "qa-revisions"}
 DOCX_MEDIA_TYPE = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
 MAX_REQUEST_BYTES = 24_000
 CONNECTOR_CREDENTIAL = re.compile(r"Bearer cscwb(?:qa)?_[A-Za-z0-9_-]{48}", re.IGNORECASE)

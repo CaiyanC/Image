@@ -500,6 +500,9 @@ def _load_previous_turn_memory(
     })
     if "purchase_context" in answer_metadata:
         memory["purchase_context"] = followup_context.normalize_purchase_context(answer_metadata["purchase_context"])
+    confirmed_request_sku = answer_metadata.get("confirmed_request_sku")
+    if not result_skus and confirmed_request_sku:
+        memory["active_product_skus"] = [confirmed_request_sku]
     if not result_skus and answer_metadata.get("replacement_turn"):
         preserved_anchor = (memory.get("purchase_context") or {}).get("anchor_sku")
         if preserved_anchor:
@@ -1828,6 +1831,13 @@ async def ask_customer_service_workbuddy_rag(
         "llm_call_count": len(state.get("llm_calls") or []),
         "answer_llm_elapsed_ms": answer_metadata.get("elapsed_ms"),
         "working_memory_update": working_memory_update,
+        "confirmed_request_sku": (
+            # Resetting the old identity does not clear the newly selected SKU.
+            known_skus[0]
+            if len(known_skus) == 1 and not replacement_turn
+            and (not reset_purchase_identity or purchase_context.get("anchor_sku") == known_skus[0])
+            else None
+        ),
         "purchase_context": purchase_context,
         "replacement_turn": replacement_turn,
         "replacement_rejections": replacement_rejections,

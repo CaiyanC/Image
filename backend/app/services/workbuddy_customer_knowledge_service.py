@@ -1,5 +1,7 @@
 """Product lookup and explicitly confirmed QA capture for the staff connector."""
 
+import hashlib
+import json
 import re
 import unicodedata
 from datetime import datetime, timezone
@@ -14,9 +16,11 @@ from ..models.knowledge_base import CustomerServiceConversation, CustomerService
 from ..models.customer_product_link import CustomerProductLink
 from ..models.product import Product
 from ..models.product_qa import ProductQa
-from . import customer_listing_source, knowledge_service, operation_log_service, product_service
+from ..models.user import User
+from . import customer_listing_source, knowledge_service, operation_log_service, product_qa_integrity_service, product_service
 
 
+QA_REVISION_STATUS = "revision"
 _PERSONAL_DATA = re.compile(
     r"https?://|www\.|[\w.+-]+@[\w.-]+\.\w+|(?<!\d)(?:\+?86[ -]?)?1[3-9]\d(?:[ -]?\d){8}(?!\d)"
     r"|(?:订单号|运单号|快递单号|手机号|收货地址|身份证号|收件人)\s*(?:[：:=]\s*\S|[A-Z\d]{5,})",
@@ -87,20 +91,22 @@ def find_products(db: Session, query: str, limit: int) -> dict:
     rows = active.filter(
         or_(exact_sku, Product.sku.icontains(query, autoescape=True),
             Product.product_name_cn.icontains(query, autoescape=True)),
-    ).order_by(case((exact_sku, 0), (exact_name, 1), else_=2), Product.sku).limit(limit).all()
+    ).order_by(case((exact_sku, 0), (exact_name, 1), else_=2), Product.sku).limit(limit + 1).all()
     if not rows:
         title = _normalized(query)
         candidates = []
         for row in active.all():
             name = _normalized(row.product_name_cn)
-            if len(name) >= 3 and name in title:
-                candidates.append((len(name), row))
-        rows = [row for _, row in sorted(candidates, key=lambda item: (-item[0], item[1].sku))[:limit]]
+            if len(name) >= 3 and len(title) >= 3 and (name in title or title in name):
+                rank = (name != title, abs(len(name) - len(title)), row.sku)
+                candidates.append((rank, row))
+        rows = [row for _, row in sorted(candidates, key=lambda item: item[0])[:limit + 1]]
     if rows and rows[0].sku.upper() == query.upper():
         return {"status": "exact_sku", "items": [{"sku": rows[0].sku, "name": rows[0].product_name_cn}]}
     return {
         "status": "candidates" if rows else "no_match",
-        "items": [{"sku": row.sku, "name": row.product_name_cn} for row in rows],
+        "items": [{"sku": row.sku, "name": row.product_name_cn} for row in rows[:limit]],
+        "has_more": len(rows) > limit,
     }
 
 
@@ -179,6 +185,95 @@ def _qa_receipt(qa: ProductQa, sku: str, status: str) -> dict:
             "review_path": "/products/qa/new?" + urlencode({"sku": sku, "qa_id": qa_id})}
 
 
+def _qa_revision_base(qa: ProductQa) -> str:
+    contents = json.dumps([qa.question, qa.answer, qa.integrity_status], ensure_ascii=False)
+    return hashlib.sha256(contents.encode("utf-8")).hexdigest()
+
+
+def _lock_product_qa(db: Session, product: Product, qa_id: str) -> ProductQa | None:
+    return db.query(ProductQa).filter(
+        ProductQa.id == qa_id, ProductQa.product_id == product.id,
+    ).populate_existing().with_for_update().one_or_none()
+
+
+def propose_qa_revision(
+    db: Session, *, user_id: str, sku: str, qa_id: str, answer: str, reason: str | None, request: Request,
+) -> dict:
+    if _PERSONAL_DATA.search(answer) or (reason and _PERSONAL_DATA.search(reason)):
+        raise HTTPException(status_code=422, detail="请删除个人信息、订单信息或链接后再提交修订。")
+    product = _active_product(db, sku)
+    original = _lock_product_qa(db, product, qa_id)
+    if original is None or original.integrity_status != "approved" or original.revision_of_qa_id is not None:
+        raise HTTPException(status_code=404, detail="找不到该 SKU 下可修订的已审核问答")
+    if original.answer.strip() == answer:
+        raise HTTPException(status_code=422, detail="新答案与原答案相同")
+    base_hash = _qa_revision_base(original)
+    revision = db.query(ProductQa).filter(
+        ProductQa.product_id == product.id,
+        ProductQa.revision_of_qa_id == str(original.id),
+        ProductQa.revision_base_hash == base_hash,
+        ProductQa.integrity_status == QA_REVISION_STATUS,
+        ProductQa.answer == answer,
+    ).first()
+    if revision is not None:
+        return {**_qa_receipt(revision, product.sku, "existing"), "target_qa_id": str(original.id)}
+
+    revision = ProductQa(
+        product_id=product.id, question=original.question, answer=answer,
+        revision_of_qa_id=str(original.id), revision_base_hash=base_hash,
+        integrity_status=QA_REVISION_STATUS, integrity_reason=reason,
+    )
+    db.add(revision)
+    db.flush()
+    operation_log_service.log_operation(
+        db, operator_id=user_id, action_type="create", action_name="客服 MCP 提交 QA 修订",
+        target_type="product_qa", target_id=str(original.id), target_name=product.sku,
+        request_data={"revision_id": str(revision.id), "reason": reason},
+        request=request, commit=False,
+    )
+    receipt = {**_qa_receipt(revision, product.sku, "saved"), "target_qa_id": str(original.id)}
+    db.commit()
+    return receipt
+
+
+async def review_qa_revision(
+    db: Session, *, product: Product, revision_id: str, data: dict, user: User, request: Request,
+) -> tuple[ProductQa, dict]:
+    revision = _lock_product_qa(db, product, revision_id)
+    if revision is None or not revision.revision_of_qa_id:
+        raise HTTPException(status_code=404, detail="这条 QA 修订已处理或不存在")
+    original = _lock_product_qa(db, product, revision.revision_of_qa_id)
+    if original is None or _qa_revision_base(original) != revision.revision_base_hash:
+        raise HTTPException(status_code=409, detail="原 QA 已被修改或删除，请核对当前版本后重新发起修订")
+    answer = data.get("answer", revision.answer)
+    if (not isinstance(answer, str) or not answer.strip() or len(answer) > 4000
+            or _PERSONAL_DATA.search(answer)):
+        raise HTTPException(status_code=422, detail="请填写不含个人信息、订单信息或链接的答案，最多 4000 字")
+    revision.answer = answer.strip()
+    revision.question = original.question
+    verdict = await product_qa_integrity_service.audit_product_qa_item(db, product, revision, user=user)
+    if verdict["status"] != "approved":
+        if revision.integrity_status == "review":
+            revision.integrity_status = QA_REVISION_STATUS
+        db.commit()
+        db.refresh(revision)
+        return revision, verdict
+
+    previous_answer = original.answer
+    for field in ("answer", "integrity_status", "integrity_reason", "integrity_model", "integrity_audited_at"):
+        setattr(original, field, getattr(revision, field))
+    operation_log_service.log_operation(
+        db, operator_id=user.id, action_type="update", action_name="审核并采用 QA 修订",
+        target_type="product_qa", target_id=str(original.id), target_name=product.sku,
+        request_data={"revision_id": str(revision.id), "previous_answer": previous_answer, "answer": original.answer},
+        response_data={"integrity_audit": verdict}, request=request, commit=False,
+    )
+    db.delete(revision)
+    db.commit()
+    db.refresh(original)
+    return original, verdict
+
+
 def export_product_qa(db: Session, sku: str, *, include_unapproved: bool) -> tuple[str, int, bytes]:
     from docx import Document
     from docx.oxml.ns import qn
@@ -210,7 +305,7 @@ def export_product_qa(db: Session, sku: str, *, include_unapproved: bool) -> tup
     document.add_paragraph(f"{product.sku}  {product.product_name_cn or ''}".rstrip())
     scope = "全部审核状态" if include_unapproved else "已审核"
     document.add_paragraph(f"{scope} · 共 {len(rows)} 条")
-    status_labels = {"approved": "已审核", "review": "待审核", "rejected": "未通过"}
+    status_labels = {"approved": "已审核", "review": "待审核", "rejected": "未通过", QA_REVISION_STATUS: "待审核修订"}
     for index, qa in enumerate(rows, 1):
         heading = f"第 {index} 条"
         if include_unapproved:
@@ -283,7 +378,9 @@ def save_qa_draft(
             raise HTTPException(status_code=409, detail="这条会话答复的商品与拟保存的 SKU 不一致")
 
     same_question = [
-        qa for qa in db.query(ProductQa).filter(ProductQa.product_id == product.id)
+        qa for qa in db.query(ProductQa).filter(
+            ProductQa.product_id == product.id, ProductQa.revision_of_qa_id.is_(None),
+        )
         if _qa_text_key(qa.question) == normalized_question
     ]
     for existing in same_question:
@@ -292,7 +389,7 @@ def save_qa_draft(
     if same_question:
         raise HTTPException(status_code=409, detail={
             "message": "同一 SKU 已有相同问题，请在产品 QA 中核对已有答案。",
-            "qa_ids": [qa.id for qa in same_question],
+            "qa_ids": [str(qa.id) for qa in same_question],
         })
 
     qa = ProductQa(
