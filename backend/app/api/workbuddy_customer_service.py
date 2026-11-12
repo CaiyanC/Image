@@ -214,7 +214,7 @@ def _current_connector_user(
 def _safe_sources(result: dict) -> list[dict]:
     sources = result.get("sources") if isinstance(result.get("sources"), list) else []
     safe = []
-    for source in sources[:8]:
+    for source in sources:
         if not isinstance(source, dict) or source.get("type") == "agent_meta":
             continue
         source_type = str(source.get("source_type") or source.get("type") or "").strip()[:60]
@@ -232,6 +232,14 @@ def _safe_sources(result: dict) -> list[dict]:
 
 
 def _connector_answer(result: dict) -> dict:
+    selected_skus = {
+        str(sku).strip().upper() for sku in (result.get("result_skus") or []) if str(sku).strip()
+    }
+    sources = _safe_sources(result)
+    if selected_skus:
+        sources = [source for source in sources if not source["sku"] or source["sku"].upper() in selected_skus]
+    else:
+        sources = [source for source in sources if not source["sku"]]
     return {
         "answer": str(result.get("answer") or ""),
         "conversation_id": result.get("conversation_id"),
@@ -244,7 +252,7 @@ def _connector_answer(result: dict) -> dict:
         "suggested_followups": list(result.get("suggested_followups") or [])[:5],
         "sku": result.get("sku"),
         "result_skus": list(result.get("result_skus") or [])[:8],
-        "sources": _safe_sources(result),
+        "sources": sources[:8],
     }
 
 

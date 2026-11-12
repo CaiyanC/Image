@@ -14,6 +14,7 @@ for retrieval, identity/provenance, safety boundaries, and persistence.
 from __future__ import annotations
 
 import json
+import re
 from time import perf_counter
 from typing import Any, Awaitable, Callable
 
@@ -328,7 +329,7 @@ def _compact_evidence_for_prompt(
         item for item in record_rows
         if str(item.get("sku") or "").strip().upper() not in visible_product_skus
     ]
-    rows = [*visible_record_rows, *other_rows, *remaining_record_rows]
+    rows = [*visible_record_rows[:4], *other_rows, *visible_record_rows[4:], *remaining_record_rows]
     compact_rows: list[dict[str, Any]] = []
     for item in rows:
         if len(compact_rows) >= _MAX_PROMPT_EVIDENCE_ROWS:
@@ -695,6 +696,27 @@ def _append_same_sku_context(
             "score": row.get("score"),
             "retrieval_rank": -1,
         })
+
+
+def _lexical_candidate_qa(db: Session, sku: str, question: str) -> list[dict[str, Any]]:
+    product = product_service.get_product_by_sku(db, sku)
+    if product is None:
+        return []
+    normalized = re.sub(r"\s+", "", question).replace("软管", "气管")
+    terms = {normalized[i:i + 2] for i in range(len(normalized) - 1)}
+    ranked = []
+    for qa in product_service.customer_visible_product_qas(db, product.id):
+        text = re.sub(r"\s+", "", qa.question or "").replace("软管", "气管")
+        score = sum(term in text for term in terms)
+        if score:
+            ranked.append((score, str(qa.id), qa))
+    ranked.sort(key=lambda item: (-item[0], item[1]))
+    return [{
+        "source_type": "product", "sku": sku, "source_id": f"product:{sku}:qa:{qa_id}",
+        "content": f"Q: {qa.question}\nA: {qa.answer}",
+        "metadata": {"source_id": f"product:{sku}:qa:{qa_id}", "section": "qa"},
+        "score": None, "retrieval_rank": -1,
+    } for _, qa_id, qa in ranked[:1]]
 
 
 def _product_details(
@@ -1346,6 +1368,16 @@ async def ask_customer_service_workbuddy_rag(
         skus=scoped_skus if len(scoped_skus) > 1 else None,
     )
     retrieval_rows = list(question_rows)
+    if not known_skus and not replacement_turn and catalogue_subject_skus:
+        # Named products remain candidates. Reserve query-relevant QA for
+        # them without treating a catalogue match as a confirmed selection.
+        candidate_qa_rows = []
+        for candidate_sku in catalogue_subject_skus[:3]:
+            candidate_qa_rows.extend(_lexical_candidate_qa(db, candidate_sku, original_question))
+            candidate_qa_rows.extend(await _retrieve_once(
+                db, query=original_question, sku=candidate_sku, sections=["qa"], limit=3,
+            ))
+        retrieval_rows[:0] = candidate_qa_rows
     if conversation_id and len(anchor_skus) == 1 and not catalogue_subject_skus and not replacement_turn:
         # Keep global recall for follow-ups while reserving evidence slots for
         # relevant QA on the product already confirmed in the conversation.
@@ -1731,6 +1763,12 @@ async def ask_customer_service_workbuddy_rag(
         candidate_skus=candidate_skus,
         identity_ambiguity=identity_ambiguity,
     )
+    if (
+        needs_clarification and not result_skus and not known_skus and not anchor_skus
+        and raw_subject_scope == "product_specific" and not semantic_selection_answer
+    ):
+        answer = "麻烦提供您咨询商品的具体型号或商品链接，我再帮您核对。"
+        selected_evidence_ids = []
     replacement_rejections: dict[str, list[str]] = {}
     if replacement_turn:
         # Check textual SKU references as well as optional selection metadata:

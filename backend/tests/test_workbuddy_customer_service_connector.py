@@ -333,6 +333,39 @@ def test_workbuddy_clarification_keeps_explicitly_selected_product(connector_cli
     assert memory["candidate_product_skus"] == ["TEST-SKU-B"]
 
 
+def test_named_product_qa_recall_matches_hose_question(connector_client):
+    _, sessions, _ = connector_client
+    from app.services import customer_service_workbuddy_rag_service as rag
+
+    with sessions() as db:
+        db.add_all([
+            ProductQa(product_id="product-a", question="测试炉的气管有多长？",
+                      answer="原配气管约 37 厘米。", integrity_status="approved"),
+            ProductQa(product_id="product-a", question="测试炉支持什么气罐？",
+                      answer="使用适配气罐。", integrity_status="approved"),
+            ProductQa(product_id="product-a", question="测试炉的气管有多长？",
+                      answer="错误的待审记录。", integrity_status="review"),
+        ])
+        db.commit()
+        rows = rag._lexical_candidate_qa(db, "TEST-SKU-A", "测试炉连接气罐的那根软管大概有多长？")
+    assert len(rows) == 1
+    assert "37 厘米" in rows[0]["content"]
+    assert "待审" not in rows[0]["content"]
+
+
+def test_connector_sources_exclude_other_products():
+    from app.api.workbuddy_customer_service import _connector_answer
+
+    sources = [
+        {"sku": "TEST-SKU-B", "source_id": "other", "source_type": "product_record"},
+        {"sku": "TEST-SKU-A", "source_id": "selected", "source_type": "product_record"},
+    ]
+    result = _connector_answer({"answer": "答复", "result_skus": ["TEST-SKU-A"], "sources": sources})
+    assert [source["source_id"] for source in result["sources"]] == ["selected"]
+    ambiguous = _connector_answer({"answer": "请确认型号", "result_skus": [], "sources": sources})
+    assert ambiguous["sources"] == []
+
+
 def test_qa_revision_preserves_original_until_review_and_rejects_stale_proposals(connector_client, monkeypatch):
     client, sessions, user_headers = connector_client
     from app.services import workbuddy_customer_knowledge_service as service
